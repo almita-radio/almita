@@ -3,6 +3,7 @@
 </p>
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
+
 ALMITA is an amateur 21 cm hydrogen line radio telescope project created by **Felipe Fridman G.**
 
 The project observes the neutral hydrogen line at **1420.405 MHz** using accessible hardware, Python software, INDI/OnStep mount control, SDR acquisition, temperature-aware calibration, HDF5 storage and post-processing tools for spectra and simple hydrogen map generation.
