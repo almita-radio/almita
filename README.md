@@ -1,11 +1,6 @@
 <p align="center">
   <img src="almita-logo.png" alt="ALMITA logo" width="100%">
 </p>
-
-# ALMITA
-
-**21 cm Hydrogen Line Radio Telescope**
-
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
 ALMITA is an amateur 21 cm hydrogen line radio telescope project created by **Felipe Fridman G.**
