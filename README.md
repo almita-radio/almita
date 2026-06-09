@@ -23,6 +23,7 @@ It can:
 * Capture I/Q samples using an SDR receiver.
 * Store raw observations and metadata in **HDF5**.
 * Record pointing information such as RA, Dec, altitude, azimuth and timestamp.
+* Store observatory coordinates in the observation metadata.
 * Measure and store LNA and SDR temperatures.
 * Support hot sky, cold sky and 50 ohm calibration references.
 * Apply calibration and temperature correction during spectrum processing.
@@ -109,7 +110,7 @@ A typical ALMITA session works like this:
 3. Generate or load an observation plan.
 4. Move the antenna through the planned sky positions.
 5. Capture I/Q data at each pointing.
-6. Record pointing metadata and temperature readings.
+6. Record pointing metadata, observatory coordinates and temperature readings.
 7. Store each observation in HDF5.
 8. Monitor the session from the web interface.
 9. Process the captured files offline.
@@ -181,6 +182,7 @@ A typical file contains:
 * Gain settings
 * RA / Dec
 * Altitude / azimuth
+* Observatory latitude / longitude / elevation
 * Mount metadata
 * LNA and SDR temperatures
 * Calibration metadata
@@ -202,6 +204,9 @@ observation_001.h5
     ├── dec
     ├── alt
     ├── az
+    ├── observatory_latitude
+    ├── observatory_longitude
+    ├── observatory_elevation_m
     ├── timestamp_utc
     ├── center_frequency_hz
     ├── sample_rate
@@ -250,6 +255,7 @@ Current goals:
 * Reliable 21 cm capture
 * Stable mount control through INDI and OnStep
 * Repeatable HDF5 data format
+* Observatory coordinate metadata
 * Temperature recording
 * Hot/cold/50 ohm calibration
 * Temperature-aware spectrum correction
