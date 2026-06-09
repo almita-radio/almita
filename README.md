@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="almita-logo.png" alt="ALMITA logo" width="260">
+</p>
+
 # ALMITA
 
 **21 cm Hydrogen Line Radio Telescope**
