@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="almita-logo.png" alt="ALMITA logo" width="260">
+  <img src="almita-logo.png" alt="ALMITA logo" width="100%">
 </p>
 
 # ALMITA
