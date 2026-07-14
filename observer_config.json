@@ -1,0 +1,32 @@
+{
+  "observer": {
+    "name": "Santiago Observatory",
+    "latitude_deg": -33.4489,
+    "longitude_deg": -70.6693,
+    "elevation_m": 570,
+    "timezone": "America/Santiago",
+    "description": "Observatorio en Santiago, Chile"
+  },
+  "site_info": {
+    "location": "Santiago, Chile",
+    "country_code": "CL",
+    "climate_zone": "Mediterranean"
+  },
+  "hardware": {
+    "telescope": "INDI Telescope Simulator",
+    "sdr_device": "RTL-SDR Blog V4",
+    "antenna_type": "Dipole"
+  },
+  "observation_defaults": {
+    "settle_time_s": 1.0,
+    "capture_duration_s": 10.0,
+    "sample_rate_hz": 2400000,
+    "center_frequency_hz": 1420405752
+  },
+  "comments": {
+    "latitude": "Negativo = Sur, Positivo = Norte",
+    "longitude": "Negativo = Oeste, Positivo = Este",
+    "elevation": "Metros sobre el nivel del mar",
+    "note": "Editar estos valores según la ubicación real del observatorio"
+  }
+}

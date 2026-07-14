@@ -1,0 +1,31 @@
+# requirements.txt
+# Dependencias para el proyecto de pruebas INDI
+
+# Librería INDI (elige UNA de las siguientes opciones):
+
+# OPCIÓN 1 (Recomendada): PyINDI - Cliente C-based, maduro y estable
+# Descomentar si tienes problemas con indipy
+# pyindi-client>=1.9.9
+
+# OPCIÓN 2: INDIpy - Python puro, experimental
+# NOTA: indipy 0.4.0 puede tener problemas de compatibilidad con Python 3.13
+# Si falla, usar pyindi-client arriba. Para fijar desde Git, usa la línea de abajo.
+indipy>=0.4.0
+# o, para forzar la versión Git probada:
+# git+https://github.com/wlatanowicz/indipy.git
+
+numpy>=1.24
+scipy>=1.11
+h5py>=3.9
+matplotlib>=3.7
+pyrtlsdr>=0.3.0
+
+# Opcional: Para análisis de datos astronómicos
+# astropy>=5.0
+# numpy>=1.24.0
+
+# Opcional: Para plate solving local
+# astrometry>=0.1.0
+
+# Opcional: Para visualización
+# matplotlib>=3.7.0

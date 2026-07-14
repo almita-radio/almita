@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs y debugging
+*.log
+*.xml
+debug_cache.xml
+indi_full_capture.xml
+telescope_properties_full.xml
+
+# Archivos temporales de testing
+test_*.txt
+temp_*.py
+scratch_*.py
+
+# Archivos de sistema
+Thumbs.db
+.directory
+
+# Secrets (si los llegas a tener)
+*.secret
+*.key
+.env
+
+# Archivos de INDIpy que no son necesarios
+Testing_INDIpy.py
+ejemplos_uso.py
+simple_indi_client.py
+SOLUCION_RAPIDA.md
+test_client_init.py
+test_raw_connection.py
+explore_indi.py
+explore_telescope_properties.py
+passive_capture.py
+ESTADO_ACTUAL.md

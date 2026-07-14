@@ -1,0 +1,68 @@
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>c2dbf4c0-6f66-44c2-bcee-282262dd5d70</ProjectGuid>
+    <ProjectHome>.</ProjectHome>
+    <StartupFile>
+    </StartupFile>
+    <SearchPath>
+    </SearchPath>
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <Name>Testing INDIpy</Name>
+    <RootNamespace>Testing INDIpy</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="capture.py" />
+    <Compile Include="check_indi.py" />
+    <Compile Include="ejemplos_uso.py" />
+    <Compile Include="explore_indi.py" />
+    <Compile Include="explore_telescope_properties.py" />
+    <Compile Include="grid_generator.py" />
+    <Compile Include="indi_telescope_control.py" />
+    <Compile Include="passive_capture.py" />
+    <Compile Include="session_manager.py" />
+    <Compile Include="simple_indi_client.py" />
+    <Compile Include="Testing_INDIpy.py" />
+    <Compile Include="test_client_init.py" />
+    <Compile Include="test_grid_distribution.py" />
+    <Compile Include="test_raw_connection.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include=".gitignore" />
+    <Content Include="CHANGELOG_ENGLISH.md" />
+    <Content Include="debug_install.sh" />
+    <Content Include="ESTADO_ACTUAL.md" />
+    <Content Include="GRID_DISTRIBUTION_CHANGES.md" />
+    <Content Include="GRID_GENERATOR_USAGE.md" />
+    <Content Include="GRID_SCAN_GUIDE.md" />
+    <Content Include="GUIA_VISUAL.md" />
+    <Content Include="INDICE.md" />
+    <Content Include="inicio_rapido.sh" />
+    <Content Include="INSTRUCCIONES_WINDOWS.bat" />
+    <Content Include="README.md" />
+    <Content Include="README_GITHUB.md" />
+    <Content Include="requirements.txt" />
+    <Content Include="RESUMEN_EJECUTIVO.md" />
+    <Content Include="setup_rpi.sh" />
+    <Content Include="SOLUCION_RAPIDA.md" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
+  <!-- Uncomment the CoreCompile target to enable the Build command in
+       Visual Studio and specify your pre- and post-build commands in
+       the BeforeBuild and AfterBuild targets below. -->
+  <!--<Target Name="CoreCompile" />-->
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+</Project>
