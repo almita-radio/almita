@@ -1,0 +1,24 @@
+{
+  "session_name": "final_test_ra_wrap",
+  "session_id": "20260810-15:37:24",
+  "grid": {
+    "center_ra_hours": 23.8,
+    "center_ra": 23.8,
+    "center_dec_degrees": -30.0,
+    "center_dec": -30.0,
+    "width_deg": 40.0,
+    "height_deg": 40.0,
+    "region_width_deg": 40.0,
+    "region_height_deg": 40.0,
+    "beam_fwhm_deg": 20.0,
+    "beam_sampling_fraction": 0.3333333333,
+    "nominal_spacing_deg": 6.666666665999999,
+    "rows": 7,
+    "columns": 7,
+    "total_points": 49,
+    "scan_strategy": "serpentine",
+    "actual_spacing_ra_axis_deg": 6.666666666666667,
+    "actual_spacing_dec_axis_deg": 6.666666666666667,
+    "projection": "tangent-plane"
+  }
+}

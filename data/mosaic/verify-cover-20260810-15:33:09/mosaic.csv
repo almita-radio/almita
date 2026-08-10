@@ -1,0 +1,1 @@
+point_number,point_id,scan_order,grid_row,grid_col,row,column,ra,dec,target_ra_hours,target_dec_degrees,target_ra_hms,target_dec_dms,center_distance_deg,nominal_spacing_deg,capture_status,start_time,end_time,duration,error_message,data_filename,session_name,session_id
