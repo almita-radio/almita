@@ -12,6 +12,7 @@ from typing import Optional, Dict, Tuple
 import argparse
 import sys
 import re
+import math
 
 class INDITelescopeControl:
     """
@@ -30,6 +31,10 @@ class INDITelescopeControl:
         self.current_ra: Optional[float] = None
         self.current_dec: Optional[float] = None
         self.cached_properties: str = ""  # Cache de propiedades recibidas
+        self.last_slew_busy_duration_sec: Optional[float] = None
+        self.last_slew_command_to_ok_sec: Optional[float] = None
+        self.final_target_error_deg: Optional[float] = None
+        self._xml_receive_buffer = ""
         
     def log(self, message: str, level: str = "INFO", force: bool = False):
         """Imprime mensaje con timestamp
@@ -361,6 +366,112 @@ class INDITelescopeControl:
         self.log_verbose(f"📤 Enviando XML:\n{xml}")
         self.writer.write((xml + '\n').encode())
         await self.writer.drain()
+
+    @staticmethod
+    def _angular_distance_deg(ra1_hours: float, dec1_deg: float,
+                              ra2_hours: float, dec2_deg: float) -> float:
+        """Separación angular esférica entre dos posiciones ecuatoriales."""
+        ra1 = math.radians((ra1_hours % 24.0) * 15.0)
+        ra2 = math.radians((ra2_hours % 24.0) * 15.0)
+        dec1 = math.radians(dec1_deg)
+        dec2 = math.radians(dec2_deg)
+        delta_ra = ra2 - ra1
+        y = math.hypot(
+            math.cos(dec2) * math.sin(delta_ra),
+            math.cos(dec1) * math.sin(dec2)
+            - math.sin(dec1) * math.cos(dec2) * math.cos(delta_ra),
+        )
+        x = (
+            math.sin(dec1) * math.sin(dec2)
+            + math.cos(dec1) * math.cos(dec2) * math.cos(delta_ra)
+        )
+        return math.degrees(math.atan2(y, x))
+
+    @staticmethod
+    def _validated_goto_coordinates(ra_hours: float,
+                                    dec_degrees: float) -> Optional[Tuple[float, float]]:
+        """Valida un target GOTO y normaliza RA sin cambiar DEC."""
+        try:
+            ra = float(ra_hours)
+            dec = float(dec_degrees)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(ra) or not math.isfinite(dec):
+            return None
+        if not -90.0 <= dec <= 90.0:
+            return None
+        return ra % 24.0, dec
+
+    @staticmethod
+    def _split_complete_xml_messages(xml_text: str) -> Tuple[list, str]:
+        """Separa vectores INDI completos y conserva el último fragmento parcial."""
+        messages = []
+        remaining = xml_text
+        vector_start = re.compile(
+            r'<(?P<tag>(?:def|set)(?:Number|Switch|Text|Light|BLOB)Vector)\b',
+            re.IGNORECASE,
+        )
+        while True:
+            start = vector_start.search(remaining)
+            if not start:
+                partial = remaining.rfind('<')
+                return messages, remaining[partial:] if partial >= 0 else ""
+            tag = start.group('tag')
+            close = re.search(rf'</{re.escape(tag)}\s*>', remaining[start.start():], re.IGNORECASE)
+            if not close:
+                return messages, remaining[start.start():]
+            end = start.start() + close.end()
+            messages.append(remaining[start.start():end])
+            remaining = remaining[end:]
+
+    def _feed_xml_messages(self, xml_chunk: str) -> list:
+        """Agrega un fragmento TCP y devuelve todos los vectores INDI completos."""
+        self._xml_receive_buffer += xml_chunk
+        messages, self._xml_receive_buffer = self._split_complete_xml_messages(
+            self._xml_receive_buffer
+        )
+        return messages
+
+    @staticmethod
+    def _extract_eod_update(xml_messages) -> Tuple[Optional[str], Optional[float], Optional[float]]:
+        """Extrae el último state/RA/DEC válido de EQUATORIAL_EOD_COORD."""
+        state = None
+        ra = None
+        dec = None
+        for message in xml_messages:
+            try:
+                root = ET.fromstring(message)
+            except ET.ParseError:
+                continue
+            if root.attrib.get('name') != 'EQUATORIAL_EOD_COORD':
+                continue
+            state = root.attrib.get('state')
+            values = {}
+            for child in root:
+                name = child.attrib.get('name')
+                if name in ('RA', 'DEC') and child.text is not None:
+                    try:
+                        values[name] = float(child.text.strip())
+                    except ValueError:
+                        pass
+            ra = values.get('RA')
+            dec = values.get('DEC')
+        return state, ra, dec
+
+    def _final_eod_error_deg(self, target_ra_hours: float, target_dec_deg: float,
+                             final_ra_hours: Optional[float],
+                             final_dec_deg: Optional[float]) -> Optional[float]:
+        """Compara el target EOD enviado con una lectura final EOD válida."""
+        if final_ra_hours is None or final_dec_deg is None:
+            return None
+        values = (target_ra_hours, target_dec_deg, final_ra_hours, final_dec_deg)
+        if not all(math.isfinite(value) for value in values):
+            return None
+        if not -90.0 <= final_dec_deg <= 90.0:
+            return None
+        return self._angular_distance_deg(
+            target_ra_hours, target_dec_deg, final_ra_hours, final_dec_deg
+        )
     
     async def get_coordinates(self, force_refresh: bool = False) -> Tuple[Optional[float], Optional[float]]:
         """
@@ -398,8 +509,10 @@ class INDITelescopeControl:
                             chunk = data.decode('utf-8', errors='ignore')
                             all_data += chunk
 
-                            # Si encontramos coordenadas, salir
-                            if 'EQUATORIAL_EOD_COORD' in all_data and '<defNumber' in all_data:
+                            # Salir sólo cuando ya existe un vector EOD completo.
+                            complete_messages, _ = self._split_complete_xml_messages(all_data)
+                            _, fresh_ra, fresh_dec = self._extract_eod_update(complete_messages)
+                            if fresh_ra is not None and fresh_dec is not None:
                                 break
                         attempts += 1
                     except asyncio.TimeoutError:
@@ -435,35 +548,8 @@ class INDITelescopeControl:
             else:
                 self.log_verbose(all_data[:500] + "...")
 
-            # Parsear RA y DEC con el patrón CORRECTO (valores en líneas separadas con espacios)
-            patterns = [
-                # Patrón CORRECTO: Maneja espacios, tabs, y saltos de línea
-                (r'<defNumber[^>]*name="RA"[^>]*>\s*([\d.+-]+)\s*</defNumber>',
-                 r'<defNumber[^>]*name="DEC"[^>]*>\s*([\d.+-]+)\s*</defNumber>'),
-                # Patrón alternativo para setNumberVector (cuando se actualizan valores)
-                (r'<oneNumber[^>]*name="RA"[^>]*>\s*([\d.+-]+)\s*</oneNumber>',
-                 r'<oneNumber[^>]*name="DEC"[^>]*>\s*([\d.+-]+)\s*</oneNumber>'),
-            ]
-
-            ra = None
-            dec = None
-
-            for i, (ra_pattern, dec_pattern) in enumerate(patterns):
-                self.log_verbose(f"Intentando patrón {i+1}...")
-                ra_match = re.search(ra_pattern, all_data)
-                dec_match = re.search(dec_pattern, all_data)
-
-                if ra_match and dec_match:
-                    try:
-                        ra = float(ra_match.group(1))
-                        dec = float(dec_match.group(1))
-                        self.log_verbose(f"✓ Patrón {i+1} funcionó: RA={ra}, DEC={dec}")
-                        break
-                    except (ValueError, IndexError) as e:
-                        self.log_verbose(f"✗ Patrón {i+1} falló al convertir: {e}")
-                        continue
-                else:
-                    self.log_verbose(f"✗ Patrón {i+1} no coincidió")
+            complete_messages, _ = self._split_complete_xml_messages(all_data)
+            _, ra, dec = self._extract_eod_update(complete_messages)
 
             if ra is not None and dec is not None:
                 self.current_ra = ra
@@ -527,6 +613,51 @@ class INDITelescopeControl:
         """Ejecuta comando GOTO"""
         try:
             self.explain_indi('goto')
+            self.final_target_error_deg = None
+            validated = self._validated_goto_coordinates(ra_hours, dec_degrees)
+            if validated is None:
+                self.log(
+                    f"Coordenadas GOTO inválidas: RA={ra_hours!r}, DEC={dec_degrees!r}. "
+                    "RA y DEC deben ser finitas; DEC debe estar entre -90° y +90°.",
+                    "ERROR",
+                )
+                return False
+            ra_hours, dec_degrees = validated
+            poll_interval_sec = 0.1
+            precheck_timeout_sec = 30.0
+
+            async def _wait_until_not_busy(timeout_sec: float) -> bool:
+                """Block until EQUATORIAL_EOD_COORD is no longer Busy before sending a new slew."""
+                deadline = asyncio.get_event_loop().time() + timeout_sec
+                while True:
+                    await self._send_command(
+                        f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>'
+                    )
+                    try:
+                        data = await asyncio.wait_for(self.reader.read(8192), timeout=0.2)
+                    except asyncio.TimeoutError:
+                        data = b""
+
+                    response = data.decode('utf-8', errors='ignore') if data else ''
+                    messages = self._feed_xml_messages(response) if response else []
+                    eod_state, _, _ = self._extract_eod_update(messages)
+
+                    if eod_state == "Alert":
+                        self.log("❌ ERROR: Mount reporta Alert antes del nuevo GOTO", "ERROR")
+                        return False
+                    if eod_state == "Busy":
+                        if asyncio.get_event_loop().time() >= deadline:
+                            self.log("⚠️  TIMEOUT: Mount siguió en Busy antes de enviar nuevo GOTO", "WARNING")
+                            return False
+                        await asyncio.sleep(poll_interval_sec)
+                        continue
+                    if eod_state in ("Ok", "Idle"):
+                        return True
+
+                    if asyncio.get_event_loop().time() >= deadline:
+                        self.log("⚠️  TIMEOUT: No se pudo confirmar estado no-Busy antes del GOTO", "WARNING")
+                        return False
+                    await asyncio.sleep(poll_interval_sec)
 
             # Leer posición actual primero
             current_ra, current_dec = await self.get_coordinates()
@@ -544,6 +675,9 @@ class INDITelescopeControl:
                 self.log(f"   Distancia angular: {distance:.2f}°")
                 self.log(f"   Tiempo estimado: {max(30, int(distance * 2))} segundos")
                 self.log("")
+
+            if not await _wait_until_not_busy(precheck_timeout_sec):
+                return False
 
             # Asegurar modo SLEW
             slew_mode = f'''<newSwitchVector device="{self.device_name}" name="ON_COORD_SET">
@@ -571,13 +705,22 @@ class INDITelescopeControl:
             self.log("")
             self.log("⏳ Polling estado del movimiento (timeout: 120s)...")
             
-            # Polling de estado - esperar hasta que state="Ok"
+            # Polling de estado y convergencia real al target
             start_time = asyncio.get_event_loop().time()
             timeout = 120  # 120 segundos máximo
-            state = "Busy"
             poll_count = 0
+            busy_started_at: Optional[float] = None
+            busy_finished_at: Optional[float] = None
+            ok_detected_at: Optional[float] = None
+            last_error_deg: Optional[float] = None
+            stable_hits = 0
+            convergence_tol_deg = 0.25
+            settle_tol_deg = 0.02
+            settle_required_hits = 2
+            self.last_slew_busy_duration_sec = None
+            self.last_slew_command_to_ok_sec = None
             
-            while state == "Busy":
+            while True:
                 poll_count += 1
                 elapsed = asyncio.get_event_loop().time() - start_time
                 
@@ -591,45 +734,88 @@ class INDITelescopeControl:
                     await self._send_command(get_state)
                     
                     # Leer respuesta con timeout
-                    data = await asyncio.wait_for(self.reader.read(8192), timeout=1.0)
+                    data = await asyncio.wait_for(self.reader.read(8192), timeout=0.1)
                     if data:
                         response = data.decode('utf-8', errors='ignore')
                         self.log_verbose(f"Poll {poll_count}: Recibidos {len(data)} bytes")
                         
-                        # Buscar estado de EQUATORIAL_EOD_COORD
-                        if 'EQUATORIAL_EOD_COORD' in response:
-                            if 'state="Ok"' in response:
-                                state = "Ok"
-                                self.log(f"✓ GOTO completado (polling: {poll_count} iteraciones, {elapsed:.1f}s)")
-                            elif 'state="Busy"' in response:
-                                self.log_verbose(f"   Estado: Busy (movimiento en progreso)")
-                            elif 'state="Alert"' in response:
-                                self.log("❌ ERROR: El telescopio reportó Alert durante GOTO", "ERROR")
-                                return False
+                        # Buscar estado SOLO de EQUATORIAL_EOD_COORD
+                        messages = self._feed_xml_messages(response)
+                        eod_state, parsed_ra, parsed_dec = self._extract_eod_update(messages)
+
+                        if parsed_ra is not None and parsed_dec is not None:
+                            # Angular error uses spherical distance in hours/deg.
+                            current_error_deg = self._angular_distance_deg(parsed_ra, parsed_dec, ra_hours, dec_degrees)
+
+                            if current_error_deg <= convergence_tol_deg:
+                                if last_error_deg is not None and abs(current_error_deg - last_error_deg) <= settle_tol_deg:
+                                    stable_hits += 1
+                                else:
+                                    stable_hits = 1
+                            else:
+                                stable_hits = 0
+                            last_error_deg = current_error_deg
+
+                        if eod_state == "Busy":
+                            if busy_started_at is None:
+                                busy_started_at = asyncio.get_event_loop().time()
+                            self.log_verbose(f"   Estado: Busy (movimiento en progreso)")
+                            await asyncio.sleep(poll_interval_sec)
+                            continue
+                        elif eod_state in ("Ok", "Idle"):
+                            if ok_detected_at is None:
+                                ok_detected_at = asyncio.get_event_loop().time()
+                                if busy_started_at is not None:
+                                    busy_finished_at = ok_detected_at
+
+                            if last_error_deg is not None and last_error_deg <= convergence_tol_deg and stable_hits >= settle_required_hits:
+                                self.log(f"✓ GOTO completado (polling: {poll_count} iteraciones, {elapsed:.1f}s, error~{last_error_deg:.3f}°)")
+                                break
+
+                            self.log_verbose(
+                                f"   Estado: {eod_state} recibido, esperando convergencia real de coordenadas..."
+                            )
+                            await asyncio.sleep(poll_interval_sec)
+                            continue
+                        elif eod_state == "Alert":
+                            self.log("❌ ERROR: El telescopio reportó Alert durante GOTO", "ERROR")
+                            return False
+                        else:
+                            await asyncio.sleep(poll_interval_sec)
+                            continue
                         
                 except asyncio.TimeoutError:
                     # Timeout de lectura - solicitar estado de nuevo
                     self.log_verbose(f"   Poll {poll_count}: Timeout de lectura (reintentando...)")
                     continue
-                
-                # Pausa entre polls (más larga para no saturar)
-                if state == "Busy":
-                    await asyncio.sleep(0.5)
+
+            if busy_started_at is not None and busy_finished_at is not None:
+                self.last_slew_busy_duration_sec = busy_finished_at - busy_started_at
+                self.log(f"⏱️  Tiempo de desplazamiento Busy->Ok: {self.last_slew_busy_duration_sec:.3f}s")
+            else:
+                self.log("⏱️  Tiempo de desplazamiento Busy->Ok: no disponible (Busy no detectado claramente)")
+
+            if ok_detected_at is not None:
+                self.last_slew_command_to_ok_sec = ok_detected_at - start_time
+                self.log(f"⏱️  Tiempo comando->Ok: {self.last_slew_command_to_ok_sec:.3f}s")
+            else:
+                self.log("⏱️  Tiempo comando->Ok: no disponible")
             
             # Leer posición final
             self.log("Leyendo posición final...")
             final_ra, final_dec = await self.get_coordinates(force_refresh=True)
+            self.final_target_error_deg = self._final_eod_error_deg(
+                ra_hours, dec_degrees, final_ra, final_dec
+            )
 
-            if final_ra is not None:
-                ra_error = abs(final_ra - ra_hours) * 60  # minutos
-                dec_error = abs(final_dec - dec_degrees) * 60  # arcominutos
+            if self.final_target_error_deg is not None:
                 self.log("")
                 self.log("📊 PRECISIÓN DEL GOTO:")
-                self.log(f"   Error RA:  {ra_error:.2f} arcminutos")
-                self.log(f"   Error DEC: {dec_error:.2f} arcminutos")
-                if ra_error < 5 and dec_error < 5:
+                final_error_arcmin = self.final_target_error_deg * 60.0
+                self.log(f"   Error angular EOD: {final_error_arcmin:.2f} arcminutos")
+                if final_error_arcmin < 5:
                     self.log("   ✓ Precisión EXCELENTE (< 5 arcmin)")
-                elif ra_error < 15 and dec_error < 15:
+                elif final_error_arcmin < 15:
                     self.log("   ✓ Precisión BUENA (< 15 arcmin) - considerar SYNC")
                 else:
                     self.log("   ⚠️  Precisión BAJA - SYNC recomendado")
