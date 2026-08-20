@@ -1,0 +1,55 @@
+{
+  "model_version": "almita-slew-4.0",
+  "model_status": "frozen",
+  "trained_at": "2026-08-20T15:44:52.795529+00:00",
+  "training_sample_count": 132,
+  "sample_count": 132,
+  "datasets": [
+    "mount_benchmark_physical_100_final/mount_benchmark.csv",
+    "mount_benchmark_targeted_36_physical/mount_benchmark.csv",
+    "mount_benchmark_targeted_30_model03_physical/mount_benchmark.csv"
+  ],
+  "model_type": "two_regimes_axis_max_and_ha_zero_crossing",
+  "regime_definitions": {
+    "normal": "start_ha_hours and target_ha_hours do not have opposite signs",
+    "ha_zero_crossing": "start_ha_hours and target_ha_hours have opposite signs; geometric only, not pier side or meridian flip"
+  },
+  "feature_definitions": {
+    "abs_delta_ra_deg": "abs(wrapped target_ra_hours - start_ra_hours) * 15",
+    "abs_delta_dec_deg": "abs(target_dec_deg - start_dec_deg)",
+    "axis_max_deg": "max(abs_delta_ra_deg, abs_delta_dec_deg)",
+    "ha_zero_crossing": "start_ha_hours * target_ha_hours < 0"
+  },
+  "normal_model": {
+    "intercept": 13.0858,
+    "axis_max_coefficient": 0.322017,
+    "safety_margin_sec": 14.2204
+  },
+  "ha_zero_crossing_model": {
+    "intercept": 64.1933,
+    "distance_coefficient": 0.0,
+    "safe_sec": 85.4585
+  },
+  "safety_percentile": 95,
+  "safety_model": {
+    "normal_residual_margin_sec": 14.2204,
+    "ha_zero_crossing_residual_margin_sec": 21.2652,
+    "strategy": "frozen regime-specific OOF conformal higher-quantile residual"
+  },
+  "cv_method": "stratified_shuffled_5_fold_seed_20260820",
+  "cv_metrics": {
+    "global": {"mae_sec": 7.06, "rmse_sec": 9.66, "r2": 0.8355},
+    "normal": {"mae_sec": 5.00, "rmse_sec": 6.35, "underestimation_p95_sec": 17.76},
+    "ha_zero_crossing": {"mae_sec": 10.80, "rmse_sec": 13.76, "underestimation_p95_sec": 25.42}
+  },
+  "safe_cv_metrics": {
+    "coverage_global_percent": 95.45,
+    "coverage_normal_percent": 95.29,
+    "coverage_crossing_percent": 95.74
+  },
+  "training_domain": {
+    "axis_max_deg_range": [1.0207131886302614, 175.1644497858915],
+    "angular_distance_deg_range": [1.0985357864391463, 109.27150370293883],
+    "ha_hours_range": [-9.793504545450093, 5.648812334614377]
+  }
+}
