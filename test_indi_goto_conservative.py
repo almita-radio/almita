@@ -108,6 +108,65 @@ def test_goto_accepts_idle_after_stable_convergence():
     asyncio.run(run_test())
 
 
+def test_goto_retries_once_after_idle_just_outside_tolerance():
+    async def run_test():
+        telescope = controller()
+
+        class RecordingWriter:
+            def __init__(self):
+                self.messages = []
+
+            def write(self, data):
+                self.messages.append(data.decode())
+
+            async def drain(self):
+                pass
+
+        class SequencedReader:
+            def __init__(self):
+                self.responses = [
+                    '<setNumberVector name="EQUATORIAL_EOD_COORD" state="Idle">'
+                    '<oneNumber name="RA">1</oneNumber><oneNumber name="DEC">0</oneNumber>'
+                    '</setNumberVector>',
+                    '<setNumberVector name="EQUATORIAL_EOD_COORD" state="Busy">'
+                    '<oneNumber name="RA">1</oneNumber><oneNumber name="DEC">0</oneNumber>'
+                    '</setNumberVector>',
+                    '<setNumberVector name="EQUATORIAL_EOD_COORD" state="Idle">'
+                    '<oneNumber name="RA">1.98</oneNumber><oneNumber name="DEC">0</oneNumber>'
+                    '</setNumberVector>',
+                    '<setNumberVector name="EQUATORIAL_EOD_COORD" state="Busy">'
+                    '<oneNumber name="RA">1.98</oneNumber><oneNumber name="DEC">0</oneNumber>'
+                    '</setNumberVector>',
+                    '<setNumberVector name="EQUATORIAL_EOD_COORD" state="Idle">'
+                    '<oneNumber name="RA">2</oneNumber><oneNumber name="DEC">0</oneNumber>'
+                    '</setNumberVector>',
+                    '<setNumberVector name="EQUATORIAL_EOD_COORD" state="Idle">'
+                    '<oneNumber name="RA">2</oneNumber><oneNumber name="DEC">0</oneNumber>'
+                    '</setNumberVector>',
+                ]
+
+            async def read(self, _):
+                return self.responses.pop(0).encode()
+
+        async def fixed_coordinates(force_refresh=False):
+            return (1.0, 0.0) if not force_refresh else (2.0, 0.0)
+
+        writer = RecordingWriter()
+        telescope.writer = writer
+        telescope.reader = SequencedReader()
+        telescope.get_coordinates = fixed_coordinates
+
+        assert await telescope.goto(2.0, 0.0) is True
+        coordinate_commands = [
+            message for message in writer.messages
+            if '<newNumberVector' in message and 'name="EQUATORIAL_EOD_COORD"' in message
+        ]
+        assert len(coordinate_commands) == 2
+        assert telescope.final_target_error_deg == pytest.approx(0.0)
+
+    asyncio.run(run_test())
+
+
 def test_incremental_xml_split_between_reads():
     telescope = controller()
     first = telescope._feed_xml_messages(

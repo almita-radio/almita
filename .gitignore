@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv/
 env/
 ENV/
 build/
@@ -63,3 +64,7 @@ explore_indi.py
 explore_telescope_properties.py
 passive_capture.py
 ESTADO_ACTUAL.md
+
+# Outputs generados por campañas físicas de montura
+mount_benchmark_output*/
+mount_benchmark_physical_*/

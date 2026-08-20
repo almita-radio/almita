@@ -717,6 +717,8 @@ class INDITelescopeControl:
             convergence_tol_deg = 0.25
             settle_tol_deg = 0.02
             settle_required_hits = 2
+            corrective_retry_limit_deg = 1.0
+            corrective_retry_sent = False
             self.last_slew_busy_duration_sec = None
             self.last_slew_command_to_ok_sec = None
             
@@ -763,14 +765,32 @@ class INDITelescopeControl:
                             await asyncio.sleep(poll_interval_sec)
                             continue
                         elif eod_state in ("Ok", "Idle"):
-                            if ok_detected_at is None:
+                            if last_error_deg is not None and last_error_deg <= convergence_tol_deg and stable_hits >= settle_required_hits:
                                 ok_detected_at = asyncio.get_event_loop().time()
                                 if busy_started_at is not None:
                                     busy_finished_at = ok_detected_at
-
-                            if last_error_deg is not None and last_error_deg <= convergence_tol_deg and stable_hits >= settle_required_hits:
                                 self.log(f"✓ GOTO completado (polling: {poll_count} iteraciones, {elapsed:.1f}s, error~{last_error_deg:.3f}°)")
                                 break
+
+                            if (
+                                eod_state == "Idle"
+                                and busy_started_at is not None
+                                and not corrective_retry_sent
+                                and last_error_deg is not None
+                                and convergence_tol_deg < last_error_deg <= corrective_retry_limit_deg
+                            ):
+                                corrective_retry_sent = True
+                                self.log(
+                                    "↻ GOTO correctivo único: mount Idle fuera de tolerancia "
+                                    f"(error~{last_error_deg:.3f}°); reenviando el mismo target"
+                                )
+                                await self._send_command(goto_cmd)
+                                busy_started_at = None
+                                busy_finished_at = None
+                                last_error_deg = None
+                                stable_hits = 0
+                                await asyncio.sleep(poll_interval_sec)
+                                continue
 
                             self.log_verbose(
                                 f"   Estado: {eod_state} recibido, esperando convergencia real de coordenadas..."
