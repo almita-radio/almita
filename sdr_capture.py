@@ -7,6 +7,8 @@ HDF5 output format with complete metadata for radio astronomy
 """
 
 import asyncio
+import json
+import os
 import time
 import socket
 import struct
@@ -55,6 +57,105 @@ class CaptureMetrics:
             f"  • Throughput:    {self.throughput_mbps:.2f} MB/s",
         ]
         return "\n".join(line for line in lines if line is not None)
+
+
+def _hdf5_attribute_value(value: Any) -> Any:
+    """Convert capture metadata to values supported by HDF5 attributes."""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True)
+    return value
+
+
+def validate_hdf5_capture(path: Path, expected_samples: Optional[int] = None,
+                          expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Validate capture structure and, when supplied, point/session identity."""
+    essential = {
+        "center_frequency_hz", "sample_rate_hz", "num_samples",
+        "capture_status", "final_filename", "created_at",
+    }
+    with h5py.File(path, "r") as capture_file:
+        if "iq_data" not in capture_file:
+            raise ValueError("HDF5 validation failed: iq_data dataset is missing")
+        stored_samples = int(capture_file.attrs.get("num_samples", -1))
+        coherent_samples = expected_samples if expected_samples is not None else stored_samples
+        if coherent_samples < 0 or capture_file["iq_data"].shape != (coherent_samples * 2,):
+            raise ValueError("HDF5 validation failed: incoherent IQ sample count")
+        if expected_samples is not None and stored_samples != expected_samples:
+            raise ValueError("HDF5 validation failed: num_samples is incoherent")
+        missing = essential.difference(capture_file.attrs.keys())
+        if missing:
+            raise ValueError(f"HDF5 validation failed: missing metadata {sorted(missing)}")
+        attributes = {key: capture_file.attrs[key] for key in capture_file.attrs.keys()}
+        for key, expected in (expected_identity or {}).items():
+            if expected is None:
+                continue
+            if key not in attributes or str(attributes[key]) != str(expected):
+                raise ValueError(f"HDF5 validation failed: identity mismatch for {key}")
+        return attributes
+
+
+def _validate_hdf5_capture(path: Path, expected_samples: int) -> None:
+    """Compatibility wrapper used by the atomic writer and fault-injection tests."""
+    validate_hdf5_capture(path, expected_samples=expected_samples)
+
+
+def write_hdf5_atomic(output_file: str, iq_samples: np.ndarray,
+                      capture_metadata: Dict[str, Any], expected_samples: int) -> Path:
+    """Write, sync, validate and atomically promote one HDF5 capture."""
+    final_path = Path(output_file)
+    part_path = final_path.with_name(f"{final_path.name}.part")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with h5py.File(part_path, "w") as capture_file:
+            dset = capture_file.create_dataset(
+                "iq_data", data=iq_samples, compression="gzip",
+                compression_opts=4, chunks=True,
+            )
+            dset.attrs["description"] = "Interleaved I/Q samples (uint8)"
+            dset.attrs["format"] = "I[0], Q[0], I[1], Q[1], ..."
+            capture_file.create_dataset(
+                "i_samples", data=iq_samples[0::2], compression="gzip", compression_opts=4
+            ).attrs["description"] = "In-phase component (I)"
+            capture_file.create_dataset(
+                "q_samples", data=iq_samples[1::2], compression="gzip", compression_opts=4
+            ).attrs["description"] = "Quadrature component (Q)"
+            for key, value in capture_metadata.items():
+                if value is not None:
+                    capture_file.attrs[key] = _hdf5_attribute_value(value)
+            capture_file.attrs["hdf5_completed_at"] = datetime.now(timezone.utc).isoformat()
+            capture_file.attrs["software"] = "INDIpy SDR Capture"
+            capture_file.attrs["file_format_version"] = "1.1"
+            capture_file.attrs["created_by"] = "sdr_capture.py"
+            capture_file.flush()
+            try:
+                handle = capture_file.id.get_vfd_handle()
+                if isinstance(handle, int):
+                    os.fsync(handle)
+            except (AttributeError, OSError, TypeError):
+                pass
+
+        _validate_hdf5_capture(part_path, expected_samples)
+        fd = os.open(part_path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(part_path, final_path)
+        try:
+            directory_fd = os.open(final_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+        return final_path
+    except Exception:
+        try:
+            part_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 class SDRCapture:
@@ -470,11 +571,14 @@ class SDRCapture:
         if output_path.suffix not in ['.h5', '.hdf5']:
             output_file = str(output_path.with_suffix('.h5'))
         
+        now_utc = datetime.now(timezone.utc)
         # Prepare complete metadata
         capture_metadata = {
             # Time information
-            'capture_start_utc': datetime.now(timezone.utc).isoformat(),
-            'unix_timestamp': time.time(),
+            'capture_start_utc': (metadata or {}).get('capture_started_at', now_utc.isoformat()),
+            'capture_completed_at': now_utc.isoformat(),
+            'unix_timestamp': now_utc.timestamp(),
+            'created_at': now_utc.isoformat(),
             
             # SDR Configuration
             'center_frequency_hz': metadata.get('center_freq', 1420405752) if metadata else 1420405752,
@@ -486,6 +590,8 @@ class SDRCapture:
             
             # Capture parameters
             'duration_seconds': duration,
+            'requested_capture_duration_sec': duration,
+            'actual_capture_duration_sec': capture_time,
             'num_samples': actual_samples,
             'capture_time_seconds': capture_time,
             'throughput_mbps': bytes_received / capture_time / 1024 / 1024,
@@ -494,12 +600,17 @@ class SDRCapture:
             'data_type': 'IQ_uint8',
             'sample_format': 'interleaved',  # I,Q,I,Q,I,Q...
             'bits_per_sample': 8,
+            'capture_status': 'success',
+            'file_state': 'complete',
+            'final_filename': Path(output_file).name,
         }
         
         # Add observation metadata if provided
         if metadata:
+            capture_metadata.update(metadata)
             capture_metadata.update({
                 'target_ra_hours': metadata.get('ra_hours', None),
+                'target_dec_deg': metadata.get('dec_degrees', None),
                 'target_dec_degrees': metadata.get('dec_degrees', None),
                 'target_ra_hms': metadata.get('ra_hms', None),
                 'target_dec_dms': metadata.get('dec_dms', None),
@@ -518,35 +629,10 @@ class SDRCapture:
                 'observer_location': metadata.get('observer_location', None),
             })
         
-        # Save to HDF5
-        with h5py.File(output_file, 'w') as f:
-            # Main data dataset with compression
-            dset = f.create_dataset(
-                'iq_data',
-                data=iq_samples,
-                compression='gzip',
-                compression_opts=4,  # Balance between speed and size
-                chunks=True
-            )
-            dset.attrs['description'] = 'Interleaved I/Q samples (uint8)'
-            dset.attrs['format'] = 'I[0], Q[0], I[1], Q[1], ...'
-            
-            # Separate I and Q for convenience (virtual datasets or links)
-            f.create_dataset('i_samples', data=iq_samples[0::2], compression='gzip', compression_opts=4)
-            f['i_samples'].attrs['description'] = 'In-phase component (I)'
-            
-            f.create_dataset('q_samples', data=iq_samples[1::2], compression='gzip', compression_opts=4)
-            f['q_samples'].attrs['description'] = 'Quadrature component (Q)'
-            
-            # Store all metadata as attributes
-            for key, value in capture_metadata.items():
-                if value is not None:
-                    f.attrs[key] = value
-            
-            # Software version info
-            f.attrs['software'] = 'INDIpy SDR Capture'
-            f.attrs['file_format_version'] = '1.0'
-            f.attrs['created_by'] = 'sdr_capture.py'
+        # The final name becomes visible only after close, sync and validation.
+        output_path = write_hdf5_atomic(
+            output_file, iq_samples, capture_metadata, actual_samples
+        )
         
         write_time = time.perf_counter() - write_start
         

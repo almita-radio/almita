@@ -14,12 +14,25 @@ import csv
 import json
 import asyncio
 import argparse
+import importlib
+import math
+import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
+import astropy.units as u
+from astropy.coordinates import EarthLocation
+from astropy.coordinates import AltAz, ICRS, SkyCoord
+from astropy.time import Time
 from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
-from sdr_capture import SDRCapture, CaptureMetrics
+from sdr_capture import SDRCapture, CaptureMetrics, validate_hdf5_capture
+
+
+def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
+    """Single gate between preflight and any physical observation execution."""
+    return bool(report.get("success")) and not preflight_only
 
 
 class CaptureExecutor:
@@ -32,7 +45,9 @@ class CaptureExecutor:
                  config_path: str = "observer_config.json",
                  verbose: bool = False, sdr_mode: str = "network",
                  sdr_host: str = "localhost", sdr_port: int = 1234,
-                 sdr_freq: int = 1420405752, sdr_sample_rate: int = 2400000):
+                 sdr_freq: int = 1420405752, sdr_sample_rate: int = 2400000,
+                 min_altitude_deg: Optional[float] = None,
+                 tracking_timeout: float = 5.0):
         """
         Initialize capture executor
 
@@ -60,6 +75,10 @@ class CaptureExecutor:
         self.session_id = session_id
         self.current_session_data = None
         self.verbose = verbose
+        self.time_provider = Time.now
+        self.meridian_partition_metadata = {}
+        self.actual_capture_order_offset = 0
+        self.grid_metadata = self._load_grid_metadata()
         
         # SDR configuration
         self.sdr_mode = sdr_mode
@@ -74,9 +93,13 @@ class CaptureExecutor:
         if not config_full_path.is_absolute():
             config_full_path = self.csv_path.parent / config_path
         
+        self.observer_config_path = config_full_path
+        self.observer_config_preexisting = config_full_path.is_file()
+        self.observer_config_valid = False
         try:
             with open(config_full_path, 'r') as f:
                 self.observer_config = json.load(f)
+            self.observer_config_valid = True
             if self.verbose:
                 self.log(f"✓ Observer config loaded: {config_full_path}")
                 self.log(f"  Location: {self.observer_config.get('observer', {}).get('name', 'Unknown')}")
@@ -104,13 +127,184 @@ class CaptureExecutor:
             self.log(f"⚠️  Invalid JSON in observer config: {e}", "ERROR", force=True)
             self.observer_config = {}
 
+        defaults = self.observer_config.get("observation_defaults", {}) if isinstance(self.observer_config, dict) else {}
+        self.min_altitude_deg = float(
+            min_altitude_deg if min_altitude_deg is not None else defaults.get("min_altitude_deg", 30.0)
+        )
+        self.tracking_timeout = float(tracking_timeout)
+        self.visibility_deferred_count = 0
+
         if self.verbose:
             self.log(f"Capture Executor initialized")
             self.log(f"CSV plan: {self.csv_path}")
 
         # Verify CSV exists
-        if not self.csv_path.exists():
-            raise FileNotFoundError(f"CSV file not found: {self.csv_path}")
+        # Existence/readability is a critical preflight check. load_observation_plan
+        # retains its existing fail-fast behavior for normal CLI use.
+
+    def _load_grid_metadata(self) -> Dict:
+        """Load generator-owned beam/grid parameters without hardcoded defaults."""
+        metadata_path = self.csv_path.parent / "grid_metadata.json"
+        try:
+            with open(metadata_path, "r") as metadata_file:
+                metadata = json.load(metadata_file)
+            grid = metadata.get("grid", {})
+            return grid if isinstance(grid, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+
+    async def _optional_mount_coordinates(self):
+        """Read mount coordinates for provenance without making capture depend on them."""
+        try:
+            if self.telescope and hasattr(self.telescope, "get_coordinates"):
+                return await self.telescope.get_coordinates(force_refresh=True)
+        except Exception as exc:
+            self.log(f"Optional mount coordinate read failed: {exc}", "WARNING")
+        return None, None
+
+    def _session_capture_directories(self, session_name: str) -> List[Path]:
+        root = self._capture_output_root()
+        if not root.is_dir():
+            return []
+        prefix = f"{session_name}-"
+        return [path for path in root.iterdir() if path.is_dir() and path.name.startswith(prefix)]
+
+    @staticmethod
+    def _quarantine_invalid_final(path: Path) -> Path:
+        """Preserve an invalid final under an unambiguous diagnostic name."""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        quarantine = path.with_name(f"{path.name}.invalid-{stamp}")
+        os.replace(path, quarantine)
+        return quarantine
+
+    def reconcile_resume(self, rows: List[Dict]) -> Dict:
+        """Reconcile CSV state against identity-validated final HDF5 captures."""
+        report = {
+            "valid_successes_preserved": 0, "promoted": 0,
+            "reset_to_planned": 0, "invalid_finals": 0,
+            "partials_cleaned": 0, "failed_preserved": 0,
+            "orphan_partials": 0, "next_actual_capture_order": 1,
+        }
+        valid_orders = []
+        associated_parts = set()
+
+        for row in rows:
+            status = str(row.get("capture_status", "planned")).strip().lower()
+            session_name = row.get("session_name", "unknown_session")
+            final_name = f"{Path(row['data_filename']).stem}.h5"
+            directories = self._session_capture_directories(session_name)
+            finals = [directory / final_name for directory in directories if (directory / final_name).is_file()]
+            parts = [directory / f"{final_name}.part" for directory in directories if (directory / f"{final_name}.part").is_file()]
+            associated_parts.update(parts)
+            identity = {
+                "point_id": row.get("point_id") or row.get("point_number"),
+                "session_id": self.session_id,
+                "scan_order": row.get("scan_order"),
+            }
+            valid = []
+            for final in finals:
+                try:
+                    attrs = validate_hdf5_capture(final, expected_identity=identity)
+                    valid.append((final, attrs))
+                except Exception as exc:
+                    quarantine = self._quarantine_invalid_final(final)
+                    report["invalid_finals"] += 1
+                    self.log(f"Invalid HDF5 quarantined: {final} -> {quarantine} ({exc})", "WARNING", force=True)
+
+            if valid:
+                _, attrs = max(valid, key=lambda item: item[0].stat().st_mtime)
+                stored_order = attrs.get("actual_capture_order")
+                if stored_order is not None:
+                    order = int(stored_order)
+                    valid_orders.append(order)
+                    row["actual_capture_order"] = str(order)
+                row["capture_status"] = "success"
+                row["resume_reconciled"] = "true"
+                if status in {"success", "completed"}:
+                    report["valid_successes_preserved"] += 1
+                    row["resume_reconcile_reason"] = "valid_success_preserved"
+                elif status == "failed":
+                    # Failed is deliberately visible and never auto-retried in P0-04.
+                    row["capture_status"] = "failed"
+                    report["failed_preserved"] += 1
+                    row["resume_reconcile_reason"] = "failed_preserved"
+                else:
+                    report["promoted"] += 1
+                    row["resume_reconcile_reason"] = "valid_hdf5_after_interrupted_status_update"
+            elif status == "failed":
+                report["failed_preserved"] += 1
+                row["resume_reconciled"] = "true"
+                row["resume_reconcile_reason"] = "failed_preserved"
+            elif status not in {"planned", "capturing", "success", "completed"}:
+                row["resume_reconciled"] = "true"
+                row["resume_reconcile_reason"] = "unknown_status_preserved"
+                self.log(f"Unknown capture status preserved for point {row.get('point_number')}: {status}", "WARNING", force=True)
+            else:
+                if status in {"success", "completed"}:
+                    reason = "success_without_valid_hdf5"
+                elif status == "capturing":
+                    reason = "capturing_without_valid_hdf5"
+                else:
+                    reason = "planned_without_valid_hdf5"
+                if status != "planned" or finals or parts:
+                    report["reset_to_planned"] += 1
+                row["capture_status"] = "planned"
+                row["actual_capture_order"] = ""
+                row["resume_reconciled"] = "true"
+                row["resume_reconcile_reason"] = reason
+
+            for part in parts:
+                part.unlink()
+                report["partials_cleaned"] += 1
+
+        # Parts with no exact data_filename association are evidence, not garbage.
+        session_names = {row.get("session_name", "unknown_session") for row in rows}
+        all_parts = {
+            part
+            for name in session_names
+            for directory in self._session_capture_directories(name)
+            for part in directory.glob("*.h5.part")
+        }
+        orphan_parts = sorted(all_parts.difference(associated_parts))
+        report["orphan_partials"] = len(orphan_parts)
+        for part in orphan_parts:
+            self.log(f"Orphan partial preserved for diagnosis: {part}", "WARNING", force=True)
+
+        self.actual_capture_order_offset = max(valid_orders, default=0)
+        report["next_actual_capture_order"] = self.actual_capture_order_offset + 1
+        fieldnames = []
+        for row in rows:
+            for field in row.keys():
+                if field not in fieldnames:
+                    fieldnames.append(field)
+        for field in ("resume_reconciled", "resume_reconcile_reason"):
+            if field not in fieldnames:
+                fieldnames.append(field)
+        with open(self.csv_path, "w", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        if self.session_id:
+            successes = sum(row.get("capture_status") == "success" for row in rows)
+            failures = sum(row.get("capture_status") == "failed" for row in rows)
+            completed_points = [int(row["point_number"]) for row in rows if row.get("capture_status") == "success"]
+            self.session_manager.update_session(
+                self.session_id, status="active", points_completed=successes,
+                points_failed=failures, last_point_completed=max(completed_points, default=0),
+            )
+        self.log(
+            "Resume reconciliation:\n"
+            f"- valid successes preserved: {report['valid_successes_preserved']}\n"
+            f"- promoted from capturing/planned by valid HDF5: {report['promoted']}\n"
+            f"- reset to planned: {report['reset_to_planned']}\n"
+            f"- invalid finals: {report['invalid_finals']}\n"
+            f"- partials cleaned: {report['partials_cleaned']}\n"
+            f"- failed preserved: {report['failed_preserved']}\n"
+            f"- next actual_capture_order: {report['next_actual_capture_order']}",
+            force=True,
+        )
+        return report
     
     def log(self, message: str, level: str = "INFO", force: bool = False):
         """Print timestamped log message
@@ -143,6 +337,17 @@ class CaptureExecutor:
                 reader = csv.DictReader(csvfile)
                 self.observation_points = list(reader)
 
+            if resume:
+                self.reconcile_resume(self.observation_points)
+
+            if not resume:
+                existing_actual_orders = [
+                    int(point["actual_capture_order"])
+                    for point in self.observation_points
+                    if str(point.get("actual_capture_order", "")).strip()
+                ]
+                self.actual_capture_order_offset = max(existing_actual_orders, default=0)
+
             # Validate CSV is not empty (has actual data rows)
             if len(self.observation_points) == 0:
                 self.log("", "ERROR")
@@ -170,6 +375,8 @@ class CaptureExecutor:
                     point['end_time'] = ''
                     point['duration'] = ''
                     point['error_message'] = ''
+                    point['actual_capture_order'] = ''
+                self.actual_capture_order_offset = 0
                 self.log(f"   ✓ Total points to capture: {len(self.observation_points)}", force=True)
             elif resume:
                 # When resuming, only load 'planned' points (not yet captured)
@@ -196,11 +403,312 @@ class CaptureExecutor:
                 self.log("Use --force to re-execute all points", "INFO")
                 return False
 
+            self.partition_pending_by_hour_angle()
+
             return True
 
         except Exception as e:
             self.log(f"Error loading CSV: {e}", "ERROR")
             return False
+
+    def _observer_location(self) -> EarthLocation:
+        """Build the same observer location used elsewhere in ALMITA."""
+        observer = self.observer_config["observer"]
+        return EarthLocation(
+            lat=float(observer["latitude_deg"]) * u.deg,
+            lon=float(observer["longitude_deg"]) * u.deg,
+            height=float(observer.get("elevation_m", 0.0)) * u.m,
+        )
+
+    @staticmethod
+    def _wrapped_hour_angle(lst_hours: float, ra_hours: float) -> float:
+        return (lst_hours - ra_hours + 12.0) % 24.0 - 12.0
+
+    def hour_angle_for_point(self, point: Dict, obstime: Optional[Time] = None) -> float:
+        """Return current geometric HA in [-12, 12) hours."""
+        when = obstime or self.time_provider()
+        location = self._observer_location()
+        lst = float(when.sidereal_time("apparent", longitude=location.lon).hour)
+        return self._wrapped_hour_angle(lst, float(point["target_ra_hours"]))
+
+    @staticmethod
+    def _scan_order(point: Dict) -> int:
+        """Grid Generator's authoritative serpentine order is scan_order."""
+        return int(point["scan_order"])
+
+    def partition_pending_by_hour_angle(self, obstime: Optional[Time] = None) -> None:
+        """Partition pending points by HA sign without changing serpentine order."""
+        when = obstime or self.time_provider()
+        ordered = sorted(self.observation_points, key=self._scan_order)
+        for point in ordered:
+            ha = self.hour_angle_for_point(point, when)
+            point["_initial_ha_hours"] = ha
+            point["_ha_block"] = "negative" if ha < 0 else "positive"
+            point["_reclassified_due_to_ha_change"] = False
+        first_block = ordered[0]["_ha_block"] if ordered else None
+        location = self._observer_location()
+        initial_lst = float(when.sidereal_time("apparent", longitude=location.lon).hour)
+        self.meridian_partition_metadata = {
+            "meridian_partition_enabled": True,
+            "initial_time_utc": when.utc.isot,
+            "initial_lst_hours": initial_lst,
+            "first_block": first_block,
+        }
+        self.observation_points = ordered
+        self.log(
+            f"Meridian partition enabled | initial_time={when.utc.isot} | "
+            f"initial_lst={initial_lst:.6f}h | first_block={first_block}",
+            force=True,
+        )
+
+    def iter_meridian_partitioned_points(self):
+        """Yield targets blockwise, reclassifying a target if its HA sign changes."""
+        queues = {"negative": [], "positive": []}
+        for point in self.observation_points:
+            queues[point["_ha_block"]].append(point)
+        first = self.meridian_partition_metadata.get("first_block")
+        active = first or "negative"
+        other = "positive" if active == "negative" else "negative"
+        while queues[active] or queues[other]:
+            while queues[active]:
+                point = queues[active].pop(0)
+                ha = self.hour_angle_for_point(point)
+                actual = "negative" if ha < 0 else "positive"
+                if actual != active:
+                    point["_ha_block"] = actual
+                    point["_reclassified_due_to_ha_change"] = True
+                    queues[actual].append(point)
+                    queues[actual].sort(key=self._scan_order)
+                    self.log(
+                        f"Point #{point['point_number']} changed HA sign; moved to {actual} block",
+                        force=True,
+                    )
+                    continue
+                point["_ha_at_selection"] = ha
+                yield point
+            active, other = other, active
+
+    def persist_selection_metadata(self, point: Dict, actual_capture_order: int) -> None:
+        """Persist actual order and HA selection metadata without altering scan_order."""
+        new_fields = ["actual_capture_order", "ha_at_selection", "ha_block", "reclassified_due_to_ha_change"]
+        with open(self.csv_path, "r", newline="") as csvfile:
+            reader = csv.DictReader(csvfile); fieldnames = list(reader.fieldnames or []); rows = list(reader)
+        for field in new_fields:
+            if field not in fieldnames: fieldnames.append(field)
+        for row in rows:
+            if int(row["point_number"]) == int(point["point_number"]):
+                row.update({"actual_capture_order": str(actual_capture_order), "ha_at_selection": f"{float(point['_ha_at_selection']):.9f}", "ha_block": point["_ha_block"], "reclassified_due_to_ha_change": str(bool(point["_reclassified_due_to_ha_change"])).lower()})
+                break
+        with open(self.csv_path, "w", newline="") as csvfile:
+            writer=csv.DictWriter(csvfile,fieldnames=fieldnames);writer.writeheader();writer.writerows(rows)
+
+    def persist_runtime_metadata(self, point: Dict, values: Dict) -> None:
+        """Add compatible per-point runtime fields while preserving capture_status."""
+        with open(self.csv_path, "r", newline="") as csvfile:
+            reader=csv.DictReader(csvfile);fieldnames=list(reader.fieldnames or []);rows=list(reader)
+        for field in values:
+            if field not in fieldnames:fieldnames.append(field)
+        for row in rows:
+            if int(row["point_number"])==int(point["point_number"]):
+                row.update({key:str(value).lower() if isinstance(value,bool) else str(value) for key,value in values.items()});break
+        with open(self.csv_path,"w",newline="") as csvfile:
+            writer=csv.DictWriter(csvfile,fieldnames=fieldnames);writer.writeheader();writer.writerows(rows)
+
+    def visibility_for_point(self, point: Dict, obstime: Optional[Time] = None) -> Dict:
+        """Calculate target Alt/Az/HA at the actual selection time."""
+        when=obstime or self.time_provider();location=self._observer_location()
+        target=SkyCoord(ra=float(point["target_ra_hours"])*u.hourangle,
+                        dec=float(point["target_dec_degrees"])*u.deg,frame=ICRS())
+        local=target.transform_to(AltAz(obstime=when,location=location))
+        return {"altitude_deg_at_goto":float(local.alt.deg),"azimuth_deg_at_goto":float(local.az.deg),
+                "ha_hours_at_goto":self.hour_angle_for_point(point,when),"visibility_checked_at":when.utc.isot,
+                "min_altitude_deg":self.min_altitude_deg}
+
+    def iter_runtime_visible_points(self):
+        """Yield each currently visible point once; deferred targets remain planned."""
+        self.visibility_deferred_count=0
+        for point in self.iter_meridian_partitioned_points():
+            visibility=self.visibility_for_point(point);point.update({f"_{k}":v for k,v in visibility.items()})
+            if visibility["altitude_deg_at_goto"] < self.min_altitude_deg:
+                self.visibility_deferred_count+=1
+                self.persist_runtime_metadata(point,{"visibility_deferred":True,"visibility_deferred_at":visibility["visibility_checked_at"],"altitude_deg":f"{visibility['altitude_deg_at_goto']:.9f}","min_altitude_deg":self.min_altitude_deg})
+                self.log(f"Point #{point['point_number']} deferred_visibility: altitude={visibility['altitude_deg_at_goto']:.3f}° < {self.min_altitude_deg:.3f}°",force=True)
+                continue
+            self.persist_runtime_metadata(point,{**visibility,"visibility_deferred":False})
+            yield point
+
+    async def confirm_tracking_on(self) -> tuple[bool,str,bool]:
+        """Ensure and verify tracking ON using only the controller's public API."""
+        state=await self.telescope.get_tracking_state(timeout=1.0);requested=False
+        if state=="alert":return False,state,requested
+        if state!="on":
+            requested=True
+            if not await self.telescope.set_tracking(True):return False,state,requested
+        confirmed=await self.telescope.wait_tracking_state(expected_on=True,timeout=self.tracking_timeout)
+        if not confirmed:
+            state=await self.telescope.get_tracking_state(timeout=1.0)
+            return False,state,requested
+        return True,"on",requested
+
+    async def ensure_tracking_off(self) -> bool:
+        """Best-effort final tracking shutdown; never masks an earlier failure."""
+        if self.telescope is None:return True
+        try:
+            command_ok=await self.telescope.set_tracking(False)
+            confirmed=command_ok and await self.telescope.wait_tracking_state(expected_on=False,timeout=self.tracking_timeout)
+            if not confirmed:self.log("Tracking OFF could not be confirmed", "WARNING", force=True)
+            return bool(confirmed)
+        except Exception as exc:
+            self.log(f"Tracking OFF best-effort failed: {type(exc).__name__}: {exc}","WARNING",force=True);return False
+
+    def _capture_output_root(self) -> Path:
+        base_dir = self.csv_path.parent.parent if self.csv_path.parent.name == 'data' else self.csv_path.parent
+        return base_dir / 'data' / 'iq'
+
+    async def _read_indi_preflight_properties(self) -> Dict[str, str]:
+        """Read optional INDI safety properties without changing mount state."""
+        queries = [
+            f"{self.device_name}.EQUATORIAL_EOD_COORD._STATE",
+            f"{self.device_name}.TELESCOPE_MOTION_NS.MOTION_NORTH",
+            f"{self.device_name}.TELESCOPE_MOTION_NS.MOTION_SOUTH",
+            f"{self.device_name}.TELESCOPE_MOTION_WE.MOTION_WEST",
+            f"{self.device_name}.TELESCOPE_MOTION_WE.MOTION_EAST",
+            f"{self.device_name}.TELESCOPE_HOME._STATE",
+            f"{self.device_name}.TELESCOPE_HOME.GO",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            "indi_getprop", "-h", self.host, "-p", str(self.port), *queries,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=5.0)
+        properties = {}
+        for line in stdout.decode(errors="replace").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                properties[key.split(f"{self.device_name}.", 1)[-1]] = value
+        return properties
+
+    async def run_preflight(self, capture_time: float, *, disk_safety_factor: float = 1.25,
+                            sdr_factory=SDRCapture, h5py_loader=None, disk_usage=shutil.disk_usage,
+                            indi_property_reader=None) -> Dict:
+        """Validate session prerequisites without GOTO, tracking, or IQ capture."""
+        checks = []
+        def record(name, status, detail):
+            checks.append({"name": name, "status": status, "detail": detail})
+
+        required_fields = {
+            "point_number", "scan_order", "target_ra_hours", "target_dec_degrees",
+            "capture_status", "start_time", "end_time", "duration", "error_message",
+            "data_filename", "session_name",
+        }
+        planned_points = []
+        try:
+            with open(self.csv_path, "r", newline="") as handle:
+                reader = csv.DictReader(handle); fields = set(reader.fieldnames or []); rows = list(reader)
+            missing = sorted(required_fields - fields)
+            if missing: record("Grid", "FAIL", f"missing required fields: {missing}")
+            else:
+                planned_points = [row for row in rows if row.get("capture_status") == "planned"]
+                valid_targets = bool(planned_points)
+                try:
+                    for row in planned_points:
+                        ra = float(row["target_ra_hours"]); dec = float(row["target_dec_degrees"]); order = int(row["scan_order"])
+                        if not all(math.isfinite(v) for v in (ra, dec)) or not 0 <= ra < 24 or not -90 <= dec <= 90 or order < 1:
+                            valid_targets = False; break
+                except (TypeError, ValueError): valid_targets = False
+                record("Grid", "PASS" if valid_targets else "FAIL", f"{len(planned_points)} planned points with valid coordinates/order={valid_targets}")
+        except Exception as exc:
+            record("Grid", "FAIL", f"not readable: {type(exc).__name__}: {exc}")
+
+        observer = self.observer_config.get("observer", {}) if isinstance(self.observer_config, dict) else {}
+        observer_ok = self.observer_config_preexisting and self.observer_config_valid
+        try:
+            observer_values = [float(observer[k]) for k in ("latitude_deg", "longitude_deg")]
+            observer_ok = observer_ok and all(math.isfinite(v) for v in observer_values)
+        except (KeyError, TypeError, ValueError): observer_ok = False
+        record("Observer config", "PASS" if observer_ok else "FAIL", str(self.observer_config_path))
+
+        numeric_ok = capture_time > 0 and self.sdr_sample_rate > 0 and self.sdr_freq > 0 and 0 < self.sdr_port < 65536 and disk_safety_factor >= 1 and -90 <= self.min_altitude_deg <= 90 and self.tracking_timeout > 0
+        record("Numeric parameters", "PASS" if numeric_ok else "FAIL", f"duration={capture_time}, rate={self.sdr_sample_rate}, frequency={self.sdr_freq}, margin={disk_safety_factor}, min_altitude={self.min_altitude_deg}, tracking_timeout={self.tracking_timeout}")
+
+        output_root = self._capture_output_root(); hdf5_ok = False
+        try:
+            output_root.mkdir(parents=True, exist_ok=True)
+            h5py = (h5py_loader or (lambda: importlib.import_module("h5py")))()
+            descriptor, temp_name = tempfile.mkstemp(prefix=".almita-preflight-", suffix=".h5", dir=output_root)
+            os.close(descriptor)
+            try:
+                with h5py.File(temp_name, "w") as handle: handle.create_dataset("probe", data=[0, 1])
+            finally:
+                Path(temp_name).unlink(missing_ok=True)
+            hdf5_ok = True; record("HDF5/output", "PASS", f"temporary HDF5 created and removed in {output_root}")
+        except Exception as exc:
+            record("HDF5/output", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        try:
+            control_dir = Path(self.session_manager.control_dir); control_dir.mkdir(parents=True, exist_ok=True)
+            descriptor, session_probe = tempfile.mkstemp(prefix=".almita-session-preflight-", suffix=".csv", dir=control_dir)
+            os.write(descriptor, b"preflight,ok\n"); os.close(descriptor); Path(session_probe).unlink()
+            record("Session persistence", "PASS", f"write/delete succeeded in {control_dir}")
+        except Exception as exc:
+            record("Session persistence", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        bytes_per_complex_sample = 4  # iq_data (2 bytes) + duplicated i_samples/q_samples (1+1)
+        estimated = int(len(planned_points) * capture_time * self.sdr_sample_rate * bytes_per_complex_sample)
+        required = int(math.ceil(estimated * disk_safety_factor))
+        try:
+            free = int(disk_usage(output_root).free)
+            record("Disk space", "PASS" if free >= required else "FAIL", f"free_bytes={free}, estimated_session_bytes={estimated}, safety_required_bytes={required}")
+        except Exception as exc:
+            record("Disk space", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        if self.sdr_mode == "usb":
+            record("SDR USB", "FAIL", "USB capture path is not validated for field use")
+        elif self.sdr_mode != "network":
+            record("SDR network", "FAIL", f"unsupported mode {self.sdr_mode}")
+        else:
+            probe = None
+            try:
+                probe = sdr_factory(mode="network", host=self.sdr_host, port=self.sdr_port, verbose=False)
+                await probe.connect(); await probe.configure(center_freq=self.sdr_freq, sample_rate=self.sdr_sample_rate, gain="auto")
+                record("SDR network", "PASS", f"configured {self.sdr_host}:{self.sdr_port} at {self.sdr_freq} Hz/{self.sdr_sample_rate} Sps, gain=auto")
+            except Exception as exc:
+                record("SDR network", "FAIL", f"{type(exc).__name__}: {exc}")
+            finally:
+                if probe is not None:
+                    try: await probe.close()
+                    except Exception: pass
+
+        if self.telescope is None:
+            record("INDI/mount", "FAIL", "controller is not connected")
+        else:
+            try:
+                ra, dec = await self.telescope.get_coordinates(force_refresh=True)
+                if ra is None or dec is None or not math.isfinite(float(ra)) or not math.isfinite(float(dec)) or not -90 <= float(dec) <= 90:
+                    raise ValueError(f"invalid coordinates RA={ra}, DEC={dec}")
+                reader = indi_property_reader or self._read_indi_preflight_properties
+                try:
+                    properties = await reader()
+                except Exception as exc:
+                    properties = {}; record("INDI properties", "WARN", f"optional state properties unavailable: {type(exc).__name__}: {exc}")
+                eod = properties.get("EQUATORIAL_EOD_COORD._STATE")
+                active = [key for key in ("TELESCOPE_MOTION_NS.MOTION_NORTH", "TELESCOPE_MOTION_NS.MOTION_SOUTH", "TELESCOPE_MOTION_WE.MOTION_WEST", "TELESCOPE_MOTION_WE.MOTION_EAST") if properties.get(key) == "On"]
+                if eod == "Alert" or active: raise RuntimeError(f"EOD={eod}, active_motion={active}")
+                home = f"HOME={properties.get('TELESCOPE_HOME._STATE')}/GO={properties.get('TELESCOPE_HOME.GO')} (informational only)"
+                record("INDI/mount", "PASS", f"valid coordinates RA={float(ra):.6f}, DEC={float(dec):.6f}; {home}")
+            except Exception as exc:
+                record("INDI/mount", "FAIL", f"{type(exc).__name__}: {exc}")
+
+        errors = [c["detail"] for c in checks if c["status"] == "FAIL"]
+        warnings = [c["detail"] for c in checks if c["status"] == "WARN"]
+        return {"success": not errors, "checks": checks, "warnings": warnings, "errors": errors,
+                "estimated_session_bytes": estimated, "safety_required_bytes": required}
+
+    def log_preflight(self, report: Dict) -> None:
+        for check in report["checks"]:
+            self.log(f"[{check['status']}] {check['name']}: {check['detail']}", force=True)
+        self.log(f"PREFLIGHT: {'PASS' if report['success'] else 'FAIL'}", force=True)
+        if not report["success"]: self.log("No hardware movement executed.", force=True)
     
     def update_point_status(self, point_number: int, status: str, 
                            start_time: Optional[str] = None,
@@ -326,14 +834,19 @@ class CaptureExecutor:
                 
         except Exception as e:
             self.log(f"Failed to initialize SDR: {e}", "ERROR", force=True)
+            await self.ensure_tracking_off()
             return False
 
         try:
-            for idx, point in enumerate(self.observation_points, start=1):
+            actual_session_count = 0
+            for idx, point in enumerate(self.iter_runtime_visible_points(), start=1):
                 point_start = datetime.now(timezone.utc)
                 point_num = int(point['point_number'])
                 ra_hours = float(point['target_ra_hours'])
                 dec_deg = float(point['target_dec_degrees'])
+                actual_session_count += 1
+                actual_capture_order = self.actual_capture_order_offset + actual_session_count
+                self.persist_selection_metadata(point, actual_capture_order)
 
                 # Header for this point
                 if self.verbose:
@@ -350,7 +863,8 @@ class CaptureExecutor:
                     self.log(f"GOTO coordinates...")
                 else:
                     self.log(f"🔭 Step 1/3: SLEWING to coordinates", force=True)
-                
+
+                mount_start_ra, mount_start_dec = await self._optional_mount_coordinates()
                 slew_start = datetime.now(timezone.utc)
                 success = await self.telescope.goto(ra_hours, dec_deg)
                 slew_end = datetime.now(timezone.utc)
@@ -374,10 +888,19 @@ class CaptureExecutor:
                     self.log(f"   ✓ SLEW completed in {slew_time:.1f}s", force=True)
                     self.log("="*80, force=True)
 
-                # Enable tracking (ALWAYS ON during capture)
-                if self.verbose:
-                    self.log(f"Enabling tracking...")
-                await self.telescope.set_tracking(True)
+                # Enable and verify real tracking state before scientific settle/capture.
+                if self.verbose:self.log(f"Enabling and confirming tracking...")
+                tracking_confirmed,tracking_state,tracking_requested=await self.confirm_tracking_on()
+                tracking_confirmed_at = datetime.now(timezone.utc) if tracking_confirmed else None
+                self.persist_runtime_metadata(point,{"tracking_requested":tracking_requested,"tracking_confirmed":tracking_confirmed,"tracking_state_at_capture":tracking_state})
+                if not tracking_confirmed:
+                    self.log(f"Tracking failed or was not confirmed (state={tracking_state}); point #{point_num} will not be captured","ERROR",force=True)
+                    self.update_point_status(point_num,'failed',error_msg=f'tracking not confirmed: {tracking_state}')
+                    failed+=1
+                    self.session_manager.update_session(self.session_id,points_failed=failed)
+                    continue
+
+                mount_capture_ra, mount_capture_dec = await self._optional_mount_coordinates()
 
                 # Wait for settle
                 if self.verbose:
@@ -452,6 +975,42 @@ class CaptureExecutor:
                         'altitude': point.get('altitude', None),
                         'target_name': point.get('target_name', 'Unknown'),
                         'point_number': point_num,
+                        'point_id': point.get('point_id', point_num),
+                        'scan_order': self._scan_order(point),
+                        'planned_scan_order': self._scan_order(point),
+                        'actual_capture_order': actual_capture_order,
+                        'ha_at_selection': float(point['_ha_at_selection']),
+                        'ha_block': point['_ha_block'],
+                        'reclassified_due_to_ha_change': bool(point['_reclassified_due_to_ha_change']),
+                        'meridian_partition_enabled': bool(self.meridian_partition_metadata.get('meridian_partition_enabled')),
+                        'altitude_deg_at_goto': float(point['_altitude_deg_at_goto']),
+                        'azimuth_deg_at_goto': float(point['_azimuth_deg_at_goto']),
+                        'ha_hours_at_goto': float(point['_ha_hours_at_goto']),
+                        'visibility_checked_at': point['_visibility_checked_at'],
+                        'min_altitude_deg': self.min_altitude_deg,
+                        'tracking_requested': tracking_requested,
+                        'tracking_confirmed': tracking_confirmed,
+                        'tracking_state_at_capture': tracking_state,
+
+                        # Grid provenance (owned by generator metadata/CSV).
+                        'beam_fwhm_deg': self.grid_metadata.get('beam_fwhm_deg'),
+                        'beam_sampling_fraction': self.grid_metadata.get('beam_sampling_fraction'),
+                        'nominal_spacing_deg': point.get('nominal_spacing_deg') or self.grid_metadata.get('nominal_spacing_deg'),
+
+                        # Actual mount coordinates; absent when an optional read failed.
+                        'mount_start_ra_hours': mount_start_ra,
+                        'mount_start_dec_deg': mount_start_dec,
+                        'mount_capture_ra_hours': mount_capture_ra,
+                        'mount_capture_dec_deg': mount_capture_dec,
+
+                        # Event timestamps and measured/requested durations.
+                        'goto_started_at': slew_start.isoformat(),
+                        'goto_completed_at': slew_end.isoformat(),
+                        'tracking_confirmed_at': tracking_confirmed_at.isoformat() if tracking_confirmed_at else None,
+                        'settle_started_at': settle_start.isoformat(),
+                        'settle_duration_sec': actual_settle,
+                        'requested_capture_duration_sec': capture_time,
+                        'capture_started_at': start_time_iso,
                         
                         # Observation parameters
                         'settle_time': settle_time,
@@ -461,6 +1020,8 @@ class CaptureExecutor:
                         
                         # SDR configuration
                         'center_freq': self.sdr_freq,
+                        'center_frequency_hz': self.sdr_freq,
+                        'sample_rate_hz': self.sdr_sample_rate,
                         'gain': 'auto',
                         
                         # Observer location (critical for Doppler corrections)
@@ -534,8 +1095,12 @@ class CaptureExecutor:
                 elif self.verbose:
                     self.log("")
 
-            # Mark session as completed
-            self.session_manager.complete_session(self.session_id)
+            # Deferred visibility remains planned for a future resume.
+            if self.visibility_deferred_count:
+                self.session_manager.pause_session(self.session_id)
+                self.log(f"No more currently executable targets; pending_total={self.visibility_deferred_count}, deferred_visibility={self.visibility_deferred_count}",force=True)
+            else:
+                self.session_manager.complete_session(self.session_id)
 
             # Summary
             if self.verbose:
@@ -554,7 +1119,7 @@ class CaptureExecutor:
                 self.log(f"   Session ID: {self.session_id}", force=True)
                 self.log("="*80, force=True)
 
-            return failed == 0
+            return failed == 0 and self.visibility_deferred_count == 0
 
         except KeyboardInterrupt:
             # User interrupted - pause session
@@ -573,11 +1138,11 @@ class CaptureExecutor:
             self.log(traceback.format_exc(), "ERROR")
             return False
         finally:
-            # Always close SDR on exit
+            # Never deliberately leave the mount tracking after any exit path.
+            await self.ensure_tracking_off()
             if self.sdr:
                 await self.sdr.close()
-                if self.verbose:
-                    self.log("SDR closed")
+                if self.verbose:self.log("SDR closed")
 
 
 async def main():
@@ -623,6 +1188,10 @@ Useful for re-observations or after fixing equipment issues.
                         help='List active/paused sessions and exit')
     parser.add_argument('--force', action='store_true',
                         help='Force re-execution of ALL points (ignores status)')
+    parser.add_argument('--preflight-only', action='store_true',
+                        help='Run all preflight checks and exit without movement or capture')
+    parser.add_argument('--disk-safety-factor', type=float, default=1.25,
+                        help='Required disk-space multiplier for preflight (default: 1.25)')
 
     # INDI connection
     parser.add_argument('--host', default='localhost',
@@ -653,6 +1222,10 @@ Useful for re-observations or after fixing equipment issues.
                         help='Center frequency in Hz (default: 1420405752 for HI line)')
     parser.add_argument('--sdr-rate', type=int, default=2400000,
                         help='Sample rate in Hz (default: 2400000)')
+    parser.add_argument('--min-altitude', type=float, default=None,
+                        help='Minimum target altitude at GOTO; config or 30 degrees by default')
+    parser.add_argument('--tracking-timeout', type=float, default=5.0,
+                        help='Seconds to confirm real tracking state (default: 5)')
 
     args = parser.parse_args()
 
@@ -713,7 +1286,9 @@ Useful for re-observations or after fixing equipment issues.
             sdr_host=args.sdr_host,
             sdr_port=args.sdr_port,
             sdr_freq=args.sdr_freq,
-            sdr_sample_rate=args.sdr_rate
+            sdr_sample_rate=args.sdr_rate,
+            min_altitude_deg=args.min_altitude,
+            tracking_timeout=args.tracking_timeout,
         )
 
         if not executor.load_observation_plan(resume=True, force=args.force):
@@ -732,7 +1307,9 @@ Useful for re-observations or after fixing equipment issues.
             sdr_host=args.sdr_host,
             sdr_port=args.sdr_port,
             sdr_freq=args.sdr_freq,
-            sdr_sample_rate=args.sdr_rate
+            sdr_sample_rate=args.sdr_rate,
+            min_altitude_deg=args.min_altitude,
+            tracking_timeout=args.tracking_timeout,
         )
 
         if not executor.load_observation_plan(resume=False, force=args.force):
@@ -767,6 +1344,17 @@ Useful for re-observations or after fixing equipment issues.
     else:
         executor.log(f"   ✓ Connected to telescope: {executor.device_name}", force=True)
         executor.log("", force=True)
+
+    preflight = await executor.run_preflight(
+        capture_time=args.capture,
+        disk_safety_factor=args.disk_safety_factor,
+    )
+    executor.log_preflight(preflight)
+    if not should_execute_after_preflight(preflight, args.preflight_only):
+        if executor.telescope and executor.telescope.writer:
+            executor.telescope.writer.close()
+            await executor.telescope.writer.wait_closed()
+        sys.exit(0 if preflight["success"] else 1)
 
     # Execute observation plan
     try:

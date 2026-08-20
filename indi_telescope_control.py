@@ -976,6 +976,75 @@ class INDITelescopeControl:
             self.log(f"Error en SYNC: {e}", "ERROR")
             return False
     
+    @staticmethod
+    def _extract_tracking_state(xml_messages) -> str:
+        """Normalize the latest TELESCOPE_TRACK_STATE vector."""
+        result = "unknown"
+        for message in xml_messages:
+            try:
+                root = ET.fromstring(message)
+            except ET.ParseError:
+                continue
+            if root.attrib.get("name") != "TELESCOPE_TRACK_STATE":
+                continue
+            if root.attrib.get("state") == "Alert":
+                result = "alert"
+                continue
+            values = {
+                child.attrib.get("name"): (child.text or "").strip()
+                for child in root
+                if child.attrib.get("name") in ("TRACK_ON", "TRACK_OFF")
+            }
+            if values.get("TRACK_ON") == "On" and values.get("TRACK_OFF") == "Off":
+                result = "on"
+            elif values.get("TRACK_ON") == "Off" and values.get("TRACK_OFF") == "On":
+                result = "off"
+            else:
+                result = "unknown"
+        return result
+
+    async def get_tracking_state(self, timeout: float = 1.0) -> str:
+        """Read fresh tracking state as on/off/unknown/alert without changing it."""
+        if timeout <= 0:
+            return "unknown"
+        query = (
+            f'<getProperties device="{self.device_name}" '
+            'name="TELESCOPE_TRACK_STATE" version="1.7"/>'
+        )
+        await self._send_command(query)
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return "unknown"
+            try:
+                data = await asyncio.wait_for(self.reader.read(8192), timeout=remaining)
+            except asyncio.TimeoutError:
+                return "unknown"
+            if not data:
+                return "unknown"
+            messages = self._feed_xml_messages(data.decode("utf-8", errors="ignore"))
+            state = self._extract_tracking_state(messages)
+            if state != "unknown":
+                return state
+
+    async def wait_tracking_state(self, expected_on: bool, timeout: float = 5.0) -> bool:
+        """Wait read-only for real tracking state; fail on timeout, unknown, or Alert."""
+        if timeout <= 0:
+            return False
+        expected = "on" if expected_on else "off"
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return False
+            state = await self.get_tracking_state(timeout=min(0.5, remaining))
+            if state == expected:
+                return True
+            if state == "alert":
+                return False
+            await asyncio.sleep(min(0.1, max(0.0, deadline - asyncio.get_event_loop().time())))
+
     async def set_tracking(self, enable: bool) -> bool:
         """Activa o desactiva el tracking"""
         try:
