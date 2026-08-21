@@ -7,7 +7,7 @@ Con información detallada del protocolo INDI
 
 import asyncio
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 import argparse
 import sys
@@ -35,6 +35,15 @@ class INDITelescopeControl:
         self.last_slew_command_to_ok_sec: Optional[float] = None
         self.final_target_error_deg: Optional[float] = None
         self._xml_receive_buffer = ""
+        # Counts only spontaneous setTextVector publications.  A
+        # getProperties reply is a defTextVector and must not advance this.
+        self._onstep_status_update_seq = 0
+        self._property_cache = {}
+        self._property_history = {}
+        self._property_condition = asyncio.Condition()
+        self._reader_task = None
+        self._reader_error = None
+        self._write_lock = asyncio.Lock()
         
     def log(self, message: str, level: str = "INFO", force: bool = False):
         """Imprime mensaje con timestamp
@@ -221,135 +230,27 @@ class INDITelescopeControl:
         """Conecta al servidor INDI"""
         try:
             self.explain_indi('connect')
-
             self.log(f"Conectando a servidor INDI en {self.host}:{self.port}...")
             self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+            await self._ensure_dispatcher()
             self.log("✓ Conexión TCP establecida")
-
-            # Solicitar propiedades
-            self.log("Solicitando propiedades del servidor...")
+            baseline = self._property_cache.get((self.device_name, "CONNECTION"), {}).get("update_seq", 0)
             await self._send_command('<getProperties version="1.7"/>')
-
-            # Leer datos inmediatamente (sin sleep que bloquea)
-            self.log("Recibiendo propiedades...")
-            all_data = b""
-            chunk_count = 0
-
-            # Leer con timeout de 3 segundos o hasta que tengamos el dispositivo
-            start_time = asyncio.get_event_loop().time()
-            max_time = 3.0  # Reducido de 5 a 3 segundos
-            device_found = False
-            
-            while (asyncio.get_event_loop().time() - start_time) < max_time:
-                try:
-                    data = await asyncio.wait_for(self.reader.read(32768), timeout=0.5)
-                    if data:
-                        chunk_count += 1
-                        all_data += data
-                        self.log_verbose(f"Chunk {chunk_count}: {len(data)} bytes (total: {len(all_data)})")
-                        
-                        # Salir en cuanto encontremos nuestro dispositivo
-                        if self.device_name.encode() in all_data:
-                            device_found = True
-                            self.log_verbose(f"✓ Dispositivo '{self.device_name}' encontrado en chunk {chunk_count}")
-                            break
-                    else:
-                        break
-                except asyncio.TimeoutError:
-                    # Si ya encontramos el dispositivo, salir
-                    if device_found or all_data:
-                        break
-                    continue
-
-            self.log(f"✓ Recibidos {len(all_data)} bytes en {chunk_count} chunks")
-
-            # Guardar propiedades en cache
-            self.cached_properties = all_data.decode('utf-8', errors='ignore')
-
-            # Verificar que el dispositivo existe
-            if self.device_name.encode() not in all_data:
-                # Listar dispositivos disponibles
-                devices = []
-                import re
-                for match in re.finditer(rb'device="([^"]+)"', all_data):
-                    dev = match.group(1).decode('utf-8', errors='ignore')
-                    if dev not in devices:
-                        devices.append(dev)
-
-                self.log(f"❌ Dispositivo '{self.device_name}' no encontrado", "ERROR")
-                self.log("", "INFO")
-                self.log("Dispositivos disponibles en el servidor:", "INFO")
-                for dev in devices:
-                    self.log(f"  • {dev}", "INFO")
-                self.log("", "INFO")
-                return False
-
-            self.log(f"✓ Dispositivo '{self.device_name}' encontrado")
-
-            # Verificar si ya está conectado
-            if b'<oneSwitch name="CONNECT">On</oneSwitch>' in all_data or b'<defSwitch name="CONNECT" label="Connect">\nOn' in all_data:
-                self.log(f"✓ Dispositivo ya está conectado")
-            else:
-                # Conectar al dispositivo
+            connection = await self._wait_property("CONNECTION", 3.0, baseline)
+            if connection["elements"].get("CONNECT") != "On":
                 connect_cmd = f'''<newSwitchVector device="{self.device_name}" name="CONNECTION">
   <oneSwitch name="CONNECT">On</oneSwitch>
   <oneSwitch name="DISCONNECT">Off</oneSwitch>
 </newSwitchVector>'''
-
-                self.log("Conectando al dispositivo...")
+                baseline = connection["update_seq"]
                 await self._send_command(connect_cmd)
-                # Esperar confirmación rápida (reducido de 2s a 1s)
-                await asyncio.sleep(1)
-                self.log("✓ Comando de conexión enviado")
-
-            # CLAVE: Seguir leyendo hasta tener las coordenadas (optimizado)
-            self.log("Capturando propiedades del dispositivo...")
-
-            start_time = asyncio.get_event_loop().time()
-            max_duration = 5.0  # Timeout máximo reducido de 8s a 5s
-            has_coordinates = False
-
-            while (asyncio.get_event_loop().time() - start_time) < max_duration:
+                await self._wait_property("CONNECTION", 3.0, baseline,
+                                          lambda x: x["elements"].get("CONNECT") == "On")
+            if (self.device_name, "EQUATORIAL_EOD_COORD") not in self._property_cache:
                 try:
-                    data = await asyncio.wait_for(self.reader.read(32768), timeout=0.8)
-                    if data:
-                        additional_data = data.decode('utf-8', errors='ignore')
-                        self.cached_properties += additional_data
-
-                        # Salir EN CUANTO tengamos las coordenadas
-                        if 'EQUATORIAL_EOD_COORD' in self.cached_properties and not has_coordinates:
-                            has_coordinates = True
-                            elapsed = asyncio.get_event_loop().time() - start_time
-                            self.log_verbose(f"✓ EQUATORIAL_EOD_COORD encontrado en {elapsed:.1f}s")
-                            # Leer un poco más para asegurar datos completos
-                            await asyncio.sleep(0.5)
-                            break
+                    await self._wait_property("EQUATORIAL_EOD_COORD", 5.0, 0)
                 except asyncio.TimeoutError:
-                    # Si ya tenemos coordenadas, salir
-                    if has_coordinates:
-                        break
-                    continue
-
-            if 'EQUATORIAL_EOD_COORD' in self.cached_properties:
-                self.log(f"✓ Propiedades completas capturadas: {len(self.cached_properties)} bytes (incluye coordenadas)")
-            else:
-                self.log(f"⚠️  Propiedades capturadas: {len(self.cached_properties)} bytes (sin coordenadas)", "WARNING")
-
-                # GUARDAR EL CACHE PARA DEBUGGING
-                with open('debug_cache.xml', 'w') as f:
-                    f.write(self.cached_properties)
-                self.log(f"💾 Cache guardado en debug_cache.xml para análisis", "DEBUG")
-
-                # Listar TODAS las propiedades que SÍ tiene
-                import re
-                all_props = re.findall(r'<def\w+Vector[^>]*name="([^"]+)"', self.cached_properties)
-                self.log(f"", "DEBUG")
-                self.log(f"Total de propiedades en cache: {len(set(all_props))}", "DEBUG")
-                self.log(f"Todas las propiedades capturadas:", "DEBUG")
-                for prop in sorted(set(all_props)):
-                    self.log(f"  • {prop}", "DEBUG")
-
-            self.log("")
+                    self.log("Propiedades capturadas sin coordenadas", "WARNING")
             return True
 
         except Exception as e:
@@ -364,8 +265,82 @@ class INDITelescopeControl:
             raise RuntimeError("No conectado")
         
         self.log_verbose(f"📤 Enviando XML:\n{xml}")
-        self.writer.write((xml + '\n').encode())
-        await self.writer.drain()
+        async with self._write_lock:
+            self.writer.write((xml + '\n').encode())
+            await self.writer.drain()
+
+    async def _ensure_dispatcher(self):
+        if self.reader is None:
+            raise RuntimeError("No conectado")
+        if self._reader_task is None or self._reader_task.done():
+            self._reader_error = None
+            self._reader_task = asyncio.create_task(self._reader_loop())
+
+    async def _reader_loop(self):
+        """The sole consumer of the INDI StreamReader."""
+        try:
+            while True:
+                data = await self.reader.read(32768)
+                if not data:
+                    raise ConnectionError("INDI socket closed")
+                for raw in self._feed_xml_messages(data.decode("utf-8", errors="ignore")):
+                    try:
+                        root = ET.fromstring(raw)
+                    except ET.ParseError:
+                        continue
+                    name = root.attrib.get("name")
+                    device = root.attrib.get("device") or self.device_name
+                    if not name or not root.tag.endswith("Vector"):
+                        continue
+                    key = (device, name)
+                    previous = self._property_cache.get(key)
+                    seq = 1 if previous is None else previous["update_seq"] + 1
+                    elements = {child.attrib.get("name"): (child.text or "").strip()
+                                for child in root if child.attrib.get("name")}
+                    item = {
+                        "tag": root.tag, "state": root.attrib.get("state"),
+                        "timestamp": root.attrib.get("timestamp"),
+                        "received_at": datetime.now(timezone.utc).isoformat(),
+                        "received_monotonic": asyncio.get_running_loop().time(),
+                        "elements": elements, "raw": raw, "update_seq": seq,
+                    }
+                    self._property_cache[key] = item
+                    self._property_history.setdefault(key, []).append(item)
+                    del self._property_history[key][:-100]
+                    self.cached_properties += raw
+                    async with self._property_condition:
+                        self._property_condition.notify_all()
+                # Let awakened waiters observe the complete TCP chunk before
+                # an immediately-ready test/socket supplies the next one.
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._reader_error = exc
+            async with self._property_condition:
+                self._property_condition.notify_all()
+
+    async def _wait_property(self, name, timeout=1.0, after_seq=None, predicate=None):
+        await self._ensure_dispatcher()
+        key = (self.device_name, name)
+        if after_seq is None:
+            after_seq = self._property_cache.get(key, {}).get("update_seq", 0)
+        deadline = asyncio.get_running_loop().time() + timeout
+        async with self._property_condition:
+            while True:
+                for candidate in self._property_history.get(key, []):
+                    if (candidate["update_seq"] > after_seq
+                            and (predicate is None or predicate(candidate))):
+                        return candidate
+                item = self._property_cache.get(key)
+                if item and item["update_seq"] > after_seq and (predicate is None or predicate(item)):
+                    return item
+                if self._reader_error is not None:
+                    raise ConnectionError(str(self._reader_error))
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                await asyncio.wait_for(self._property_condition.wait(), remaining)
 
     @staticmethod
     def _angular_distance_deg(ra1_hours: float, dec1_deg: float,
@@ -495,29 +470,17 @@ class INDITelescopeControl:
                 # Pedir ESPECÍFICAMENTE solo las coordenadas
                 self.log("Solicitando coordenadas actualizadas al servidor...")
                 get_coords = f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>'
+                baseline = self._property_cache.get(
+                    (self.device_name, "EQUATORIAL_EOD_COORD"), {}
+                ).get("update_seq", 0)
                 await self._send_command(get_coords)
-
-                # Esperar más tiempo para coordenadas frescas después de comandos
-                await asyncio.sleep(2.5 if force_refresh else 1.5)
-
-                # Leer respuesta
-                attempts = 0
-                while attempts < 5:
-                    try:
-                        data = await asyncio.wait_for(self.reader.read(16384), timeout=1.0)
-                        if data:
-                            chunk = data.decode('utf-8', errors='ignore')
-                            all_data += chunk
-
-                            # Salir sólo cuando ya existe un vector EOD completo.
-                            complete_messages, _ = self._split_complete_xml_messages(all_data)
-                            _, fresh_ra, fresh_dec = self._extract_eod_update(complete_messages)
-                            if fresh_ra is not None and fresh_dec is not None:
-                                break
-                        attempts += 1
-                    except asyncio.TimeoutError:
-                        attempts += 1
-                        continue
+                try:
+                    item = await self._wait_property(
+                        "EQUATORIAL_EOD_COORD", 5.0, baseline,
+                        lambda x: "RA" in x["elements"] and "DEC" in x["elements"])
+                    all_data = item["raw"]
+                except asyncio.TimeoutError:
+                    all_data = ""
 
                 if all_data:
                     # Actualizar solo la parte de coordenadas en el cache
@@ -625,22 +588,22 @@ class INDITelescopeControl:
             ra_hours, dec_degrees = validated
             poll_interval_sec = 0.1
             precheck_timeout_sec = 30.0
+            eod_seq = 0
 
             async def _wait_until_not_busy(timeout_sec: float) -> bool:
                 """Block until EQUATORIAL_EOD_COORD is no longer Busy before sending a new slew."""
+                nonlocal eod_seq
                 deadline = asyncio.get_event_loop().time() + timeout_sec
                 while True:
                     await self._send_command(
                         f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>'
                     )
                     try:
-                        data = await asyncio.wait_for(self.reader.read(8192), timeout=0.2)
+                        item = await self._wait_property("EQUATORIAL_EOD_COORD", 0.2, eod_seq)
+                        eod_seq = item["update_seq"]
                     except asyncio.TimeoutError:
-                        data = b""
-
-                    response = data.decode('utf-8', errors='ignore') if data else ''
-                    messages = self._feed_xml_messages(response) if response else []
-                    eod_state, _, _ = self._extract_eod_update(messages)
+                        item = None
+                    eod_state = item["state"] if item else None
 
                     if eod_state == "Alert":
                         self.log("❌ ERROR: Mount reporta Alert antes del nuevo GOTO", "ERROR")
@@ -734,16 +697,15 @@ class INDITelescopeControl:
                     # ACTIVE POLLING: Solicitar estado actual del telescopio
                     get_state = f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>'
                     await self._send_command(get_state)
-                    
-                    # Leer respuesta con timeout
-                    data = await asyncio.wait_for(self.reader.read(8192), timeout=0.1)
-                    if data:
-                        response = data.decode('utf-8', errors='ignore')
-                        self.log_verbose(f"Poll {poll_count}: Recibidos {len(data)} bytes")
-                        
-                        # Buscar estado SOLO de EQUATORIAL_EOD_COORD
-                        messages = self._feed_xml_messages(response)
-                        eod_state, parsed_ra, parsed_dec = self._extract_eod_update(messages)
+                    item = await self._wait_property("EQUATORIAL_EOD_COORD", 0.1, eod_seq)
+                    eod_seq = item["update_seq"]
+                    if item:
+                        eod_state = item["state"]
+                        try:
+                            parsed_ra = float(item["elements"].get("RA"))
+                            parsed_dec = float(item["elements"].get("DEC"))
+                        except (TypeError, ValueError):
+                            parsed_ra = parsed_dec = None
 
                         if parsed_ra is not None and parsed_dec is not None:
                             # Angular error uses spherical distance in hours/deg.
@@ -1011,22 +973,123 @@ class INDITelescopeControl:
             f'<getProperties device="{self.device_name}" '
             'name="TELESCOPE_TRACK_STATE" version="1.7"/>'
         )
+        baseline = self._property_cache.get(
+            (self.device_name, "TELESCOPE_TRACK_STATE"), {}
+        ).get("update_seq", 0)
         await self._send_command(query)
-        deadline = asyncio.get_event_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                return "unknown"
+        try:
+            item = await self._wait_property("TELESCOPE_TRACK_STATE", timeout, baseline)
+        except (asyncio.TimeoutError, ConnectionError):
+            return "unknown"
+        return self._extract_tracking_state([item["raw"]])
+
+    @staticmethod
+    def _unknown_onstep_status(reason: str) -> Dict:
+        """Return an explicit non-healthy result when no INDI status was read."""
+        return {
+            "state": "unknown", "message": None, "is_error": False,
+            "vector_state": None, "timestamp": None, "received_at": None,
+            # ``fresh`` is retained for compatibility and means INDI XML only.
+            "fresh": False, "indi_fresh": False, "hardware_fresh": False,
+            "source": None, "update_seq": None,
+            "reason": reason, "elements": {}, "raw": None,
+        }
+
+    def _extract_onstep_status(self, xml_messages) -> Optional[Dict]:
+        """Extract the latest real OnStep Status text vector for this device."""
+        latest = None
+        for raw in xml_messages:
             try:
-                data = await asyncio.wait_for(self.reader.read(8192), timeout=remaining)
-            except asyncio.TimeoutError:
-                return "unknown"
-            if not data:
-                return "unknown"
-            messages = self._feed_xml_messages(data.decode("utf-8", errors="ignore"))
-            state = self._extract_tracking_state(messages)
-            if state != "unknown":
-                return state
+                root = ET.fromstring(raw)
+            except ET.ParseError:
+                continue
+            if (root.tag not in ("defTextVector", "setTextVector")
+                    or root.attrib.get("name") != "OnStep Status"
+                    or root.attrib.get("device") not in (None, self.device_name)):
+                continue
+            hardware_fresh = root.tag == "setTextVector"
+            if hardware_fresh:
+                self._onstep_status_update_seq += 1
+            elements = {
+                child.attrib.get("name"): (child.text or "").strip()
+                for child in root
+                if child.tag in ("defText", "oneText") and child.attrib.get("name")
+            }
+            message = elements.get("Error") or None
+            vector_state = root.attrib.get("state")
+            vector_alert = str(vector_state).lower() == "alert"
+            healthy = message in ("None", "Goto No Error")
+            if vector_alert:
+                state = "alert"
+            elif message is None:
+                state = "unknown"
+            else:
+                state = "healthy" if healthy else "error"
+            latest = {
+                "state": state,
+                "message": message,
+                "is_error": vector_alert or state == "error",
+                "vector_state": vector_state,
+                "timestamp": root.attrib.get("timestamp"),
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                # Backwards compatible: this says only that a new XML vector
+                # was received, not that the controller was just polled.
+                "fresh": True,
+                "indi_fresh": True,
+                "hardware_fresh": hardware_fresh,
+                "source": "indi_poll" if hardware_fresh else "indi_cached",
+                "update_seq": self._onstep_status_update_seq,
+                "reason": None,
+                "elements": elements,
+                "raw": raw,
+            }
+        return latest
+
+    async def get_onstep_status(self, timeout: float = 1.0) -> Dict:
+        """Read an INDI snapshot; this does not request a new hardware poll."""
+        if timeout <= 0:
+            return self._unknown_onstep_status("timeout")
+        query = (
+            f'<getProperties device="{self.device_name}" '
+            'name="OnStep Status" version="1.7"/>'
+        )
+        baseline = self._property_cache.get(
+            (self.device_name, "OnStep Status"), {}
+        ).get("update_seq", 0)
+        await self._send_command(query)
+        try:
+            item = await self._wait_property("OnStep Status", timeout, baseline)
+        except asyncio.TimeoutError:
+            return self._unknown_onstep_status("timeout")
+        except ConnectionError:
+            return self._unknown_onstep_status("absent")
+        item = self._property_cache.get((self.device_name, "OnStep Status"), item)
+        return self._extract_onstep_status([item["raw"]]) or self._unknown_onstep_status("absent")
+
+    async def wait_onstep_status_update(self, timeout: float = 2.5) -> Dict:
+        """Wait passively for the next status publication from driver polling.
+
+        LX200 OnStep publishes ``setTextVector`` after its normal
+        ``ReadScopeStatus()`` / ``:GU#`` cycle.  In contrast, a client
+        ``getProperties`` request is answered with a cached ``defTextVector``.
+        This method sends no request and accepts only the former.  The sequence
+        is local to XML vectors received by this controller instance; identical
+        consecutive payloads still count as distinct polling updates.
+        """
+        if timeout <= 0:
+            return self._unknown_onstep_status("timeout")
+        baseline = self._property_cache.get(
+            (self.device_name, "OnStep Status"), {}
+        ).get("update_seq", 0)
+        try:
+            item = await self._wait_property(
+                "OnStep Status", timeout, baseline,
+                lambda x: x["tag"] == "setTextVector")
+        except asyncio.TimeoutError:
+            return self._unknown_onstep_status("timeout")
+        except ConnectionError:
+            return self._unknown_onstep_status("absent")
+        return self._extract_onstep_status([item["raw"]]) or self._unknown_onstep_status("absent")
 
     async def wait_tracking_state(self, expected_on: bool, timeout: float = 5.0) -> bool:
         """Wait read-only for real tracking state; fail on timeout, unknown, or Alert."""
@@ -1092,6 +1155,13 @@ class INDITelescopeControl:
     
     async def disconnect(self):
         """Desconecta del servidor"""
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+            self._reader_task = None
         if self.writer:
             self.writer.close()
             await self.writer.wait_closed()

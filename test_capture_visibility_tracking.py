@@ -15,9 +15,20 @@ class FakeSession:
 
 class FakeTelescope:
     device_name="fake"
-    def __init__(self,goto=True,state="off",wait_on=True,wait_off=True,set_on=True,set_off=True):
+    def __init__(self,goto=True,state="off",wait_on=True,wait_off=True,set_on=True,set_off=True,onstep_statuses=None,cached_onstep_status=None):
         self.goto_result=goto;self.state=state;self.wait_on=wait_on;self.wait_off=wait_off;self.set_on=set_on;self.set_off=set_off;self.events=[]
+        self.onstep_statuses=list(onstep_statuses or [])
+        self.cached_onstep_status=cached_onstep_status
+        self.onstep_seq=0
     async def goto(self,*args):self.events.append("goto");return self.goto_result
+    async def get_onstep_status(self,timeout=1):
+        self.events.append("onstep_cached")
+        return self.cached_onstep_status or {"state":"healthy","message":"None","is_error":False,"received_at":"2026-08-20T00:00:00+00:00","fresh":True,"hardware_fresh":False,"source":"indi_cached","update_seq":self.onstep_seq,"reason":None}
+    async def wait_onstep_status_update(self,timeout=2.5):
+        self.events.append("onstep")
+        if self.onstep_statuses:return self.onstep_statuses.pop(0)
+        self.onstep_seq+=1
+        return {"state":"healthy","message":"None","is_error":False,"received_at":"2026-08-20T00:00:00+00:00","fresh":True,"hardware_fresh":True,"source":"indi_poll","update_seq":self.onstep_seq,"reason":None}
     async def get_tracking_state(self,timeout=1):self.events.append("get_tracking");return self.state
     async def set_tracking(self,enable):self.events.append("set_on" if enable else "set_off");return self.set_on if enable else self.set_off
     async def wait_tracking_state(self,expected_on,timeout=5):self.events.append("wait_on" if expected_on else "wait_off");return self.wait_on if expected_on else self.wait_off
@@ -95,6 +106,32 @@ async def test_wait_tracking_failure_or_alert_prevents_capture(monkeypatch,tmp_p
     monkeypatch.setattr(capture,"SDRCapture",FakeSDR)
     for state,wait in [("off",False),("alert",True)]:
         ex=make_executor(tmp_path/str(state),count=1);visibility_map(ex,{1:40});ex.telescope=FakeTelescope(state=state,wait_on=wait);assert not await ex.execute_observation_plan(0,0);assert "capture" not in FakeSDR.events
+
+@pytest.mark.asyncio
+async def test_tracking_failure_after_goto_pauses_without_next_goto(monkeypatch,tmp_path):
+    monkeypatch.setattr(capture,"SDRCapture",FakeSDR)
+    ex=make_executor(tmp_path,count=2);visibility_map(ex,{1:40,2:40})
+    ex.telescope=FakeTelescope(state="off",wait_on=False)
+    assert not await ex.execute_observation_plan(0,0)
+    rows=csv_rows(ex)
+    assert [row["capture_status"] for row in rows]==["failed","planned"]
+    assert rows[0]["error_message"]=="tracking not confirmed: off; OnStep healthy: None"
+    assert ex.telescope.events.count("goto")==1
+    assert "pause" in ex.session_manager.actions
+
+@pytest.mark.asyncio
+async def test_safety_paused_plan_can_resume_preserving_failed_and_planned(monkeypatch,tmp_path):
+    monkeypatch.setattr(capture,"SDRCapture",FakeSDR)
+    ex=make_executor(tmp_path,count=3);visibility_map(ex,{1:40,2:40,3:40})
+    ex.telescope=FakeTelescope(state="off",wait_on=False)
+    assert not await ex.execute_observation_plan(0,0)
+
+    resumed=CaptureExecutor(str(ex.csv_path),session_id="session",config_path="observer_config.json")
+    resumed.session_manager=FakeSession();resumed.hour_angle_for_point=lambda p,obstime=None:-1
+    assert resumed.load_observation_plan(resume=True)
+    rows=csv_rows(resumed)
+    assert [row["capture_status"] for row in rows]==["failed","planned","planned"]
+    assert [int(point["point_number"]) for point in resumed.observation_points]==[2,3]
 
 @pytest.mark.asyncio
 async def test_goto_failure_never_enables_tracking_or_captures(monkeypatch,tmp_path):

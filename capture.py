@@ -550,6 +550,48 @@ class CaptureExecutor:
             return False,state,requested
         return True,"on",requested
 
+    async def read_onstep_status(self, *, retry_unknown: bool = False) -> Dict:
+        """Wait for a hardware-polled OnStep status, optionally retrying unknown once."""
+        status = await self.telescope.wait_onstep_status_update(timeout=self.tracking_timeout)
+        if retry_unknown and status.get("state") == "unknown":
+            await asyncio.sleep(0.1)
+            status = await self.telescope.wait_onstep_status_update(timeout=self.tracking_timeout)
+        if not status.get("hardware_fresh") and status.get("reason") == "timeout":
+            status = dict(status)
+            status["reason"] = "onstep_status_hardware_timeout"
+        return status
+
+    def persist_onstep_status(self, point: Dict, phase: str, status: Dict) -> None:
+        """Persist the stable OnStep status fields needed for causal diagnosis."""
+        values = {
+            f"onstep_state_{phase}": status.get("state", "unknown"),
+            f"onstep_message_{phase}": status.get("message") or "",
+            f"onstep_received_at_{phase}": status.get("received_at") or "",
+            f"onstep_fresh_{phase}": bool(status.get("fresh", False)),
+            f"onstep_{phase}_hardware_fresh": bool(status.get("hardware_fresh", False)),
+            f"onstep_source_{phase}": status.get("source") or "",
+            f"onstep_{phase}_update_seq": status.get("update_seq") if status.get("update_seq") is not None else "",
+            f"onstep_reason_{phase}": status.get("reason") or "",
+        }
+        self.persist_runtime_metadata(point, values)
+        point[f"_onstep_{phase}"] = dict(status)
+        self.log(
+            f"OnStep {phase}: state={values[f'onstep_state_{phase}']} | "
+            f"message={values[f'onstep_message_{phase}'] or '<empty>'} | "
+            f"received_at={values[f'onstep_received_at_{phase}'] or '<none>'} | "
+            f"hardware_fresh={values[f'onstep_{phase}_hardware_fresh']} | "
+            f"source={values[f'onstep_source_{phase}'] or '<none>'} | "
+            f"update_seq={values[f'onstep_{phase}_update_seq'] or '<none>'}",
+            force=True,
+        )
+
+    @staticmethod
+    def onstep_status_allows_operation(status: Dict) -> bool:
+        """Only a hardware-fresh, explicitly healthy status permits operation."""
+        return (bool(status.get("hardware_fresh"))
+                and status.get("state") == "healthy"
+                and status.get("is_error") is False)
+
     async def ensure_tracking_off(self) -> bool:
         """Best-effort final tracking shutdown; never masks an earlier failure."""
         if self.telescope is None:return True
@@ -805,6 +847,7 @@ class CaptureExecutor:
 
         successful = 0
         failed = 0
+        safety_paused = False
 
         # Initialize SDR
         try:
@@ -858,6 +901,19 @@ class CaptureExecutor:
                     self.log(f"📍 POINT {idx}/{len(self.observation_points)} (#{point_num}) | RA={point['target_ra_hms']} DEC={point['target_dec_dms']}", force=True)
                     self.log("="*80, force=True)
 
+                # A fresh healthy OnStep status is the final gate before motion.
+                onstep_pre_goto = await self.read_onstep_status(retry_unknown=True)
+                self.persist_onstep_status(point, "pre_goto", onstep_pre_goto)
+                if not self.onstep_status_allows_operation(onstep_pre_goto):
+                    safety_paused = True
+                    message = onstep_pre_goto.get("message") or onstep_pre_goto.get("reason") or "unverifiable"
+                    self.session_manager.update_session(self.session_id, status="paused")
+                    self.log(
+                        f"Safety pause before GOTO: OnStep state={onstep_pre_goto.get('state')} | message={message}; target remains planned",
+                        "ERROR", force=True,
+                    )
+                    break
+
                 # GOTO coordinates
                 if self.verbose:
                     self.log(f"GOTO coordinates...")
@@ -888,17 +944,65 @@ class CaptureExecutor:
                     self.log(f"   ✓ SLEW completed in {slew_time:.1f}s", force=True)
                     self.log("="*80, force=True)
 
+                onstep_post_goto = await self.read_onstep_status(retry_unknown=True)
+                self.persist_onstep_status(point, "post_goto", onstep_post_goto)
+                if not self.onstep_status_allows_operation(onstep_post_goto):
+                    safety_paused = True
+                    message = onstep_post_goto.get("message") or onstep_post_goto.get("reason") or "unverifiable"
+                    self.update_point_status(point_num, "failed", error_msg=f"OnStep post-GOTO {onstep_post_goto.get('state')}: {message}")
+                    failed += 1
+                    self.session_manager.update_session(self.session_id, points_failed=failed, status="paused")
+                    self.log(
+                        f"Safety pause after GOTO: OnStep state={onstep_post_goto.get('state')} | message={message}; tracking will not be attempted",
+                        "ERROR", force=True,
+                    )
+                    break
+
                 # Enable and verify real tracking state before scientific settle/capture.
                 if self.verbose:self.log(f"Enabling and confirming tracking...")
+                tracking_request_at = datetime.now(timezone.utc)
                 tracking_confirmed,tracking_state,tracking_requested=await self.confirm_tracking_on()
-                tracking_confirmed_at = datetime.now(timezone.utc) if tracking_confirmed else None
-                self.persist_runtime_metadata(point,{"tracking_requested":tracking_requested,"tracking_confirmed":tracking_confirmed,"tracking_state_at_capture":tracking_state})
+                tracking_result_at = datetime.now(timezone.utc)
+                tracking_confirmed_at = tracking_result_at if tracking_confirmed else None
+                onstep_post_tracking = await self.read_onstep_status()
+                self.persist_onstep_status(point, "post_tracking", onstep_post_tracking)
+                self.persist_runtime_metadata(point,{
+                    "tracking_requested":tracking_requested,
+                    "tracking_confirmed":tracking_confirmed,
+                    "tracking_state_at_capture":tracking_state,
+                    "goto_command_started_at":slew_start.isoformat(),
+                    "goto_completed_at":slew_end.isoformat(),
+                    "tracking_request_at":tracking_request_at.isoformat(),
+                    "tracking_confirmation_at":tracking_result_at.isoformat() if tracking_confirmed else "",
+                    "tracking_failure_at":tracking_result_at.isoformat() if not tracking_confirmed else "",
+                })
                 if not tracking_confirmed:
-                    self.log(f"Tracking failed or was not confirmed (state={tracking_state}); point #{point_num} will not be captured","ERROR",force=True)
-                    self.update_point_status(point_num,'failed',error_msg=f'tracking not confirmed: {tracking_state}')
+                    onstep_detail = onstep_post_tracking.get("message") or onstep_post_tracking.get("reason") or "unverifiable"
+                    self.log(f"Tracking failed or was not confirmed (state={tracking_state}, OnStep={onstep_post_tracking.get('state')}: {onstep_detail}); point #{point_num} will not be captured","ERROR",force=True)
+                    self.update_point_status(point_num,'failed',error_msg=f"tracking not confirmed: {tracking_state}; OnStep {onstep_post_tracking.get('state')}: {onstep_detail}")
                     failed+=1
-                    self.session_manager.update_session(self.session_id,points_failed=failed)
-                    continue
+                    safety_paused = True
+                    self.session_manager.update_session(
+                        self.session_id, points_failed=failed, status="paused"
+                    )
+                    self.log(
+                        "Safety pause: tracking was not confirmed after GOTO; "
+                        "no additional GOTO will be attempted",
+                        "ERROR", force=True,
+                    )
+                    break
+
+                if not self.onstep_status_allows_operation(onstep_post_tracking):
+                    safety_paused = True
+                    message = onstep_post_tracking.get("message") or onstep_post_tracking.get("reason") or "unverifiable"
+                    self.update_point_status(point_num, "failed", error_msg=f"OnStep post-tracking {onstep_post_tracking.get('state')}: {message}")
+                    failed += 1
+                    self.session_manager.update_session(self.session_id, points_failed=failed, status="paused")
+                    self.log(
+                        f"Safety pause after tracking: OnStep state={onstep_post_tracking.get('state')} | message={message}",
+                        "ERROR", force=True,
+                    )
+                    break
 
                 mount_capture_ra, mount_capture_dec = await self._optional_mount_coordinates()
 
@@ -991,6 +1095,18 @@ class CaptureExecutor:
                         'tracking_requested': tracking_requested,
                         'tracking_confirmed': tracking_confirmed,
                         'tracking_state_at_capture': tracking_state,
+                        'onstep_state_pre_goto': onstep_pre_goto.get('state'),
+                        'onstep_message_pre_goto': onstep_pre_goto.get('message'),
+                        'onstep_received_at_pre_goto': onstep_pre_goto.get('received_at'),
+                        'onstep_fresh_pre_goto': bool(onstep_pre_goto.get('fresh')),
+                        'onstep_state_post_goto': onstep_post_goto.get('state'),
+                        'onstep_message_post_goto': onstep_post_goto.get('message'),
+                        'onstep_received_at_post_goto': onstep_post_goto.get('received_at'),
+                        'onstep_fresh_post_goto': bool(onstep_post_goto.get('fresh')),
+                        'onstep_state_post_tracking': onstep_post_tracking.get('state'),
+                        'onstep_message_post_tracking': onstep_post_tracking.get('message'),
+                        'onstep_received_at_post_tracking': onstep_post_tracking.get('received_at'),
+                        'onstep_fresh_post_tracking': bool(onstep_post_tracking.get('fresh')),
 
                         # Grid provenance (owned by generator metadata/CSV).
                         'beam_fwhm_deg': self.grid_metadata.get('beam_fwhm_deg'),
@@ -1006,7 +1122,11 @@ class CaptureExecutor:
                         # Event timestamps and measured/requested durations.
                         'goto_started_at': slew_start.isoformat(),
                         'goto_completed_at': slew_end.isoformat(),
+                        'goto_command_started_at': slew_start.isoformat(),
+                        'tracking_request_at': tracking_request_at.isoformat(),
                         'tracking_confirmed_at': tracking_confirmed_at.isoformat() if tracking_confirmed_at else None,
+                        'tracking_confirmation_at': tracking_result_at.isoformat() if tracking_confirmed else None,
+                        'tracking_failure_at': tracking_result_at.isoformat() if not tracking_confirmed else None,
                         'settle_started_at': settle_start.isoformat(),
                         'settle_duration_sec': actual_settle,
                         'requested_capture_duration_sec': capture_time,
@@ -1096,7 +1216,13 @@ class CaptureExecutor:
                     self.log("")
 
             # Deferred visibility remains planned for a future resume.
-            if self.visibility_deferred_count:
+            if safety_paused:
+                self.session_manager.pause_session(self.session_id)
+                self.log(
+                    "Session paused by mount safety policy; remaining planned targets were preserved",
+                    "WARNING", force=True,
+                )
+            elif self.visibility_deferred_count:
                 self.session_manager.pause_session(self.session_id)
                 self.log(f"No more currently executable targets; pending_total={self.visibility_deferred_count}, deferred_visibility={self.visibility_deferred_count}",force=True)
             else:
@@ -1119,7 +1245,7 @@ class CaptureExecutor:
                 self.log(f"   Session ID: {self.session_id}", force=True)
                 self.log("="*80, force=True)
 
-            return failed == 0 and self.visibility_deferred_count == 0
+            return not safety_paused and failed == 0 and self.visibility_deferred_count == 0
 
         except KeyboardInterrupt:
             # User interrupted - pause session
