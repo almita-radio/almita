@@ -337,27 +337,43 @@ class INDITelescopeControl:
             async with self._property_condition:
                 self._property_condition.notify_all()
 
-    async def _wait_property(self, name, timeout=1.0, after_seq=None, predicate=None):
+    async def _wait_property(self, name, timeout=1.0, after_seq=None, predicate=None,
+                             wait_metrics=None):
         await self._ensure_dispatcher()
         key = (self.device_name, name)
         if after_seq is None:
             after_seq = self._property_cache.get(key, {}).get("update_seq", 0)
         deadline = asyncio.get_running_loop().time() + timeout
+        entries_examined = 0
         async with self._property_condition:
             while True:
                 for candidate in self._property_history.get(key, []):
+                    entries_examined += 1
                     if (candidate["update_seq"] > after_seq
                             and (predicate is None or predicate(candidate))):
+                        if wait_metrics is not None:
+                            wait_metrics["history_entries_examined"] = entries_examined
                         return candidate
                 item = self._property_cache.get(key)
                 if item and item["update_seq"] > after_seq and (predicate is None or predicate(item)):
+                    if wait_metrics is not None:
+                        wait_metrics["history_entries_examined"] = entries_examined
                     return item
                 if self._reader_error is not None:
+                    if wait_metrics is not None:
+                        wait_metrics["history_entries_examined"] = entries_examined
                     raise ConnectionError(str(self._reader_error))
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
+                    if wait_metrics is not None:
+                        wait_metrics["history_entries_examined"] = entries_examined
                     raise asyncio.TimeoutError
-                await asyncio.wait_for(self._property_condition.wait(), remaining)
+                try:
+                    await asyncio.wait_for(self._property_condition.wait(), remaining)
+                except asyncio.TimeoutError:
+                    if wait_metrics is not None:
+                        wait_metrics["history_entries_examined"] = entries_examined
+                    raise
 
     @staticmethod
     def _angular_distance_deg(ra1_hours: float, dec1_deg: float,
@@ -472,64 +488,97 @@ class INDITelescopeControl:
         Args:
             force_refresh: Si True, solicita coordenadas frescas del servidor
         """
+        get_coord_started = time.perf_counter()
+
+        def coord_trace(label, duration=None, details=None):
+            now = time.perf_counter()
+            utc = datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]
+            suffix = f" duration={duration:.6f} s" if duration is not None else ""
+            print(f"[{utc}] [+{now - get_coord_started:.6f}] {label}{suffix}", flush=True)
+            for detail in details or []:
+                print(f"    {detail}", flush=True)
+
+        coord_trace("GET_COORD ENTER", details=[f"force_refresh={force_refresh}"])
         try:
-            import re  # Importar al inicio
-
             self.log("Leyendo coordenadas actuales del telescopio...")
+            key = (self.device_name, "EQUATORIAL_EOD_COORD")
 
-            all_data = ""
+            lookup_started = time.perf_counter()
+            coord_trace("CACHE LOOKUP START")
+            cached_item = self._property_cache.get(key)
+            history = self._property_history.get(key, [])
+            cache_seq = cached_item.get("update_seq", 0) if cached_item else 0
+            coord_trace(
+                "CACHE LOOKUP END",
+                duration=time.perf_counter() - lookup_started,
+                details=[f"cache_seq={cache_seq}", f"history_len={len(history)}"],
+            )
 
-            # Si no forzamos refresh Y tenemos cache con coordenadas, usarlo
-            if not force_refresh and 'EQUATORIAL_EOD_COORD' in self.cached_properties:
+            item = None
+            if not force_refresh and cached_item is not None:
                 self.log("✓ Usando coordenadas del cache")
-                all_data = self.cached_properties
+                item = cached_item
             else:
-                # Pedir ESPECÍFICAMENTE solo las coordenadas
                 self.log("Solicitando coordenadas actualizadas al servidor...")
                 get_coords = f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>'
-                baseline = self._property_cache.get(
-                    (self.device_name, "EQUATORIAL_EOD_COORD"), {}
-                ).get("update_seq", 0)
+                baseline = cache_seq
+                request_started = time.perf_counter()
+                coord_trace("REQUEST EOD START", details=[f"baseline_seq={baseline}"])
                 await self._send_command(get_coords)
+                coord_trace("REQUEST EOD END", duration=time.perf_counter() - request_started)
+                wait_started = time.perf_counter()
+                wait_metrics = {}
+                coord_trace(
+                    "WAIT PROPERTY START",
+                    details=[
+                        f"baseline_seq={baseline}",
+                        f"history_len={len(history)}",
+                        "timeout=5.000 s",
+                        f"history_start_index={len(history)}",
+                    ],
+                )
                 try:
                     item = await self._wait_property(
                         "EQUATORIAL_EOD_COORD", 5.0, baseline,
-                        lambda x: "RA" in x["elements"] and "DEC" in x["elements"])
-                    all_data = item["raw"]
+                        lambda x: "RA" in x["elements"] and "DEC" in x["elements"],
+                        wait_metrics=wait_metrics)
                 except asyncio.TimeoutError:
-                    all_data = ""
+                    coord_trace(
+                        "WAIT PROPERTY END",
+                        duration=time.perf_counter() - wait_started,
+                        details=[
+                            "result=timeout",
+                            f"history_entries_examined={wait_metrics.get('history_entries_examined', 0)}",
+                        ],
+                    )
+                    item = None
+                else:
+                    coord_trace(
+                        "WAIT PROPERTY END",
+                        duration=time.perf_counter() - wait_started,
+                        details=[
+                            f"returned_seq={item.get('update_seq')}",
+                            f"state={item.get('state')}",
+                            f"history_entries_examined={wait_metrics.get('history_entries_examined', 0)}",
+                            f"history_len={len(self._property_history.get(key, []))}",
+                        ],
+                    )
 
-                if all_data:
-                    # Actualizar solo la parte de coordenadas en el cache
-                    if 'EQUATORIAL_EOD_COORD' in all_data:
-                        # Reemplazar o agregar las coordenadas en el cache
-                        import re
-                        # Eliminar coordenadas viejas del cache si existen
-                        self.cached_properties = re.sub(
-                            r'<defNumberVector[^>]*name="EQUATORIAL_EOD_COORD"[^>]*>.*?</defNumberVector>',
-                            '',
-                            self.cached_properties,
-                            flags=re.DOTALL
-                        )
-                        # Agregar las nuevas
-                        self.cached_properties += all_data
-                        self.log(f"✓ Coordenadas actualizadas en cache")
-                    else:
-                        self.log(f"✓ Respuesta recibida: {len(all_data)} bytes")
-
-            if not all_data:
+            if item is None:
                 self.log("❌ No se recibieron datos", "ERROR")
+                coord_trace("GET_COORD RETURN", duration=time.perf_counter() - get_coord_started,
+                            details=["result=None,None"])
                 return None, None
 
-            self.log_verbose(f"Respuesta completa ({len(all_data)} bytes):")
-            if self.verbose:
-                # Mostrar la respuesta completa en modo verbose
-                self.log_verbose(all_data)
-            else:
-                self.log_verbose(all_data[:500] + "...")
-
-            complete_messages, _ = self._split_complete_xml_messages(all_data)
-            _, ra, dec = self._extract_eod_update(complete_messages)
+            parse_started = time.perf_counter()
+            coord_trace("PARSE RA/DEC START")
+            elements = item.get("elements", {})
+            try:
+                ra = float(elements["RA"])
+                dec = float(elements["DEC"])
+            except (KeyError, TypeError, ValueError):
+                ra = dec = None
+            coord_trace("PARSE RA/DEC END", duration=time.perf_counter() - parse_started)
 
             if ra is not None and dec is not None:
                 self.current_ra = ra
@@ -550,13 +599,15 @@ class INDITelescopeControl:
                 self.log("=" * 80)
                 self.log("")
 
+                coord_trace("GET_COORD RETURN", duration=time.perf_counter() - get_coord_started,
+                            details=[f"RA={ra}", f"DEC={dec}"])
                 return ra, dec
             else:
                 self.log("⚠️  No se pudieron parsear las coordenadas", "WARNING")
                 self.log("")
                 self.log("🔍 DATOS RECIBIDOS DEL SERVIDOR:", "DEBUG")
                 # Mostrar fragmentos relevantes
-                lines = all_data.split('\n')
+                lines = item.get("raw", "").split('\n')
                 for line in lines[:10]:  # Primeras 10 líneas
                     if line.strip():
                         self.log(f"   {line[:100]}", "DEBUG")
@@ -565,12 +616,16 @@ class INDITelescopeControl:
                 self.log("   1. Espera 10 segundos y vuelve a intentar", "INFO")
                 self.log("   2. Verifica que el telescopio esté conectado en KStars", "INFO")
                 self.log("   3. Ejecuta con --verbose para ver más detalles", "INFO")
+                coord_trace("GET_COORD RETURN", duration=time.perf_counter() - get_coord_started,
+                            details=["result=None,None"])
                 return None, None
 
         except Exception as e:
             self.log(f"Error al leer coordenadas: {e}", "ERROR")
             import traceback
             traceback.print_exc()
+            coord_trace("GET_COORD RETURN", duration=time.perf_counter() - get_coord_started,
+                        details=[f"error={type(e).__name__}: {e}"])
             return None, None
     
     def _format_ra(self, ra_hours: float) -> str:
