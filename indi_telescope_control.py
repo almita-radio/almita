@@ -13,6 +13,7 @@ import argparse
 import sys
 import re
 import math
+import time
 
 class INDITelescopeControl:
     """
@@ -259,15 +260,31 @@ class INDITelescopeControl:
             traceback.print_exc()
             return False
     
-    async def _send_command(self, xml: str):
+    async def _send_command(self, xml: str, timing_trace=None):
         """Envía comando XML al servidor"""
         if not self.writer:
             raise RuntimeError("No conectado")
         
         self.log_verbose(f"📤 Enviando XML:\n{xml}")
+        lock_wait_started = time.perf_counter()
+        if timing_trace:
+            timing_trace("WRITE LOCK WAIT", details=[])
         async with self._write_lock:
+            if timing_trace:
+                timing_trace(
+                    "WRITE LOCK ACQUIRED",
+                    duration=time.perf_counter() - lock_wait_started,
+                )
+                write_started = time.perf_counter()
+                timing_trace("WRITER WRITE START", details=[])
             self.writer.write((xml + '\n').encode())
+            if timing_trace:
+                timing_trace("WRITER WRITE END", duration=time.perf_counter() - write_started)
+                drain_started = time.perf_counter()
+                timing_trace("DRAIN START", details=[])
             await self.writer.drain()
+            if timing_trace:
+                timing_trace("DRAIN END", duration=time.perf_counter() - drain_started)
 
     async def _ensure_dispatcher(self):
         if self.reader is None:
@@ -575,9 +592,26 @@ class INDITelescopeControl:
     async def goto(self, ra_hours: float, dec_degrees: float) -> bool:
         """Ejecuta comando GOTO"""
         try:
+            goto_enter_clock = time.perf_counter()
+
+            def precommand_trace(label, duration=None, details=None):
+                now = time.perf_counter()
+                utc = datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]
+                suffix = f" duration={duration:.3f} s" if duration is not None else ""
+                print(f"[{utc}] [+{now - goto_enter_clock:.3f}] {label}{suffix}", flush=True)
+                for detail in details or []:
+                    print(f"    {detail}", flush=True)
+
+            precommand_trace("GOTO ENTER")
             self.explain_indi('goto')
             self.final_target_error_deg = None
+            operation_started = time.perf_counter()
+            precommand_trace("VALIDATE TARGET START")
             validated = self._validated_goto_coordinates(ra_hours, dec_degrees)
+            precommand_trace(
+                "VALIDATE TARGET END",
+                duration=time.perf_counter() - operation_started,
+            )
             if validated is None:
                 self.log(
                     f"Coordenadas GOTO inválidas: RA={ra_hours!r}, DEC={dec_degrees!r}. "
@@ -595,14 +629,40 @@ class INDITelescopeControl:
                 nonlocal eod_seq
                 deadline = asyncio.get_event_loop().time() + timeout_sec
                 while True:
+                    request_started = time.perf_counter()
+                    precommand_trace(
+                        "CURRENT EOD REQUEST START",
+                        details=["property=EQUATORIAL_EOD_COORD", f"baseline update_seq={eod_seq}"],
+                    )
                     await self._send_command(
-                        f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>'
+                        f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>',
+                        timing_trace=precommand_trace,
+                    )
+                    precommand_trace(
+                        "CURRENT EOD REQUEST END",
+                        duration=time.perf_counter() - request_started,
+                    )
+                    wait_started = time.perf_counter()
+                    precommand_trace(
+                        "WAIT CURRENT EOD START",
+                        details=["property=EQUATORIAL_EOD_COORD", f"baseline update_seq={eod_seq}",
+                                 "timeout=0.200 s"],
                     )
                     try:
                         item = await self._wait_property("EQUATORIAL_EOD_COORD", 0.2, eod_seq)
                         eod_seq = item["update_seq"]
+                        precommand_trace(
+                            "WAIT CURRENT EOD END",
+                            duration=time.perf_counter() - wait_started,
+                            details=[f"seq received={eod_seq}", f"state={item['state']}"],
+                        )
                     except asyncio.TimeoutError:
                         item = None
+                        precommand_trace(
+                            "WAIT CURRENT EOD END",
+                            duration=time.perf_counter() - wait_started,
+                            details=["result=timeout", f"baseline update_seq={eod_seq}"],
+                        )
                     eod_state = item["state"] if item else None
 
                     if eod_state == "Alert":
@@ -612,7 +672,10 @@ class INDITelescopeControl:
                         if asyncio.get_event_loop().time() >= deadline:
                             self.log("⚠️  TIMEOUT: Mount siguió en Busy antes de enviar nuevo GOTO", "WARNING")
                             return False
+                        sleep_started = time.perf_counter()
+                        precommand_trace("PRECHECK SLEEP START", details=["requested=0.100 s"])
                         await asyncio.sleep(poll_interval_sec)
+                        precommand_trace("PRECHECK SLEEP END", duration=time.perf_counter() - sleep_started)
                         continue
                     if eod_state in ("Ok", "Idle"):
                         return True
@@ -620,10 +683,20 @@ class INDITelescopeControl:
                     if asyncio.get_event_loop().time() >= deadline:
                         self.log("⚠️  TIMEOUT: No se pudo confirmar estado no-Busy antes del GOTO", "WARNING")
                         return False
+                    sleep_started = time.perf_counter()
+                    precommand_trace("PRECHECK SLEEP START", details=["requested=0.100 s"])
                     await asyncio.sleep(poll_interval_sec)
+                    precommand_trace("PRECHECK SLEEP END", duration=time.perf_counter() - sleep_started)
 
             # Leer posición actual primero
+            operation_started = time.perf_counter()
+            precommand_trace("READ CURRENT POSITION START", details=["operation=get_coordinates()"])
             current_ra, current_dec = await self.get_coordinates()
+            precommand_trace(
+                "READ CURRENT POSITION END",
+                duration=time.perf_counter() - operation_started,
+                details=[f"RA={current_ra}", f"DEC={current_dec}"],
+            )
 
             if current_ra is not None and current_dec is not None:
                 # Calcular distancia angular
@@ -639,8 +712,23 @@ class INDITelescopeControl:
                 self.log(f"   Tiempo estimado: {max(30, int(distance * 2))} segundos")
                 self.log("")
 
+            operation_started = time.perf_counter()
+            eod_seq = self._property_cache.get(
+                (self.device_name, "EQUATORIAL_EOD_COORD"), {}
+            ).get("update_seq", 0)
+            precommand_trace(
+                "PRE-COMMAND EOD PRECHECK START",
+                details=["property=EQUATORIAL_EOD_COORD",
+                         f"baseline update_seq={eod_seq}",
+                         "timeout configured=30.000 s"],
+            )
             if not await _wait_until_not_busy(precheck_timeout_sec):
                 return False
+            precommand_trace(
+                "PRE-COMMAND EOD PRECHECK END",
+                duration=time.perf_counter() - operation_started,
+                details=[f"final seq={eod_seq}"],
+            )
 
             # Asegurar modo SLEW
             slew_mode = f'''<newSwitchVector device="{self.device_name}" name="ON_COORD_SET">
@@ -650,8 +738,14 @@ class INDITelescopeControl:
 </newSwitchVector>'''
 
             self.log("Paso 1/2: Configurando modo SLEW (movimiento)...")
-            await self._send_command(slew_mode)
+            operation_started = time.perf_counter()
+            precommand_trace("SEND SLEW MODE START", details=["property=ON_COORD_SET"])
+            await self._send_command(slew_mode, timing_trace=precommand_trace)
+            precommand_trace("SEND SLEW MODE END", duration=time.perf_counter() - operation_started)
+            sleep_started = time.perf_counter()
+            precommand_trace("SLEW MODE SLEEP START", details=["requested=0.500 s"])
             await asyncio.sleep(0.5)
+            precommand_trace("SLEW MODE SLEEP END", duration=time.perf_counter() - sleep_started)
 
             # Enviar coordenadas
             goto_cmd = f'''<newNumberVector device="{self.device_name}" name="EQUATORIAL_EOD_COORD">
@@ -663,7 +757,27 @@ class INDITelescopeControl:
             self.log(f"   RA  = {ra_hours} horas ({self._format_ra(ra_hours)})")
             self.log(f"   DEC = {dec_degrees}° ({self._format_dec(dec_degrees)})")
             self.log("   (Presiona Ctrl+C para cancelar)")
-            await self._send_command(goto_cmd)
+            operation_started = time.perf_counter()
+            precommand_trace("GET EOD BASELINE START", details=["source=_property_cache"])
+            baseline_eod_seq = self._property_cache.get(
+                (self.device_name, "EQUATORIAL_EOD_COORD"), {}
+            ).get("update_seq", 0)
+            precommand_trace(
+                "GET EOD BASELINE END",
+                duration=time.perf_counter() - operation_started,
+                details=[f"baseline update_seq={baseline_eod_seq}"],
+            )
+            eod_seq = baseline_eod_seq
+            self.log(f"GOTO baseline_seq={baseline_eod_seq}")
+            operation_started = time.perf_counter()
+            precommand_trace("SEND GOTO COMMAND START", details=["property=EQUATORIAL_EOD_COORD"])
+            await self._send_command(goto_cmd, timing_trace=precommand_trace)
+            precommand_trace(
+                "GOTO COMMAND SENT",
+                duration=time.perf_counter() - operation_started,
+                details=[f"goto_pre_command_total={time.perf_counter() - goto_enter_clock:.3f} s"],
+            )
+            self.log(f"GOTO command_sent_seq={baseline_eod_seq}")
 
             self.log("")
             self.log("⏳ Polling estado del movimiento (timeout: 120s)...")
@@ -677,6 +791,7 @@ class INDITelescopeControl:
             ok_detected_at: Optional[float] = None
             last_error_deg: Optional[float] = None
             stable_hits = 0
+            last_stable_hit_seq: Optional[int] = None
             convergence_tol_deg = 0.25
             settle_tol_deg = 0.02
             settle_required_hits = 2
@@ -701,6 +816,7 @@ class INDITelescopeControl:
                     eod_seq = item["update_seq"]
                     if item:
                         eod_state = item["state"]
+                        item_seq = item["update_seq"]
                         try:
                             parsed_ra = float(item["elements"].get("RA"))
                             parsed_dec = float(item["elements"].get("DEC"))
@@ -711,14 +827,37 @@ class INDITelescopeControl:
                             # Angular error uses spherical distance in hours/deg.
                             current_error_deg = self._angular_distance_deg(parsed_ra, parsed_dec, ra_hours, dec_degrees)
 
-                            if current_error_deg <= convergence_tol_deg:
-                                if last_error_deg is not None and abs(current_error_deg - last_error_deg) <= settle_tol_deg:
+                            self.log_verbose(
+                                f"   EOD seq={item_seq} state={eod_state} "
+                                f"RA={parsed_ra:.8f} DEC={parsed_dec:.8f} "
+                                f"error={current_error_deg:.6f}° "
+                                f"post_command={item_seq > baseline_eod_seq}"
+                            )
+
+                            if item_seq <= baseline_eod_seq:
+                                self.log_verbose(
+                                    f"   EOD seq={item_seq} ignorado para convergencia "
+                                    f"(baseline_seq={baseline_eod_seq})"
+                                )
+                            elif current_error_deg <= convergence_tol_deg:
+                                if (
+                                    last_error_deg is not None
+                                    and last_stable_hit_seq is not None
+                                    and item_seq > last_stable_hit_seq
+                                    and abs(current_error_deg - last_error_deg) <= settle_tol_deg
+                                ):
                                     stable_hits += 1
                                 else:
                                     stable_hits = 1
+                                last_stable_hit_seq = item_seq
+                                self.log_verbose(
+                                    f"   convergence=True stable_hit={stable_hits} seq={item_seq}"
+                                )
                             else:
                                 stable_hits = 0
-                            last_error_deg = current_error_deg
+                                last_stable_hit_seq = None
+                            if item_seq > baseline_eod_seq:
+                                last_error_deg = current_error_deg
 
                         if eod_state == "Busy":
                             if busy_started_at is None:
@@ -746,11 +885,17 @@ class INDITelescopeControl:
                                     "↻ GOTO correctivo único: mount Idle fuera de tolerancia "
                                     f"(error~{last_error_deg:.3f}°); reenviando el mismo target"
                                 )
+                                baseline_eod_seq = self._property_cache.get(
+                                    (self.device_name, "EQUATORIAL_EOD_COORD"), {}
+                                ).get("update_seq", eod_seq)
+                                eod_seq = baseline_eod_seq
+                                self.log(f"GOTO correctivo baseline_seq={baseline_eod_seq}")
                                 await self._send_command(goto_cmd)
                                 busy_started_at = None
                                 busy_finished_at = None
                                 last_error_deg = None
                                 stable_hits = 0
+                                last_stable_hit_seq = None
                                 await asyncio.sleep(poll_interval_sec)
                                 continue
 

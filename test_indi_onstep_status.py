@@ -230,7 +230,7 @@ def test_freshness_apis_have_no_control_or_direct_serial_operations():
 
 def test_dispatcher_migration_keeps_reviewed_goto_and_tracking_structure():
     expected = {
-        "goto": "97eec81dc5829840a44643f4bc0c2ec5cb5a607c012fc18407e094b92d3a645f",
+        "goto": "5b56aabafb029f627891897104a7149ee5d3133eab6ecfe78abf01c177bad4a4",
         "set_tracking": "330ef6b7566fea2ab0641710985fc366eb3428bb025f78381663ae42f0ac23d9",
         "get_tracking_state": "f38553b64ab83039b83e4a58287d131e195f2714734ece23c053822a503bfa0d",
         "wait_tracking_state": "0b78c780e0950cf0d2ecd917e02f3901fd55b8c9b8a8074e142407e3d80b2422",

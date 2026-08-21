@@ -18,6 +18,8 @@ import importlib
 import math
 import shutil
 import tempfile
+import time
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
@@ -79,6 +81,10 @@ class CaptureExecutor:
         self.meridian_partition_metadata = {}
         self.actual_capture_order_offset = 0
         self.grid_metadata = self._load_grid_metadata()
+        self._live_timing_csv_path = None
+        self._live_timing_rows = []
+        self._live_session_clock = None
+        self._live_previous_point_complete_clock = None
         
         # SDR configuration
         self.sdr_mode = sdr_mode
@@ -314,10 +320,141 @@ class CaptureExecutor:
             level: Log level (INFO, WARNING, ERROR)
             force: Always print even in non-verbose mode
         """
-        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         if self.verbose or force or level in ["WARNING", "ERROR"]:
-            print(f"[{timestamp}] {message}")
+            print(f"[{timestamp}] {message}", flush=True)
         sys.stdout.flush()
+
+    @staticmethod
+    def _live_utc() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+    def _live_event(self, row: Dict, label: str, field: Optional[str] = None,
+                    details: Optional[List[str]] = None) -> float:
+        """Print and record a diagnostic event without affecting control flow."""
+        now = time.perf_counter()
+        elapsed = now - row["_point_clock"]
+        utc = self._live_utc()
+        print(f"[+{elapsed:07.3f}] {label}", flush=True)
+        for detail in details or []:
+            print(f"           {detail}", flush=True)
+        if field:
+            row[field] = utc
+            row[f"_{field}_clock"] = now
+        return now
+
+    def _observe_goto_log(self, row: Dict, message: str) -> None:
+        """Translate existing goto verbose logs into the operator timeline."""
+        baseline = re.search(r"GOTO baseline_seq=(\d+)", message)
+        if baseline:
+            row["baseline_eod_seq"] = int(baseline.group(1))
+            self._live_event(row, "EOD BASELINE RECORDED",
+                             details=[f"baseline_eod_seq={baseline.group(1)}"])
+            return
+
+        command_sent = re.search(r"GOTO command_sent_seq=(\d+)", message)
+        if command_sent:
+            self._live_event(row, "GOTO COMMAND SENT", "goto_command_utc",
+                             [f"baseline_eod_seq={command_sent.group(1)}"])
+            row["_waiting_last_report_clock"] = time.perf_counter()
+            return
+
+        eod = re.search(
+            r"EOD seq=(\d+) state=(\w+) RA=([-+0-9.]+) DEC=([-+0-9.]+) "
+            r"error=([-+0-9.]+)", message)
+        if eod:
+            seq, state, ra, dec, error = eod.groups()
+            seq_i = int(seq)
+            row.setdefault("first_post_command_eod_seq", seq_i)
+            row["_last_eod"] = {
+                "seq": seq_i, "state": state, "ra": ra, "dec": dec,
+                "error": float(error),
+            }
+            if state != "Busy" and not row.get("motion_start_utc"):
+                now = time.perf_counter()
+                if now - row.get("_waiting_last_report_clock", now) >= 1.0:
+                    row["_waiting_last_report_clock"] = now
+                    self._live_event(row, "WAITING FOR MOTION...", details=[
+                        f"elapsed={now - row['_goto_command_utc_clock']:.3f} s",
+                        f"EOD state={state}", f"seq={seq}",
+                        f"RA={ra}", f"DEC={dec}",
+                        f"error={float(error):.6f} deg",
+                    ])
+            if state == "Busy" and not row.get("motion_start_utc"):
+                motion_clock = self._live_event(
+                    row, "MOUNT MOTION START", "motion_start_utc",
+                    ["detection=EOD Busy", f"seq={seq}",
+                     f"command_to_motion_start={time.perf_counter() - row['_goto_command_utc_clock']:.3f} s"],
+                )
+                row["_motion_last_report_clock"] = motion_clock
+            elif state == "Busy" and row.get("motion_start_utc"):
+                now = time.perf_counter()
+                if now - row.get("_motion_last_report_clock", 0.0) >= 1.0:
+                    row["_motion_last_report_clock"] = now
+                    self._live_event(
+                        row, "MOUNT MOVING", details=[
+                            f"elapsed_motion={now - row['_motion_start_utc_clock']:.3f} s",
+                            f"RA={ra}", f"DEC={dec}",
+                            f"error={float(error):.6f} deg",
+                            f"EOD={state}", f"seq={seq}",
+                        ])
+            elif state != "Busy" and row.get("motion_start_utc") and not row.get("motion_end_utc"):
+                now = self._live_event(
+                    row, "MOUNT MOTION END", "motion_end_utc",
+                    [f"EOD={state}", f"seq={seq}",
+                     f"physical_motion_duration={time.perf_counter() - row['_motion_start_utc_clock']:.3f} s",
+                     f"command_to_motion_end={time.perf_counter() - row['_goto_command_utc_clock']:.3f} s"],
+                )
+            if float(error) <= 0.25 and not row.get("first_convergence_utc"):
+                self._live_event(
+                    row, "FIRST CONVERGENCE", "first_convergence_utc",
+                    [f"error={float(error):.6f} deg", f"eod_seq={seq}"],
+                )
+            return
+
+        hit = re.search(r"convergence=True stable_hit=(\d+) seq=(\d+)", message)
+        if hit:
+            number, seq = map(int, hit.groups())
+            if number == 1 and not row.get("hit1_utc"):
+                row["hit1_seq"] = seq
+                error = row.get("_last_eod", {}).get("error")
+                self._live_event(row, "STABLE HIT 1", "hit1_utc",
+                                 [f"error={error} deg", f"seq={seq}"])
+            elif number == 2 and not row.get("hit2_utc"):
+                row["hit2_seq"] = seq
+                error = row.get("_last_eod", {}).get("error")
+                self._live_event(row, "STABLE HIT 2", "hit2_utc",
+                                 [f"error={error} deg", f"seq={seq}"])
+
+    def _write_live_timing_csv(self) -> None:
+        """Rewrite the small diagnostic timing CSV atomically after each point."""
+        if not self._live_timing_csv_path or not self._live_timing_rows:
+            return
+        fields = [
+            "point_id", "scan_order", "actual_capture_order", "point_start_utc",
+            "pre_guard_start", "pre_guard_end", "goto_command_utc",
+            "motion_start_utc", "motion_end_utc", "first_convergence_utc",
+            "hit1_utc", "hit2_utc", "goto_return_utc", "post_guard_start",
+            "post_guard_end", "tracking_start", "tracking_confirmed",
+            "post_tracking_guard_start", "post_tracking_guard_end",
+            "settle_start", "settle_end", "flush_start", "flush_end",
+            "capture_start", "capture_end", "disk_write_start", "disk_write_end",
+            "validation_start", "validation_end", "rename_start", "rename_end",
+            "persist_start", "persist_end", "point_complete_utc",
+            "next_point_start_utc", "baseline_eod_seq", "first_post_command_eod_seq",
+            "hit1_seq", "hit2_seq", "command_to_motion_start_sec",
+            "physical_motion_sec", "motion_end_to_goto_return_sec", "goto_total_sec",
+            "pre_guard_sec", "post_guard_sec", "tracking_sec",
+            "post_tracking_guard_sec", "settle_sec", "flush_sec", "capture_sec",
+            "disk_hdf5_sec", "persist_sec", "inter_point_delay_sec", "other_sec",
+            "point_total_sec", "capture_disk_combined",
+        ]
+        temp_path = self._live_timing_csv_path.with_suffix(".csv.tmp")
+        with temp_path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(self._live_timing_rows)
+        os.replace(temp_path, self._live_timing_csv_path)
     
     def load_observation_plan(self, resume: bool = False, force: bool = False) -> bool:
         """
@@ -842,6 +979,17 @@ class CaptureExecutor:
         else:
             self.log(f"📋 Resuming Session ID: {self.session_id}", force=True)
 
+        self._live_timing_csv_path = (
+            self.csv_path.parent / f"capture_timing_{self.session_id}.csv"
+        )
+        self._live_session_clock = time.perf_counter()
+        self._live_timing_rows = []
+        live_totals = {key: 0.0 for key in (
+            "command_delay", "physical_motion", "motion_tail", "goto", "guards",
+            "tracking", "settle", "flush", "capture", "disk_hdf5", "persist",
+            "inter_point", "other", "point_total",
+        )}
+
         if not self.verbose:
             self.log("", force=True)
 
@@ -882,14 +1030,35 @@ class CaptureExecutor:
 
         try:
             actual_session_count = 0
+            timing_totals = {key: 0.0 for key in (
+                "slew", "settle", "flush", "capture", "hdf5",
+                "guards", "tracking", "persist", "other", "wall")}
             for idx, point in enumerate(self.iter_runtime_visible_points(), start=1):
+                point_clock = time.perf_counter()
                 point_start = datetime.now(timezone.utc)
                 point_num = int(point['point_number'])
                 ra_hours = float(point['target_ra_hours'])
                 dec_deg = float(point['target_dec_degrees'])
                 actual_session_count += 1
                 actual_capture_order = self.actual_capture_order_offset + actual_session_count
+                inter_point_delay_sec = (
+                    0.0 if self._live_previous_point_complete_clock is None
+                    else point_clock - self._live_previous_point_complete_clock
+                )
+                if idx > 1:
+                    previous_total = self._live_timing_rows[-1].get("point_total_sec", 0.0)
+                    print(
+                        f"[{self._live_utc()}] NEXT POINT START\n"
+                        f"      previous_point_total={float(previous_total):.3f} s\n"
+                        f"      session_wall_so_far={point_clock - self._live_session_clock:.3f} s\n"
+                        f"      inter_point_delay_sec={inter_point_delay_sec:.3f} s",
+                        flush=True,
+                    )
+                    self._live_timing_rows[-1]["next_point_start_utc"] = self._live_utc()
+                    self._write_live_timing_csv()
+                persist_clock = time.perf_counter()
                 self.persist_selection_metadata(point, actual_capture_order)
+                persist_sec = time.perf_counter() - persist_clock
 
                 # Header for this point
                 if self.verbose:
@@ -901,8 +1070,62 @@ class CaptureExecutor:
                     self.log(f"📍 POINT {idx}/{len(self.observation_points)} (#{point_num}) | RA={point['target_ra_hms']} DEC={point['target_dec_dms']}", force=True)
                     self.log("="*80, force=True)
 
+                previous_target = getattr(self, "_timing_previous_target", None)
+                if previous_target:
+                    previous_coord = SkyCoord(
+                        ra=previous_target[0] * u.hourangle,
+                        dec=previous_target[1] * u.deg,
+                    )
+                    target_coord = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_deg * u.deg)
+                    distance_from_previous = float(previous_coord.separation(target_coord).deg)
+                else:
+                    distance_from_previous = 0.0
+                live_row = {
+                    "point_id": point.get("point_id", point_num),
+                    "scan_order": self._scan_order(point),
+                    "actual_capture_order": actual_capture_order,
+                    "point_start_utc": point_start.isoformat(timespec="milliseconds"),
+                    "_point_clock": point_clock,
+                    "inter_point_delay_sec": inter_point_delay_sec,
+                }
+                print("=" * 60, flush=True)
+                print(f"POINT {idx:02d}/{len(self.observation_points):02d} START", flush=True)
+                print(f"UTC={live_row['point_start_utc']}", flush=True)
+                print(f"RA={ra_hours:.9f} h", flush=True)
+                print(f"DEC={dec_deg:.9f} deg", flush=True)
+                print(f"HA={float(point['_ha_at_selection']):+.6f} h", flush=True)
+                print(f"ALT={float(point['_altitude_deg_at_goto']):.3f} deg", flush=True)
+                print(f"DIST={distance_from_previous:.3f} deg", flush=True)
+                print("=" * 8, flush=True)
+                self._live_event(live_row, "POINT START")
+                self.log(
+                    f"TIMING POINT {idx:02d}/20 | point_id={point.get('point_id', point_num)} | "
+                    f"scan={self._scan_order(point)} | actual={actual_capture_order} | "
+                    f"RA={ra_hours:.6f}h DEC={dec_deg:.6f}° | "
+                    f"HA={float(point['_ha_at_selection']):+.6f}h | "
+                    f"Alt={float(point['_altitude_deg_at_goto']):.3f}° "
+                    f"Az={float(point['_azimuth_deg_at_goto']):.3f}° | "
+                    f"distance={distance_from_previous:.3f}°",
+                    force=True,
+                )
+
                 # A fresh healthy OnStep status is the final gate before motion.
+                guard_clock = time.perf_counter()
+                self._live_event(live_row, "PRE-GOTO GUARD START", "pre_guard_start")
+                self.log("PRE-GOTO GUARD START | waiting hardware-fresh", force=True)
                 onstep_pre_goto = await self.read_onstep_status(retry_unknown=True)
+                pre_goto_guard_sec = time.perf_counter() - guard_clock
+                self._live_event(
+                    live_row, "PRE-GOTO GUARD END", "pre_guard_end",
+                    [f"duration={pre_goto_guard_sec:.3f} s",
+                     f"hardware_fresh={onstep_pre_goto.get('hardware_fresh')}",
+                     f"update_seq={onstep_pre_goto.get('update_seq')}"],
+                )
+                self.log(
+                    f"PRE-GOTO GUARD END | hardware_fresh={onstep_pre_goto.get('hardware_fresh')} | "
+                    f"update_seq={onstep_pre_goto.get('update_seq')} | duration={pre_goto_guard_sec:.3f}s",
+                    force=True,
+                )
                 self.persist_onstep_status(point, "pre_goto", onstep_pre_goto)
                 if not self.onstep_status_allows_operation(onstep_pre_goto):
                     safety_paused = True
@@ -922,9 +1145,61 @@ class CaptureExecutor:
 
                 mount_start_ra, mount_start_dec = await self._optional_mount_coordinates()
                 slew_start = datetime.now(timezone.utc)
-                success = await self.telescope.goto(ra_hours, dec_deg)
+                slew_clock = time.perf_counter()
+                self.log(f">>> GOTO START | distance={distance_from_previous:.3f}°", force=True)
+                original_telescope_log = getattr(self.telescope, "log", None)
+                original_telescope_log_verbose = getattr(self.telescope, "log_verbose", None)
+                if original_telescope_log is not None:
+                    def timeline_telescope_log(message, level="INFO", *args, **kwargs):
+                        result = original_telescope_log(message, level, *args, **kwargs)
+                        if ("GOTO baseline_seq=" in str(message)
+                                or "GOTO command_sent_seq=" in str(message)):
+                            self._observe_goto_log(live_row, str(message))
+                        return result
+                    self.telescope.log = timeline_telescope_log
+                if original_telescope_log_verbose is not None:
+                    def timeline_telescope_log_verbose(message, *args, **kwargs):
+                        self._observe_goto_log(live_row, str(message))
+                        return original_telescope_log_verbose(message, *args, **kwargs)
+                    self.telescope.log_verbose = timeline_telescope_log_verbose
+                try:
+                    success = await self.telescope.goto(ra_hours, dec_deg)
+                finally:
+                    if original_telescope_log is not None:
+                        self.telescope.log = original_telescope_log
+                    if original_telescope_log_verbose is not None:
+                        self.telescope.log_verbose = original_telescope_log_verbose
+                slew_sec = time.perf_counter() - slew_clock
                 slew_end = datetime.now(timezone.utc)
                 slew_time = (slew_end - slew_start).total_seconds()
+                if not live_row.get("motion_start_utc"):
+                    print("MOUNT MOTION START: BUSY NOT OBSERVED", flush=True)
+                goto_return_clock = time.perf_counter()
+                live_row["goto_total_sec"] = slew_sec
+                if live_row.get("motion_start_utc"):
+                    live_row["command_to_motion_start_sec"] = (
+                        live_row["_motion_start_utc_clock"] - live_row["_goto_command_utc_clock"]
+                    )
+                if live_row.get("motion_end_utc"):
+                    live_row["physical_motion_sec"] = (
+                        live_row["_motion_end_utc_clock"] - live_row["_motion_start_utc_clock"]
+                    )
+                    live_row["motion_end_to_goto_return_sec"] = (
+                        goto_return_clock - live_row["_motion_end_utc_clock"]
+                    )
+                command_delay = float(live_row.get("command_to_motion_start_sec") or 0.0)
+                physical_motion = float(live_row.get("physical_motion_sec") or 0.0)
+                motion_tail = float(live_row.get("motion_end_to_goto_return_sec") or 0.0)
+                residual_goto = slew_sec - command_delay - physical_motion - motion_tail
+                self._live_event(
+                    live_row, "GOTO RETURN", "goto_return_utc",
+                    [f"goto_total={slew_sec:.3f} s",
+                     f"command_to_motion_start={command_delay:.3f} s",
+                     f"physical_motion={physical_motion:.3f} s",
+                     f"motion_end_to_return={motion_tail:.3f} s",
+                     f"residual_goto_time={residual_goto:.3f} s"],
+                )
+                self.log(f"<<< GOTO END | monotonic={slew_sec:.3f}s", force=True)
 
                 if not success:
                     self.log(f"   ❌ ERROR: SLEW failed!", "ERROR", force=True)
@@ -944,7 +1219,22 @@ class CaptureExecutor:
                     self.log(f"   ✓ SLEW completed in {slew_time:.1f}s", force=True)
                     self.log("="*80, force=True)
 
+                guard_clock = time.perf_counter()
+                self._live_event(live_row, "POST-GOTO GUARD START", "post_guard_start")
+                self.log("POST-GOTO GUARD START", force=True)
                 onstep_post_goto = await self.read_onstep_status(retry_unknown=True)
+                post_goto_guard_sec = time.perf_counter() - guard_clock
+                self._live_event(
+                    live_row, "POST-GOTO GUARD END", "post_guard_end",
+                    [f"duration={post_goto_guard_sec:.3f} s",
+                     f"hardware_fresh={onstep_post_goto.get('hardware_fresh')}",
+                     f"update_seq={onstep_post_goto.get('update_seq')}"],
+                )
+                self.log(
+                    f"POST-GOTO GUARD END | hardware_fresh={onstep_post_goto.get('hardware_fresh')} | "
+                    f"update_seq={onstep_post_goto.get('update_seq')} | duration={post_goto_guard_sec:.3f}s",
+                    force=True,
+                )
                 self.persist_onstep_status(point, "post_goto", onstep_post_goto)
                 if not self.onstep_status_allows_operation(onstep_post_goto):
                     safety_paused = True
@@ -961,10 +1251,38 @@ class CaptureExecutor:
                 # Enable and verify real tracking state before scientific settle/capture.
                 if self.verbose:self.log(f"Enabling and confirming tracking...")
                 tracking_request_at = datetime.now(timezone.utc)
+                tracking_clock = time.perf_counter()
+                self._live_event(live_row, "TRACKING START", "tracking_start")
+                self.log("TRACKING START | ON REQUEST", force=True)
                 tracking_confirmed,tracking_state,tracking_requested=await self.confirm_tracking_on()
+                tracking_enable_sec = time.perf_counter() - tracking_clock
+                self._live_event(
+                    live_row, "TRACKING ON CONFIRMED" if tracking_confirmed else "TRACKING NOT CONFIRMED",
+                    "tracking_confirmed", [f"duration={tracking_enable_sec:.3f} s"],
+                )
+                self.log(
+                    f"TRACKING {'CONFIRMED' if tracking_confirmed else 'NOT CONFIRMED'} | "
+                    f"state={tracking_state} | duration={tracking_enable_sec:.3f}s",
+                    force=True,
+                )
                 tracking_result_at = datetime.now(timezone.utc)
                 tracking_confirmed_at = tracking_result_at if tracking_confirmed else None
+                guard_clock = time.perf_counter()
+                self._live_event(live_row, "POST-TRACK GUARD START", "post_tracking_guard_start")
+                self.log("POST-TRACKING GUARD START", force=True)
                 onstep_post_tracking = await self.read_onstep_status()
+                post_tracking_guard_sec = time.perf_counter() - guard_clock
+                self._live_event(
+                    live_row, "POST-TRACK GUARD END", "post_tracking_guard_end",
+                    [f"duration={post_tracking_guard_sec:.3f} s",
+                     f"hardware_fresh={onstep_post_tracking.get('hardware_fresh')}",
+                     f"update_seq={onstep_post_tracking.get('update_seq')}"],
+                )
+                self.log(
+                    f"POST-TRACKING GUARD END | hardware_fresh={onstep_post_tracking.get('hardware_fresh')} | "
+                    f"update_seq={onstep_post_tracking.get('update_seq')} | duration={post_tracking_guard_sec:.3f}s",
+                    force=True,
+                )
                 self.persist_onstep_status(point, "post_tracking", onstep_post_tracking)
                 self.persist_runtime_metadata(point,{
                     "tracking_requested":tracking_requested,
@@ -1014,9 +1332,17 @@ class CaptureExecutor:
                     self.log(f"   Settling time: {settle_time}s", force=True)
                 
                 settle_start = datetime.now(timezone.utc)
+                settle_clock = time.perf_counter()
+                self._live_event(live_row, "SETTLE START", "settle_start",
+                                 [f"requested={settle_time:.3f} s"])
+                self.log(f"SETTLE START ({settle_time:.3f}s)", force=True)
                 await asyncio.sleep(settle_time)
+                settle_sec = time.perf_counter() - settle_clock
                 settle_end = datetime.now(timezone.utc)
                 actual_settle = (settle_end - settle_start).total_seconds()
+                self._live_event(live_row, "SETTLE END", "settle_end",
+                                 [f"actual={settle_sec:.3f} s"])
+                self.log(f"SETTLE END | requested={settle_time:.3f}s | actual={settle_sec:.3f}s", force=True)
                 
                 if not self.verbose:
                     self.log(f"   ✓ Settling completed ({actual_settle:.1f}s)", force=True)
@@ -1025,7 +1351,22 @@ class CaptureExecutor:
                 # FLUSH SDR BUFFER AFTER SETTLE - discard data accumulated during slew AND settle
                 # This ensures we only capture data from the final stable position
                 if self.sdr and hasattr(self.sdr, 'flush_buffer'):
+                    flush_clock = time.perf_counter()
+                    self._live_event(live_row, "FLUSH START", "flush_start")
+                    self.log(">>> SDR FLUSH START", force=True)
                     flushed_bytes = await self.sdr.flush_buffer()
+                    flush_sec = time.perf_counter() - flush_clock
+                    self._live_event(
+                        live_row, "FLUSH END", "flush_end",
+                        [f"flush_duration={flush_sec:.3f} s",
+                         f"samples_flushed={flushed_bytes // 2:,}",
+                         f"bytes_flushed={flushed_bytes:,}"],
+                    )
+                    self.log(
+                        f"<<< SDR FLUSH END | samples={flushed_bytes//2:,} | "
+                        f"bytes={flushed_bytes:,} | duration={flush_sec:.3f}s",
+                        force=True,
+                    )
                     if self.verbose and flushed_bytes > 0:
                         self.log(f"  Flushed {flushed_bytes//2:,} samples from SDR buffer")
 
@@ -1033,7 +1374,9 @@ class CaptureExecutor:
                 capture_start = datetime.now(timezone.utc)
                 start_time_iso = capture_start.isoformat()
 
+                persist_clock = time.perf_counter()
                 self.update_point_status(point_num, 'capturing', start_time=start_time_iso)
+                persist_sec += time.perf_counter() - persist_clock
 
                 if self.verbose:
                     self.log(f"Capturing data for {capture_time}s...")
@@ -1157,11 +1500,57 @@ class CaptureExecutor:
                     }
                     
                     # Capture with SDR
+                    capture_wall_clock = time.perf_counter()
+                    self._live_event(
+                        live_row, "CAPTURE START", "capture_start",
+                        [f"requested_duration={capture_time:.3f} s",
+                         f"requested_samples={int(capture_time * self.sdr_sample_rate):,}",
+                         "implementation=single opaque SDRCapture.capture operation"],
+                    )
+                    live_row["disk_write_start"] = "N/D (inside SDRCapture.capture)"
+                    live_row["capture_disk_combined"] = True
+                    self.log(
+                        f">>> SDR CAPTURE START | requested_duration={capture_time:.3f}s | "
+                        f"requested_samples={int(capture_time * self.sdr_sample_rate):,}",
+                        force=True,
+                    )
                     sdr_metrics = await self.sdr.capture(
                         duration=capture_time,
                         output_file=str(data_path),
                         sample_rate=self.sdr_sample_rate,
                         metadata=capture_metadata
+                    )
+                    capture_hdf_wall_sec = time.perf_counter() - capture_wall_clock
+                    capture_sec = float(sdr_metrics.capture_time)
+                    hdf5_sec = float(sdr_metrics.disk_write_time)
+                    actual_samples = getattr(sdr_metrics, 'total_samples', 0)
+                    effective_rate = actual_samples / capture_sec if capture_sec > 0 else 0.0
+                    combined_end = self._live_event(
+                        live_row, "CAPTURE END", "capture_end",
+                        [f"duration={capture_sec:.3f} s",
+                         f"samples_received={actual_samples:,}"],
+                    )
+                    self._live_event(
+                        live_row, "DISK WRITE START", details=[
+                            "timing=reported retrospectively by SDRCapture.capture"],
+                    )
+                    self._live_event(
+                        live_row, "DISK WRITE END", details=[f"duration={hdf5_sec:.3f} s"],
+                    )
+                    live_row["disk_write_end"] = "N/D (inside SDRCapture.capture)"
+                    live_row["validation_start"] = "N/D (inside SDRCapture.capture)"
+                    live_row["validation_end"] = "N/D (inside SDRCapture.capture)"
+                    live_row["rename_start"] = "N/D (inside SDRCapture.capture)"
+                    live_row["rename_end"] = "N/D (inside SDRCapture.capture)"
+                    self.log(
+                        f"<<< SDR CAPTURE END | capture_wall={capture_sec:.3f}s | "
+                        f"samples_received={actual_samples:,} | effective_rate={effective_rate:.1f}Sps",
+                        force=True,
+                    )
+                    self.log(
+                        f"HDF5 FINALIZED | write_time={hdf5_sec:.3f}s | valid=True | "
+                        f"samples={actual_samples:,} | file={data_path} | combined_wall={capture_hdf_wall_sec:.3f}s",
+                        force=True,
                     )
                     
                     if self.verbose:
@@ -1179,14 +1568,124 @@ class CaptureExecutor:
                 end_time_iso = capture_end.isoformat()
                 duration = (capture_end - capture_start).total_seconds()
 
-                self.update_point_status(point_num, 'success', 
+                persist_clock = time.perf_counter()
+                self._live_event(live_row, "PERSIST START", "persist_start")
+                self.log("CSV/SESSION PERSIST START", force=True)
+                self.update_point_status(point_num, 'success',
                                        start_time=start_time_iso,
                                        end_time=end_time_iso,
                                        duration=duration)
+                persist_sec += time.perf_counter() - persist_clock
+                self._live_event(
+                    live_row, "PERSIST END", "persist_end",
+                    [f"persist_duration={persist_sec:.3f} s", "capture_status=success"],
+                )
+                self.log(f"CSV/SESSION PERSIST END | cumulative_persist={persist_sec:.3f}s", force=True)
 
                 # Calculate total time for this point
                 point_end = datetime.now(timezone.utc)
-                total_point_time = (point_end - point_start).total_seconds()
+                total_point_time = time.perf_counter() - point_clock
+                guards_sec = pre_goto_guard_sec + post_goto_guard_sec + post_tracking_guard_sec
+                known_sec = (slew_sec + settle_sec + flush_sec + capture_sec + hdf5_sec
+                             + guards_sec + tracking_enable_sec + persist_sec)
+                other_sec = total_point_time - known_sec
+                live_row.update({
+                    "pre_guard_sec": pre_goto_guard_sec,
+                    "post_guard_sec": post_goto_guard_sec,
+                    "tracking_sec": tracking_enable_sec,
+                    "post_tracking_guard_sec": post_tracking_guard_sec,
+                    "settle_sec": settle_sec, "flush_sec": flush_sec,
+                    "capture_sec": capture_sec, "disk_hdf5_sec": hdf5_sec,
+                    "persist_sec": persist_sec, "other_sec": other_sec,
+                    "point_total_sec": total_point_time,
+                })
+                point_timing = {
+                    "slew": slew_sec, "settle": settle_sec, "flush": flush_sec,
+                    "capture": capture_sec, "hdf5": hdf5_sec, "guards": guards_sec,
+                    "tracking": tracking_enable_sec, "persist": persist_sec,
+                    "other": other_sec, "wall": total_point_time,
+                }
+                for key, value in point_timing.items(): timing_totals[key] += value
+                self.persist_runtime_metadata(point, {
+                    "timing_pre_goto_guard_sec": pre_goto_guard_sec,
+                    "timing_slew_sec": slew_sec,
+                    "timing_post_goto_guard_sec": post_goto_guard_sec,
+                    "timing_tracking_enable_sec": tracking_enable_sec,
+                    "timing_post_tracking_guard_sec": post_tracking_guard_sec,
+                    "timing_settle_sec": settle_sec, "timing_flush_sec": flush_sec,
+                    "timing_capture_sec": capture_sec, "timing_hdf5_finalize_sec": hdf5_sec,
+                    "timing_persist_sec": persist_sec, "timing_other_sec": other_sec,
+                    "timing_point_total_sec": total_point_time,
+                    "timing_distance_from_previous_deg": distance_from_previous,
+                })
+                self._timing_previous_target = (ra_hours, dec_deg)
+                self._live_event(live_row, "POINT COMPLETE", "point_complete_utc")
+                self._live_previous_point_complete_clock = time.perf_counter()
+                self._live_timing_rows.append(live_row)
+                self._write_live_timing_csv()
+                command_delay = float(live_row.get("command_to_motion_start_sec") or 0.0)
+                physical_motion = float(live_row.get("physical_motion_sec") or 0.0)
+                motion_tail = float(live_row.get("motion_end_to_goto_return_sec") or 0.0)
+                for key, value in {
+                    "command_delay": command_delay, "physical_motion": physical_motion,
+                    "motion_tail": motion_tail, "goto": slew_sec, "guards": guards_sec,
+                    "tracking": tracking_enable_sec, "settle": settle_sec,
+                    "flush": flush_sec, "capture": capture_sec, "disk_hdf5": hdf5_sec,
+                    "persist": persist_sec, "inter_point": inter_point_delay_sec,
+                    "other": other_sec, "point_total": total_point_time,
+                }.items():
+                    live_totals[key] += value
+                print(f"\n---------------- POINT {idx:02d} METRICS ----------------", flush=True)
+                print(f"Pre-GOTO guard:              {pre_goto_guard_sec:.3f} s", flush=True)
+                print(f"Command -> motion start:     {command_delay:.3f} s" if live_row.get("motion_start_utc") else "Command -> motion start:     N/D", flush=True)
+                print(f"Physical motion:             {physical_motion:.3f} s" if live_row.get("motion_end_utc") else "Physical motion:             N/D", flush=True)
+                print(f"Motion end -> GOTO return:    {motion_tail:.3f} s" if live_row.get("motion_end_utc") else "Motion end -> GOTO return:    N/D", flush=True)
+                print(f"GOTO TOTAL:                  {slew_sec:.3f} s", flush=True)
+                print(f"Post-GOTO guard:              {post_goto_guard_sec:.3f} s", flush=True)
+                print(f"Tracking:                     {tracking_enable_sec:.3f} s", flush=True)
+                print(f"Post-track guard:             {post_tracking_guard_sec:.3f} s", flush=True)
+                print(f"Settle:                       {settle_sec:.3f} s", flush=True)
+                print(f"FLUSH:                        {flush_sec:.3f} s", flush=True)
+                print(f"Capture:                      {capture_sec:.3f} s", flush=True)
+                print(f"Disk write:                   {hdf5_sec:.3f} s", flush=True)
+                print(f"Persist:                      {persist_sec:.3f} s", flush=True)
+                print(f"Other:                        {other_sec:.3f} s", flush=True)
+                print(f"POINT TOTAL:                  {total_point_time:.3f} s", flush=True)
+                print("------------------------------------------------------\n", flush=True)
+                n = actual_session_count
+                wall_elapsed = time.perf_counter() - self._live_session_clock
+                print(f"SESSION RUNNING TOTAL {n:02d}/{len(self.observation_points):02d}", flush=True)
+                print(f"GOTO total={live_totals['goto']:.3f} s", flush=True)
+                print(f"command->motion total={live_totals['command_delay']:.3f} s", flush=True)
+                print(f"physical motion total={live_totals['physical_motion']:.3f} s", flush=True)
+                print(f"motion-end->return total={live_totals['motion_tail']:.3f} s", flush=True)
+                print(f"guards total={live_totals['guards']:.3f} s", flush=True)
+                print(f"tracking total={live_totals['tracking']:.3f} s", flush=True)
+                print(f"settle total={live_totals['settle']:.3f} s", flush=True)
+                print(f"flush total={live_totals['flush']:.3f} s", flush=True)
+                print(f"capture total={live_totals['capture']:.3f} s", flush=True)
+                print(f"disk total={live_totals['disk_hdf5']:.3f} s", flush=True)
+                print(f"other total={live_totals['other']:.3f} s", flush=True)
+                print(f"wall total={wall_elapsed:.3f} s", flush=True)
+                self.log(
+                    f"POINT COMPLETE | slew={slew_sec:.3f} guards={guards_sec:.3f} "
+                    f"tracking={tracking_enable_sec:.3f} settle={settle_sec:.3f} "
+                    f"flush={flush_sec:.3f} capture={capture_sec:.3f} hdf5={hdf5_sec:.3f} "
+                    f"persist={persist_sec:.3f} other={other_sec:.3f} total={total_point_time:.3f}",
+                    force=True,
+                )
+                self.log(
+                    f"RUNNING TOTAL {actual_session_count:02d}/20 | slew={timing_totals['slew']:.3f} "
+                    f"settle={timing_totals['settle']:.3f} flush={timing_totals['flush']:.3f} "
+                    f"capture={timing_totals['capture']:.3f} hdf5={timing_totals['hdf5']:.3f} "
+                    f"guards/tracking={timing_totals['guards']+timing_totals['tracking']:.3f} "
+                    f"persist={timing_totals['persist']:.3f} other={timing_totals['other']:.3f} "
+                    f"wall={timing_totals['wall']:.3f} | "
+                    f"avg_point={timing_totals['wall']/actual_session_count:.3f} "
+                    f"avg_slew={timing_totals['slew']/actual_session_count:.3f} "
+                    f"avg_flush={timing_totals['flush']/actual_session_count:.3f}",
+                    force=True,
+                )
 
                 if self.verbose:
                     self.log(f"  Capture completed ({duration:.1f}s)")
