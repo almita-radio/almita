@@ -523,6 +523,9 @@ class SDRCapture:
         
         # CAPTURE EXACT NUMBER OF SAMPLES
         capture_start = time.perf_counter()
+        last_data_at = capture_start
+        stall_timeout = 5.0
+        max_capture_wall = max(duration * 2.0, duration + 15.0)
         last_progress_update = capture_start
         
         bytes_received = 0
@@ -531,25 +534,60 @@ class SDRCapture:
         
         loop = asyncio.get_event_loop()
         
-        # Capture all data
-        while bytes_received < expected_bytes:
-            remaining = expected_bytes - bytes_received
-            read_size = min(chunk_size, remaining)
-            
-            self.socket.settimeout(5.0)
-            chunk = await loop.run_in_executor(None, self.socket.recv, read_size)
-            if not chunk:
-                raise ConnectionError("rtl_tcp connection closed unexpectedly")
-            
-            iq_data.extend(chunk)
-            bytes_received += len(chunk)
-            
-            # Update progress bar
-            current_time = time.perf_counter()
-            if not self.verbose and (current_time - last_progress_update) >= 0.1:
-                self._print_progress_bar(bytes_received, expected_bytes, "Capturing", 
-                                        capture_start, width=40)
-                last_progress_update = current_time
+        # Capture all data.  A timeout is measured from the last received byte,
+        # while the wall watchdog bounds the complete network transfer.
+        try:
+            while bytes_received < expected_bytes:
+                now = time.perf_counter()
+                wall_remaining = max_capture_wall - (now - capture_start)
+                stall_remaining = stall_timeout - (now - last_data_at)
+                if wall_remaining <= 0 or stall_remaining <= 0:
+                    raise TimeoutError("rtl_tcp stream stalled/disconnected")
+
+                remaining = expected_bytes - bytes_received
+                read_size = min(chunk_size, remaining)
+                self.socket.settimeout(min(wall_remaining, stall_remaining))
+                try:
+                    chunk = await loop.run_in_executor(None, self.socket.recv, read_size)
+                except (socket.timeout, TimeoutError) as exc:
+                    raise TimeoutError("rtl_tcp stream stalled/disconnected") from exc
+                except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError) as exc:
+                    raise ConnectionError("rtl_tcp stream stalled/disconnected") from exc
+                if not chunk:
+                    raise ConnectionError("rtl_tcp stream stalled/disconnected")
+
+                iq_data.extend(chunk)
+                bytes_received += len(chunk)
+                last_data_at = time.perf_counter()
+
+                # Update progress bar
+                current_time = time.perf_counter()
+                if (not self.verbose
+                        and (current_time - last_progress_update) >= 0.1):
+                    self._print_progress_bar(bytes_received, expected_bytes, "Capturing",
+                                            capture_start, width=40)
+                    last_progress_update = current_time
+        except Exception as exc:
+            failure_time = time.perf_counter() - capture_start
+            if not self.verbose:
+                print("\r\033[2K", end="", flush=True)
+            print(f"CAPTURE    FAIL after {failure_time:.1f}s", flush=True)
+            print("reason=rtl_tcp disconnected/stalled", flush=True)
+            if self.socket is not None:
+                try:
+                    self.socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                self.socket.close()
+                self.socket = None
+            part_path = Path(output_file).with_name(f"{Path(output_file).name}.part")
+            try:
+                part_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise ConnectionError(
+                "SDR NETWORK ERROR: rtl_tcp stream stalled/disconnected"
+            ) from exc
         
         capture_time = time.perf_counter() - capture_start
         
