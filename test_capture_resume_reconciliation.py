@@ -87,12 +87,13 @@ def test_state_matrix_and_actual_order_recovery(tmp_path):
     assert executor.load_observation_plan(resume=True)
     rows = read_rows(executor)
     assert [row["capture_status"] for row in rows] == [
-        "success", "planned", "success", "planned", "success", "failed"
+        "success", "planned", "success", "failed", "success", "failed"
     ]
     assert rows[1]["resume_reconcile_reason"] == "success_without_valid_hdf5"
     assert rows[2]["resume_reconcile_reason"] == "valid_hdf5_after_interrupted_status_update"
     assert not (directory / "point_4.h5.part").exists()
-    assert [int(point["point_number"]) for point in executor.observation_points] == [2, 4]
+    assert rows[3]["error_code"] == "interrupted_capture"
+    assert [int(point["point_number"]) for point in executor.observation_points] == [2]
     assert executor.actual_capture_order_offset == 7
     assert executor.session_manager.updates[-1][1]["points_completed"] == 3
 
@@ -111,13 +112,24 @@ def test_invalid_and_wrong_identity_finals_are_quarantined(tmp_path):
     assert len(list(directory.glob("*.invalid-*"))) == 2
 
 
+def test_valid_final_is_authoritative_over_failed_csv_status(tmp_path):
+    executor = make_executor(tmp_path, ["failed"])
+    directory = capture_dir(tmp_path)
+    write_valid(directory, 1, order=1)
+
+    assert not executor.load_observation_plan(resume=True)
+    row = read_rows(executor)[0]
+    assert row["capture_status"] == "success"
+    assert row["resume_reconcile_reason"] == "valid_hdf5_after_failed_status_update"
+
+
 def test_orphan_part_is_reported_and_preserved(tmp_path, capsys):
     executor = make_executor(tmp_path, ["capturing"])
     directory = capture_dir(tmp_path)
     orphan = directory / "unknown_point.h5.part"
     orphan.write_bytes(b"evidence")
 
-    assert executor.load_observation_plan(resume=True)
+    assert not executor.load_observation_plan(resume=True)
     assert orphan.exists()
     assert "Orphan partial preserved" in capsys.readouterr().out
 
@@ -130,7 +142,7 @@ def test_reconciliation_never_calls_mount_or_tracking(tmp_path):
             raise AssertionError(f"hardware API accessed: {name}")
 
     executor.telescope = ForbiddenHardware()
-    assert executor.load_observation_plan(resume=True)
+    assert not executor.load_observation_plan(resume=True)
 
 
 def test_five_point_kill_restart_artifact_scenarios(tmp_path):
@@ -144,9 +156,10 @@ def test_five_point_kill_restart_artifact_scenarios(tmp_path):
     assert executor.load_observation_plan(resume=True)
     rows = read_rows(executor)
     assert [row["capture_status"] for row in rows] == [
-        "success", "planned", "success", "success", "planned"
+        "success", "failed", "success", "success", "planned"
     ]
-    assert [int(point["point_number"]) for point in executor.observation_points] == [2, 5]
+    assert rows[1]["resume_reconcile_reason"] == "interrupted_capture"
+    assert [int(point["point_number"]) for point in executor.observation_points] == [5]
     assert not (directory / "point_2.h5.part").exists()
     assert executor.actual_capture_order_offset == 4
 
@@ -175,6 +188,6 @@ def test_real_sigkill_during_part_is_recovered(tmp_path):
             process.kill()
             process.wait(timeout=5)
 
-    assert executor.load_observation_plan(resume=True)
-    assert read_rows(executor)[0]["capture_status"] == "planned"
+    assert not executor.load_observation_plan(resume=True)
+    assert read_rows(executor)[0]["capture_status"] == "failed"
     assert not part.exists()

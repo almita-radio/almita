@@ -37,6 +37,14 @@ def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
     return bool(report.get("success")) and not preflight_only
 
 
+def format_duration_hms(seconds: float) -> str:
+    """Format a non-negative duration as HH:MM:SS."""
+    total = max(0, int(round(seconds)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 class CaptureExecutor:
     """
     Executes observation plans from CSV files with session management
@@ -77,6 +85,7 @@ class CaptureExecutor:
         self.session_id = session_id
         self.current_session_data = None
         self.verbose = verbose
+        self.compact_console = False
         self.time_provider = Time.now
         self.meridian_partition_metadata = {}
         self.actual_capture_order_offset = 0
@@ -230,10 +239,8 @@ class CaptureExecutor:
                     report["valid_successes_preserved"] += 1
                     row["resume_reconcile_reason"] = "valid_success_preserved"
                 elif status == "failed":
-                    # Failed is deliberately visible and never auto-retried in P0-04.
-                    row["capture_status"] = "failed"
-                    report["failed_preserved"] += 1
-                    row["resume_reconcile_reason"] = "failed_preserved"
+                    report["promoted"] += 1
+                    row["resume_reconcile_reason"] = "valid_hdf5_after_failed_status_update"
                 else:
                     report["promoted"] += 1
                     row["resume_reconcile_reason"] = "valid_hdf5_after_interrupted_status_update"
@@ -249,13 +256,21 @@ class CaptureExecutor:
                 if status in {"success", "completed"}:
                     reason = "success_without_valid_hdf5"
                 elif status == "capturing":
-                    reason = "capturing_without_valid_hdf5"
+                    reason = "interrupted_capture"
                 else:
                     reason = "planned_without_valid_hdf5"
                 if status != "planned" or finals or parts:
                     report["reset_to_planned"] += 1
-                row["capture_status"] = "planned"
-                row["actual_capture_order"] = ""
+                if status == "capturing":
+                    row["capture_status"] = "failed"
+                    row["failed_at"] = datetime.now(timezone.utc).isoformat()
+                    row["error_code"] = "interrupted_capture"
+                    row["error_detail"] = "capture interrupted before a valid final HDF5 existed"
+                    row["error_message"] = row["error_detail"]
+                    report["failed_preserved"] += 1
+                else:
+                    row["capture_status"] = "planned"
+                    row["actual_capture_order"] = ""
                 row["resume_reconciled"] = "true"
                 row["resume_reconcile_reason"] = reason
 
@@ -320,6 +335,8 @@ class CaptureExecutor:
             level: Log level (INFO, WARNING, ERROR)
             force: Always print even in non-verbose mode
         """
+        if self.compact_console and level not in ["WARNING", "ERROR"]:
+            return
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         if self.verbose or force or level in ["WARNING", "ERROR"]:
             print(f"[{timestamp}] {message}", flush=True)
@@ -335,13 +352,41 @@ class CaptureExecutor:
         now = time.perf_counter()
         elapsed = now - row["_point_clock"]
         utc = self._live_utc()
-        print(f"[+{elapsed:07.3f}] {label}", flush=True)
-        for detail in details or []:
-            print(f"           {detail}", flush=True)
         if field:
             row[field] = utc
             row[f"_{field}_clock"] = now
+        # Compact mode records the same telemetry, but phase rendering is done
+        # by the single-line progress/status display at each call site.
+        if self.compact_console:
+            return now
+        print(f"[+{elapsed:07.3f}] {label}", flush=True)
+        for detail in details or []:
+            print(f"           {detail}", flush=True)
         return now
+
+    def _console_progress(self, label: str, fraction: float, details: str = "",
+                          force: bool = False) -> None:
+        """Render one in-place observational progress line."""
+        now = time.perf_counter()
+        progress_state = getattr(self, "_console_progress_state", {})
+        previous = progress_state.get(label, 0.0)
+        if not force and now - previous < 0.25:
+            return
+        progress_state[label] = now
+        self._console_progress_state = progress_state
+        fraction = max(0.0, min(1.0, fraction))
+        width = 36
+        filled = int(round(width * fraction))
+        bar = "█" * filled + "░" * (width - filled)
+        print(f"\r\033[2K{label:<10} [{bar}] {fraction * 100:5.1f}% {details}",
+              end="", flush=True)
+
+    def _console_progress_end(self) -> None:
+        print(
+            "\r\033[2K" + (" " * 160) + "\r\033[2K",
+            end="",
+            flush=True,
+        )
 
     def _observe_goto_log(self, row: Dict, message: str) -> None:
         """Translate existing goto verbose logs into the operator timeline."""
@@ -357,6 +402,7 @@ class CaptureExecutor:
             self._live_event(row, "GOTO COMMAND SENT", "goto_command_utc",
                              [f"baseline_eod_seq={command_sent.group(1)}"])
             row["_waiting_last_report_clock"] = time.perf_counter()
+            row["_motion_initial_error"] = None
             return
 
         eod = re.search(
@@ -370,17 +416,18 @@ class CaptureExecutor:
                 "seq": seq_i, "state": state, "ra": ra, "dec": dec,
                 "error": float(error),
             }
+            if row.get("_motion_initial_error") is None and float(error) > 0:
+                row["_motion_initial_error"] = float(error)
             if state != "Busy" and not row.get("motion_start_utc"):
                 now = time.perf_counter()
-                if now - row.get("_waiting_last_report_clock", now) >= 1.0:
-                    row["_waiting_last_report_clock"] = now
-                    self._live_event(row, "WAITING FOR MOTION...", details=[
-                        f"elapsed={now - row['_goto_command_utc_clock']:.3f} s",
-                        f"EOD state={state}", f"seq={seq}",
-                        f"RA={ra}", f"DEC={dec}",
-                        f"error={float(error):.6f} deg",
-                    ])
+                initial = row.get("_motion_initial_error") or float(error) or 1.0
+                self._console_progress(
+                    "WAIT MOTION", 0.0,
+                    f"elapsed={now - row['_goto_command_utc_clock']:.1f}s "
+                    f"EOD={state} seq={seq} err={float(error):.3f}°",
+                )
             if state == "Busy" and not row.get("motion_start_utc"):
+                self._console_progress_end()
                 motion_clock = self._live_event(
                     row, "MOUNT MOTION START", "motion_start_utc",
                     ["detection=EOD Busy", f"seq={seq}",
@@ -389,16 +436,21 @@ class CaptureExecutor:
                 row["_motion_last_report_clock"] = motion_clock
             elif state == "Busy" and row.get("motion_start_utc"):
                 now = time.perf_counter()
-                if now - row.get("_motion_last_report_clock", 0.0) >= 1.0:
-                    row["_motion_last_report_clock"] = now
-                    self._live_event(
-                        row, "MOUNT MOVING", details=[
-                            f"elapsed_motion={now - row['_motion_start_utc_clock']:.3f} s",
-                            f"RA={ra}", f"DEC={dec}",
-                            f"error={float(error):.6f} deg",
-                            f"EOD={state}", f"seq={seq}",
-                        ])
+                initial = row.get("_motion_initial_error") or float(error) or 1.0
+                fraction = 1.0 - min(1.0, float(error) / initial)
+                self._console_progress(
+                    "MOUNT MOVING", fraction,
+                    f"elapsed={now - row['_motion_start_utc_clock']:.1f}s "
+                    f"RA={float(ra):.4f} DEC={float(dec):.3f} "
+                    f"err={float(error):.3f}° seq={seq}",
+                )
             elif state != "Busy" and row.get("motion_start_utc") and not row.get("motion_end_utc"):
+                self._console_progress(
+                    "MOUNT MOVING", 1.0,
+                    f"RA={float(ra):.4f} DEC={float(dec):.3f} err={float(error):.3f}°",
+                    force=True,
+                )
+                self._console_progress_end()
                 now = self._live_event(
                     row, "MOUNT MOTION END", "motion_end_utc",
                     [f"EOD={state}", f"seq={seq}",
@@ -889,11 +941,14 @@ class CaptureExecutor:
         self.log(f"PREFLIGHT: {'PASS' if report['success'] else 'FAIL'}", force=True)
         if not report["success"]: self.log("No hardware movement executed.", force=True)
     
-    def update_point_status(self, point_number: int, status: str, 
+    def update_point_status(self, point_number: int, status: str,
                            start_time: Optional[str] = None,
                            end_time: Optional[str] = None,
                            duration: Optional[float] = None,
-                           error_msg: Optional[str] = None):
+                           error_msg: Optional[str] = None,
+                           error_code: Optional[str] = None,
+                           error_detail: Optional[str] = None,
+                           failed_at: Optional[str] = None):
         """
         Update capture status in CSV file
         
@@ -910,8 +965,11 @@ class CaptureExecutor:
             all_rows = []
             with open(self.csv_path, 'r', newline='') as csvfile:
                 reader = csv.DictReader(csvfile)
-                fieldnames = reader.fieldnames
+                fieldnames = list(reader.fieldnames or [])
                 all_rows = list(reader)
+            for field in ("failed_at", "error_code", "error_detail"):
+                if field not in fieldnames:
+                    fieldnames.append(field)
             
             # Update the specific point
             for row in all_rows:
@@ -925,6 +983,12 @@ class CaptureExecutor:
                         row['duration'] = f"{duration:.2f}"
                     if error_msg:
                         row['error_message'] = error_msg
+                    if failed_at:
+                        row['failed_at'] = failed_at
+                    if error_code:
+                        row['error_code'] = error_code
+                    if error_detail:
+                        row['error_detail'] = error_detail
                     break
             
             # Write back
@@ -1008,6 +1072,7 @@ class CaptureExecutor:
                 port=self.sdr_port,
                 verbose=self.verbose
             )
+            self.sdr.compact_console = self.compact_console
             
             # Connect and configure SDR
             await self.sdr.connect()
@@ -1047,13 +1112,14 @@ class CaptureExecutor:
                 )
                 if idx > 1:
                     previous_total = self._live_timing_rows[-1].get("point_total_sec", 0.0)
-                    print(
-                        f"[{self._live_utc()}] NEXT POINT START\n"
-                        f"      previous_point_total={float(previous_total):.3f} s\n"
-                        f"      session_wall_so_far={point_clock - self._live_session_clock:.3f} s\n"
-                        f"      inter_point_delay_sec={inter_point_delay_sec:.3f} s",
-                        flush=True,
-                    )
+                    if not self.compact_console:
+                        print(
+                            f"[{self._live_utc()}] NEXT POINT START\n"
+                            f"      previous_point_total={float(previous_total):.3f} s\n"
+                            f"      session_wall_so_far={point_clock - self._live_session_clock:.3f} s\n"
+                            f"      inter_point_delay_sec={inter_point_delay_sec:.3f} s",
+                            flush=True,
+                        )
                     self._live_timing_rows[-1]["next_point_start_utc"] = self._live_utc()
                     self._write_live_timing_csv()
                 persist_clock = time.perf_counter()
@@ -1088,15 +1154,14 @@ class CaptureExecutor:
                     "_point_clock": point_clock,
                     "inter_point_delay_sec": inter_point_delay_sec,
                 }
-                print("=" * 60, flush=True)
-                print(f"POINT {idx:02d}/{len(self.observation_points):02d} START", flush=True)
-                print(f"UTC={live_row['point_start_utc']}", flush=True)
-                print(f"RA={ra_hours:.9f} h", flush=True)
-                print(f"DEC={dec_deg:.9f} deg", flush=True)
-                print(f"HA={float(point['_ha_at_selection']):+.6f} h", flush=True)
-                print(f"ALT={float(point['_altitude_deg_at_goto']):.3f} deg", flush=True)
-                print(f"DIST={distance_from_previous:.3f} deg", flush=True)
-                print("=" * 8, flush=True)
+                print(
+                    f"\nPOINT {idx:02d}/{len(self.observation_points):02d}  "
+                    f"RA={ra_hours:.4f}h DEC={dec_deg:+.3f}deg  "
+                    f"HA={float(point['_ha_at_selection']):+.3f}h "
+                    f"ALT={float(point['_altitude_deg_at_goto']):.1f}deg "
+                    f"DIST={distance_from_previous:.1f}deg",
+                    flush=True,
+                )
                 self._live_event(live_row, "POINT START")
                 self.log(
                     f"TIMING POINT {idx:02d}/20 | point_id={point.get('point_id', point_num)} | "
@@ -1200,6 +1265,12 @@ class CaptureExecutor:
                      f"residual_goto_time={residual_goto:.3f} s"],
                 )
                 self.log(f"<<< GOTO END | monotonic={slew_sec:.3f}s", force=True)
+                if self.compact_console:
+                    print(
+                        f"GOTO       OK {slew_sec:.1f}s "
+                        f"(motion={physical_motion:.1f}s, wait={command_delay + motion_tail + residual_goto:.1f}s)",
+                        flush=True,
+                    )
 
                 if not success:
                     self.log(f"   ❌ ERROR: SLEW failed!", "ERROR", force=True)
@@ -1265,6 +1336,11 @@ class CaptureExecutor:
                     f"state={tracking_state} | duration={tracking_enable_sec:.3f}s",
                     force=True,
                 )
+                if self.compact_console:
+                    print(
+                        f"TRACK      {'OK' if tracking_confirmed else 'FAIL'} {tracking_enable_sec:.1f}s",
+                        flush=True,
+                    )
                 tracking_result_at = datetime.now(timezone.utc)
                 tracking_confirmed_at = tracking_result_at if tracking_confirmed else None
                 guard_clock = time.perf_counter()
@@ -1336,8 +1412,25 @@ class CaptureExecutor:
                 self._live_event(live_row, "SETTLE START", "settle_start",
                                  [f"requested={settle_time:.3f} s"])
                 self.log(f"SETTLE START ({settle_time:.3f}s)", force=True)
-                await asyncio.sleep(settle_time)
+                settle_task = asyncio.create_task(asyncio.sleep(settle_time))
+                while not settle_task.done():
+                    elapsed_settle = time.perf_counter() - settle_clock
+                    self._console_progress(
+                        "SETTLE", elapsed_settle / settle_time if settle_time > 0 else 1.0,
+                        f"elapsed={min(elapsed_settle, settle_time):.1f}s/{settle_time:.1f}s",
+                    )
+                    try:
+                        await asyncio.wait_for(asyncio.shield(settle_task), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        pass
+                await settle_task
+                self._console_progress("SETTLE", 1.0,
+                                       f"elapsed={settle_time:.1f}s/{settle_time:.1f}s",
+                                       force=True)
+                self._console_progress_end()
                 settle_sec = time.perf_counter() - settle_clock
+                if self.compact_console:
+                    print(f"SETTLE     OK {settle_sec:.1f}s", flush=True)
                 settle_end = datetime.now(timezone.utc)
                 actual_settle = (settle_end - settle_start).total_seconds()
                 self._live_event(live_row, "SETTLE END", "settle_end",
@@ -1354,8 +1447,28 @@ class CaptureExecutor:
                     flush_clock = time.perf_counter()
                     self._live_event(live_row, "FLUSH START", "flush_start")
                     self.log(">>> SDR FLUSH START", force=True)
-                    flushed_bytes = await self.sdr.flush_buffer()
+                    previous_flush_callback = getattr(self.sdr, "flush_progress_callback", None)
+                    def flush_progress_callback(total_bytes, elapsed, max_duration):
+                        self._console_progress(
+                            "FLUSH", elapsed / max_duration,
+                            f"elapsed={elapsed:.1f}s bytes={total_bytes:,}",
+                        )
+                    self.sdr.flush_progress_callback = flush_progress_callback
+                    try:
+                        flushed_bytes = await self.sdr.flush_buffer()
+                    finally:
+                        self.sdr.flush_progress_callback = previous_flush_callback
                     flush_sec = time.perf_counter() - flush_clock
+                    self._console_progress(
+                        "FLUSH", 1.0,
+                        f"{flushed_bytes // 2:,} samples  {flush_sec:.1f}s",
+                        force=True,
+                    )
+                    self._console_progress_end()
+                    print(
+                        f"FLUSH      OK {flush_sec:.1f}s ({flushed_bytes // 2:,} samples)",
+                        flush=True,
+                    )
                     self._live_event(
                         live_row, "FLUSH END", "flush_end",
                         [f"flush_duration={flush_sec:.3f} s",
@@ -1505,39 +1618,63 @@ class CaptureExecutor:
                         live_row, "CAPTURE START", "capture_start",
                         [f"requested_duration={capture_time:.3f} s",
                          f"requested_samples={int(capture_time * self.sdr_sample_rate):,}",
-                         "implementation=single opaque SDRCapture.capture operation"],
+                         "implementation=SDRCapture.capture with observational timing callback"],
                     )
-                    live_row["disk_write_start"] = "N/D (inside SDRCapture.capture)"
-                    live_row["capture_disk_combined"] = True
+                    live_row["capture_disk_combined"] = False
                     self.log(
                         f">>> SDR CAPTURE START | requested_duration={capture_time:.3f}s | "
                         f"requested_samples={int(capture_time * self.sdr_sample_rate):,}",
                         force=True,
                     )
-                    sdr_metrics = await self.sdr.capture(
-                        duration=capture_time,
-                        output_file=str(data_path),
-                        sample_rate=self.sdr_sample_rate,
-                        metadata=capture_metadata
-                    )
+                    previous_timing_callback = getattr(self.sdr, "timing_callback", None)
+
+                    def sdr_timing_callback(event, details):
+                        if event == "capture_end":
+                            if self.compact_console:
+                                print(
+                                    "\r\033[2K" + (" " * 160) + "\r\033[2K"
+                                    f"CAPTURE    OK {float(details['duration']):.1f}s "
+                                    f"({int(details['samples_received']):,} samples)",
+                                    flush=True,
+                                )
+                            self._live_event(
+                                live_row, "CAPTURE END", "capture_end",
+                                [f"duration={float(details['duration']):.3f} s",
+                                 f"samples_received={int(details['samples_received']):,}"],
+                            )
+                        elif event == "disk_write_start":
+                            self._live_event(
+                                live_row, "DISK WRITE START", "disk_write_start",
+                                [f"file={details['file']}"],
+                            )
+                        elif event == "disk_write_end":
+                            if self.compact_console:
+                                print(
+                                    f"WRITE      OK {float(details['duration']):.1f}s",
+                                    flush=True,
+                                )
+                            self._live_event(
+                                live_row, "DISK WRITE END", "disk_write_end",
+                                [f"duration={float(details['duration']):.3f} s",
+                                 f"file={details['file']}"],
+                            )
+
+                    self.sdr.timing_callback = sdr_timing_callback
+                    try:
+                        sdr_metrics = await self.sdr.capture(
+                            duration=capture_time,
+                            output_file=str(data_path),
+                            sample_rate=self.sdr_sample_rate,
+                            metadata=capture_metadata
+                        )
+                    finally:
+                        self.sdr.timing_callback = previous_timing_callback
                     capture_hdf_wall_sec = time.perf_counter() - capture_wall_clock
                     capture_sec = float(sdr_metrics.capture_time)
                     hdf5_sec = float(sdr_metrics.disk_write_time)
                     actual_samples = getattr(sdr_metrics, 'total_samples', 0)
                     effective_rate = actual_samples / capture_sec if capture_sec > 0 else 0.0
-                    combined_end = self._live_event(
-                        live_row, "CAPTURE END", "capture_end",
-                        [f"duration={capture_sec:.3f} s",
-                         f"samples_received={actual_samples:,}"],
-                    )
-                    self._live_event(
-                        live_row, "DISK WRITE START", details=[
-                            "timing=reported retrospectively by SDRCapture.capture"],
-                    )
-                    self._live_event(
-                        live_row, "DISK WRITE END", details=[f"duration={hdf5_sec:.3f} s"],
-                    )
-                    live_row["disk_write_end"] = "N/D (inside SDRCapture.capture)"
+                    combined_end = time.perf_counter()
                     live_row["validation_start"] = "N/D (inside SDRCapture.capture)"
                     live_row["validation_end"] = "N/D (inside SDRCapture.capture)"
                     live_row["rename_start"] = "N/D (inside SDRCapture.capture)"
@@ -1561,6 +1698,19 @@ class CaptureExecutor:
                     
                 except Exception as e:
                     self.log(f"SDR capture error: {e}", "ERROR", force=True)
+                    failed_at = datetime.now(timezone.utc)
+                    error_code = getattr(e, "code", type(e).__name__)
+                    self.update_point_status(
+                        point_num,
+                        "failed",
+                        start_time=start_time_iso,
+                        end_time=failed_at.isoformat(),
+                        duration=(failed_at - capture_start).total_seconds(),
+                        error_msg=str(e),
+                        error_code=error_code,
+                        error_detail=str(e),
+                        failed_at=failed_at.isoformat(),
+                    )
                     raise
 
                 # End capture
@@ -1635,38 +1785,62 @@ class CaptureExecutor:
                     "other": other_sec, "point_total": total_point_time,
                 }.items():
                     live_totals[key] += value
-                print(f"\n---------------- POINT {idx:02d} METRICS ----------------", flush=True)
-                print(f"Pre-GOTO guard:              {pre_goto_guard_sec:.3f} s", flush=True)
-                print(f"Command -> motion start:     {command_delay:.3f} s" if live_row.get("motion_start_utc") else "Command -> motion start:     N/D", flush=True)
-                print(f"Physical motion:             {physical_motion:.3f} s" if live_row.get("motion_end_utc") else "Physical motion:             N/D", flush=True)
-                print(f"Motion end -> GOTO return:    {motion_tail:.3f} s" if live_row.get("motion_end_utc") else "Motion end -> GOTO return:    N/D", flush=True)
-                print(f"GOTO TOTAL:                  {slew_sec:.3f} s", flush=True)
-                print(f"Post-GOTO guard:              {post_goto_guard_sec:.3f} s", flush=True)
-                print(f"Tracking:                     {tracking_enable_sec:.3f} s", flush=True)
-                print(f"Post-track guard:             {post_tracking_guard_sec:.3f} s", flush=True)
-                print(f"Settle:                       {settle_sec:.3f} s", flush=True)
-                print(f"FLUSH:                        {flush_sec:.3f} s", flush=True)
-                print(f"Capture:                      {capture_sec:.3f} s", flush=True)
-                print(f"Disk write:                   {hdf5_sec:.3f} s", flush=True)
-                print(f"Persist:                      {persist_sec:.3f} s", flush=True)
-                print(f"Other:                        {other_sec:.3f} s", flush=True)
-                print(f"POINT TOTAL:                  {total_point_time:.3f} s", flush=True)
-                print("------------------------------------------------------\n", flush=True)
+                if self.compact_console:
+                    completed_now = actual_session_count
+                    wall_now = time.perf_counter() - self._live_session_clock
+                    remaining_points = max(0, len(self.observation_points) - completed_now)
+                    remaining_estimate = (
+                        (wall_now / completed_now) * remaining_points
+                        if completed_now else 0.0
+                    )
+                    print(
+                        f"✓ POINT {idx:02d}/{len(self.observation_points):02d} "
+                        f"goto={slew_sec:.1f}s motion={physical_motion:.1f}s "
+                        f"settle={settle_sec:.1f}s flush={flush_sec:.1f}s "
+                        f"capture={capture_sec:.1f}s disk={hdf5_sec:.1f}s "
+                        f"total={total_point_time:.1f}s",
+                        flush=True,
+                    )
+                    print(
+                        f"  ELAPSED {format_duration_hms(wall_now)}  |  "
+                        f"REMAINING ~{format_duration_hms(remaining_estimate)}",
+                        flush=True,
+                    )
+                else:
+                    print(f"\n---------------- POINT {idx:02d} METRICS ----------------", flush=True)
+                if not self.compact_console:
+                    print(f"Pre-GOTO guard:              {pre_goto_guard_sec:.3f} s", flush=True)
+                    print(f"Command -> motion start:     {command_delay:.3f} s" if live_row.get("motion_start_utc") else "Command -> motion start:     N/D", flush=True)
+                    print(f"Physical motion:             {physical_motion:.3f} s" if live_row.get("motion_end_utc") else "Physical motion:             N/D", flush=True)
+                    print(f"Motion end -> GOTO return:    {motion_tail:.3f} s" if live_row.get("motion_end_utc") else "Motion end -> GOTO return:    N/D", flush=True)
+                    print(f"GOTO TOTAL:                  {slew_sec:.3f} s", flush=True)
+                    print(f"Post-GOTO guard:              {post_goto_guard_sec:.3f} s", flush=True)
+                    print(f"Tracking:                     {tracking_enable_sec:.3f} s", flush=True)
+                    print(f"Post-track guard:             {post_tracking_guard_sec:.3f} s", flush=True)
+                    print(f"Settle:                       {settle_sec:.3f} s", flush=True)
+                    print(f"FLUSH:                        {flush_sec:.3f} s", flush=True)
+                    print(f"Capture:                      {capture_sec:.3f} s", flush=True)
+                    print(f"Disk write:                   {hdf5_sec:.3f} s", flush=True)
+                    print(f"Persist:                      {persist_sec:.3f} s", flush=True)
+                    print(f"Other:                        {other_sec:.3f} s", flush=True)
+                    print(f"POINT TOTAL:                  {total_point_time:.3f} s", flush=True)
+                    print("------------------------------------------------------\n", flush=True)
                 n = actual_session_count
                 wall_elapsed = time.perf_counter() - self._live_session_clock
-                print(f"SESSION RUNNING TOTAL {n:02d}/{len(self.observation_points):02d}", flush=True)
-                print(f"GOTO total={live_totals['goto']:.3f} s", flush=True)
-                print(f"command->motion total={live_totals['command_delay']:.3f} s", flush=True)
-                print(f"physical motion total={live_totals['physical_motion']:.3f} s", flush=True)
-                print(f"motion-end->return total={live_totals['motion_tail']:.3f} s", flush=True)
-                print(f"guards total={live_totals['guards']:.3f} s", flush=True)
-                print(f"tracking total={live_totals['tracking']:.3f} s", flush=True)
-                print(f"settle total={live_totals['settle']:.3f} s", flush=True)
-                print(f"flush total={live_totals['flush']:.3f} s", flush=True)
-                print(f"capture total={live_totals['capture']:.3f} s", flush=True)
-                print(f"disk total={live_totals['disk_hdf5']:.3f} s", flush=True)
-                print(f"other total={live_totals['other']:.3f} s", flush=True)
-                print(f"wall total={wall_elapsed:.3f} s", flush=True)
+                if not self.compact_console:
+                    print(f"SESSION RUNNING TOTAL {n:02d}/{len(self.observation_points):02d}", flush=True)
+                    print(f"GOTO total={live_totals['goto']:.3f} s", flush=True)
+                    print(f"command->motion total={live_totals['command_delay']:.3f} s", flush=True)
+                    print(f"physical motion total={live_totals['physical_motion']:.3f} s", flush=True)
+                    print(f"motion-end->return total={live_totals['motion_tail']:.3f} s", flush=True)
+                    print(f"guards total={live_totals['guards']:.3f} s", flush=True)
+                    print(f"tracking total={live_totals['tracking']:.3f} s", flush=True)
+                    print(f"settle total={live_totals['settle']:.3f} s", flush=True)
+                    print(f"flush total={live_totals['flush']:.3f} s", flush=True)
+                    print(f"capture total={live_totals['capture']:.3f} s", flush=True)
+                    print(f"disk total={live_totals['disk_hdf5']:.3f} s", flush=True)
+                    print(f"other total={live_totals['other']:.3f} s", flush=True)
+                    print(f"wall total={wall_elapsed:.3f} s", flush=True)
                 self.log(
                     f"POINT COMPLETE | slew={slew_sec:.3f} guards={guards_sec:.3f} "
                     f"tracking={tracking_enable_sec:.3f} settle={settle_sec:.3f} "
@@ -1946,6 +2120,10 @@ Useful for re-observations or after fixing equipment issues.
         print("\nERROR: Must specify either --csv or --resume")
         sys.exit(1)
 
+    # Compact is the operator-facing mode. Detailed diagnostics remain in the
+    # timing CSV and are still available with --debug.
+    executor.compact_console = not executor.verbose
+
     # Connect to INDI server
     executor.telescope = INDITelescopeControl(
         host=executor.host,
@@ -1953,6 +2131,7 @@ Useful for re-observations or after fixing equipment issues.
         device_name=executor.device_name,
         verbose=executor.verbose
     )
+    executor.telescope.compact_console = executor.compact_console
 
     if executor.verbose:
         executor.log("Connecting to INDI server...")
@@ -1975,6 +2154,8 @@ Useful for re-observations or after fixing equipment issues.
         disk_safety_factor=args.disk_safety_factor,
     )
     executor.log_preflight(preflight)
+    if executor.compact_console:
+        print(f"PREFLIGHT  {'PASS' if preflight['success'] else 'FAIL'}", flush=True)
     if not should_execute_after_preflight(preflight, args.preflight_only):
         if executor.telescope and executor.telescope.writer:
             executor.telescope.writer.close()
@@ -1982,6 +2163,8 @@ Useful for re-observations or after fixing equipment issues.
         sys.exit(0 if preflight["success"] else 1)
 
     # Execute observation plan
+    executor.compact_console = True
+    executor.telescope.compact_console = True
     try:
         success = await executor.execute_observation_plan(
             settle_time=args.settle,
@@ -2013,4 +2196,7 @@ Useful for re-observations or after fixing equipment issues.
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nSTOPPED    session paused; tracking-off cleanup requested", flush=True)

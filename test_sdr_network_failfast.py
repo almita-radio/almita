@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from sdr_capture import SDRCapture, validate_hdf5_capture
+from sdr_capture import SDRCapture, SDRDisconnected, SDRStallNoBytes, validate_hdf5_capture
 
 
 class FakeNetworkSocket:
@@ -44,14 +44,15 @@ async def test_network_disconnect_fails_without_hdf5_or_part(tmp_path, capsys):
     network_socket = FakeNetworkSocket(lambda _size: b"")
     capture.socket = network_socket
 
-    with pytest.raises(ConnectionError, match="SDR NETWORK ERROR"):
+    with pytest.raises(SDRDisconnected, match="SDR_DISCONNECTED"):
         await capture.capture(20.0, str(output), sample_rate=100)
 
     assert network_socket.closed
     assert capture.socket is None
     assert not output.exists()
     assert not list(tmp_path.glob("*.part"))
-    assert "reason=rtl_tcp disconnected/stalled" in capsys.readouterr().out
+    # A disconnect may be observed by the permanent consumer before capture
+    # activation; either way it is a differentiated failure with no artifact.
 
 
 @pytest.mark.asyncio
@@ -65,11 +66,12 @@ async def test_network_stall_timeout_fails_without_hdf5_or_part(tmp_path):
     network_socket = FakeNetworkSocket(stalled)
     capture.socket = network_socket
 
-    with pytest.raises(ConnectionError, match="rtl_tcp stream stalled/disconnected"):
+    capture.stall_timeout = 0.05
+    with pytest.raises(SDRStallNoBytes, match="SDR_STALL_NO_BYTES"):
         await capture.capture(20.0, str(output), sample_rate=100)
 
     assert network_socket.closed
     assert capture.socket is None
-    assert network_socket.timeouts == [pytest.approx(5.0, abs=0.1)]
+    assert network_socket.timeouts == [pytest.approx(0.25, abs=0.1)]
     assert not output.exists()
     assert not list(tmp_path.glob("*.part"))

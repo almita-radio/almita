@@ -144,7 +144,7 @@ async def test_normal_finish_turns_tracking_off(monkeypatch,tmp_path):
 @pytest.mark.asyncio
 async def test_capture_exception_still_turns_tracking_off(monkeypatch,tmp_path):
     class Broken(FakeSDR):fail_capture=True
-    monkeypatch.setattr(capture,"SDRCapture",Broken);ex=make_executor(tmp_path,count=1);visibility_map(ex,{1:40});ex.telescope=FakeTelescope();assert not await ex.execute_observation_plan(0,0);assert csv_rows(ex)[0]["capture_status"]!="success";assert ex.telescope.events[-2:]==["set_off","wait_off"]
+    monkeypatch.setattr(capture,"SDRCapture",Broken);ex=make_executor(tmp_path,count=1);visibility_map(ex,{1:40});ex.telescope=FakeTelescope();assert not await ex.execute_observation_plan(0,0);row=csv_rows(ex)[0];assert row["capture_status"]=="failed";assert row["failed_at"];assert row["error_code"]=="RuntimeError";assert "HDF5/SDR failure" in row["error_detail"];assert ex.telescope.events[-2:]==["set_off","wait_off"]
 
 @pytest.mark.asyncio
 async def test_no_visible_targets_pauses_and_turns_tracking_off(monkeypatch,tmp_path):

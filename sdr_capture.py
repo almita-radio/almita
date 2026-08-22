@@ -12,6 +12,7 @@ import os
 import time
 import socket
 import struct
+import threading
 import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
@@ -43,6 +44,20 @@ class CaptureMetrics:
     total_samples: int = 0
     sample_rate: int = 0
     throughput_mbps: float = 0.0
+    bytes_received_total: int = 0
+    bytes_discarded: int = 0
+    bytes_kept: int = 0
+    instantaneous_throughput: float = 0.0
+    effective_capture_throughput: float = 0.0
+    seconds_since_last_byte: float = 0.0
+    consumer_state: str = "DISCONNECTED"
+    generation: int = 0
+    expected_bytes: int = 0
+    received_capture_bytes: int = 0
+    buffer_capacity: int = 0
+    buffer_used: int = 0
+    socket_reconnect_count: int = 0
+    last_error: Optional[str] = None
     
     def __str__(self) -> str:
         lines = [
@@ -57,6 +72,33 @@ class CaptureMetrics:
             f"  • Throughput:    {self.throughput_mbps:.2f} MB/s",
         ]
         return "\n".join(line for line in lines if line is not None)
+
+
+class SDRNetworkError(ConnectionError):
+    """Typed rtl_tcp stream failure with a complete diagnostic snapshot."""
+
+    code = "SDR_NETWORK_ERROR"
+
+    def __init__(self, message: str, **details):
+        self.details = details
+        detail_text = " ".join(f"{key}={value}" for key, value in details.items())
+        super().__init__(f"{self.code}: {message}" + (f" | {detail_text}" if detail_text else ""))
+
+
+class SDRDisconnected(SDRNetworkError):
+    code = "SDR_DISCONNECTED"
+
+
+class SDRStallNoBytes(SDRNetworkError):
+    code = "SDR_STALL_NO_BYTES"
+
+
+class SDRThroughputTooLow(SDRNetworkError):
+    code = "SDR_THROUGHPUT_TOO_LOW"
+
+
+class SDRWallTimeout(SDRNetworkError):
+    code = "SDR_WALL_TIMEOUT"
 
 
 def _hdf5_attribute_value(value: Any) -> Any:
@@ -168,7 +210,7 @@ class SDRCapture:
                  device_index: int = 0, verbose: bool = False):
         """
         Initialize SDR capture
-        
+
         Args:
             mode: "usb" for local USB or "network" for rtl_tcp
             host: rtl_tcp server host (only for network mode)
@@ -181,11 +223,32 @@ class SDRCapture:
         self.port = port
         self.device_index = device_index
         self.verbose = verbose
-        
+
         self.sdr = None  # USB mode: RtlSdr object
         self.socket = None  # Network mode: socket connection
         self.metrics = CaptureMetrics()
-        
+        self.timing_callback = None
+        self.flush_progress_callback = None
+        self.compact_console = False
+        self.consumer_state = "DISCONNECTED"
+        self.bytes_received_total = 0
+        self.bytes_discarded = 0
+        self.bytes_kept = 0
+        self.instantaneous_throughput = 0.0
+        self.last_byte_timestamp = 0.0
+        self.socket_reconnect_count = 0
+        self.last_error = None
+        self.generation = 0
+        self.stall_timeout = 5.0
+        self.throughput_grace = 5.0
+        self.throughput_ratio = 0.50
+        self.max_capture_wall_override = None
+        self._consumer_thread = None
+        self._consumer_stop = threading.Event()
+        self._consumer_condition = threading.Condition()
+        self._active_capture = None
+        self._flush_marker = 0
+
         if self.mode not in ["usb", "network"]:
             raise ValueError(f"Invalid mode: {mode}. Must be 'usb' or 'network'")
         
@@ -197,6 +260,152 @@ class SDRCapture:
         if self.verbose:
             timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
             print(f"[{timestamp}] {message}")
+
+    def _emit_timing_event(self, event: str, **details) -> None:
+        """Emit optional live timing telemetry without changing capture flow."""
+        callback = self.timing_callback
+        if callback is not None:
+            callback(event, details)
+
+    def _network_error(self, error_type, message: str, request=None):
+        now = time.monotonic()
+        request = request or self._active_capture or {}
+        started = request.get("started", now)
+        received = request.get("received", 0)
+        expected = request.get("expected", 0)
+        elapsed = max(0.0, now - started)
+        last_age = max(0.0, now - self.last_byte_timestamp) if self.last_byte_timestamp else elapsed
+        effective = received / elapsed if elapsed > 0 else 0.0
+        return error_type(
+            message,
+            received_bytes=received,
+            expected_bytes=expected,
+            elapsed=f"{elapsed:.6f}",
+            effective_throughput=f"{effective:.3f}",
+            seconds_since_last_byte=f"{last_age:.6f}",
+            consumer_state=self.consumer_state,
+            generation=request.get("generation", self.generation),
+        )
+
+    def get_network_telemetry(self) -> Dict[str, Any]:
+        """Return an atomic snapshot of continuous-consumer telemetry."""
+        with self._consumer_condition:
+            request = self._active_capture or {}
+            now = time.monotonic()
+            return {
+                "bytes_received_total": self.bytes_received_total,
+                "bytes_discarded": self.bytes_discarded,
+                "bytes_kept": self.bytes_kept,
+                "instantaneous_throughput": self.instantaneous_throughput,
+                "seconds_since_last_byte": (
+                    max(0.0, now - self.last_byte_timestamp)
+                    if self.last_byte_timestamp else float("inf")
+                ),
+                "consumer_state": self.consumer_state,
+                "generation": request.get("generation", self.generation),
+                "expected_bytes": request.get("expected", 0),
+                "received_capture_bytes": request.get("received", 0),
+                "buffer_capacity": request.get("expected", 0),
+                "buffer_used": request.get("received", 0),
+                "socket_reconnect_count": self.socket_reconnect_count,
+                "last_error": self.last_error,
+            }
+
+    def _ensure_consumer_started(self) -> None:
+        if self.mode != "network" or self.socket is None:
+            raise SDRDisconnected("rtl_tcp socket is not connected")
+        if self._consumer_thread and self._consumer_thread.is_alive():
+            return
+        self._consumer_stop.clear()
+        self.consumer_state = "DISCARD"
+        self.socket.settimeout(0.25)
+        self._consumer_thread = threading.Thread(
+            target=self._network_consumer_loop,
+            name="rtl_tcp-continuous-consumer",
+            daemon=True,
+        )
+        self._consumer_thread.start()
+
+    def _fail_consumer(self, error: SDRNetworkError) -> None:
+        with self._consumer_condition:
+            self.last_error = str(error)
+            self.consumer_state = "FAILED"
+            request = self._active_capture
+            if request and request.get("error") is None:
+                request["error"] = error
+                request["done"] = True
+            self._consumer_condition.notify_all()
+        if self.socket is not None:
+            failed_socket = self.socket
+            try:
+                failed_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            failed_socket.close()
+            self.socket = None
+
+    def _network_consumer_loop(self) -> None:
+        """The sole owner of streaming recv(); always drains rtl_tcp."""
+        last_measurement = time.monotonic()
+        measured_bytes = 0
+        while not self._consumer_stop.is_set():
+            try:
+                chunk = self.socket.recv(524288)
+            except socket.timeout:
+                with self._consumer_condition:
+                    request = self._active_capture
+                    if request and not request.get("done"):
+                        age = time.monotonic() - request.get("last_byte", request["started"])
+                        if age >= self.stall_timeout:
+                            self._fail_consumer(self._network_error(
+                                SDRStallNoBytes, "rtl_tcp delivered no bytes", request
+                            ))
+                            return
+                continue
+            except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError) as exc:
+                if not self._consumer_stop.is_set():
+                    self._fail_consumer(self._network_error(
+                        SDRDisconnected, f"rtl_tcp socket error: {exc}"
+                    ))
+                return
+            if not chunk:
+                if not self._consumer_stop.is_set():
+                    self._fail_consumer(self._network_error(
+                        SDRDisconnected, "rtl_tcp closed the stream"
+                    ))
+                return
+
+            now = time.monotonic()
+            size = len(chunk)
+            with self._consumer_condition:
+                self.bytes_received_total += size
+                self.last_byte_timestamp = now
+                measured_bytes += size
+                interval = now - last_measurement
+                if interval >= 0.25:
+                    self.instantaneous_throughput = measured_bytes / interval
+                    measured_bytes = 0
+                    last_measurement = now
+
+                request = self._active_capture
+                if request and not request.get("done"):
+                    remaining = request["expected"] - request["received"]
+                    kept = min(remaining, size)
+                    start = request["received"]
+                    request["buffer"][start:start + kept] = chunk[:kept]
+                    request["received"] += kept
+                    request["last_byte"] = now
+                    self.bytes_kept += kept
+                    if kept < size:
+                        self.bytes_discarded += size - kept
+                    if request["received"] == request["expected"]:
+                        request["done"] = True
+                        request["completed"] = now
+                        self._active_capture = None
+                        self.consumer_state = "DISCARD"
+                        self._consumer_condition.notify_all()
+                else:
+                    self.bytes_discarded += size
     
     def _print_progress_bar(self, current: float, total: float, label: str, 
                            start_time: float, width: int = 40):
@@ -222,7 +431,8 @@ class SDRCapture:
         else:
             eta_str = "Remaining: --s"
         
-        print(f"\r   {label}: [{bar}] {percent:.1f}% | Elapsed: {elapsed:.1f}s | {eta_str}", 
+        print(f"\r\033[2K{label.upper():<10} [{bar}] {percent:5.1f}% elapsed={elapsed:.1f}s eta={eta:.1f}s" if current > 0 else
+              f"\r\033[2K{label.upper():<10} [{bar}] {percent:5.1f}% elapsed={elapsed:.1f}s",
               end='', flush=True)
     
     async def connect(self) -> CaptureMetrics:
@@ -260,6 +470,7 @@ class SDRCapture:
         start = time.perf_counter()
         
         # Create socket connection
+        self.consumer_state = "CONNECTING"
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.settimeout(5.0)
         
@@ -268,12 +479,22 @@ class SDRCapture:
         
         # Read dongle info (12 bytes) that rtl_tcp sends on connect
         # Format: "RTL0" magic (4 bytes) + tuner type (4 bytes) + gain count (4 bytes)
-        dongle_info = await loop.run_in_executor(None, self.socket.recv, 12)
+        def read_dongle_info():
+            payload = bytearray()
+            while len(payload) < 12:
+                chunk = self.socket.recv(12 - len(payload))
+                if not chunk:
+                    raise SDRDisconnected("rtl_tcp closed during dongle handshake")
+                payload.extend(chunk)
+            return bytes(payload)
+
+        dongle_info = await loop.run_in_executor(None, read_dongle_info)
         if len(dongle_info) == 12:
             magic = dongle_info[0:4].decode('ascii', errors='ignore')
             self.log(f"Received dongle info: {magic}")
         
         metrics.network_connect_time = time.perf_counter() - start
+        self.socket_reconnect_count += 1
         
         self.log(f"Connected to rtl_tcp in {metrics.network_connect_time*1000:.2f}ms")
         
@@ -350,23 +571,10 @@ class SDRCapture:
         
         await loop.run_in_executor(None, self.socket.send, cmd)
         
-        # Wait for rtl_tcp to apply settings (critical for sample rate change)
+        # Wait for rtl_tcp to apply settings.  Streaming data is subsequently
+        # owned exclusively by the permanent consumer.
         await asyncio.sleep(0.2)
-        
-        # Flush buffer to discard data with old settings
-        self.socket.settimeout(0.01)
-        flushed = 0
-        try:
-            while True:
-                chunk = await loop.run_in_executor(None, self.socket.recv, 65536)
-                if not chunk:
-                    break
-                flushed += len(chunk)
-        except socket.timeout:
-            pass
-        
-        if flushed > 0:
-            self.log(f"Flushed {flushed/1024:.1f} KB of buffer after config")
+        self._ensure_consumer_started()
         
         metrics.usb_config_time = time.perf_counter() - start
         
@@ -486,7 +694,14 @@ class SDRCapture:
         write_time = time.perf_counter() - write_start
         
         if not self.verbose:
-            print()  # Newline after progress bar
+            self._print_progress_bar(expected_bytes, expected_bytes, "CAPTURE", capture_start, width=40)
+            # Clear the in-place bar before the permanent phase summary.  The
+            # spaces also work on terminals that ignore ANSI erase-line.
+            print(
+                "\r\033[2K" + (" " * 160) + "\r\033[2K",
+                end="",
+                flush=True,
+            )
             print(f"   ✓ Real-time capture of {duration:.1f}s completed (SDR read: {capture_time:.2f}s, write: {write_time:.2f}s)", flush=True)
         
         # Calculate metrics
@@ -516,93 +731,116 @@ class SDRCapture:
         expected_samples = int(duration * sample_rate)
         expected_bytes = expected_samples * 2  # I+Q bytes (uint8 each)
         
-        if not self.verbose:
+        if not self.verbose and not self.compact_console:
             print(f"   📻 Capturing {expected_samples:,} samples ({duration:.1f}s @ {sample_rate/1e6:.1f}M S/s)...", flush=True)
         else:
             self.log(f"Capturing {expected_samples:,} samples ({duration}s) via network...")
         
-        # CAPTURE EXACT NUMBER OF SAMPLES
-        capture_start = time.perf_counter()
-        last_data_at = capture_start
-        stall_timeout = 5.0
-        max_capture_wall = max(duration * 2.0, duration + 15.0)
-        last_progress_update = capture_start
-        
-        bytes_received = 0
-        chunk_size = 16384
-        iq_data = bytearray()  # Accumulate data in memory
-        
-        loop = asyncio.get_event_loop()
-        
-        # Capture all data.  A timeout is measured from the last received byte,
-        # while the wall watchdog bounds the complete network transfer.
+        capture_start = time.monotonic()
+        max_capture_wall = (
+            self.max_capture_wall_override
+            if self.max_capture_wall_override is not None
+            else max(duration * 2.0, duration + 15.0)
+        )
         try:
-            while bytes_received < expected_bytes:
-                now = time.perf_counter()
-                wall_remaining = max_capture_wall - (now - capture_start)
-                stall_remaining = stall_timeout - (now - last_data_at)
-                if wall_remaining <= 0 or stall_remaining <= 0:
-                    raise TimeoutError("rtl_tcp stream stalled/disconnected")
+            iq_data = bytearray(expected_bytes)
+        except (MemoryError, OverflowError) as exc:
+            raise MemoryError(f"cannot reserve bounded SDR buffer of {expected_bytes} bytes") from exc
 
-                remaining = expected_bytes - bytes_received
-                read_size = min(chunk_size, remaining)
-                self.socket.settimeout(min(wall_remaining, stall_remaining))
-                try:
-                    chunk = await loop.run_in_executor(None, self.socket.recv, read_size)
-                except (socket.timeout, TimeoutError) as exc:
-                    raise TimeoutError("rtl_tcp stream stalled/disconnected") from exc
-                except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError) as exc:
-                    raise ConnectionError("rtl_tcp stream stalled/disconnected") from exc
-                if not chunk:
-                    raise ConnectionError("rtl_tcp stream stalled/disconnected")
+        self._ensure_consumer_started()
+        with self._consumer_condition:
+            if self.consumer_state == "FAILED":
+                raise SDRDisconnected(self.last_error or "rtl_tcp consumer failed")
+            if self._active_capture is not None:
+                raise RuntimeError("an SDR capture is already active")
+            self.generation += 1
+            request = {
+                "generation": self.generation,
+                "expected": expected_bytes,
+                "received": 0,
+                "buffer": iq_data,
+                "started": capture_start,
+                "last_byte": capture_start,
+                "done": False,
+                "error": None,
+            }
+            self._active_capture = request
+            self.consumer_state = "CAPTURE"
 
-                iq_data.extend(chunk)
-                bytes_received += len(chunk)
-                last_data_at = time.perf_counter()
-
-                # Update progress bar
-                current_time = time.perf_counter()
-                if (not self.verbose
-                        and (current_time - last_progress_update) >= 0.1):
-                    self._print_progress_bar(bytes_received, expected_bytes, "Capturing",
-                                            capture_start, width=40)
-                    last_progress_update = current_time
+        try:
+            while True:
+                await asyncio.sleep(0.02)
+                with self._consumer_condition:
+                    done = request["done"]
+                    error = request["error"]
+                    bytes_received = request["received"]
+                if error is not None:
+                    raise error
+                if done:
+                    break
+                now = time.monotonic()
+                elapsed = now - capture_start
+                if elapsed >= max_capture_wall:
+                    raise self._network_error(
+                        SDRWallTimeout, "capture exceeded wall deadline", request
+                    )
+                if elapsed >= self.throughput_grace:
+                    effective = bytes_received / elapsed
+                    required = sample_rate * 2 * self.throughput_ratio
+                    if effective < required:
+                        raise self._network_error(
+                            SDRThroughputTooLow,
+                            f"effective throughput {effective:.1f} B/s below {required:.1f} B/s",
+                            request,
+                        )
+        except asyncio.CancelledError:
+            with self._consumer_condition:
+                if self._active_capture is request:
+                    self._active_capture = None
+                    self.consumer_state = "DISCARD"
+                    request["done"] = True
+                    request["error"] = asyncio.CancelledError()
+                    self._consumer_condition.notify_all()
+            raise
         except Exception as exc:
-            failure_time = time.perf_counter() - capture_start
-            if not self.verbose:
+            with self._consumer_condition:
+                if self._active_capture is request:
+                    self._active_capture = None
+                    if self.consumer_state != "FAILED":
+                        self.consumer_state = "DISCARD"
+                    request["done"] = True
+                    request["error"] = exc
+            failure_time = time.monotonic() - capture_start
+            if not self.verbose and not self.compact_console:
                 print("\r\033[2K", end="", flush=True)
             print(f"CAPTURE    FAIL after {failure_time:.1f}s", flush=True)
-            print("reason=rtl_tcp disconnected/stalled", flush=True)
-            if self.socket is not None:
-                try:
-                    self.socket.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-                self.socket.close()
-                self.socket = None
+            code = getattr(exc, "code", "SDR_NETWORK_ERROR")
+            print(f"reason={code}", flush=True)
             part_path = Path(output_file).with_name(f"{Path(output_file).name}.part")
             try:
                 part_path.unlink()
             except FileNotFoundError:
                 pass
-            raise ConnectionError(
-                "SDR NETWORK ERROR: rtl_tcp stream stalled/disconnected"
-            ) from exc
+            raise
         
-        capture_time = time.perf_counter() - capture_start
+        capture_time = time.monotonic() - capture_start
         
-        if not self.verbose:
+        if not self.verbose and not self.compact_console:
             print()  # Newline after progress bar
         
         # Convert to numpy array (interleaved I/Q uint8)
         iq_samples = np.frombuffer(iq_data, dtype=np.uint8)
         actual_samples = len(iq_samples) // 2
+        self._emit_timing_event(
+            "capture_end", duration=capture_time, samples_received=actual_samples
+        )
         
         # Write to HDF5 with complete metadata
-        if not self.verbose:
+        if not self.verbose and not self.compact_console:
             print(f"   💾 Saving to HDF5 with metadata...", flush=True)
         
         write_start = time.perf_counter()
+        self._emit_timing_event("disk_write_start", file=str(output_file))
         
         # Ensure .h5 or .hdf5 extension
         output_path = Path(output_file)
@@ -668,26 +906,47 @@ class SDRCapture:
             })
         
         # The final name becomes visible only after close, sync and validation.
-        output_path = write_hdf5_atomic(
-            output_file, iq_samples, capture_metadata, actual_samples
+        # Keep the event loop free while the dedicated consumer continues to
+        # drain and discard rtl_tcp data during compression/fsync/rename.
+        output_path = await asyncio.get_running_loop().run_in_executor(
+            None, write_hdf5_atomic,
+            output_file, iq_samples, capture_metadata, actual_samples,
         )
         
         write_time = time.perf_counter() - write_start
+        self._emit_timing_event(
+            "disk_write_end", duration=write_time, file=str(output_path)
+        )
         
         # Calculate file size
         file_size_mb = Path(output_file).stat().st_size / 1024 / 1024
         
         throughput_mbps = bytes_received / capture_time / 1024 / 1024
         
+        telemetry = self.get_network_telemetry()
         metrics = CaptureMetrics(
             capture_time=capture_time,
             disk_write_time=write_time,
             total_samples=actual_samples,
             sample_rate=sample_rate,
-            throughput_mbps=throughput_mbps
+            throughput_mbps=throughput_mbps,
+            bytes_received_total=telemetry["bytes_received_total"],
+            bytes_discarded=telemetry["bytes_discarded"],
+            bytes_kept=telemetry["bytes_kept"],
+            instantaneous_throughput=telemetry["instantaneous_throughput"],
+            effective_capture_throughput=bytes_received / capture_time,
+            seconds_since_last_byte=telemetry["seconds_since_last_byte"],
+            consumer_state=telemetry["consumer_state"],
+            generation=request["generation"],
+            expected_bytes=expected_bytes,
+            received_capture_bytes=bytes_received,
+            buffer_capacity=expected_bytes,
+            buffer_used=bytes_received,
+            socket_reconnect_count=telemetry["socket_reconnect_count"],
+            last_error=telemetry["last_error"],
         )
         
-        if not self.verbose:
+        if not self.verbose and not self.compact_console:
             print(f"   ✓ {actual_samples:,} samples captured = {duration:.1f}s of data @ {sample_rate/1e6:.1f} MS/s", flush=True)
             print(f"     HDF5 file: {file_size_mb:.1f} MB (compressed)", flush=True)
             print(f"     Time: capture {capture_time:.2f}s + write {write_time:.2f}s = {capture_time + write_time:.2f}s total", flush=True)
@@ -711,49 +970,24 @@ class SDRCapture:
         """
         if self.mode != "network" or not self.socket:
             return 0
-        
-        loop = asyncio.get_event_loop()
-        total_flushed = 0
-        
-        # Set socket to non-blocking with minimal timeout
-        self.socket.settimeout(0.01)  # 10ms timeout
-        
-        # Adaptive flush: drain until buffer empty
-        chunk_size = 524288  # 512KB chunks
-        max_duration = 5.0  # Safety timeout (5s max)
-        empty_threshold = 5  # Number of consecutive timeouts = buffer empty
-        
-        start_time = time.time()
-        empty_count = 0
-        
-        while empty_count < empty_threshold:
-            # Safety check: don't flush forever
-            if (time.time() - start_time) > max_duration:
-                self.log(f"Flush safety timeout after {max_duration}s")
-                break
-            
-            try:
-                chunk = await loop.run_in_executor(None, self.socket.recv, chunk_size)
-                if chunk and len(chunk) > 0:
-                    total_flushed += len(chunk)
-                    empty_count = 0  # Reset counter - still draining
-                else:
-                    empty_count += 1  # No data received
-            except socket.timeout:
-                # Timeout = no data available
-                empty_count += 1
-            except Exception as e:
-                self.log(f"Flush exception: {e}")
-                break
-        
-        flush_duration = time.time() - start_time
-        
-        if not self.verbose and total_flushed > 0:
+        self._ensure_consumer_started()
+        await asyncio.sleep(0)
+        with self._consumer_condition:
+            if self.consumer_state == "FAILED":
+                raise SDRDisconnected(self.last_error or "rtl_tcp consumer failed")
+            total_flushed = self.bytes_discarded - self._flush_marker
+            self._flush_marker = self.bytes_discarded
+        flush_duration = 0.0
+        callback = self.flush_progress_callback
+        if callback is not None:
+            callback(total_flushed, flush_duration, 1.0)
+
+        if not self.verbose and not self.compact_console and total_flushed > 0:
             flushed_samples = total_flushed // 2
             print(f"   🗑️  Buffer flushed: {flushed_samples:,} samples discarded ({total_flushed/1024/1024:.1f} MB in {flush_duration:.1f}s)", flush=True)
-        
+
         self.log(f"Flushed {total_flushed} bytes ({total_flushed//2} samples) from buffer in {flush_duration:.1f}s")
-        
+
         return total_flushed
     
     async def close(self):
@@ -761,8 +995,21 @@ class SDRCapture:
         if self.mode == "usb" and self.sdr:
             self.sdr.close()
             self.log("RTL-SDR closed")
-        elif self.mode == "network" and self.socket:
-            self.socket.close()
+        elif self.mode == "network":
+            self._consumer_stop.set()
+            network_socket = self.socket
+            if network_socket:
+                try:
+                    network_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                network_socket.close()
+            if self._consumer_thread and self._consumer_thread.is_alive():
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._consumer_thread.join, 2.0
+                )
+            self.socket = None
+            self.consumer_state = "CLOSED"
             self.log("rtl_tcp connection closed")
 
 
