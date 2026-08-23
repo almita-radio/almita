@@ -885,7 +885,7 @@ class CaptureExecutor:
         except Exception as exc:
             record("Session persistence", "FAIL", f"{type(exc).__name__}: {exc}")
 
-        bytes_per_complex_sample = 4  # iq_data (2 bytes) + duplicated i_samples/q_samples (1+1)
+        bytes_per_complex_sample = 2  # canonical interleaved iq_data: uint8 I + uint8 Q
         estimated = int(len(planned_points) * capture_time * self.sdr_sample_rate * bytes_per_complex_sample)
         required = int(math.ceil(estimated * disk_safety_factor))
         try:

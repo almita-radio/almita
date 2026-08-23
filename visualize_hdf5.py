@@ -12,6 +12,8 @@ from datetime import datetime
 import sys
 import os
 
+from sdr_capture import read_hdf5_iq_components
+
 def visualize_hdf5(filename, display_length=None, save_plot=False):
     """
     Visualiza datos de captura HDF5
@@ -46,8 +48,7 @@ def visualize_hdf5(filename, display_length=None, save_plot=False):
         print()
         
         # Leer datos I/Q
-        i_samples = f['i_samples'][:]
-        q_samples = f['q_samples'][:]
+        i_samples, q_samples = read_hdf5_iq_components(f)
         
         sample_rate = f.attrs['sample_rate_hz']
         center_freq = f.attrs['center_frequency_hz']

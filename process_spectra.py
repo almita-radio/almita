@@ -20,6 +20,8 @@ from pathlib import Path
 from datetime import datetime
 import sys
 
+from sdr_capture import read_hdf5_iq_components
+
 
 class SpectrumProcessor:
     def __init__(self, data_dir, calibration_dir, fft_size=8192, output_dir=None):
@@ -72,8 +74,7 @@ class SpectrumProcessor:
         hot_file = self.calibration_dir / f"hot_calibration_{self.calibration['session_id']}.h5"
         print(f"Loading HOT calibration: {hot_file.name}")
         with h5py.File(hot_file, 'r') as f:
-            i_samples = f['i_samples'][:]
-            q_samples = f['q_samples'][:]
+            i_samples, q_samples = read_hdf5_iq_components(f)
             print(f"  ✓ {len(i_samples):,} samples loaded")
             print(f"  Expected Tb: {self.calibration['hot']['point']['tb_kelvin']} K")
         
@@ -88,8 +89,7 @@ class SpectrumProcessor:
         cold_file = self.calibration_dir / f"cold_calibration_{self.calibration['session_id']}.h5"
         print(f"Loading COLD calibration: {cold_file.name}")
         with h5py.File(cold_file, 'r') as f:
-            i_samples = f['i_samples'][:]
-            q_samples = f['q_samples'][:]
+            i_samples, q_samples = read_hdf5_iq_components(f)
             print(f"  ✓ {len(i_samples):,} samples loaded")
             print(f"  Expected Tb: {self.calibration['cold']['point']['tb_kelvin']} K")
         
@@ -104,8 +104,7 @@ class SpectrumProcessor:
         load_file = self.calibration_dir / f"load_calibration_{self.calibration['session_id']}.h5"
         print(f"Loading LOAD calibration: {load_file.name}")
         with h5py.File(load_file, 'r') as f:
-            i_samples = f['i_samples'][:]
-            q_samples = f['q_samples'][:]
+            i_samples, q_samples = read_hdf5_iq_components(f)
             print(f"  ✓ {len(i_samples):,} samples loaded")
         
         # Convert uint8 to complex (centered and normalized)
@@ -232,8 +231,7 @@ class SpectrumProcessor:
         
         # Load observation data
         with h5py.File(h5_file, 'r') as f:
-            i_samples = f['i_samples'][:]
-            q_samples = f['q_samples'][:]
+            i_samples, q_samples = read_hdf5_iq_components(f)
             
             # Load metadata
             metadata = {key: f.attrs[key] for key in f.attrs.keys()}

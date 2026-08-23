@@ -108,6 +108,22 @@ def _hdf5_attribute_value(value: Any) -> Any:
     return value
 
 
+def read_hdf5_iq_components(capture_file) -> Tuple[np.ndarray, np.ndarray]:
+    """Read I/Q bytes with canonical interleaved data and legacy fallback."""
+    if "iq_data" in capture_file:
+        iq_data = capture_file["iq_data"][:]
+        if iq_data.ndim != 1 or iq_data.size % 2:
+            raise ValueError("HDF5 IQ data must be a flat, even-length array")
+        return iq_data[0::2], iq_data[1::2]
+    if "i_samples" in capture_file and "q_samples" in capture_file:
+        i_samples = capture_file["i_samples"][:]
+        q_samples = capture_file["q_samples"][:]
+        if i_samples.shape != q_samples.shape:
+            raise ValueError("HDF5 legacy I/Q datasets have different shapes")
+        return i_samples, q_samples
+    raise ValueError("HDF5 file contains neither iq_data nor legacy I/Q datasets")
+
+
 def validate_hdf5_capture(path: Path, expected_samples: Optional[int] = None,
                           expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Validate capture structure and, when supplied, point/session identity."""
@@ -155,12 +171,6 @@ def write_hdf5_atomic(output_file: str, iq_samples: np.ndarray,
             )
             dset.attrs["description"] = "Interleaved I/Q samples (uint8)"
             dset.attrs["format"] = "I[0], Q[0], I[1], Q[1], ..."
-            capture_file.create_dataset(
-                "i_samples", data=iq_samples[0::2], compression="gzip", compression_opts=4
-            ).attrs["description"] = "In-phase component (I)"
-            capture_file.create_dataset(
-                "q_samples", data=iq_samples[1::2], compression="gzip", compression_opts=4
-            ).attrs["description"] = "Quadrature component (Q)"
             for key, value in capture_metadata.items():
                 if value is not None:
                     capture_file.attrs[key] = _hdf5_attribute_value(value)
@@ -869,6 +879,8 @@ class SDRCapture:
             'requested_capture_duration_sec': duration,
             'actual_capture_duration_sec': capture_time,
             'num_samples': actual_samples,
+            'raw_iq_bytes': len(iq_samples),
+            'bytes_per_complex_sample': 2,
             'capture_time_seconds': capture_time,
             'throughput_mbps': bytes_received / capture_time / 1024 / 1024,
             

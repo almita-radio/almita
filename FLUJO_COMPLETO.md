@@ -93,8 +93,8 @@ We stitch together INDI-based telescope control with rtl_tcp IQ capture and a th
 - Logs: printed to console; persist with `| tee <path>/stage.log` per step.
 
 ## HDF5 metadata (what each file carries)
-- Capture H5 (IQ per point): datasets `i_samples`, `q_samples`; attrs like `target_ra_hours`, `target_dec_degrees`, `sample_rate_hz`, `center_freq_hz`, `gain_db`, `timestamp_iso`, `session_name`, `sequence_id`, plus any grid identifiers; used later by processing.
-- Calibration H5 (hot/cold/load): datasets `i_samples`, `q_samples`; attrs include `capture_time_s`, `center_freq_hz`, `sample_rate_hz`, `gain_db`, and point metadata (`point_ra_hours`, `point_dec_degrees`, `tb_expected_kelvin`). The companion `calibration_results.json` records `session_id`, timestamps, and expected Tb per point.
+- Capture H5 (IQ per point): dataset canónico `iq_data` intercalado (uint8, gzip nivel 4); los lectores mantienen fallback para archivos históricos `i_samples`/`q_samples`. Los attrs incluyen `target_ra_hours`, `target_dec_degrees`, `sample_rate_hz`, `center_freq_hz`, `gain_db`, `timestamp_iso`, `session_name`, `sequence_id` y los identificadores de grilla.
+- Calibration H5 (hot/cold/load): usa el mismo `iq_data` canónico y la misma compatibilidad histórica; attrs include `capture_time_s`, `center_freq_hz`, `sample_rate_hz`, `gain_db`, y metadata del punto (`point_ra_hours`, `point_dec_degrees`, `tb_expected_kelvin`). The companion `calibration_results.json` records `session_id`, timestamps, and expected Tb per point.
 - Spectrum H5 (`*_spectrum.h5`): datasets `frequencies_hz`, `tb_kelvin`; attrs propagate capture metadata (target RA/DEC, frequency, sample rate, gain), plus processing info (`fft_size`, `n_samples_processed`, `calibration_session`, `processing_timestamp`). This makes spectra self-describing and traceable to the calibration set.
 
 ## Good practice

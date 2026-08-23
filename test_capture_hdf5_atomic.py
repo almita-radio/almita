@@ -48,6 +48,9 @@ def test_atomic_success_and_complete_metadata(tmp_path):
     assert not Path(f"{final}.part").exists()
     with h5py.File(final, "r") as capture_file:
         assert capture_file["iq_data"].shape == (4,)
+        assert capture_file["iq_data"].dtype == np.uint8
+        assert "i_samples" not in capture_file
+        assert "q_samples" not in capture_file
         for key, value in metadata().items():
             assert key in capture_file.attrs
             if isinstance(value, float):
