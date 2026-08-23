@@ -75,3 +75,36 @@ async def test_set_tracking_behavior_is_preserved(monkeypatch):
     c=controller()
     async def no_sleep(_):pass
     monkeypatch.setattr(asyncio,"sleep",no_sleep);assert await c.set_tracking(True) is True;assert "<newSwitchVector" in c.writer.messages[0];assert "<oneSwitch name=\"TRACK_ON\">On" in c.writer.messages[0]
+
+@pytest.mark.asyncio
+async def test_wait_accepts_confirmation_received_during_set_tracking_sleep(monkeypatch):
+    c=controller()
+    key=(c.device_name,"TELESCOPE_TRACK_STATE")
+    raw=vector(on="On",off="Off")
+    async def send(xml,timing_trace=None):
+        if "<newSwitchVector" in xml:
+            item={"tag":"setSwitchVector","state":"Busy","timestamp":None,
+                  "received_at":"now","received_monotonic":0.0,
+                  "elements":{"TRACK_ON":"On","TRACK_OFF":"Off"},
+                  "raw":raw,"update_seq":1}
+            c._property_cache[key]=item
+            c._property_history[key]=[item]
+    async def no_sleep(_):pass
+    monkeypatch.setattr(c,"_send_command",send)
+    monkeypatch.setattr(asyncio,"sleep",no_sleep)
+    assert await c.set_tracking(True) is True
+    assert await c.wait_tracking_state(True,timeout=.1) is True
+
+@pytest.mark.asyncio
+async def test_command_confirmation_rejects_pre_command_cached_state():
+    c=controller()
+    key=(c.device_name,"TELESCOPE_TRACK_STATE")
+    raw=vector(on="On",off="Off")
+    item={"tag":"setSwitchVector","state":"Busy","timestamp":None,
+          "received_at":"old","received_monotonic":0.0,
+          "elements":{"TRACK_ON":"On","TRACK_OFF":"Off"},
+          "raw":raw,"update_seq":1}
+    c._property_cache[key]=item
+    c._property_history[key]=[item]
+    c._tracking_command_after_seq=1
+    assert await c.wait_tracking_state(True,timeout=.01) is False

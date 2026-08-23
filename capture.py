@@ -730,6 +730,7 @@ class CaptureExecutor:
         """Ensure and verify tracking ON using only the controller's public API."""
         state=await self.telescope.get_tracking_state(timeout=1.0);requested=False
         if state=="alert":return False,state,requested
+        if state=="on":return True,state,requested
         if state!="on":
             requested=True
             if not await self.telescope.set_tracking(True):return False,state,requested

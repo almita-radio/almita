@@ -39,6 +39,7 @@ class INDITelescopeControl:
         # Counts only spontaneous setTextVector publications.  A
         # getProperties reply is a defTextVector and must not advance this.
         self._onstep_status_update_seq = 0
+        self._tracking_command_after_seq = None
         self._property_cache = {}
         self._property_history = {}
         self._property_condition = asyncio.Condition()
@@ -1296,6 +1297,32 @@ class INDITelescopeControl:
         if timeout <= 0:
             return False
         expected = "on" if expected_on else "off"
+        command_baseline = self._tracking_command_after_seq
+        self._tracking_command_after_seq = None
+        if command_baseline is not None:
+            query = (
+                f'<getProperties device="{self.device_name}" '
+                'name="TELESCOPE_TRACK_STATE" version="1.7"/>'
+            )
+            await self._send_command(query)
+            deadline = asyncio.get_running_loop().time() + timeout
+            baseline = command_baseline
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return False
+                try:
+                    item = await self._wait_property(
+                        "TELESCOPE_TRACK_STATE", remaining, baseline
+                    )
+                except (asyncio.TimeoutError, ConnectionError):
+                    return False
+                state = self._extract_tracking_state([item["raw"]])
+                if state == expected:
+                    return True
+                if state == "alert":
+                    return False
+                baseline = item["update_seq"]
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
@@ -1323,6 +1350,9 @@ class INDITelescopeControl:
   <oneSwitch name="TRACK_OFF">{'Off' if enable else 'On'}</oneSwitch>
 </newSwitchVector>'''
 
+            self._tracking_command_after_seq = self._property_cache.get(
+                (self.device_name, "TELESCOPE_TRACK_STATE"), {}
+            ).get("update_seq", 0)
             await self._send_command(track_cmd)
             await asyncio.sleep(1)
 
