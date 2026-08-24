@@ -30,6 +30,7 @@ from astropy.time import Time
 from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
 from sdr_capture import SDRCapture, CaptureMetrics, validate_hdf5_capture
+from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 
 
 def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
@@ -148,6 +149,14 @@ class CaptureExecutor:
         )
         self.tracking_timeout = float(tracking_timeout)
         self.visibility_deferred_count = 0
+        sensor_config = self.observer_config.get("temperature_sensors", {}) if isinstance(self.observer_config, dict) else {}
+        self.temperature_reader = (
+            DS18B20Reader(
+                sensor_config,
+                warning=lambda message: self.log(message, "WARNING", force=True),
+            )
+            if all(sensor_config.get(role) for role in ("sdr", "lna")) else None
+        )
 
         if self.verbose:
             self.log(f"Capture Executor initialized")
@@ -1612,6 +1621,12 @@ class CaptureExecutor:
                         'session_id': self.session_id,
                         'capture_start_iso': start_time_iso,
                     }
+
+                    # DS18B20 sysfs I/O is deliberately outside the SDR recv path.
+                    temperature_pre = self.temperature_reader.read_all() if self.temperature_reader else {}
+                    if self.temperature_reader:
+                        self.log(format_temperatures(temperature_pre), force=True)
+                    capture_metadata.update(temperature_metadata(temperature_pre, {}))
                     
                     # Capture with SDR
                     capture_wall_clock = time.perf_counter()
@@ -1631,6 +1646,10 @@ class CaptureExecutor:
 
                     def sdr_timing_callback(event, details):
                         if event == "capture_end":
+                            temperature_post = self.temperature_reader.read_all() if self.temperature_reader else {}
+                            if self.temperature_reader:
+                                self.log(format_temperatures(temperature_post), force=True)
+                            capture_metadata.update(temperature_metadata(temperature_pre, temperature_post))
                             if self.compact_console:
                                 print(
                                     "\r\033[2K" + (" " * 160) + "\r\033[2K"
