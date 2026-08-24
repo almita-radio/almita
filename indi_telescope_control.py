@@ -325,7 +325,6 @@ class INDITelescopeControl:
                     self._property_cache[key] = item
                     self._property_history.setdefault(key, []).append(item)
                     del self._property_history[key][:-100]
-                    self.cached_properties += raw
                     async with self._property_condition:
                         self._property_condition.notify_all()
                 # Let awakened waiters observe the complete TCP chunk before

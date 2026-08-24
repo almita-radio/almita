@@ -121,3 +121,17 @@ async def test_identical_sets_increment_but_definition_is_distinct():
     assert [item["update_seq"] for item in history] == [1, 2, 3]
     assert [item["tag"] for item in history] == ["setTextVector", "setTextVector", "defTextVector"]
     await c.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_does_not_accumulate_raw_xml_history():
+    c = control()
+    waiter = asyncio.create_task(c._wait_property("S", 1, 499))
+    await c.reader.queue.put(b"".join(vector("S", str(index)) for index in range(500)))
+    latest = await waiter
+
+    assert latest["update_seq"] == 500
+    assert latest["elements"]["VALUE"] == "499"
+    assert c.cached_properties == ""
+    assert len(c._property_history[("Scope", "S")]) == 100
+    await c.disconnect()
