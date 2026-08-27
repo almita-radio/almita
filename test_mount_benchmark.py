@@ -34,7 +34,9 @@ def test_plan_has_reasonable_azimuth_quadrants_and_all_distance_bands():
     for row in rows:
         quadrants[min(int(row["target_az_deg"] // 90), 3)] += 1
     assert all(count >= 10 for count in quadrants)
-    assert {row["distance_band"] for row in rows[1:]} == {"<=10", ">10-30", ">30-60", ">60"}
+    assert {row["distance_band"] for row in rows[1:]} == {
+        "0-5", ">5-10", ">10-30", ">30-60", ">60"
+    }
 
 
 def test_seed_is_reproducible():
@@ -100,6 +102,15 @@ def test_execution_uses_real_position_and_external_duration():
     ))
     assert result["goto_duration_external_sec"] == 2.0
     assert result["goto_duration_controller_sec"] == 1.25
+    assert result["seed"] == 20260819
+    assert result["planned_target_alt"] >= 30.0
+    assert result["actual_target_alt_at_send"] == pytest.approx(result["target_alt_deg"])
+    assert result["delta_ra_deg_equivalent"] == pytest.approx(
+        result["delta_ra_hours_wrapped"] * 15.0
+    )
+    assert result["abs_delta_dec_deg"] == pytest.approx(abs(result["delta_dec_deg"]))
+    assert result["axis_motion_class"] in {"ra_dominant", "dec_dominant", "mixed", "small"}
+    assert result["ha_band"] in {"<-4", "-4--2", "-2--1", "-1-0", "0-1", "1-2", "2-4", ">4"}
 
 
 def test_failed_goto_is_recorded_without_inventing_final_position():
@@ -133,6 +144,7 @@ def test_dry_run_writes_outputs_and_never_constructs_controller(tmp_path, monkey
         "mount_benchmark_plan.csv", "mount_benchmark.csv",
         "mount_benchmark_metadata.json", "mount_benchmark_summary.json",
         "mount_benchmark_plan.png", "mount_benchmark_distances.png",
+        "mount_benchmark_axis_motion.png", "mount_benchmark_ha_distribution.png",
     }
     assert {path.name for path in output.iterdir()} == expected
     with (output / "mount_benchmark_plan.csv").open() as handle:
@@ -149,3 +161,35 @@ def test_load_plan_restores_numeric_fields(tmp_path):
     assert [row["sample_id"] for row in restored] == [1, 2]
     assert isinstance(restored[0]["target_ra_icrs_hours"], float)
     assert restored == rows
+
+
+def test_targeted_cell_uses_existing_classification_boundaries():
+    assert mb.targeted_cell(4.0, "ra_dominant", 5.0) == "ra_dominant_short"
+    assert mb.targeted_cell(4.0, "mixed", 5.0) == "mixed_short"
+    assert mb.targeted_cell(61.0, "dec_dominant", 0.0) == "dec_dominant_long"
+    assert mb.targeted_cell(61.0, "mixed", 0.0) == "mixed_long"
+    assert mb.targeted_cell(30.0, "ra_dominant", -1.0) == "ra_dominant_meridian"
+    assert mb.targeted_cell(30.0, "ra_dominant", 1.01) is None
+
+
+def test_targeted_sequence_is_interleaved_and_has_exact_quotas():
+    sequence = mb._targeted_sequence()
+    assert len(sequence) == 36
+    assert {name: sequence.count(name) for name in mb.TARGETED_QUOTAS} == mb.TARGETED_QUOTAS
+    assert sequence[:5] == [
+        "ra_dominant_short", "mixed_short", "dec_dominant_long",
+        "mixed_long", "ra_dominant_meridian",
+    ]
+
+
+def test_targeted_mismatch_is_deferred_without_goto():
+    rows = plan(samples=1)
+    rows[0]["campaign_name"] = "targeted_36"
+    rows[0]["target_cell"] = "dec_dominant_long"
+    target = rows[0]
+    controller = FakeController([(target["target_ra_eod_hours"], target["target_dec_eod_deg"])])
+    result = asyncio.run(mb.execute_plan(
+        controller, rows, LOCATION, -90.0, 0.0, time_now=lambda: OBSTIME,
+    ))[0]
+    assert result["result"] == "deferred_cell_mismatch"
+    assert controller.goto_calls == []

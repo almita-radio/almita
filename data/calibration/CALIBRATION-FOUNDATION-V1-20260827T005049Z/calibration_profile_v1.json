@@ -1,0 +1,208 @@
+{
+  "schema_version": "1.0",
+  "calibration_level": "RELATIVE_INSTRUMENTAL",
+  "absolute_calibration": false,
+  "temperature_kelvin": null,
+  "antenna_temperature_kelvin": null,
+  "flux_jy": null,
+  "created_utc": "2026-08-27T00:51:07.483000+00:00",
+  "reference_topology": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+  "instrument_chain": "LNA_FILTER_CABLING_TO_RTL_SDR",
+  "bias_t_state": "ON",
+  "center_frequency_hz": 1420405752,
+  "frequency_hz": {
+    "start": 1419205752.0,
+    "stop": 1421605459.03125,
+    "bin_width": 292.96875
+  },
+  "sample_rate_hz": 2400000,
+  "gain_db": 40.2,
+  "fft_size": 8192,
+  "window": "Hann (numpy.hanning)",
+  "aggregation": "median FFT power within capture; median across captures",
+  "iq_center": 127.5,
+  "reference_count": 4,
+  "reference_files": [
+    "data/rf_characterization/SDR-CONFIG-SEQUENCE-FIX-01-20260826T205052Z/gain_ascending_40.2.h5",
+    "data/rf_characterization/SDR-CONFIG-SEQUENCE-FIX-01-20260826T205052Z/gain_descending_40.2.h5",
+    "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/50ohm_a.h5",
+    "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/50ohm_b.h5"
+  ],
+  "reference_records": [
+    {
+      "source_file": "data/rf_characterization/SDR-CONFIG-SEQUENCE-FIX-01-20260826T205052Z/gain_ascending_40.2.h5",
+      "timestamp": "2026-08-26T20:51:14.396195+00:00",
+      "gain_db": 40.2,
+      "center_frequency_hz": 1420405752,
+      "sample_rate_hz": 2400000,
+      "duration_seconds": 2.0,
+      "bias_t_state": "ON",
+      "topology": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+      "temperatures_c": [],
+      "adc_statistics": {
+        "mean": 127.3988078125,
+        "sigma": 0.6352238250062977,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.3915612379969784,
+        "clipping_fraction": 0.0
+      }
+    },
+    {
+      "source_file": "data/rf_characterization/SDR-CONFIG-SEQUENCE-FIX-01-20260826T205052Z/gain_descending_40.2.h5",
+      "timestamp": "2026-08-26T20:51:24.337838+00:00",
+      "gain_db": 40.2,
+      "center_frequency_hz": 1420405752,
+      "sample_rate_hz": 2400000,
+      "duration_seconds": 2.0,
+      "bias_t_state": "ON",
+      "topology": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+      "temperatures_c": [],
+      "adc_statistics": {
+        "mean": 127.3981165625,
+        "sigma": 0.6360596265260962,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.393477708379278,
+        "clipping_fraction": 0.0
+      }
+    },
+    {
+      "source_file": "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/50ohm_a.h5",
+      "timestamp": "2026-08-27T00:31:11.889640+00:00",
+      "gain_db": 40.2,
+      "center_frequency_hz": 1420405752,
+      "sample_rate_hz": 2400000,
+      "duration_seconds": 2.0,
+      "bias_t_state": "ON",
+      "topology": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+      "temperatures_c": [],
+      "adc_statistics": {
+        "mean": 127.39855197916667,
+        "sigma": 0.6363908382975038,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.394233594771693,
+        "clipping_fraction": 0.0
+      }
+    },
+    {
+      "source_file": "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/50ohm_b.h5",
+      "timestamp": "2026-08-27T00:39:55.094487+00:00",
+      "gain_db": 40.2,
+      "center_frequency_hz": 1420405752,
+      "sample_rate_hz": 2400000,
+      "duration_seconds": 2.0,
+      "bias_t_state": "ON",
+      "topology": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+      "temperatures_c": [],
+      "adc_statistics": {
+        "mean": 127.39851895833333,
+        "sigma": 0.6369367890004849,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.3954768895697183,
+        "clipping_fraction": 0.0
+      }
+    }
+  ],
+  "dc_frequency_hz": 1420405752,
+  "dc_mask": {
+    "half_width_hz": 1464.84375,
+    "half_width_bins": 5.0,
+    "center_bin": 4096,
+    "affected_bins_above_threshold": 3,
+    "threshold_db": 0.5,
+    "peak_excess_db": 22.469299102146522,
+    "frequency_bin_hz": 292.96875
+  },
+  "dc_mask_bins": 11,
+  "dc_mask_half_width_hz": 1464.84375,
+  "spur_regions": [
+    {
+      "lo_bin": 1892,
+      "hi_bin": 1897,
+      "frequency_hz": 1419760634.8125,
+      "score": 17.452723733398425,
+      "persistence": 1.0,
+      "width_hz": 1757.8125,
+      "reason": "persistent_narrow_feature_in_50ohm_ensemble"
+    }
+  ],
+  "edge_mask_bins_each_side": 163,
+  "valid_fraction": 0.9581298828125,
+  "temperature_range": null,
+  "temperature_correction": "NOT_ESTABLISHED",
+  "adc_statistics": {
+    "reference_records": [
+      {
+        "mean": 127.3988078125,
+        "sigma": 0.6352238250062977,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.3915612379969784,
+        "clipping_fraction": 0.0
+      },
+      {
+        "mean": 127.3981165625,
+        "sigma": 0.6360596265260962,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.393477708379278,
+        "clipping_fraction": 0.0
+      },
+      {
+        "mean": 127.39855197916667,
+        "sigma": 0.6363908382975038,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.394233594771693,
+        "clipping_fraction": 0.0
+      },
+      {
+        "mean": 127.39851895833333,
+        "sigma": 0.6369367890004849,
+        "p0_1": 126.0,
+        "p99_9": 129.0,
+        "effective_range_codes": 3.0,
+        "entropy_bits": 1.3954768895697183,
+        "clipping_fraction": 0.0
+      }
+    ],
+    "absolute_meaning": "INCONCLUSIVE_NO_KNOWN_RF_SOURCE"
+  },
+  "global_reference_level": {
+    "median": 0.9998995344722021,
+    "robust_sigma": 0.0018397173727351089,
+    "min": 0.9980274845141935,
+    "max": 1.002319789725854
+  },
+  "relative_calibration": {
+    "default_scale_mode": "none",
+    "formula": "fractional_excess=(PSD-reference_scaled)/reference_scaled",
+    "none": "reference_scaled=reference_psd; preserves broadband changes",
+    "median_scalar": "scale=median(PSD/reference_psd over valid_mask); removes global level drift and broadband continuum"
+  },
+  "quicklook_contract": [
+    "frequency_hz",
+    "relative_psd_db",
+    "fractional_excess",
+    "valid_mask",
+    "fractional_uncertainty",
+    "calibration_metadata"
+  ],
+  "known_limitations": [
+    "relative/instrumental only; no Kelvin or Jansky calibration",
+    "profile is specific to 40.2 dB and the declared topology",
+    "median-scalar mode can remove astrophysical broadband continuum",
+    "source metadata historically contains gain='auto'; gain_requested_db takes precedence",
+    "ADC absolute scale remains inconclusive without a known RF source"
+  ]
+}

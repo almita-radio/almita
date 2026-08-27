@@ -48,6 +48,16 @@ class QueryDrivenWriter:
         pass
 
 
+async def wait_for_goto_command(writer, count=1, timeout=3.0):
+    """Synchronize fixtures with the command instead of wall-clock timing."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while sum('<newNumberVector' in message and 'EQUATORIAL_EOD_COORD' in message
+              for message in writer.messages) < count:
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError("timed out waiting for synthetic GOTO command")
+        await asyncio.sleep(0.01)
+
+
 def test_angular_distance_same_position():
     assert controller()._angular_distance_deg(12.0, -30.0, 12.0, -30.0) == pytest.approx(0.0)
 
@@ -239,7 +249,7 @@ def test_goto_initial_cache_equal_target_waits_for_post_command_updates():
 
         telescope.get_coordinates = fixed_coordinates
         task = asyncio.create_task(telescope.goto(2.0, 0.0))
-        await asyncio.sleep(0.65)
+        await wait_for_goto_command(telescope.writer)
         assert not task.done(), "GOTO no debe aceptar el cache seq=100 igual al target"
         telescope.reader.queue.put_nowait(eod_vector("Idle", 1.5, 0))  # seq 101, transit
         telescope.reader.queue.put_nowait(eod_vector("Idle", 2, 0))    # seq 102, hit 1
@@ -263,7 +273,7 @@ def test_reverse_goto_does_not_accept_stale_previous_endpoint():
 
         telescope.get_coordinates = coordinates
         outward = asyncio.create_task(telescope.goto(2.0, 0.0))  # A -> B
-        await asyncio.sleep(0.65)
+        await wait_for_goto_command(writer)
         telescope.reader.queue.put_nowait(eod_vector("Idle", 1.5, 0))
         telescope.reader.queue.put_nowait(eod_vector("Idle", 2, 0))
         telescope.reader.queue.put_nowait(eod_vector("Idle", 2, 0))
@@ -279,7 +289,7 @@ def test_reverse_goto_does_not_accept_stale_previous_endpoint():
 
         telescope.get_coordinates = reverse_coordinates
         reverse = asyncio.create_task(telescope.goto(1.0, 0.0))
-        await asyncio.sleep(0.65)
+        await wait_for_goto_command(writer, count=2)
         assert not reverse.done(), "B -> A no debe retornar usando el A stale pre-command"
         telescope.reader.queue.put_nowait(eod_vector("Idle", 1.5, 0))  # seq 105
         telescope.reader.queue.put_nowait(eod_vector("Idle", 1, 0))    # seq 106, hit 1
@@ -302,7 +312,7 @@ def test_goto_without_busy_succeeds_on_two_distinct_fresh_updates():
 
         telescope.get_coordinates = fixed_coordinates
         task = asyncio.create_task(telescope.goto(2.0, 0.0))
-        await asyncio.sleep(0.65)
+        await wait_for_goto_command(telescope.writer)
         telescope.reader.queue.put_nowait(eod_vector("Idle", 1.5, 0))  # seq 11
         telescope.reader.queue.put_nowait(eod_vector("Ok", 2, 0))     # seq 12
         telescope.reader.queue.put_nowait(eod_vector("Idle", 2, 0))   # seq 13

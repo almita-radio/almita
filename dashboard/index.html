@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Dashboard</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <div id="loading" class="loading">LOADING QUICKLOOK DERIVATIVES…</div>
+  <main id="app" hidden>
+    <header class="topbar">
+      <div><h1>ALMITA</h1><span class="readonly">READ ONLY</span></div>
+      <dl><div><dt>SESSION</dt><dd id="session">—</dd></div><div><dt>STATUS</dt><dd id="status" class="badge">—</dd></div>
+        <div><dt>UTC</dt><dd id="clock">—</dd></div><div><dt>DATA</dt><dd id="freshness">—</dd></div></dl>
+    </header>
+    <div id="connection" class="banner connection" hidden>DATA CONNECTION DEGRADED — showing last valid derivatives</div>
+    <div id="environment" class="banner environment" hidden>INDOOR VALIDATION DATA · NO ASTRONOMICAL INTERPRETATION</div>
+    <section class="calibration"><span>CALIBRATION <b id="calibration">—</b></span><span>ABSOLUTE <b id="absolute">—</b></span><span>UPDATED <b id="updated">—</b></span><span>TELEMETRY <b id="telemetry-status">—</b></span><span id="telemetry-freshness">—</span></section>
+    <section id="progress" class="progress"></section>
+    <section class="visual-grid">
+      <article class="panel"><header><h2>SPECTRUM</h2><span id="spectrum-point"></span></header>
+        <div class="imagebox"><img id="spectrum-img" alt="Latest relative instrumental spectrum"><div class="unavailable">NOT AVAILABLE YET</div></div>
+        <div id="spectrum-meta" class="metrics"></div></article>
+      <article class="panel"><header><h2>WATERFALL</h2><span>FEATURE / OUTLIER ONLY</span></header>
+        <div class="imagebox"><img id="waterfall-img" alt="Latest relative instrumental waterfall"><div class="unavailable">NOT AVAILABLE YET</div></div>
+        <div id="waterfall-meta" class="metrics"></div></article>
+      <article class="panel"><header><h2>FRACTIONAL EXCESS</h2><span>RELATIVE INSTRUMENTAL</span></header>
+        <div class="imagebox"><img id="fractional-img" alt="Latest fractional excess"><div class="unavailable">NOT AVAILABLE YET</div></div>
+        <div id="fractional-meta" class="metrics"></div></article>
+      <article class="panel"><header><h2>QUICKLOOK MAP</h2><span id="map-state">—</span></header>
+        <div class="imagebox"><img id="map-img" alt="Quicklook map"><div class="unavailable">NOT AVAILABLE YET</div></div>
+        <div id="map-meta" class="metrics"></div></article>
+    </section>
+    <section class="ops-grid">
+      <article class="panel compact"><h2>LATEST POINT</h2><div id="latest-point" class="kv"></div></article>
+      <article class="panel compact"><h2>INSTRUMENT / RF</h2><div id="instrument" class="kv"></div></article>
+      <article class="panel compact"><h2>TEMPERATURE</h2><div id="temperature" class="kv"><p class="nodata">TELEMETRY NOT AVAILABLE</p></div><h2>MOUNT</h2><div id="mount" class="kv"><p class="nodata">MOUNT TELEMETRY NOT EXPOSED</p></div></article>
+      <article class="panel compact"><h2>SYSTEM / SDR HEALTH</h2><div id="system" class="kv"><p class="nodata">TELEMETRY NOT AVAILABLE</p></div><h2>SDR</h2><div id="sdr" class="kv"></div></article>
+      <article class="panel issues"><h2>ISSUES</h2><div id="issues"></div></article>
+      <article class="panel compact"><h2>QUICKLOOK TIMING</h2><div id="timing" class="kv"></div></article>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body></html>

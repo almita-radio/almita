@@ -83,8 +83,9 @@ def _set_timestamp(readings: Dict[str, Dict]) -> Optional[str]:
     return max(timestamps) if timestamps else None
 
 
-def format_temperatures(readings: Dict[str, Dict]) -> str:
+def format_temperatures(readings: Dict[str, Dict], phase: Optional[str] = None) -> str:
     def value(role: str) -> str:
         item = readings.get(role, {})
         return f"{item['temperature_c']:.1f}°C" if item.get("valid") else "ERR"
-    return f"TEMP     SDR={value('sdr')}   LNA={value('lna')}"
+    phase_text = f"{phase.upper():<9}" if phase else ""
+    return f"TEMP     {phase_text}SDR={value('sdr')}   LNA={value('lna')}"

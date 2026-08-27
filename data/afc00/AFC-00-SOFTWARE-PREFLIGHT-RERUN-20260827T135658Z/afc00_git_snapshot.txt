@@ -1,0 +1,36 @@
+AFC-00 SOFTWARE PREFLIGHT RERUN — GIT SNAPSHOT
+UTC: 2026-08-27T13:58:05Z
+HEAD: d5c83ecb2128984e38a2524cf739f167a327a14a
+
+TRACKED MODIFIED (existing worktree):
+alignment.py
+capture.py
+data/IQ/session.csv
+grid_generator.py
+indi_telescope_control.py
+mount_benchmark.py
+mount_slew_model.py
+sdr_capture.py
+temperature_sensors.py
+test_capture_visibility_tracking.py
+test_indi_goto_conservative.py
+test_indi_onstep_status.py
+test_mount_benchmark.py
+test_temperature_sensors.py
+
+RELEVANT UNTRACKED GROUPS:
+- Calibration, Quicklook, Dashboard, Telemetry, Field Service and AFC evidence/test assets.
+
+DIFF STAT:
+14 files changed, 1757 insertions(+), 497 deletions(-).
+
+DIFF CHECK:
+Only pre-existing trailing whitespace in data/IQ/session.csv lines 2-43.
+
+VALIDATION MUTATIONS:
+- This rerun added only its required evidence directory under data/afc00/.
+- No production source, historical HDF5, observer configuration, hardware service or scientific product was modified.
+- No stage, commit, push, reset, checkout or cleanup was performed.
+
+FUNCTIONAL SOFTWARE READINESS: PASS
+RELEASE SNAPSHOT READINESS: STILL REQUIRED

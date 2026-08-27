@@ -23,13 +23,15 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
+from astropy_offline import configure_astropy_offline
+configure_astropy_offline()
 import astropy.units as u
 from astropy.coordinates import EarthLocation
 from astropy.coordinates import AltAz, ICRS, SkyCoord
 from astropy.time import Time
 from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
-from sdr_capture import SDRCapture, CaptureMetrics, validate_hdf5_capture
+from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 
 
@@ -46,6 +48,46 @@ def format_duration_hms(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+INPUT_TOPOLOGIES = {
+    "antenna": "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+    "50ohm": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+}
+QUICKLOOK_SESSION_FIELDS = (
+    "point_id", "status", "source_hdf5", "ra_deg", "dec_deg",
+    "coordinate_source", "frequency_hz", "sample_rate_hz",
+    "gain_requested_db", "instrument_topology", "bias_tee_enabled",
+    "timestamp", "capture_duration_seconds",
+)
+
+
+def write_quicklook_manifest_row(session_dir: Path, row: Dict) -> Path:
+    """Atomically upsert one future-campaign row for Quicklook Live."""
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / "session.csv"
+    rows = []
+    if path.exists():
+        with path.open(newline="") as stream:
+            rows = list(csv.DictReader(stream))
+    normalized = {field: row.get(field, "") for field in QUICKLOOK_SESSION_FIELDS}
+    if str(normalized["source_hdf5"]).endswith(".part"):
+        raise ValueError("source_hdf5 must reference a finalized HDF5 file")
+    for index, existing in enumerate(rows):
+        if existing.get("point_id") == str(normalized["point_id"]):
+            rows[index] = normalized
+            break
+    else:
+        rows.append(normalized)
+    temporary = path.with_suffix(".csv.tmp")
+    with temporary.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=QUICKLOOK_SESSION_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+    return path
+
+
 class CaptureExecutor:
     """
     Executes observation plans from CSV files with session management
@@ -57,6 +99,9 @@ class CaptureExecutor:
                  verbose: bool = False, sdr_mode: str = "network",
                  sdr_host: str = "localhost", sdr_port: int = 1234,
                  sdr_freq: int = 1420405752, sdr_sample_rate: int = 2400000,
+                 sdr_gain_db: float = 40.2,
+                 input_topology: str = INPUT_TOPOLOGIES["antenna"],
+                 bias_tee_enabled: bool = True,
                  min_altitude_deg: Optional[float] = None,
                  tracking_timeout: float = 5.0):
         """
@@ -102,6 +147,11 @@ class CaptureExecutor:
         self.sdr_port = sdr_port
         self.sdr_freq = sdr_freq
         self.sdr_sample_rate = sdr_sample_rate
+        self.sdr_gain_db = float(sdr_gain_db)
+        self.input_topology = input_topology
+        if input_topology not in INPUT_TOPOLOGIES.values():
+            raise ValueError(f"unsupported input topology: {input_topology}")
+        self.bias_tee_enabled = bool(bias_tee_enabled)
         self.sdr = None
         
         # Load observer configuration
@@ -376,6 +426,8 @@ class CaptureExecutor:
     def _console_progress(self, label: str, fraction: float, details: str = "",
                           force: bool = False) -> None:
         """Render one in-place observational progress line."""
+        if not sys.stdout.isatty():
+            return
         now = time.perf_counter()
         progress_state = getattr(self, "_console_progress_state", {})
         previous = progress_state.get(label, 0.0)
@@ -391,11 +443,61 @@ class CaptureExecutor:
               end="", flush=True)
 
     def _console_progress_end(self) -> None:
+        if not sys.stdout.isatty():
+            return
         print(
             "\r\033[2K" + (" " * 160) + "\r\033[2K",
             end="",
             flush=True,
         )
+
+    @staticmethod
+    def _console_phase(category: str, phase: str, status: str,
+                       duration: Optional[float] = None, detail: str = "") -> None:
+        duration_text = f"{duration:6.1f}s" if duration is not None else "       "
+        suffix = f"   {detail}" if detail else ""
+        print(
+            f"{category:<8} {phase:<9} {status:<5} {duration_text}{suffix}",
+            flush=True,
+        )
+
+    def print_console_header(self, settle_time: float, capture_time: float) -> None:
+        """Render the normal-mode operational header using existing config."""
+        session_name = (
+            self.observation_points[0].get("session_name", "unknown")
+            if self.observation_points else "unknown"
+        )
+        endpoint = (
+            f"{self.sdr_host}:{self.sdr_port}"
+            if self.sdr_mode == "network" else "USB"
+        )
+        print("ALMITA CAPTURE", flush=True)
+        rows = (
+            ("Session", session_name),
+            ("Targets", str(len(self.observation_points))),
+            ("Mount", self.device_name or "auto-detect"),
+            ("SDR endpoint", endpoint),
+            ("Center frequency", f"{self.sdr_freq / 1e6:.6f} MHz"),
+            ("Sample rate", f"{self.sdr_sample_rate / 1e6:.3f} MS/s"),
+            ("Gain", "auto"),
+            ("Bias-T", "N/D"),
+            ("Settle", f"{settle_time:.1f} s"),
+            ("Capture duration", f"{capture_time:.1f} s"),
+            ("Output path", str(self._capture_output_root())),
+        )
+        for label, value in rows:
+            print(f"{label:<18} {value}", flush=True)
+        print("", flush=True)
+
+    @staticmethod
+    def _format_target_coordinates(ra_hours: float, dec_degrees: float) -> tuple[str, str]:
+        """Format existing target values without changing their coordinates."""
+        coordinate = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_degrees * u.deg)
+        ra_text = coordinate.ra.to_string(unit=u.hourangle, sep=":", precision=1, pad=True)
+        dec_text = coordinate.dec.to_string(
+            unit=u.deg, sep=":", precision=0, pad=True, alwayssign=True
+        )
+        return ra_text, dec_text
 
     def _observe_goto_log(self, row: Dict, message: str) -> None:
         """Translate existing goto verbose logs into the operator timeline."""
@@ -443,6 +545,8 @@ class CaptureExecutor:
                      f"command_to_motion_start={time.perf_counter() - row['_goto_command_utc_clock']:.3f} s"],
                 )
                 row["_motion_last_report_clock"] = motion_clock
+                if self.compact_console:
+                    self._console_phase("MOUNT", "MOTION", "START")
             elif state == "Busy" and row.get("motion_start_utc"):
                 now = time.perf_counter()
                 initial = row.get("_motion_initial_error") or float(error) or 1.0
@@ -466,6 +570,11 @@ class CaptureExecutor:
                      f"physical_motion_duration={time.perf_counter() - row['_motion_start_utc_clock']:.3f} s",
                      f"command_to_motion_end={time.perf_counter() - row['_goto_command_utc_clock']:.3f} s"],
                 )
+                if self.compact_console:
+                    self._console_phase(
+                        "MOUNT", "MOTION", "END",
+                        now - row["_motion_start_utc_clock"],
+                    )
             if float(error) <= 0.25 and not row.get("first_convergence_utc"):
                 self._live_event(
                     row, "FIRST CONVERGENCE", "first_convergence_utc",
@@ -911,8 +1020,8 @@ class CaptureExecutor:
             probe = None
             try:
                 probe = sdr_factory(mode="network", host=self.sdr_host, port=self.sdr_port, verbose=False)
-                await probe.connect(); await probe.configure(center_freq=self.sdr_freq, sample_rate=self.sdr_sample_rate, gain="auto")
-                record("SDR network", "PASS", f"configured {self.sdr_host}:{self.sdr_port} at {self.sdr_freq} Hz/{self.sdr_sample_rate} Sps, gain=auto")
+                await probe.connect(); await probe.configure(center_freq=self.sdr_freq, sample_rate=self.sdr_sample_rate, gain=self.sdr_gain_db)
+                record("SDR network", "PASS", f"configured {self.sdr_host}:{self.sdr_port} at {self.sdr_freq} Hz/{self.sdr_sample_rate} Sps, manual gain={self.sdr_gain_db} dB")
             except Exception as exc:
                 record("SDR network", "FAIL", f"{type(exc).__name__}: {exc}")
             finally:
@@ -1089,7 +1198,7 @@ class CaptureExecutor:
             await self.sdr.configure(
                 center_freq=self.sdr_freq,
                 sample_rate=self.sdr_sample_rate,
-                gain='auto'
+                gain=self.sdr_gain_db,
             )
             
             if self.verbose:
@@ -1164,14 +1273,23 @@ class CaptureExecutor:
                     "_point_clock": point_clock,
                     "inter_point_delay_sec": inter_point_delay_sec,
                 }
+                separator = "─" * 64
+                print(f"\n{separator}", flush=True)
                 print(
-                    f"\nPOINT {idx:02d}/{len(self.observation_points):02d}  "
-                    f"RA={ra_hours:.4f}h DEC={dec_deg:+.3f}deg  "
-                    f"HA={float(point['_ha_at_selection']):+.3f}h "
-                    f"ALT={float(point['_altitude_deg_at_goto']):.1f}deg "
-                    f"DIST={distance_from_previous:.1f}deg",
+                    f"POINT {idx:03d}/{len(self.observation_points):03d}  "
+                    f"HA={float(point['_ha_at_selection']):+.2f}h  "
+                    f"ALT={float(point['_altitude_deg_at_goto']):.1f}°  "
+                    f"AZ={float(point['_azimuth_deg_at_goto']):.1f}°  "
+                    f"DIST={distance_from_previous:.1f}°",
                     flush=True,
                 )
+                print(
+                    "TARGET RA={}  DEC={}".format(
+                        *self._format_target_coordinates(ra_hours, dec_deg)
+                    ),
+                    flush=True,
+                )
+                print(separator, flush=True)
                 self._live_event(live_row, "POINT START")
                 self.log(
                     f"TIMING POINT {idx:02d}/20 | point_id={point.get('point_id', point_num)} | "
@@ -1248,7 +1366,8 @@ class CaptureExecutor:
                 slew_end = datetime.now(timezone.utc)
                 slew_time = (slew_end - slew_start).total_seconds()
                 if not live_row.get("motion_start_utc"):
-                    print("MOUNT MOTION START: BUSY NOT OBSERVED", flush=True)
+                    if not self.compact_console:
+                        print("MOUNT MOTION START: BUSY NOT OBSERVED", flush=True)
                 goto_return_clock = time.perf_counter()
                 live_row["goto_total_sec"] = slew_sec
                 if live_row.get("motion_start_utc"):
@@ -1276,10 +1395,10 @@ class CaptureExecutor:
                 )
                 self.log(f"<<< GOTO END | monotonic={slew_sec:.3f}s", force=True)
                 if self.compact_console:
-                    print(
-                        f"GOTO       OK {slew_sec:.1f}s "
-                        f"(motion={physical_motion:.1f}s, wait={command_delay + motion_tail + residual_goto:.1f}s)",
-                        flush=True,
+                    self._console_phase(
+                        "MOUNT", "GOTO", "OK", slew_sec,
+                        f"motion={physical_motion:.1f}s   "
+                        f"wait={command_delay + motion_tail + residual_goto:.1f}s",
                     )
 
                 if not success:
@@ -1347,9 +1466,9 @@ class CaptureExecutor:
                     force=True,
                 )
                 if self.compact_console:
-                    print(
-                        f"TRACK      {'OK' if tracking_confirmed else 'FAIL'} {tracking_enable_sec:.1f}s",
-                        flush=True,
+                    self._console_phase(
+                        "MOUNT", "TRACK", "OK" if tracking_confirmed else "FAIL",
+                        tracking_enable_sec,
                     )
                 tracking_result_at = datetime.now(timezone.utc)
                 tracking_confirmed_at = tracking_result_at if tracking_confirmed else None
@@ -1440,7 +1559,7 @@ class CaptureExecutor:
                 self._console_progress_end()
                 settle_sec = time.perf_counter() - settle_clock
                 if self.compact_console:
-                    print(f"SETTLE     OK {settle_sec:.1f}s", flush=True)
+                    self._console_phase("CAPTURE", "SETTLE", "OK", settle_sec)
                 settle_end = datetime.now(timezone.utc)
                 actual_settle = (settle_end - settle_start).total_seconds()
                 self._live_event(live_row, "SETTLE END", "settle_end",
@@ -1475,9 +1594,9 @@ class CaptureExecutor:
                         force=True,
                     )
                     self._console_progress_end()
-                    print(
-                        f"FLUSH      OK {flush_sec:.1f}s ({flushed_bytes // 2:,} samples)",
-                        flush=True,
+                    self._console_phase(
+                        "SDR", "FLUSH", "OK", flush_sec,
+                        f"discarded={flushed_bytes // 2:,} samples",
                     )
                     self._live_event(
                         live_row, "FLUSH END", "flush_end",
@@ -1608,7 +1727,12 @@ class CaptureExecutor:
                         'center_freq': self.sdr_freq,
                         'center_frequency_hz': self.sdr_freq,
                         'sample_rate_hz': self.sdr_sample_rate,
-                        'gain': 'auto',
+                        'gain': self.sdr_gain_db,
+                        'gain_requested_db': self.sdr_gain_db,
+                        'gain_mode': 'manual',
+                        'instrument_topology': self.input_topology,
+                        'rf_input': self.input_topology,
+                        'bias_tee_enabled': self.bias_tee_enabled,
                         
                         # Observer location (critical for Doppler corrections)
                         'observer_latitude': self.observer_config.get('observer', {}).get('latitude_deg'),
@@ -1622,10 +1746,24 @@ class CaptureExecutor:
                         'capture_start_iso': start_time_iso,
                     }
 
+                    if mount_capture_ra is not None and mount_capture_dec is not None:
+                        contract_ra_deg = float(mount_capture_ra) * 15.0
+                        contract_dec_deg = float(mount_capture_dec)
+                        coordinate_source = "ACTUAL"
+                    else:
+                        contract_ra_deg = ra_hours * 15.0
+                        contract_dec_deg = dec_deg
+                        coordinate_source = "COMMANDED"
+                    capture_metadata.update({
+                        'ra_deg': contract_ra_deg,
+                        'dec_deg': contract_dec_deg,
+                        'coordinate_source': coordinate_source,
+                    })
+
                     # DS18B20 sysfs I/O is deliberately outside the SDR recv path.
                     temperature_pre = self.temperature_reader.read_all() if self.temperature_reader else {}
                     if self.temperature_reader:
-                        self.log(format_temperatures(temperature_pre), force=True)
+                        print(format_temperatures(temperature_pre, "PRE"), flush=True)
                     capture_metadata.update(temperature_metadata(temperature_pre, {}))
                     
                     # Capture with SDR
@@ -1647,15 +1785,14 @@ class CaptureExecutor:
                     def sdr_timing_callback(event, details):
                         if event == "capture_end":
                             temperature_post = self.temperature_reader.read_all() if self.temperature_reader else {}
-                            if self.temperature_reader:
-                                self.log(format_temperatures(temperature_post), force=True)
                             capture_metadata.update(temperature_metadata(temperature_pre, temperature_post))
                             if self.compact_console:
-                                print(
-                                    "\r\033[2K" + (" " * 160) + "\r\033[2K"
-                                    f"CAPTURE    OK {float(details['duration']):.1f}s "
-                                    f"({int(details['samples_received']):,} samples)",
-                                    flush=True,
+                                duration_value = float(details["duration"])
+                                samples_value = int(details["samples_received"])
+                                self._console_phase(
+                                    "SDR", "CAPTURE", "OK", duration_value,
+                                    f"samples={samples_value:,}   "
+                                    f"rate={samples_value / duration_value / 1e6:.3f} MS/s",
                                 )
                             self._live_event(
                                 live_row, "CAPTURE END", "capture_end",
@@ -1669,9 +1806,13 @@ class CaptureExecutor:
                             )
                         elif event == "disk_write_end":
                             if self.compact_console:
-                                print(
-                                    f"WRITE      OK {float(details['duration']):.1f}s",
-                                    flush=True,
+                                size_detail = (
+                                    f"size={float(details['size_mb']):.1f} MB"
+                                    if details.get("size_mb") is not None else ""
+                                )
+                                self._console_phase(
+                                    "DISK", "WRITE", "OK",
+                                    float(details["duration"]), size_detail,
                                 )
                             self._live_event(
                                 live_row, "DISK WRITE END", "disk_write_end",
@@ -1717,7 +1858,8 @@ class CaptureExecutor:
                         self.log(f"  Throughput: {sdr_metrics.throughput_mbps:.2f} MB/s")
                     
                 except Exception as e:
-                    self.log(f"SDR capture error: {e}", "ERROR", force=True)
+                    if not (self.compact_console and isinstance(e, SDRNetworkError)):
+                        self.log(f"SDR capture error: {e}", "ERROR", force=True)
                     failed_at = datetime.now(timezone.utc)
                     error_code = getattr(e, "code", type(e).__name__)
                     self.update_point_status(
@@ -1731,6 +1873,11 @@ class CaptureExecutor:
                         error_detail=str(e),
                         failed_at=failed_at.isoformat(),
                     )
+                    if self.compact_console:
+                        print(
+                            f"✗ POINT {idx:03d}/{len(self.observation_points):03d} FAILED",
+                            flush=True,
+                        )
                     raise
 
                 # End capture
@@ -1745,6 +1892,21 @@ class CaptureExecutor:
                                        start_time=start_time_iso,
                                        end_time=end_time_iso,
                                        duration=duration)
+                write_quicklook_manifest_row(output_dir, {
+                    "point_id": str(point.get("point_id", point_num)),
+                    "status": "SUCCESS",
+                    "source_hdf5": data_path.name,
+                    "ra_deg": contract_ra_deg,
+                    "dec_deg": contract_dec_deg,
+                    "coordinate_source": coordinate_source,
+                    "frequency_hz": self.sdr_freq,
+                    "sample_rate_hz": self.sdr_sample_rate,
+                    "gain_requested_db": self.sdr_gain_db,
+                    "instrument_topology": self.input_topology,
+                    "bias_tee_enabled": str(self.bias_tee_enabled).lower(),
+                    "timestamp": end_time_iso,
+                    "capture_duration_seconds": capture_time,
+                })
                 persist_sec += time.perf_counter() - persist_clock
                 self._live_event(
                     live_row, "PERSIST END", "persist_end",
@@ -1814,16 +1976,14 @@ class CaptureExecutor:
                         if completed_now else 0.0
                     )
                     print(
-                        f"✓ POINT {idx:02d}/{len(self.observation_points):02d} "
-                        f"goto={slew_sec:.1f}s motion={physical_motion:.1f}s "
-                        f"settle={settle_sec:.1f}s flush={flush_sec:.1f}s "
-                        f"capture={capture_sec:.1f}s disk={hdf5_sec:.1f}s "
+                        f"✓ POINT {idx:03d}/{len(self.observation_points):03d}   "
                         f"total={total_point_time:.1f}s",
                         flush=True,
                     )
                     print(
-                        f"  ELAPSED {format_duration_hms(wall_now)}  |  "
-                        f"REMAINING ~{format_duration_hms(remaining_estimate)}",
+                        f"SESSION  elapsed={format_duration_hms(wall_now)}   "
+                        f"remaining≈{format_duration_hms(remaining_estimate)}   "
+                        f"success={successful + 1} failed={failed}",
                         flush=True,
                     )
                 else:
@@ -1938,6 +2098,42 @@ class CaptureExecutor:
                 self.log(f"   Session ID: {self.session_id}", force=True)
                 self.log("="*80, force=True)
 
+            if self.compact_console:
+                elapsed = time.perf_counter() - self._live_session_clock
+                part_count = sum(
+                    1 for directory in self._session_capture_directories(session_name)
+                    for _ in directory.glob("*.part")
+                )
+                onstep_state = "N/D"
+                if "onstep" in str(self.device_name).lower() and "onstep_post_tracking" in locals():
+                    onstep_state = str(onstep_post_tracking.get("state", "N/D")).upper()
+                rtl_state = (
+                    "HEALTHY" if getattr(self.sdr, "consumer_state", None) == "DISCARD"
+                    else str(getattr(self.sdr, "consumer_state", "N/D"))
+                )
+                session_label = (
+                    "SESSION PAUSED"
+                    if safety_paused or self.visibility_deferred_count else "SESSION COMPLETE"
+                )
+                print(f"\n════════════════ {session_label} ═════════════════", flush=True)
+                print(f"Points       {successful + failed}/{len(self.observation_points)}", flush=True)
+                print(f"Success      {successful}", flush=True)
+                print(f"Failed       {failed}", flush=True)
+                print(f"Deferred     {self.visibility_deferred_count}", flush=True)
+                print(f"Elapsed      {format_duration_hms(elapsed)}", flush=True)
+                print("", flush=True)
+                print(f"GOTO         {timing_totals['slew']:.1f}s", flush=True)
+                print(f"Motion       {live_totals['physical_motion']:.1f}s", flush=True)
+                print(f"Capture      {timing_totals['capture']:.1f}s", flush=True)
+                print(f"Disk         {timing_totals['hdf5']:.1f}s", flush=True)
+                print("", flush=True)
+                print(f"SDR stalls   0", flush=True)
+                print(f"Disconnects  0", flush=True)
+                print(f".part        {part_count}", flush=True)
+                print(f"OnStep       {onstep_state}", flush=True)
+                print(f"rtl_tcp      {rtl_state}", flush=True)
+                print("══════════════════════════════════════════════════", flush=True)
+
             return not safety_paused and failed == 0 and self.visibility_deferred_count == 0
 
         except KeyboardInterrupt:
@@ -1951,10 +2147,13 @@ class CaptureExecutor:
             raise
         except Exception as e:
             # Unexpected error - mark as failed but save progress
-            self.log(f"Observation execution error: {e}", "ERROR")
             self.session_manager.pause_session(self.session_id)
-            import traceback
-            self.log(traceback.format_exc(), "ERROR")
+            if self.compact_console and isinstance(e, SDRNetworkError):
+                print("SESSION PAUSED", flush=True)
+            else:
+                self.log(f"Observation execution error: {e}", "ERROR")
+                import traceback
+                self.log(traceback.format_exc(), "ERROR")
             return False
         finally:
             # Never deliberately leave the mount tracking after any exit path.
@@ -2041,6 +2240,10 @@ Useful for re-observations or after fixing equipment issues.
                         help='Center frequency in Hz (default: 1420405752 for HI line)')
     parser.add_argument('--sdr-rate', type=int, default=2400000,
                         help='Sample rate in Hz (default: 2400000)')
+    parser.add_argument('--sdr-gain', type=float, default=40.2,
+                        help='Manual tuner gain in dB (default: 40.2; AGC is not used)')
+    parser.add_argument('--input-topology', choices=sorted(INPUT_TOPOLOGIES), default='antenna',
+                        help='Physical input at the LNA: antenna or 50ohm (default: antenna)')
     parser.add_argument('--min-altitude', type=float, default=None,
                         help='Minimum target altitude at GOTO; config or 30 degrees by default')
     parser.add_argument('--tracking-timeout', type=float, default=5.0,
@@ -2106,9 +2309,12 @@ Useful for re-observations or after fixing equipment issues.
             sdr_port=args.sdr_port,
             sdr_freq=args.sdr_freq,
             sdr_sample_rate=args.sdr_rate,
+            sdr_gain_db=args.sdr_gain,
+            input_topology=INPUT_TOPOLOGIES[args.input_topology],
             min_altitude_deg=args.min_altitude,
             tracking_timeout=args.tracking_timeout,
         )
+        executor.compact_console = not executor.verbose
 
         if not executor.load_observation_plan(resume=True, force=args.force):
             print("Failed to load observation plan")
@@ -2127,9 +2333,12 @@ Useful for re-observations or after fixing equipment issues.
             sdr_port=args.sdr_port,
             sdr_freq=args.sdr_freq,
             sdr_sample_rate=args.sdr_rate,
+            sdr_gain_db=args.sdr_gain,
+            input_topology=INPUT_TOPOLOGIES[args.input_topology],
             min_altitude_deg=args.min_altitude,
             tracking_timeout=args.tracking_timeout,
         )
+        executor.compact_console = not executor.verbose
 
         if not executor.load_observation_plan(resume=False, force=args.force):
             print("Failed to load observation plan")
@@ -2143,6 +2352,8 @@ Useful for re-observations or after fixing equipment issues.
     # Compact is the operator-facing mode. Detailed diagnostics remain in the
     # timing CSV and are still available with --debug.
     executor.compact_console = not executor.verbose
+    if executor.compact_console:
+        executor.print_console_header(args.settle, args.capture)
 
     # Connect to INDI server
     executor.telescope = INDITelescopeControl(

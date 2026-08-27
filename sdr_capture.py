@@ -258,6 +258,12 @@ class SDRCapture:
         self._consumer_condition = threading.Condition()
         self._active_capture = None
         self._flush_marker = 0
+        self.current_frequency = None
+        self.current_sample_rate = None
+        self.manual_gain_enabled = None
+        self.current_gain = None
+        self.retune_settle_seconds = 0.5
+        self.gain_settle_seconds = 0.2
 
         if self.mode not in ["usb", "network"]:
             raise ValueError(f"Invalid mode: {mode}. Must be 'usb' or 'network'")
@@ -353,6 +359,23 @@ class SDRCapture:
                 pass
             failed_socket.close()
             self.socket = None
+            self._invalidate_network_config()
+
+    def _invalidate_network_config(self) -> None:
+        """Forget configuration that belonged to a dead/unknown connection."""
+        self.current_frequency = None
+        self.current_sample_rate = None
+        self.manual_gain_enabled = None
+        self.current_gain = None
+
+    async def _retune_settle_and_drain(self) -> int:
+        """Let the sole continuous consumer discard post-retune samples."""
+        self._ensure_consumer_started()
+        before = self.get_network_telemetry()["bytes_discarded"]
+        self.log(f"SDR RETUNE SETTLE/DRAIN {self.retune_settle_seconds:.1f}s")
+        await asyncio.sleep(self.retune_settle_seconds)
+        after = self.get_network_telemetry()["bytes_discarded"]
+        return after - before
 
     def _network_consumer_loop(self) -> None:
         """The sole owner of streaming recv(); always drains rtl_tcp."""
@@ -475,6 +498,7 @@ class SDRCapture:
     async def _connect_network(self) -> CaptureMetrics:
         """Connect to rtl_tcp server"""
         metrics = CaptureMetrics()
+        self._invalidate_network_config()
         
         self.log(f"Connecting to rtl_tcp at {self.host}:{self.port}...")
         start = time.perf_counter()
@@ -555,41 +579,63 @@ class SDRCapture:
     async def _configure_network(self, center_freq: int, sample_rate: int,
                                  gain: str, metrics: CaptureMetrics) -> CaptureMetrics:
         """Configure rtl_tcp server"""
-        self.log(f"Configuring rtl_tcp: {center_freq/1e6:.6f} MHz @ {sample_rate/1e6:.2f} MS/s")
         start = time.perf_counter()
-        
+
         # rtl_tcp command format: [CMD: 1 byte][ARG: 4 bytes big-endian]
         # CMD 0x01: Set frequency, CMD 0x02: Set sample rate, CMD 0x03: Set gain mode, CMD 0x04: Set gain
-        
         loop = asyncio.get_event_loop()
-        
-        # Set sample rate FIRST (most important for data integrity)
-        cmd = struct.pack('>BI', 0x02, sample_rate)
-        await loop.run_in_executor(None, self.socket.send, cmd)
-        
-        # Set frequency
-        cmd = struct.pack('>BI', 0x01, center_freq)
-        await loop.run_in_executor(None, self.socket.send, cmd)
-        
-        # Set gain mode (0 = manual, 1 = auto)
-        if gain == 'auto':
-            cmd = struct.pack('>BI', 0x03, 1)
-        else:
-            cmd = struct.pack('>BI', 0x03, 0)
-            # Set gain value (tenths of dB)
-            cmd = struct.pack('>BI', 0x04, int(float(gain) * 10))
-        
-        await loop.run_in_executor(None, self.socket.send, cmd)
-        
-        # Wait for rtl_tcp to apply settings.  Streaming data is subsequently
-        # owned exclusively by the permanent consumer.
-        await asyncio.sleep(0.2)
-        self._ensure_consumer_started()
-        
+        initial = self.current_frequency is None and self.current_sample_rate is None
+        frequency_changed = center_freq != self.current_frequency
+        sample_rate_changed = sample_rate != self.current_sample_rate
+        requested_manual = gain != 'auto'
+        gain_value = None if not requested_manual else float(gain)
+        manual_changed = requested_manual != self.manual_gain_enabled
+        gain_changed = requested_manual and gain_value != self.current_gain
+        retune = frequency_changed or sample_rate_changed
+
+        async def send(command, value):
+            packet = struct.pack('>BI', command, int(value))
+            await loop.run_in_executor(None, self.socket.sendall, packet)
+
+        if not (retune or manual_changed or gain_changed):
+            self.log("SDR CONFIG NO-OP")
+            metrics.usb_config_time = time.perf_counter() - start
+            return metrics
+
+        if initial:
+            self.log(
+                f"SDR CONFIG INIT f={center_freq} sr={sample_rate} "
+                f"manual_gain={1 if requested_manual else 0} gain={gain}"
+            )
+        elif retune:
+            if frequency_changed:
+                self.log(f"SDR RETUNE frequency {self.current_frequency}→{center_freq}")
+            if sample_rate_changed:
+                self.log(f"SDR RETUNE sample_rate {self.current_sample_rate}→{sample_rate}")
+        elif gain_changed:
+            self.log(f"SDR GAIN ONLY old={self.current_gain} new={gain_value}")
+
+        if frequency_changed:
+            await send(0x01, center_freq)
+            self.current_frequency = center_freq
+        if sample_rate_changed:
+            await send(0x02, sample_rate)
+            self.current_sample_rate = sample_rate
+        if manual_changed:
+            # librtlsdr: 1 enables manual tuner gain; 0 enables automatic gain.
+            await send(0x03, 1 if requested_manual else 0)
+            self.manual_gain_enabled = requested_manual
+            self.current_gain = None
+        if gain_changed:
+            await send(0x04, round(gain_value * 10))
+            self.current_gain = gain_value
+
+        if retune:
+            await self._retune_settle_and_drain()
+        elif gain_changed:
+            await asyncio.sleep(self.gain_settle_seconds)
+
         metrics.usb_config_time = time.perf_counter() - start
-        
-        self.log(f"rtl_tcp configured in {metrics.usb_config_time*1000:.2f}ms")
-        
         return metrics
     
     async def capture(self, duration: float, output_file: str,
@@ -823,9 +869,25 @@ class SDRCapture:
             failure_time = time.monotonic() - capture_start
             if not self.verbose and not self.compact_console:
                 print("\r\033[2K", end="", flush=True)
-            print(f"CAPTURE    FAIL after {failure_time:.1f}s", flush=True)
             code = getattr(exc, "code", "SDR_NETWORK_ERROR")
-            print(f"reason={code}", flush=True)
+            if self.compact_console:
+                details = getattr(exc, "details", {})
+                print(f"SDR      CAPTURE   FAIL  {failure_time:6.1f}s", flush=True)
+                print(f"         {code}", flush=True)
+                if details:
+                    print(
+                        f"         received={details.get('received_bytes', 'N/D')}   "
+                        f"expected={details.get('expected_bytes', 'N/D')}",
+                        flush=True,
+                    )
+                    print(
+                        f"         last_byte_age={details.get('seconds_since_last_byte', 'N/D')}s   "
+                        f"throughput={details.get('effective_throughput', 'N/D')} B/s",
+                        flush=True,
+                    )
+            else:
+                print(f"CAPTURE    FAIL after {failure_time:.1f}s", flush=True)
+                print(f"reason={code}", flush=True)
             part_path = Path(output_file).with_name(f"{Path(output_file).name}.part")
             try:
                 part_path.unlink()
@@ -926,12 +988,11 @@ class SDRCapture:
         )
         
         write_time = time.perf_counter() - write_start
-        self._emit_timing_event(
-            "disk_write_end", duration=write_time, file=str(output_path)
-        )
-        
-        # Calculate file size
         file_size_mb = Path(output_file).stat().st_size / 1024 / 1024
+        self._emit_timing_event(
+            "disk_write_end", duration=write_time, file=str(output_path),
+            size_mb=file_size_mb,
+        )
         
         throughput_mbps = bytes_received / capture_time / 1024 / 1024
         
@@ -1021,6 +1082,7 @@ class SDRCapture:
                     None, self._consumer_thread.join, 2.0
                 )
             self.socket = None
+            self._invalidate_network_config()
             self.consumer_state = "CLOSED"
             self.log("rtl_tcp connection closed")
 

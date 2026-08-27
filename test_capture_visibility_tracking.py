@@ -1,4 +1,4 @@
-import csv,json
+import asyncio,csv,json,re
 from types import SimpleNamespace
 import pytest
 import capture
@@ -43,7 +43,12 @@ class FakeSDR:
     async def capture(self,**kwargs):
         self.events.append("capture")
         if self.fail_capture:raise RuntimeError("HDF5/SDR failure")
-        return SimpleNamespace(capture_time=0,disk_write_time=0,throughput_mbps=0)
+        callback=getattr(self,"timing_callback",None)
+        if callback:
+            callback("capture_end",{"duration":2.0,"samples_received":4_800_000})
+            callback("disk_write_start",{"file":kwargs["output_file"]})
+            callback("disk_write_end",{"duration":0.7,"file":kwargs["output_file"],"size_mb":5.2})
+        return SimpleNamespace(capture_time=2.0,disk_write_time=0.7,throughput_mbps=4.8,total_samples=4_800_000)
     async def close(self):self.events.append("close")
 
 def make_executor(tmp_path,count=3,min_altitude=30):
@@ -61,6 +66,44 @@ def visibility_map(ex,altitudes):
     ex.visibility_for_point=value
 
 def csv_rows(ex):return list(csv.DictReader(ex.csv_path.open()))
+
+@pytest.mark.asyncio
+async def test_compact_console_operational_output(monkeypatch,tmp_path,capsys):
+    class WallTimedFakeSDR(FakeSDR):
+        async def capture(self,**kwargs):
+            # Match the timing telemetry emitted by FakeSDR: 2.0 s receiving
+            # plus 0.7 s writing.  Wall-clock assertions must measure reality,
+            # not merely trust the reported phase metrics.
+            await asyncio.sleep(2.7)
+            return await super().capture(**kwargs)
+    monkeypatch.setattr(capture,"SDRCapture",WallTimedFakeSDR)
+    ex=make_executor(tmp_path,count=1);visibility_map(ex,{1:45});ex.telescope=FakeTelescope();ex.compact_console=True
+    ex.print_console_header(0,2)
+    assert await ex.execute_observation_plan(0,2)
+    output=capsys.readouterr().out
+    for expected in [
+        "ALMITA CAPTURE","Session","Targets","SDR endpoint","POINT 001/001",
+        "TARGET RA=","MOUNT    GOTO","MOUNT    TRACK","CAPTURE  SETTLE",
+        "SDR      FLUSH","SDR      CAPTURE","DISK     WRITE","✓ POINT 001/001",
+        "SESSION  elapsed=","SESSION COMPLETE","Success      1",".part        0",
+    ]: assert expected in output
+    assert "RUNNING TOTAL" not in output
+    assert "POINT SUMMARY" not in output
+    assert "TARGET RA=01:00:00.0  DEC=-40:00:00" in output
+    assert "MOUNT    MOTION" not in output
+    point_total=re.search(r"✓ POINT 001/001\s+total=([0-9.]+)s",output)
+    assert point_total and float(point_total.group(1))>=2.6
+    measured_point_wall=ex._live_timing_rows[0]["point_total_sec"]
+    assert measured_point_wall>=2.6
+    assert measured_point_wall>=2.0
+    session_elapsed=re.search(r"SESSION\s+elapsed=(\d\d):(\d\d):(\d\d)",output)
+    assert session_elapsed
+    session_seconds=sum(value*factor for value,factor in zip(map(int,session_elapsed.groups()),(3600,60,1)))
+    assert session_seconds>=round(measured_point_wall)
+    assert "SESSION  elapsed=00:00:00" not in output
+    final_elapsed=re.search(r"Elapsed\s+(\d\d:\d\d:\d\d)",output)
+    assert final_elapsed and final_elapsed.group(1)==":".join(session_elapsed.groups())
+    assert "OnStep       N/D" in output
 
 def test_above_and_equal_minimum_are_executable(tmp_path):
     ex=make_executor(tmp_path,count=2);visibility_map(ex,{1:31,2:30});assert [int(p["point_number"]) for p in ex.iter_runtime_visible_points()]==[1,2]

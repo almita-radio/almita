@@ -4,6 +4,8 @@ from __future__ import annotations
 import json, math
 from pathlib import Path
 from typing import Any, Mapping
+from astropy_offline import configure_astropy_offline
+configure_astropy_offline()
 import astropy.units as u
 from astropy.coordinates import EarthLocation
 from astropy.time import Time

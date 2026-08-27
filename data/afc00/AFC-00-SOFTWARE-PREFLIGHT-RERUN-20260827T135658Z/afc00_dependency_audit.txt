@@ -1,0 +1,20 @@
+AFC-00 RERUN OFFLINE DEPENDENCY AUDIT
+UTC: 2026-08-27T13:56:58Z
+RESULT: PASS
+
+RUNTIME
+- No critical Internet dependency found in audited operational modules or dashboard.
+- IERS downloads are disabled by astropy_offline.py before coordinate work.
+
+INSTALLATION_ONLY
+- Existing exception messages mention pip installation if a dependency is absent.
+- They do not execute installation, and all required dependencies are already local.
+
+DOCUMENTATION / LOCALHOST
+- serve_dashboard.py and dashboard documentation contain only localhost URLs.
+
+ABSENT
+- No requests, urllib, aiohttp, astroquery, SIMBAD, Horizons, Google Fonts, CDN, unpkg, jsdelivr, cloud API, remote asset, or runtime package installation was found.
+
+AIRPLANE MODE SOFTWARE READINESS: PASS
+Physical Internet removal remains a field-only action.

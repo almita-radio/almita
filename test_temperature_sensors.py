@@ -6,7 +6,7 @@ import numpy as np
 
 from capture import CaptureExecutor
 from sdr_capture import read_hdf5_iq_components, write_hdf5_atomic
-from temperature_sensors import DS18B20Reader, temperature_metadata
+from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 
 
 def slave(tmp_path, sensor_id, temperature="32125", crc="YES"):
@@ -26,6 +26,7 @@ def test_two_valid_sensors_and_fixed_role_assignment(tmp_path):
     assert readings["sdr"]["sensor_id"] == "28-hot"
     assert readings["sdr"]["temperature_c"] == 42.75
     assert readings["lna"]["temperature_c"] == 21.5
+    assert format_temperatures(readings, "pre") == "TEMP     PRE      SDR=42.8°C   LNA=21.5°C"
 
 
 def test_crc_failure_is_nonfatal(tmp_path):

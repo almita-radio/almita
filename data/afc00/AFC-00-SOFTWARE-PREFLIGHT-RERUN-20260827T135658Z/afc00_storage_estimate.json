@@ -1,0 +1,17 @@
+{
+  "status": "PASS",
+  "filesystem": "/home/stellarmate/almita",
+  "total_bytes": 503609339904,
+  "used_bytes": 94281547776,
+  "free_bytes": 393930698752,
+  "percent_used": 18.72116744180565,
+  "hdf5_files_inventoried": 2013,
+  "hdf5_files_with_duration": 2001,
+  "median_capture_bytes_per_second": 1091758.6,
+  "estimates": {
+    "5_seconds": {"bytes_per_point": 5458793, "approximate_point_capacity": 72164},
+    "20_seconds": {"bytes_per_point": 21835172, "approximate_point_capacity": 18041},
+    "60_seconds": {"bytes_per_point": 65505516, "approximate_point_capacity": 6013}
+  },
+  "afc00_assessment": "PASS with ample margin for 50-ohm baseline, 30-60 s stationary antenna capture, 3x3 campaign, Quicklook products and logs"
+}

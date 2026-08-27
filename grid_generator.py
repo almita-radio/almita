@@ -24,6 +24,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 try:
+    from astropy_offline import configure_astropy_offline
+    configure_astropy_offline()
     import astropy.units as u
     from astropy.coordinates import SkyCoord, SkyOffsetFrame
 except ImportError as exc:

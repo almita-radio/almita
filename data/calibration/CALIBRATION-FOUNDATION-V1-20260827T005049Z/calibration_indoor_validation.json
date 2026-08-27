@@ -1,0 +1,47 @@
+{
+  "calibration_level": "RELATIVE_INSTRUMENTAL",
+  "absolute_calibration": false,
+  "environment": "INDOOR_DEPARTMENT",
+  "astronomical_interpretation": "NOT_PERMITTED",
+  "captures": [
+    {
+      "source_file": "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/antenna_a.h5",
+      "label": "INDOOR TEST \u2014 ASTRONOMICAL INTERPRETATION NOT PERMITTED",
+      "compatibility": {
+        "status": "COMPATIBLE",
+        "reason": "frequency, sample rate, gain and topology match"
+      },
+      "reference_scale": 1.0,
+      "masked_fraction": 0.0418701171875,
+      "residual_median": 0.006372909773721244,
+      "residual_robust_sigma": 0.06736487613946375,
+      "residual_p01": -0.14123495321521112,
+      "residual_p99": 0.17694773946909442
+    },
+    {
+      "source_file": "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/antenna_b.h5",
+      "label": "INDOOR TEST \u2014 ASTRONOMICAL INTERPRETATION NOT PERMITTED",
+      "compatibility": {
+        "status": "COMPATIBLE",
+        "reason": "frequency, sample rate, gain and topology match"
+      },
+      "reference_scale": 1.0,
+      "masked_fraction": 0.0418701171875,
+      "residual_median": 0.0030174998583859833,
+      "residual_robust_sigma": 0.06823288605111125,
+      "residual_p01": -0.14278638046082495,
+      "residual_p99": 0.17205861181632026
+    }
+  ],
+  "performance": {
+    "build_seconds": 7.881958045007195,
+    "load_seconds": 0.003045771998586133,
+    "apply_seconds_each": [
+      1.1905696559988428,
+      1.3259425229916815
+    ],
+    "peak_rss_mib": 414.359375,
+    "npz_bytes": 209352,
+    "json_bytes": 6940
+  }
+}

@@ -31,7 +31,10 @@ class INDITelescopeControl:
         self.writer: Optional[asyncio.StreamWriter] = None
         self.current_ra: Optional[float] = None
         self.current_dec: Optional[float] = None
-        self.cached_properties: str = ""  # Cache de propiedades recibidas
+        # Retained as an empty compatibility attribute.  Live XML is stored in
+        # the bounded property cache/history below, never in one cumulative
+        # string whose repeated concatenation becomes O(n²) over long runs.
+        self.cached_properties: str = ""
         self.last_slew_busy_duration_sec: Optional[float] = None
         self.last_slew_command_to_ok_sec: Optional[float] = None
         self.final_target_error_deg: Optional[float] = None
@@ -46,6 +49,7 @@ class INDITelescopeControl:
         self._reader_task = None
         self._reader_error = None
         self._write_lock = asyncio.Lock()
+        self.compact_console = False
         
     def log(self, message: str, level: str = "INFO", force: bool = False):
         """Imprime mensaje con timestamp
@@ -491,6 +495,8 @@ class INDITelescopeControl:
         get_coord_started = time.perf_counter()
 
         def coord_trace(label, duration=None, details=None):
+            if self.compact_console:
+                return
             now = time.perf_counter()
             utc = datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]
             suffix = f" duration={duration:.6f} s" if duration is not None else ""
@@ -650,6 +656,8 @@ class INDITelescopeControl:
             goto_enter_clock = time.perf_counter()
 
             def precommand_trace(label, duration=None, details=None):
+                if self.compact_console:
+                    return
                 now = time.perf_counter()
                 utc = datetime.now(timezone.utc).strftime('%H:%M:%S.%f')[:-3]
                 suffix = f" duration={duration:.3f} s" if duration is not None else ""
@@ -1004,7 +1012,11 @@ class INDITelescopeControl:
 
             return True
 
-        except (KeyboardInterrupt, asyncio.CancelledError):
+        except asyncio.CancelledError:
+            self.log("GOTO cancelado; propagando cancelación limpia", "WARNING")
+            raise
+
+        except KeyboardInterrupt:
             self.log("", "WARNING")
             self.log("=" * 80, "WARNING")
             self.log("GOTO INTERRUMPIDO POR USUARIO (Ctrl+C)", "WARNING")
@@ -1012,7 +1024,7 @@ class INDITelescopeControl:
             self.log("El telescopio puede estar en movimiento.", "WARNING")
             self.log("Verifica su posición actual antes de continuar.", "WARNING")
             self.log("")
-            raise KeyboardInterrupt  # Re-lanzar para manejo superior
+            return False
 
         except Exception as e:
             self.log(f"Error en GOTO: {e}", "ERROR")
