@@ -13,7 +13,7 @@
     "climate_zone": "Mediterranean"
   },
   "hardware": {
-    "telescope": "INDI Telescope Simulator",
+    "telescope": "LX200 OnStep",
     "sdr_device": "RTL-SDR Blog V4",
     "antenna_type": "Dipole"
   },

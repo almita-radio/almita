@@ -25,6 +25,7 @@ from quicklook_map import (MapPoint, MapError, flag_outliers, interpolate_visual
                            map_metric, project_offsets, robust_spherical_center, sha256)
 from quicklook_spectrum import generate_quicklook
 from quicklook_waterfall import generate_waterfall
+from runtime_state import read_json_safe
 
 
 STOP_REQUESTED = False
@@ -71,6 +72,19 @@ def read_manifest(session_dir: Path) -> list[dict[str, str]]:
     if not rows and not required.issubset(set(csv.DictReader(path.open()).fieldnames or [])):
         raise ValueError("session.csv lacks required columns")
     return rows
+
+
+def resolve_session_id(session_dir: Path) -> str:
+    """Prefer the canonical session_id Capture persisted inside the session
+    directory (session_identity.json); fall back to the directory's own
+    basename only for historical sessions that predate this contract. New
+    sessions always carry session_identity.json, so this fallback never
+    applies to them - it exists solely for compatibility with sessions
+    captured before this fix."""
+    identity = read_json_safe(session_dir / "session_identity.json")
+    if identity and isinstance(identity.get("session_id"), str) and identity["session_id"]:
+        return identity["session_id"]
+    return session_dir.name
 
 
 def initial_state(session_id: str) -> dict[str, Any]:
@@ -152,7 +166,7 @@ class QuicklookLive:
         # (e.g. in tests) never writes outside of what the caller controls.
         self.runtime_dir=Path(runtime_dir) if runtime_dir else None
         self.profile_path=Path(profile_path); self.profile=load_calibration_profile(profile_path)
-        self.poll_interval=float(poll_interval); self.session_id=self.session_dir.name
+        self.poll_interval=float(poll_interval); self.session_id=resolve_session_id(self.session_dir)
         self.state_path=self.output/"quicklook_live_state.json"; self.status_path=self.output/"quicklook_live_status.json"
         self.log_path=self.output/"quicklook_live.log"; self.state=load_state(self.state_path,self.session_id)
         self.state.setdefault("performance_history",[])

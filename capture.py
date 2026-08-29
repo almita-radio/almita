@@ -33,7 +33,7 @@ from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
 from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
-from runtime_state import announce_session
+from runtime_state import announce_session, atomic_write_json
 
 
 def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
@@ -137,7 +137,6 @@ class CaptureExecutor:
         self.runtime_dir = Path(runtime_dir) if runtime_dir else None
         self.host = host
         self.port = port
-        self.device_name = device_name or "Telescope Simulator"
         self.telescope = None
         self.observation_points = []
         self.session_manager = SessionManager()
@@ -215,6 +214,9 @@ class CaptureExecutor:
             self.log(f"⚠️  Invalid JSON in observer config: {e}", "ERROR", force=True)
             self.observer_config = {}
 
+        hardware_config = self.observer_config.get("hardware", {}) if isinstance(self.observer_config, dict) else {}
+        self.device_name = device_name or hardware_config.get("telescope") or "Telescope Simulator"
+
         defaults = self.observer_config.get("observation_defaults", {}) if isinstance(self.observer_config, dict) else {}
         self.min_altitude_deg = float(
             min_altitude_deg if min_altitude_deg is not None else defaults.get("min_altitude_deg", 30.0)
@@ -247,6 +249,24 @@ class CaptureExecutor:
         """
         if self.runtime_dir is not None:
             announce_session(self.runtime_dir, session_id=self.session_id, **fields)
+
+    def _persist_session_identity(self, output_dir: Path, session_name: str) -> None:
+        """Durable canonical session identity inside the session's own
+        output directory, so Quicklook (given only --session-dir) discovers
+        the exact same session_id Capture is using, instead of inventing one
+        from the directory basename. Never raises: capture must keep running
+        even if this metadata write fails.
+        """
+        try:
+            atomic_write_json(output_dir / "session_identity.json", {
+                "schema_version": 1,
+                "session_id": self.session_id,
+                "session_name": session_name,
+                "session_root": str(output_dir),
+                "created_utc": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
 
     def _load_grid_metadata(self) -> Dict:
         """Load generator-owned beam/grid parameters without hardcoded defaults."""
@@ -511,8 +531,8 @@ class CaptureExecutor:
             ("SDR endpoint", endpoint),
             ("Center frequency", f"{self.sdr_freq / 1e6:.6f} MHz"),
             ("Sample rate", f"{self.sdr_sample_rate / 1e6:.3f} MS/s"),
-            ("Gain", "auto"),
-            ("Bias-T", "N/D"),
+            ("Gain", f"{self.sdr_gain_db:.1f} dB"),
+            ("Bias-T", "ON" if self.bias_tee_enabled else "OFF"),
             ("Settle", f"{settle_time:.1f} s"),
             ("Capture duration", f"{capture_time:.1f} s"),
             ("Output path", str(self._capture_output_root())),
@@ -1205,6 +1225,7 @@ class CaptureExecutor:
             points_success=0, points_failed=0, points_deferred=0,
             point_current=None, current_point_id=None, last_successful_point_id=None,
             last_capture_utc=None, session_root=None, quicklook_root=None, error=None,
+            mount_device=self.device_name,
         )
 
         self._live_timing_csv_path = (
@@ -1698,6 +1719,7 @@ class CaptureExecutor:
                     output_dir.mkdir(parents=True, exist_ok=True)
                     if idx == 1:
                         self._announce(event="POINT_STARTED", session_root=str(output_dir))
+                        self._persist_session_identity(output_dir, session_name)
                     
                     # Build HDF5 filename
                     base_filename = Path(point['data_filename']).stem  # Remove .dat extension
