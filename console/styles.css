@@ -25,4 +25,7 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .kv dd{margin:0;font-family:ui-monospace,monospace}
 .compact{margin-top:10px;padding:11px}
 .compact h2{margin-bottom:8px}
+.thumbs{display:flex;gap:10px;margin-top:10px}
+.thumbs a{display:block;background:var(--panel);border:1px solid var(--line);padding:6px;text-decoration:none;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center}
+.thumbs img{display:block;width:100%;height:110px;object-fit:contain;background:#0d1317;margin-bottom:4px}
 @media(max-width:900px){.grid3{grid-template-columns:1fr}.topbar{display:block}.topbar dl{margin-top:10px}}

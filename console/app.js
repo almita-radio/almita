@@ -25,7 +25,7 @@ function renderInstrument(instrument){
     pair("PORT 1234",instrument.rtl_tcp_listening===true?"LISTENING":instrument.rtl_tcp_listening===false?"NOT LISTENING":"UNKNOWN"),
     pair("SDR TEMP",instrument.sdr_temperature_c==null?"N/A":`${num(instrument.sdr_temperature_c)} °C`),
     pair("LNA TEMP",instrument.lna_temperature_c==null?"N/A":`${num(instrument.lna_temperature_c)} °C`),
-    pair("MOUNT",safe(instrument.mount_state,"NOT_EXPOSED")),
+    pair("MOUNT",instrument.mount_device?instrument.mount_device:safe(instrument.mount_state,"NOT_EXPOSED")),
     pair("TELEMETRY",instrument.telemetry_stale?"STALE":"LIVE"),
   ].join("");
 }
@@ -48,10 +48,28 @@ function renderSession(acquisition){
   ].join("");
 }
 
+function renderThumbs(quicklook){
+  const items=[["spectrum","latest_spectrum.png",quicklook.spectrum_available],
+    ["waterfall","latest_waterfall.png",quicklook.waterfall_available],
+    ["map","quicklook_map.png",quicklook.map_available]];
+  const version=encodeURIComponent(quicklook.last_product_utc||"unversioned");
+  let any=false;
+  for(const [id,file,available] of items){
+    const img=$(`thumb-${id}`),link=$(`thumb-${id}-link`);
+    if(available){
+      const src=`${CONFIG.root}/quicklook_products/${file}?v=${version}`;
+      img.src=src;link.href=src;img.hidden=false;any=true;
+    }else{
+      img.hidden=true;
+    }
+  }
+  $("quicklook-thumbs").hidden=!any;
+}
+
 function renderQuicklook(quicklook){
   const state=quicklook.state||"IDLE";
   $("quicklook-badge").textContent=state;$("quicklook-badge").className=badgeClass(state);
-  if(state==="IDLE"){$("quicklook-kv").innerHTML=pair("QUICKLOOK","NO ACTIVE SESSION");return}
+  if(state==="IDLE"){$("quicklook-kv").innerHTML=pair("QUICKLOOK","NO ACTIVE SESSION");$("quicklook-thumbs").hidden=true;return}
   $("quicklook-kv").innerHTML=[
     pair("PROCESSED",quicklook.points_processed),
     pair("SPECTRUM",quicklook.spectrum_available?"AVAILABLE":"WAITING"),
@@ -60,6 +78,7 @@ function renderQuicklook(quicklook){
     pair("STALE",quicklook.quicklook_stale?"YES":"NO"),
     pair("ERROR",quicklook.error),
   ].join("");
+  renderThumbs(quicklook);
 }
 
 function renderLastSession(lastSession){

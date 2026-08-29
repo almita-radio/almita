@@ -199,6 +199,10 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
                   collect_fn: Callable[[], dict], capture_process_detected: bool) -> dict:
     current_session = read_json_safe(Path(runtime_dir) / "current_session.json")
     instrument = build_instrument(now_monotonic, state, collect_fn)
+    # Mount telemetry (tracking/position) is intentionally deferred - this is
+    # only the device name Capture itself already announced, reused as-is.
+    # No second INDI reader is introduced by this.
+    instrument["mount_device"] = (current_session or {}).get("mount_device")
     acquisition = build_acquisition(now_utc, current_session, capture_process_detected)
     quicklook = build_quicklook(now_utc, runtime_dir, acquisition["session_id"])
 
@@ -236,12 +240,40 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
     }
 
 
+def refresh_quicklook_products_link(runtime_dir: Path, session_id: Optional[str]) -> None:
+    """Best-effort convenience symlink so the already-served runtime/
+    directory also exposes the current session's Quicklook product images
+    (spectrum/waterfall/map PNGs) at runtime/quicklook_products/ - reusing
+    the exact same read-only symlink approach already used for runtime/
+    itself, with no new server route, no copying, and no second process.
+    Never raises."""
+    link = Path(runtime_dir) / "quicklook_products"
+    try:
+        announcement = read_json_safe(Path(runtime_dir) / "quicklook_announcement.json")
+        quicklook_root = None
+        if announcement and announcement.get("session_id") == session_id:
+            quicklook_root = announcement.get("quicklook_root")
+        if not quicklook_root or not Path(quicklook_root).is_dir():
+            if link.is_symlink():
+                link.unlink()
+            return
+        target = Path(quicklook_root).resolve()
+        if link.is_symlink() and link.resolve() == target:
+            return
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(target, target_is_directory=True)
+    except Exception:
+        pass
+
+
 def tick(runtime_dir: Path, state: WatcherState, collect_fn: Callable[[], dict] = telemetry_summary.collect,
           proc_root: Path = Path("/proc")) -> dict:
     now_utc = utcnow()
     now_monotonic = time.monotonic()
     capture_detected = find_capture_process(proc_root)
     status = build_status(now_utc, now_monotonic, state, runtime_dir, collect_fn, capture_detected)
+    refresh_quicklook_products_link(runtime_dir, status["acquisition"]["session_id"])
     atomic_write_json(Path(runtime_dir) / "almita_status.json", status)
     return status
 
