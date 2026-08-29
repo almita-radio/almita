@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Field Console</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header class="topbar">
+    <div><h1>ALMITA FIELD CONSOLE</h1><span class="readonly">READ ONLY</span></div>
+    <dl><div><dt>SYSTEM</dt><dd id="system-badge" class="badge">—</dd></div>
+      <div><dt>UTC</dt><dd id="clock">—</dd></div>
+      <div><dt>UPDATED</dt><dd id="updated">—</dd></div></dl>
+  </header>
+  <div id="connection" class="banner connection" hidden>DATA CONNECTION DEGRADED — showing last valid status</div>
+  <div id="loading" class="loading">CONNECTING TO CONSOLE WATCHER…</div>
+  <main id="app" hidden>
+    <section class="grid3">
+      <article class="panel"><header><h2>INSTRUMENT</h2><span id="instrument-badge" class="badge">—</span></header>
+        <div id="instrument-kv" class="kv"></div></article>
+      <article class="panel"><header><h2>SESSION</h2><span id="session-badge" class="badge">—</span></header>
+        <div id="session-kv" class="kv"></div></article>
+      <article class="panel"><header><h2>QUICKLOOK</h2><span id="quicklook-badge" class="badge">—</span></header>
+        <div id="quicklook-kv" class="kv"></div></article>
+    </section>
+    <section id="last-session" class="panel compact" hidden>
+      <h2>LAST KNOWN SESSION</h2><div id="last-session-kv" class="kv"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body></html>

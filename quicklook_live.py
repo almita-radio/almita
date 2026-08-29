@@ -140,8 +140,11 @@ def _write_map_png(path: Path, document: dict[str,Any], grid) -> None:
 
 
 class QuicklookLive:
-    def __init__(self, session_dir, profile_path, output_dir, poll_interval=1.0):
+    def __init__(self, session_dir, profile_path, output_dir, poll_interval=1.0, runtime_dir=None):
         self.session_dir=Path(session_dir); self.output=Path(output_dir); self.output.mkdir(parents=True,exist_ok=True)
+        # Console announcement is opt-in (None by default): direct construction
+        # (e.g. in tests) never writes outside of what the caller controls.
+        self.runtime_dir=Path(runtime_dir) if runtime_dir else None
         self.profile_path=Path(profile_path); self.profile=load_calibration_profile(profile_path)
         self.poll_interval=float(poll_interval); self.session_id=self.session_dir.name
         self.state_path=self.output/"quicklook_live_state.json"; self.status_path=self.output/"quicklook_live_status.json"
@@ -283,8 +286,22 @@ class QuicklookLive:
             "capture launch integration intentionally absent"]}
         atomic_json(self.status_path,status);return status
 
+    def _announce(self)->None:
+        """Best-effort, isolated locator for the console watcher. Never raises
+        and never affects the Quicklook algorithms or their outputs. No-op
+        unless runtime_dir was explicitly configured (CLI only)."""
+        if self.runtime_dir is None:
+            return
+        try:
+            atomic_json(self.runtime_dir/"quicklook_announcement.json",
+                        {"schema_version":1,"session_id":self.session_id,
+                         "quicklook_root":str(self.output.resolve()),"updated_utc":utcnow()})
+        except Exception:
+            pass
+
     def run(self,once=False):
         _log(self.log_path,"SESSION START",self.session_id)
+        self._announce()
         while True:
             status=self.scan_once()
             if once or STOP_REQUESTED:break
@@ -307,8 +324,10 @@ def main():
     parser.add_argument("--session-dir",required=True);parser.add_argument("--calibration-profile",required=True)
     parser.add_argument("--output-dir",required=True);parser.add_argument("--poll-interval",type=float,default=1.0)
     parser.add_argument("--once",action="store_true")
+    parser.add_argument("--runtime-dir",default="data/runtime",
+                         help="Canonical field-console runtime dir for the console watcher (default: data/runtime)")
     args=parser.parse_args();signal.signal(signal.SIGINT,request_stop);signal.signal(signal.SIGTERM,request_stop)
-    live=QuicklookLive(args.session_dir,args.calibration_profile,args.output_dir,args.poll_interval)
+    live=QuicklookLive(args.session_dir,args.calibration_profile,args.output_dir,args.poll_interval,args.runtime_dir)
     print(json.dumps(live.run(args.once),indent=2));return 0
 
 

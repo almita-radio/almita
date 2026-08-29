@@ -33,6 +33,7 @@ from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
 from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
+from runtime_state import announce_session
 
 
 def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
@@ -103,7 +104,8 @@ class CaptureExecutor:
                  input_topology: str = INPUT_TOPOLOGIES["antenna"],
                  bias_tee_enabled: bool = True,
                  min_altitude_deg: Optional[float] = None,
-                 tracking_timeout: float = 5.0):
+                 tracking_timeout: float = 5.0,
+                 runtime_dir: Optional[str] = None):
         """
         Initialize capture executor
 
@@ -122,6 +124,10 @@ class CaptureExecutor:
             sdr_sample_rate: Sample rate in Hz (default: 2400000)
         """
         self.csv_path = Path(csv_path)
+        # Console announcements are opt-in (None by default): direct
+        # instantiation (e.g. by tests) never touches the real filesystem
+        # location; only the CLI enables it explicitly via --runtime-dir.
+        self.runtime_dir = Path(runtime_dir) if runtime_dir else None
         self.host = host
         self.port = port
         self.device_name = device_name or "Telescope Simulator"
@@ -224,6 +230,16 @@ class CaptureExecutor:
         # Verify CSV exists
         # Existence/readability is a critical preflight check. load_observation_plan
         # retains its existing fail-fast behavior for normal CLI use.
+
+    def _announce(self, **fields) -> None:
+        """Best-effort session-state announcement for the field console.
+
+        No-op unless runtime_dir was explicitly configured (CLI only), so
+        direct construction of CaptureExecutor (e.g. in tests) never writes
+        outside of what the caller controls.
+        """
+        if self.runtime_dir is not None:
+            announce_session(self.runtime_dir, session_id=self.session_id, **fields)
 
     def _load_grid_metadata(self) -> Dict:
         """Load generator-owned beam/grid parameters without hardcoded defaults."""
@@ -1175,6 +1191,15 @@ class CaptureExecutor:
         else:
             self.log(f"📋 Resuming Session ID: {self.session_id}", force=True)
 
+        self._announce(
+            event="SESSION_STARTED", session_name=session_name, state="STARTING",
+            started_utc=datetime.now(timezone.utc).isoformat(),
+            points_total=len(self.observation_points),
+            points_success=0, points_failed=0, points_deferred=0,
+            point_current=None, current_point_id=None, last_successful_point_id=None,
+            last_capture_utc=None, session_root=None, quicklook_root=None, error=None,
+        )
+
         self._live_timing_csv_path = (
             self.csv_path.parent / f"capture_timing_{self.session_id}.csv"
         )
@@ -1222,6 +1247,7 @@ class CaptureExecutor:
                 
         except Exception as e:
             self.log(f"Failed to initialize SDR: {e}", "ERROR", force=True)
+            self._announce(event="SESSION_ABORTED", state="DEGRADED", error=f"SDR init failed: {e}")
             await self.ensure_tracking_off()
             return False
 
@@ -1238,6 +1264,8 @@ class CaptureExecutor:
                 dec_deg = float(point['target_dec_degrees'])
                 actual_session_count += 1
                 actual_capture_order = self.actual_capture_order_offset + actual_session_count
+                self._announce(event="POINT_STARTED", state="RUNNING", point_current=idx,
+                                current_point_id=str(point.get("point_id", point_num)))
                 inter_point_delay_sec = (
                     0.0 if self._live_previous_point_complete_clock is None
                     else point_clock - self._live_previous_point_complete_clock
@@ -1661,6 +1689,8 @@ class CaptureExecutor:
                     
                     output_dir = base_dir / 'data' / 'iq' / f"{session_name}-{self._capture_timestamp}"
                     output_dir.mkdir(parents=True, exist_ok=True)
+                    if idx == 1:
+                        self._announce(event="POINT_STARTED", session_root=str(output_dir))
                     
                     # Build HDF5 filename
                     base_filename = Path(point['data_filename']).stem  # Remove .dat extension
@@ -1886,6 +1916,8 @@ class CaptureExecutor:
                         error_detail=str(e),
                         failed_at=failed_at.isoformat(),
                     )
+                    self._announce(event="POINT_COMPLETED", state="RUNNING",
+                                    points_failed=failed + 1, error=str(e))
                     if self.compact_console:
                         print(
                             f"✗ POINT {idx:03d}/{len(self.observation_points):03d} FAILED",
@@ -1905,6 +1937,10 @@ class CaptureExecutor:
                                        start_time=start_time_iso,
                                        end_time=end_time_iso,
                                        duration=duration)
+                self._announce(event="POINT_COMPLETED", state="RUNNING",
+                                points_success=successful + 1,
+                                last_successful_point_id=str(point.get("point_id", point_num)),
+                                last_capture_utc=end_time_iso, error=None)
                 write_quicklook_manifest_row(output_dir, {
                     "point_id": str(point.get("point_id", point_num)),
                     "status": "SUCCESS",
@@ -2084,15 +2120,25 @@ class CaptureExecutor:
             # Deferred visibility remains planned for a future resume.
             if safety_paused:
                 self.session_manager.pause_session(self.session_id)
+                self._announce(event="SESSION_ABORTED", state="DEGRADED",
+                                points_success=successful, points_failed=failed,
+                                error="paused by mount safety policy; remaining planned targets were preserved")
                 self.log(
                     "Session paused by mount safety policy; remaining planned targets were preserved",
                     "WARNING", force=True,
                 )
             elif self.visibility_deferred_count:
                 self.session_manager.pause_session(self.session_id)
+                self._announce(event="SESSION_ABORTED", state="DEGRADED",
+                                points_success=successful, points_failed=failed,
+                                points_deferred=self.visibility_deferred_count,
+                                error=f"no more currently executable targets; deferred_visibility={self.visibility_deferred_count}")
                 self.log(f"No more currently executable targets; pending_total={self.visibility_deferred_count}, deferred_visibility={self.visibility_deferred_count}",force=True)
             else:
                 self.session_manager.complete_session(self.session_id)
+                self._announce(event="SESSION_COMPLETED", state="COMPLETED",
+                                points_success=successful, points_failed=failed,
+                                points_deferred=0, error=None)
 
             # Summary
             if self.verbose:
@@ -2156,11 +2202,14 @@ class CaptureExecutor:
             self.log("⚠️  OBSERVATION INTERRUPTED BY USER", "WARNING", force=True)
             self.log("=" * 80, "WARNING", force=True)
             self.session_manager.pause_session(self.session_id)
+            self._announce(event="SESSION_ABORTED", state="ABORTED",
+                            error="interrupted by user (KeyboardInterrupt)")
             self.log(f"📋 Session paused. Resume with: --resume {self.session_id}", "INFO", force=True)
             raise
         except Exception as e:
             # Unexpected error - mark as failed but save progress
             self.session_manager.pause_session(self.session_id)
+            self._announce(event="SESSION_ABORTED", state="ABORTED", error=f"{type(e).__name__}: {e}")
             if self.compact_console and isinstance(e, SDRNetworkError):
                 print("SESSION PAUSED", flush=True)
             else:
@@ -2261,6 +2310,8 @@ Useful for re-observations or after fixing equipment issues.
                         help='Minimum target altitude at GOTO; config or 30 degrees by default')
     parser.add_argument('--tracking-timeout', type=float, default=5.0,
                         help='Seconds to confirm real tracking state (default: 5)')
+    parser.add_argument('--runtime-dir', default='data/runtime',
+                        help='Canonical field-console runtime dir for the console watcher (default: data/runtime)')
 
     args = parser.parse_args()
 
@@ -2326,6 +2377,7 @@ Useful for re-observations or after fixing equipment issues.
             input_topology=INPUT_TOPOLOGIES[args.input_topology],
             min_altitude_deg=args.min_altitude,
             tracking_timeout=args.tracking_timeout,
+            runtime_dir=args.runtime_dir,
         )
         executor.compact_console = not executor.verbose
 
@@ -2350,6 +2402,7 @@ Useful for re-observations or after fixing equipment issues.
             input_topology=INPUT_TOPOLOGIES[args.input_topology],
             min_altitude_deg=args.min_altitude,
             tracking_timeout=args.tracking_timeout,
+            runtime_dir=args.runtime_dir,
         )
         executor.compact_console = not executor.verbose
 
