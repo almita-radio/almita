@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 import almita_console_watcher as watcher
+import almita_console_server as server_module
+import capture as capture_module
+import quicklook_live as quicklook_module
 from runtime_state import announce_session, atomic_write_json, read_json_safe, utcnow
 from serve_dashboard import make_server
 
@@ -320,6 +323,65 @@ def test_23_frontend_completed_render(tmp_path):
         last_session={"session_id": "s1", "session_name": "demo", "final_state": "COMPLETED",
                       "completed_utc": utcnow(), "points_success": 9, "points_total": 9})))
     assert ">COMPLETED<" in html and "LAST KNOWN SESSION" in html
+
+
+# ---------------------------------------------------------------- closeout: canonical runtime_dir
+
+
+def test_capture_executor_without_runtime_dir_does_not_write_to_repo(tmp_path, monkeypatch):
+    from test_capture_preflight import make_executor
+    monkeypatch.chdir(tmp_path)
+    ex = make_executor(tmp_path)
+    assert ex.runtime_dir is None
+    ex._announce(event="SESSION_STARTED", state="STARTING")  # must be a true no-op
+    assert not (Path(capture_module.DEFAULT_RUNTIME_DIR) / "current_session.json").exists()
+
+
+def test_quicklooklive_without_runtime_dir_does_not_write_to_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    live = object.__new__(quicklook_module.QuicklookLive)
+    live.runtime_dir = None
+    live.session_id = "s1"
+    live.output = tmp_path / "out"
+    live.output.mkdir()
+    live._announce()  # must be a true no-op
+    assert not (Path(quicklook_module.DEFAULT_RUNTIME_DIR) / "quicklook_announcement.json").exists()
+
+
+def test_capture_cli_runtime_dir_defaults_to_canonical_constant():
+    source = (ROOT / "capture.py").read_text()
+    assert "default=DEFAULT_RUNTIME_DIR" in source
+    assert capture_module.DEFAULT_RUNTIME_DIR == str(ROOT / "data" / "runtime")
+    assert Path(capture_module.DEFAULT_RUNTIME_DIR).is_absolute()
+
+
+def test_quicklook_cli_runtime_dir_defaults_to_canonical_constant():
+    source = (ROOT / "quicklook_live.py").read_text()
+    assert "default=DEFAULT_RUNTIME_DIR" in source
+    assert quicklook_module.DEFAULT_RUNTIME_DIR == str(ROOT / "data" / "runtime")
+
+
+def test_capture_and_quicklook_announce_to_the_same_default_runtime_dir():
+    assert capture_module.DEFAULT_RUNTIME_DIR == quicklook_module.DEFAULT_RUNTIME_DIR
+
+
+def test_console_watcher_and_server_also_default_to_the_same_canonical_runtime_dir():
+    assert str(watcher.ROOT / "data" / "runtime") == capture_module.DEFAULT_RUNTIME_DIR
+    assert str(server_module.ROOT / "data" / "runtime") == capture_module.DEFAULT_RUNTIME_DIR
+
+
+def test_capture_executor_explicit_runtime_dir_override_still_works(tmp_path):
+    from test_capture_preflight import make_executor
+    from capture import CaptureExecutor
+    make_executor(tmp_path)  # writes plan.csv + observer_config.json into tmp_path
+    custom = tmp_path / "custom_runtime"
+    ex = CaptureExecutor(str(tmp_path / "plan.csv"), config_path="observer_config.json",
+                          runtime_dir=str(custom))
+    assert ex.runtime_dir == custom
+    ex.session_id = "override-test"
+    ex._announce(event="SESSION_STARTED", state="STARTING")
+    assert (custom / "current_session.json").is_file()
+    assert json.loads((custom / "current_session.json").read_text())["session_id"] == "override-test"
 
 
 # ---------------------------------------------------------------- offline-first audit

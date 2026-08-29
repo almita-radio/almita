@@ -68,3 +68,7 @@ ESTADO_ACTUAL.md
 # Outputs generados por campañas físicas de montura
 mount_benchmark_output*/
 mount_benchmark_physical_*/
+
+# Almita Console V1 - runtime outputs generados (no versionar)
+data/runtime/
+data/console_web/

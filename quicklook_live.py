@@ -29,6 +29,12 @@ from quicklook_waterfall import generate_waterfall
 
 STOP_REQUESTED = False
 
+# Canonical field-console runtime dir, anchored to this file's own location so
+# the CLI resolves it correctly regardless of the operator's cwd. Only used as
+# the CLI default below; QuicklookLive itself still defaults to
+# runtime_dir=None (announcements are opt-in at the class level).
+DEFAULT_RUNTIME_DIR = str(Path(__file__).resolve().parent / "data" / "runtime")
+
 
 def request_stop(signum=None, frame=None):
     global STOP_REQUESTED
@@ -324,8 +330,8 @@ def main():
     parser.add_argument("--session-dir",required=True);parser.add_argument("--calibration-profile",required=True)
     parser.add_argument("--output-dir",required=True);parser.add_argument("--poll-interval",type=float,default=1.0)
     parser.add_argument("--once",action="store_true")
-    parser.add_argument("--runtime-dir",default="data/runtime",
-                         help="Canonical field-console runtime dir for the console watcher (default: data/runtime)")
+    parser.add_argument("--runtime-dir",default=DEFAULT_RUNTIME_DIR,
+                         help=f"Canonical field-console runtime dir for the console watcher (default: {DEFAULT_RUNTIME_DIR})")
     args=parser.parse_args();signal.signal(signal.SIGINT,request_stop);signal.signal(signal.SIGTERM,request_stop)
     live=QuicklookLive(args.session_dir,args.calibration_profile,args.output_dir,args.poll_interval,args.runtime_dir)
     print(json.dumps(live.run(args.once),indent=2));return 0

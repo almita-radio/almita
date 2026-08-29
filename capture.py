@@ -49,6 +49,13 @@ def format_duration_hms(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+# Canonical field-console runtime dir, anchored to this file's own location so
+# the CLI resolves it correctly regardless of the operator's cwd. Only used as
+# the CLI default below; CaptureExecutor itself still defaults to
+# runtime_dir=None (announcements are opt-in at the class level).
+DEFAULT_RUNTIME_DIR = str(Path(__file__).resolve().parent / "data" / "runtime")
+
+
 INPUT_TOPOLOGIES = {
     "antenna": "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
     "50ohm": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
@@ -2310,8 +2317,8 @@ Useful for re-observations or after fixing equipment issues.
                         help='Minimum target altitude at GOTO; config or 30 degrees by default')
     parser.add_argument('--tracking-timeout', type=float, default=5.0,
                         help='Seconds to confirm real tracking state (default: 5)')
-    parser.add_argument('--runtime-dir', default='data/runtime',
-                        help='Canonical field-console runtime dir for the console watcher (default: data/runtime)')
+    parser.add_argument('--runtime-dir', default=DEFAULT_RUNTIME_DIR,
+                        help=f'Canonical field-console runtime dir for the console watcher (default: {DEFAULT_RUNTIME_DIR})')
 
     args = parser.parse_args()
 
