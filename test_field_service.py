@@ -20,6 +20,17 @@ def test_prepare_publication(tmp_path):
     assert result["status"]=="PASS" and (tmp_path/"public/quicklook").is_symlink()
     assert "ALMITA_TELEMETRY_ROOT" in (tmp_path/"public/config.js").read_text()
 
+def test_prepare_empty_live_session(tmp_path):
+    dashboard=tmp_path/"dash";dashboard.mkdir()
+    for n in ("index.html","styles.css","app.js"):(dashboard/n).write_text('<script src="app.js"></script>' if n=="index.html" else n)
+    quick=tmp_path/"quick";quick.mkdir();(quick/"quicklook_live_status.json").write_text('{"status":"IDLE"}')
+    telemetry=tmp_path/"t.json";telemetry.write_text("{}")
+    result=prepare(dashboard,quick,telemetry,tmp_path/"public")
+    assert result["status"]=="PASS"
+    assert result["publication_state"]=="EMPTY_WAITING_FOR_DERIVATIVES"
+    from prepare_field_dashboard import ROOT_FILES
+    assert set(result["absent_derivatives"])==set(ROOT_FILES[1:])
+
 def test_http_methods_cache_types_listing_and_traversal(tmp_path):
     (tmp_path/"index.html").write_text("ok");(tmp_path/"x.json").write_text('{}');(tmp_path/"x.png").write_bytes(b'png')
     (tmp_path/"dir").mkdir();(tmp_path/"dir/file").write_text("secret")

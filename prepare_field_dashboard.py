@@ -7,7 +7,12 @@ ROOT_FILES=("quicklook_live_status.json","latest_spectrum.json","latest_spectrum
 def prepare(dashboard,quicklook,telemetry,public):
     dashboard=Path(dashboard);quicklook=Path(quicklook);telemetry=Path(telemetry);public=Path(public)
     missing=[str(dashboard/x) for x in ("index.html","styles.css","app.js") if not (dashboard/x).is_file()]
-    missing += [str(quicklook/x) for x in ROOT_FILES if not (quicklook/x).is_file()]
+    # A live session has a status document before its first capture.  The
+    # dashboard already renders absent derivative products as unavailable, so
+    # publication must not manufacture placeholder science products merely to
+    # make an empty session visible.
+    missing += [str(quicklook/"quicklook_live_status.json") if not (quicklook/"quicklook_live_status.json").is_file() else ""]
+    missing=[item for item in missing if item]
     if missing:raise ValueError("missing publication inputs: "+", ".join(missing))
     public.mkdir(parents=True,exist_ok=True)
     for name in ("index.html","styles.css","app.js"):
@@ -20,7 +25,8 @@ def prepare(dashboard,quicklook,telemetry,public):
     (public/"config.js.tmp").write_text(config);os.replace(public/"config.js.tmp",public/"config.js")
     index=(public/"index.html").read_text();index=index.replace('<script src="app.js"></script>','<script src="config.js"></script><script src="app.js"></script>')
     (public/"index.html.tmp").write_text(index);os.replace(public/"index.html.tmp",public/"index.html")
-    result={"status":"PASS","public_root":str(public),"quicklook_target":str(quicklook.resolve()),"telemetry_source":str(telemetry.resolve()),"root_files":list(ROOT_FILES)}
+    absent_derivatives=[name for name in ROOT_FILES[1:] if not (quicklook/name).is_file()]
+    result={"status":"PASS","public_root":str(public),"quicklook_target":str(quicklook.resolve()),"telemetry_source":str(telemetry.resolve()),"root_files":list(ROOT_FILES),"publication_state":"EMPTY_WAITING_FOR_DERIVATIVES" if absent_derivatives else "READY","absent_derivatives":absent_derivatives}
     (public/"publication_manifest.json").write_text(json.dumps(result,indent=2));return result
 def main():
     p=argparse.ArgumentParser();p.add_argument("--dashboard-dist",default="dashboard/dist");p.add_argument("--quicklook-root",required=True);p.add_argument("--telemetry",required=True);p.add_argument("--public-root",default="data/field_web")
