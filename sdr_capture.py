@@ -6,6 +6,7 @@ Optimized for NVMe disk I/O with detailed performance metrics
 HDF5 output format with complete metadata for radio astronomy
 """
 
+import argparse
 import asyncio
 import json
 import os
@@ -1187,5 +1188,109 @@ async def test_sdr_modes():
     print("="*80)
 
 
+BASELINE_FREQUENCY_HZ = 1420405752
+BASELINE_SAMPLE_RATE_HZ = 2400000
+BASELINE_GAIN_DB = 40.2
+BASELINE_TOPOLOGY = "50ohm"
+BASELINE_INSTRUMENT_CHAIN = "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR"
+
+
+def build_cli_parser() -> argparse.ArgumentParser:
+    """Build explicit commands; importing/helping this module must not touch SDR hardware."""
+    parser = argparse.ArgumentParser(
+        description="Controlled RTL-SDR capture commands",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    baseline = subparsers.add_parser(
+        "baseline-50ohm",
+        help="capture one controlled 50-ohm instrumental baseline",
+    )
+    baseline.add_argument("--output", required=True, help="Final .h5 output path")
+    baseline.add_argument("--duration", required=True, type=float, help="Capture duration in seconds")
+    baseline.add_argument("--frequency", required=True, type=int, help="Must be 1420405752 Hz")
+    baseline.add_argument("--sample-rate", required=True, type=int, help="Must be 2400000 S/s")
+    baseline.add_argument("--gain", required=True, type=float, help="Must be manual 40.2 dB")
+    baseline.add_argument("--topology", required=True, choices=(BASELINE_TOPOLOGY,))
+    baseline.add_argument("--bias-t", required=True, choices=("on",))
+    baseline.add_argument("--session-id", required=True)
+    baseline.add_argument("--host", default="127.0.0.1")
+    baseline.add_argument("--port", type=int, default=1234)
+
+    subparsers.add_parser("demo", help="run the legacy USB/network comparison demo explicitly")
+    return parser
+
+
+def _validate_baseline_request(args: argparse.Namespace) -> None:
+    if args.duration <= 0:
+        raise ValueError("baseline duration must be > 0")
+    expected = {
+        "frequency": BASELINE_FREQUENCY_HZ,
+        "sample_rate": BASELINE_SAMPLE_RATE_HZ,
+        "gain": BASELINE_GAIN_DB,
+        "topology": BASELINE_TOPOLOGY,
+        "bias_t": "on",
+    }
+    actual = {key: getattr(args, key) for key in expected}
+    mismatches = [f"{key}={actual[key]!r} (expected {expected[key]!r})" for key in expected if actual[key] != expected[key]]
+    if mismatches:
+        raise ValueError("controlled 50-ohm baseline contract violation: " + "; ".join(mismatches))
+
+
+async def run_baseline_50ohm(args: argparse.Namespace) -> Path:
+    """Perform exactly one explicit manual-gain 50-ohm capture."""
+    _validate_baseline_request(args)
+    output = Path(args.output)
+    if output.suffix not in (".h5", ".hdf5"):
+        output = output.with_suffix(".h5")
+    if output.exists() or output.with_name(f"{output.name}.part").exists():
+        raise FileExistsError(f"baseline output already exists or is partial: {output}")
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    metadata = {
+        "capture_kind": "calibration_baseline_50ohm",
+        "session_id": args.session_id,
+        "point_id": "baseline_50ohm",
+        "status": "baseline_reference",
+        "center_freq": args.frequency,
+        "center_frequency_hz": args.frequency,
+        "sample_rate_hz": args.sample_rate,
+        "gain": args.gain,
+        "gain_requested_db": args.gain,
+        "gain_mode": "manual",
+        "agc_enabled": False,
+        "bias_tee_enabled": True,
+        "bias_t_state": "ON",
+        "input_topology": BASELINE_TOPOLOGY,
+        "reference_topology": BASELINE_INSTRUMENT_CHAIN,
+        "instrument_topology": BASELINE_INSTRUMENT_CHAIN,
+        "rf_input": "50_OHM_AT_LNA_INPUT",
+        "coordinate_source": "stationary_50ohm_baseline",
+        "capture_started_at": started_at,
+    }
+    sdr = SDRCapture(mode="network", host=args.host, port=args.port, verbose=True)
+    try:
+        await sdr.connect()
+        await sdr.configure(args.frequency, args.sample_rate, gain=args.gain)
+        await sdr.capture(args.duration, str(output), args.sample_rate, metadata)
+    finally:
+        await sdr.close()
+    validate_hdf5_capture(output, expected_samples=int(args.duration * args.sample_rate))
+    return output
+
+
+def main(argv=None) -> int:
+    parser = build_cli_parser()
+    args = parser.parse_args(argv)
+    if args.command == "baseline-50ohm":
+        output = asyncio.run(run_baseline_50ohm(args))
+        print(f"BASELINE_50OHM_CAPTURE=PASS output={output}")
+        return 0
+    if args.command == "demo":
+        asyncio.run(test_sdr_modes())
+        return 0
+    parser.print_help()
+    return 2
+
+
 if __name__ == "__main__":
-    asyncio.run(test_sdr_modes())
+    raise SystemExit(main())
