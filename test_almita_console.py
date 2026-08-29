@@ -239,6 +239,21 @@ def test_17_get_almita_status_json_200(tmp_path):
             assert r.status == 200
 
 
+def test_17b_quicklook_product_symlink_is_servable_read_only(tmp_path):
+    """§7: the watcher's runtime/quicklook_products symlink must be
+    transparently browsable through the existing read-only server, with no
+    new route and no copying - it's just another file under runtime/."""
+    root = console_root(tmp_path, status={"schema_version": 1})
+    products_source = tmp_path / "real_quicklook_output"
+    products_source.mkdir()
+    (products_source / "latest_spectrum.png").write_bytes(b"\x89PNG-fixture")
+    (root / "runtime" / "quicklook_products").symlink_to(products_source, target_is_directory=True)
+    with running(root) as base:
+        with urllib.request.urlopen(base + "/runtime/quicklook_products/latest_spectrum.png") as r:
+            assert r.status == 200
+            assert r.read() == b"\x89PNG-fixture"
+
+
 def test_18_write_methods_405(tmp_path):
     with running(console_root(tmp_path)) as base:
         for method in ("POST", "PUT", "DELETE", "PATCH"):
@@ -302,6 +317,13 @@ def test_21_frontend_running_render(tmp_path):
     assert ">RUNNING<" in html and "p003" in html and "demo" in html
 
 
+def test_21b_frontend_shows_spectrum_thumbnail_when_available(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert 'id="quicklook-thumbs"' in html and "quicklook-thumbs\" hidden" not in html
+    assert "quicklook_products/latest_spectrum.png" in html
+    assert 'id="thumb-waterfall" alt="Waterfall" hidden' in html or "thumb-waterfall\" hidden" in html
+
+
 def test_22_frontend_degraded_render(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture(
         "DEGRADED", system_state="DEGRADED",
@@ -325,7 +347,27 @@ def test_23_frontend_completed_render(tmp_path):
     assert ">COMPLETED<" in html and "LAST KNOWN SESSION" in html
 
 
+def test_24_frontend_shows_mount_device_when_announced_by_capture(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", instrument={"cpu": 10.0, "ram": 20.0, "disk": 30.0, "network_interfaces": {"interface": "eth0"},
+                                "rtl_tcp_process": True, "rtl_tcp_listening": True, "sdr_temperature_c": 25.0,
+                                "lna_temperature_c": 24.0, "mount_state": "NOT_EXPOSED",
+                                "mount_device": "LX200 OnStep", "telemetry_stale": False, "error": None})))
+    assert "LX200 OnStep" in html
+
+
 # ---------------------------------------------------------------- closeout: canonical runtime_dir
+
+
+def _snapshot(path):
+    """(exists, mtime_ns, content) for a real file that may legitimately
+    already exist on this machine from unrelated prior real usage - tests
+    must assert 'unchanged by this call', never 'absent', since ambient repo
+    state (e.g. a real field session run earlier today) is out of our control."""
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return (stat.st_mtime_ns, path.read_bytes())
 
 
 def test_capture_executor_without_runtime_dir_does_not_write_to_repo(tmp_path, monkeypatch):
@@ -333,8 +375,10 @@ def test_capture_executor_without_runtime_dir_does_not_write_to_repo(tmp_path, m
     monkeypatch.chdir(tmp_path)
     ex = make_executor(tmp_path)
     assert ex.runtime_dir is None
+    target = Path(capture_module.DEFAULT_RUNTIME_DIR) / "current_session.json"
+    before = _snapshot(target)
     ex._announce(event="SESSION_STARTED", state="STARTING")  # must be a true no-op
-    assert not (Path(capture_module.DEFAULT_RUNTIME_DIR) / "current_session.json").exists()
+    assert _snapshot(target) == before
 
 
 def test_quicklooklive_without_runtime_dir_does_not_write_to_repo(tmp_path, monkeypatch):
@@ -344,8 +388,10 @@ def test_quicklooklive_without_runtime_dir_does_not_write_to_repo(tmp_path, monk
     live.session_id = "s1"
     live.output = tmp_path / "out"
     live.output.mkdir()
+    target = Path(quicklook_module.DEFAULT_RUNTIME_DIR) / "quicklook_announcement.json"
+    before = _snapshot(target)
     live._announce()  # must be a true no-op
-    assert not (Path(quicklook_module.DEFAULT_RUNTIME_DIR) / "quicklook_announcement.json").exists()
+    assert _snapshot(target) == before
 
 
 def test_capture_cli_runtime_dir_defaults_to_canonical_constant():
