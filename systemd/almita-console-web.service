@@ -1,0 +1,17 @@
+[Unit]
+Description=ALMITA Field Console - resident read-only web server (0.0.0.0:8088)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=stellarmate
+WorkingDirectory=/home/stellarmate/almita
+ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/almita_console_server.py --bind 0.0.0.0 --port 8088
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

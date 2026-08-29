@@ -1,0 +1,17 @@
+[Unit]
+Description=ALMITA Field Console - resident read-only status watcher
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=stellarmate
+WorkingDirectory=/home/stellarmate/almita
+ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/almita_console_watcher.py --interval 2
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
