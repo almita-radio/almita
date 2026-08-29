@@ -161,6 +161,7 @@ class CaptureExecutor:
         
         self.observer_config_path = config_full_path
         self.observer_config_preexisting = config_full_path.is_file()
+        self.observer_config_generated_by_capture = False
         self.observer_config_valid = False
         try:
             with open(config_full_path, 'r') as f:
@@ -171,24 +172,32 @@ class CaptureExecutor:
                 self.log(f"  Location: {self.observer_config.get('observer', {}).get('name', 'Unknown')}")
         except FileNotFoundError:
             self.log(f"⚠️  Observer config not found: {config_full_path}", "WARNING", force=True)
-            self.log(f"   Creating default config...", "WARNING", force=True)
-            # Create default config with Santiago coordinates
-            self.observer_config = {
-                "observer": {
-                    "name": "Default Observatory",
-                    "latitude_deg": -33.4489,
-                    "longitude_deg": -70.6693,
-                    "elevation_m": 570,
-                    "timezone": "America/Santiago"
+            if config_full_path.name.endswith(".part"):
+                self.log("   Refusing to create observer config at temporary path", "ERROR", force=True)
+                self.observer_config = {}
+            else:
+                self.log(f"   Creating default config...", "WARNING", force=True)
+                # Create default config with Santiago coordinates
+                generated_config = {
+                    "observer": {
+                        "name": "Default Observatory",
+                        "latitude_deg": -33.4489,
+                        "longitude_deg": -70.6693,
+                        "elevation_m": 570,
+                        "timezone": "America/Santiago"
+                    }
                 }
-            }
-            # Save default config
-            try:
-                with open(config_full_path, 'w') as f:
-                    json.dump(self.observer_config, f, indent=2)
-                self.log(f"   ✓ Default config created at: {config_full_path}", "INFO", force=True)
-            except Exception as e:
-                self.log(f"   Could not create config file: {e}", "WARNING")
+                # Save default config
+                try:
+                    with open(config_full_path, 'w') as f:
+                        json.dump(generated_config, f, indent=2)
+                    self.observer_config = generated_config
+                    self.observer_config_valid = True
+                    self.observer_config_generated_by_capture = True
+                    self.log(f"   ✓ Default config created at: {config_full_path}", "INFO", force=True)
+                except Exception as e:
+                    self.observer_config = {}
+                    self.log(f"   Could not create config file: {e}", "WARNING")
         except json.JSONDecodeError as e:
             self.log(f"⚠️  Invalid JSON in observer config: {e}", "ERROR", force=True)
             self.observer_config = {}
@@ -971,12 +980,16 @@ class CaptureExecutor:
             record("Grid", "FAIL", f"not readable: {type(exc).__name__}: {exc}")
 
         observer = self.observer_config.get("observer", {}) if isinstance(self.observer_config, dict) else {}
-        observer_ok = self.observer_config_preexisting and self.observer_config_valid
+        observer_ok = (
+            self.observer_config_valid
+            and (self.observer_config_preexisting or self.observer_config_generated_by_capture)
+        )
         try:
-            observer_values = [float(observer[k]) for k in ("latitude_deg", "longitude_deg")]
-            observer_ok = observer_ok and all(math.isfinite(v) for v in observer_values)
+            latitude_deg, longitude_deg = [float(observer[k]) for k in ("latitude_deg", "longitude_deg")]
+            observer_ok = observer_ok and all(math.isfinite(v) for v in (latitude_deg, longitude_deg)) and -90 <= latitude_deg <= 90 and -180 <= longitude_deg <= 180
         except (KeyError, TypeError, ValueError): observer_ok = False
-        record("Observer config", "PASS" if observer_ok else "FAIL", str(self.observer_config_path))
+        origin = "preexisting" if self.observer_config_preexisting else "generated_by_capture" if self.observer_config_generated_by_capture else "untrusted"
+        record("Observer config", "PASS" if observer_ok else "FAIL", f"{self.observer_config_path} (origin={origin})")
 
         numeric_ok = capture_time > 0 and self.sdr_sample_rate > 0 and self.sdr_freq > 0 and 0 < self.sdr_port < 65536 and disk_safety_factor >= 1 and -90 <= self.min_altitude_deg <= 90 and self.tracking_timeout > 0
         record("Numeric parameters", "PASS" if numeric_ok else "FAIL", f"duration={capture_time}, rate={self.sdr_sample_rate}, frequency={self.sdr_freq}, margin={disk_safety_factor}, min_altitude={self.min_altitude_deg}, tracking_timeout={self.tracking_timeout}")

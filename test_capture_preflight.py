@@ -48,6 +48,62 @@ async def test_complete_preflight_pass(tmp_path):
     report=await run(make_executor(tmp_path,statuses=("planned","planned")));assert report["success"];assert all(c["status"] in {"PASS","WARN"} for c in report["checks"])
 
 @pytest.mark.asyncio
+async def test_generated_valid_observer_config_passes_preflight(tmp_path):
+    plan=tmp_path/"plan.csv"
+    with plan.open("w",newline="") as h:
+        w=csv.DictWriter(h,fieldnames=FIELDS);w.writeheader()
+        w.writerow({"point_number":1,"scan_order":1,"target_ra_hours":1,"target_dec_degrees":-40,"capture_status":"planned","data_filename":"p1.dat","session_name":"test"})
+    config=tmp_path/"observer_config.json"
+    assert not config.exists()
+    ex=CaptureExecutor(str(plan),config_path="observer_config.json",sdr_mode="network")
+    ex.telescope=FakeTelescope()
+    assert config.is_file()
+    report=await run(ex)
+    assert status(report,"Observer config")=="PASS"
+    assert report["success"]
+
+@pytest.mark.asyncio
+async def test_invalid_observer_config_json_fails_preflight(tmp_path):
+    ex=make_executor(tmp_path)
+    (tmp_path/"observer_config.json").write_text("{")
+    ex=CaptureExecutor(str(ex.csv_path),config_path="observer_config.json",sdr_mode="network")
+    ex.telescope=FakeTelescope()
+    report=await run(ex)
+    assert status(report,"Observer config")=="FAIL"
+    assert not report["success"]
+
+@pytest.mark.asyncio
+async def test_observer_config_without_required_coordinates_fails_preflight(tmp_path):
+    ex=make_executor(tmp_path)
+    (tmp_path/"observer_config.json").write_text(json.dumps({"observer":{"latitude_deg":-33.4}}))
+    ex=CaptureExecutor(str(ex.csv_path),config_path="observer_config.json",sdr_mode="network")
+    ex.telescope=FakeTelescope()
+    report=await run(ex)
+    assert status(report,"Observer config")=="FAIL"
+    assert not report["success"]
+
+@pytest.mark.asyncio
+async def test_out_of_range_observer_coordinates_fail_preflight(tmp_path):
+    ex=make_executor(tmp_path)
+    (tmp_path/"observer_config.json").write_text(json.dumps({"observer":{"latitude_deg":-91,"longitude_deg":-70.6}}))
+    ex=CaptureExecutor(str(ex.csv_path),config_path="observer_config.json",sdr_mode="network")
+    ex.telescope=FakeTelescope()
+    report=await run(ex)
+    assert status(report,"Observer config")=="FAIL"
+    assert not report["success"]
+
+@pytest.mark.asyncio
+async def test_temporary_observer_config_path_is_not_trusted_or_generated(tmp_path):
+    ex=make_executor(tmp_path)
+    temporary=tmp_path/"observer_config.json.part"
+    ex=CaptureExecutor(str(ex.csv_path),config_path=temporary.name,sdr_mode="network")
+    ex.telescope=FakeTelescope()
+    report=await run(ex)
+    assert not temporary.exists()
+    assert status(report,"Observer config")=="FAIL"
+    assert not report["success"]
+
+@pytest.mark.asyncio
 async def test_missing_grid_fails(tmp_path):
     report=await run(make_executor(tmp_path,csv_exists=False));assert not report["success"];assert status(report,"Grid")=="FAIL"
 
