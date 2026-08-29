@@ -82,31 +82,34 @@ def run(args):
 
     validation = []
     apply_times = []
-    figure, axis = plt.subplots(figsize=(10, 5))
-    for capture in args.antenna:
-        start = time.perf_counter()
-        calibrated = apply_relative_calibration(profile, capture, scale_mode="none")
-        apply_times.append(time.perf_counter() - start)
-        selected = calibrated["fractional_excess"][valid]
-        row = {
-            "source_file": capture,
-            "label": "INDOOR TEST — ASTRONOMICAL INTERPRETATION NOT PERMITTED",
-            "compatibility": calibrated["compatibility"],
-            "reference_scale": calibrated["reference_scale"],
-            "masked_fraction": float(1 - np.mean(valid)),
-            "residual_median": float(np.median(selected)),
-            "residual_robust_sigma": float(1.4826 * np.median(np.abs(selected - np.median(selected)))),
-            "residual_p01": float(np.percentile(selected, 1)),
-            "residual_p99": float(np.percentile(selected, 99)),
-        }
-        validation.append(row)
-        axis.plot(frequency_mhz[valid], calibrated["fractional_excess"][valid], label=Path(capture).stem)
-    axis.set(xlabel="Frequency (MHz)", ylabel="Fractional excess")
-    axis.grid(True)
-    axis.legend()
-    figure.tight_layout()
-    figure.savefig(output / "calibration_validation_indoor.png", dpi=150)
-    plt.close(figure)
+    validation_status = "DEFERRED_NO_ANTENNA_CAPTURE"
+    if args.antenna:
+        validation_status = "COMPLETED"
+        figure, axis = plt.subplots(figsize=(10, 5))
+        for capture in args.antenna:
+            start = time.perf_counter()
+            calibrated = apply_relative_calibration(profile, capture, scale_mode="none")
+            apply_times.append(time.perf_counter() - start)
+            selected = calibrated["fractional_excess"][valid]
+            row = {
+                "source_file": capture,
+                "label": "INDOOR TEST — ASTRONOMICAL INTERPRETATION NOT PERMITTED",
+                "compatibility": calibrated["compatibility"],
+                "reference_scale": calibrated["reference_scale"],
+                "masked_fraction": float(1 - np.mean(valid)),
+                "residual_median": float(np.median(selected)),
+                "residual_robust_sigma": float(1.4826 * np.median(np.abs(selected - np.median(selected)))),
+                "residual_p01": float(np.percentile(selected, 1)),
+                "residual_p99": float(np.percentile(selected, 99)),
+            }
+            validation.append(row)
+            axis.plot(frequency_mhz[valid], calibrated["fractional_excess"][valid], label=Path(capture).stem)
+        axis.set(xlabel="Frequency (MHz)", ylabel="Fractional excess")
+        axis.grid(True)
+        axis.legend()
+        figure.tight_layout()
+        figure.savefig(output / "calibration_validation_indoor.png", dpi=150)
+        plt.close(figure)
 
     performance = {
         "build_seconds": build_seconds,
@@ -121,6 +124,7 @@ def run(args):
         "absolute_calibration": False,
         "environment": "INDOOR_DEPARTMENT",
         "astronomical_interpretation": "NOT_PERMITTED",
+        "antenna_validation_status": validation_status,
         "captures": validation,
         "performance": performance,
     }
@@ -134,6 +138,7 @@ def run(args):
         "spur_count": len(metadata["spur_regions"]),
         "valid_fraction": metadata["valid_fraction"],
         "temperature_correction": metadata["temperature_correction"],
+        "antenna_validation_status": validation_status,
         "indoor_validation": validation,
         "performance": performance,
     }, indent=2))
@@ -143,7 +148,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--reference", nargs="+", required=True)
-    parser.add_argument("--antenna", nargs="+", required=True)
+    parser.add_argument(
+        "--antenna", nargs="*", default=[],
+        help="Optional antenna captures; omit to build only the 50-ohm reference profile",
+    )
     return parser.parse_args()
 
 
