@@ -1,0 +1,201 @@
+{
+  "schema_version": "1.0",
+  "status": "OK",
+  "session_id": "AFC-E2E-02-20260828-04:18:47",
+  "created_utc": "2026-08-28T04:19:36.670645+00:00",
+  "updated_utc": "2026-08-28T04:24:59.926498+00:00",
+  "poll_interval_seconds": 2.0,
+  "calibration_profile": "data/e2e/AFC-E2E-01-20260827T233127Z/calibration_profile/calibration_profile_v1",
+  "calibration_level": "RELATIVE_INSTRUMENTAL",
+  "absolute_calibration": false,
+  "environment": "UNKNOWN",
+  "astronomical_interpretation": "NOT_ASSERTED",
+  "points_seen": 9,
+  "points_success": 9,
+  "points_processed": 9,
+  "points_skipped": 0,
+  "latest_point_id": "9",
+  "latest_source_hdf5": "data/e2e/AFC-E2E-02-20260828T010600Z/AFC-E2E-02-20260828-01:51:36/data/iq/AFC-E2E-02-20260828-04:18:47/AFC-E2E-02_0009.h5",
+  "latest_products": {
+    "spectrum_json": "data/e2e/AFC-E2E-02-20260828T010600Z/quicklook_live_e2e02_run/points/9/spectrum/quicklook_spectrum.json",
+    "spectrum_png": "data/e2e/AFC-E2E-02-20260828T010600Z/quicklook_live_e2e02_run/points/9/spectrum/quicklook_spectrum.png",
+    "fractional_excess_png": "data/e2e/AFC-E2E-02-20260828T010600Z/quicklook_live_e2e02_run/points/9/spectrum/quicklook_fractional_excess.png",
+    "waterfall_json": "data/e2e/AFC-E2E-02-20260828T010600Z/quicklook_live_e2e02_run/points/9/waterfall/quicklook_waterfall.json",
+    "waterfall_npz": "data/e2e/AFC-E2E-02-20260828T010600Z/quicklook_live_e2e02_run/points/9/waterfall/quicklook_waterfall.npz",
+    "waterfall_png": "data/e2e/AFC-E2E-02-20260828T010600Z/quicklook_live_e2e02_run/points/9/waterfall/quicklook_waterfall.png"
+  },
+  "map_points": 9,
+  "backlog_count": 0,
+  "backlog_initial": 0,
+  "errors": [],
+  "warnings": [],
+  "session_progress": {
+    "total_planned": null,
+    "success": 9,
+    "failed": 0,
+    "deferred": 0,
+    "pending": null,
+    "processed": 9
+  },
+  "performance": {
+    "discovery_seconds": 0.00031488901004195213,
+    "state_write_seconds": 0.002504683972802013,
+    "restart_resume_seconds": 1.1849915608763695e-06,
+    "points": [
+      {
+        "point_id": "1",
+        "spectrum_seconds": 8.559369319002144,
+        "waterfall_seconds": 4.029250166029669,
+        "map_seconds": 0.30382736201863736,
+        "publication_seconds": 0.003136863000690937,
+        "total_seconds": 13.029155606986023
+      },
+      {
+        "point_id": "2",
+        "spectrum_seconds": 9.401273691968527,
+        "waterfall_seconds": 4.04830194497481,
+        "map_seconds": 0.26875990303233266,
+        "publication_seconds": 0.00481757998932153,
+        "total_seconds": 13.873874548997264
+      },
+      {
+        "point_id": "3",
+        "spectrum_seconds": 9.519660182006191,
+        "waterfall_seconds": 3.991233832028229,
+        "map_seconds": 0.38955216703470796,
+        "publication_seconds": 0.0045890629990026355,
+        "total_seconds": 14.038105220999569
+      },
+      {
+        "point_id": "6",
+        "spectrum_seconds": 9.548758947988972,
+        "waterfall_seconds": 4.058104574971367,
+        "map_seconds": 0.3580278889858164,
+        "publication_seconds": 0.0033069190103560686,
+        "total_seconds": 14.10899999603862
+      },
+      {
+        "point_id": "5",
+        "spectrum_seconds": 9.65804492001189,
+        "waterfall_seconds": 3.972804359975271,
+        "map_seconds": 0.35712327098008245,
+        "publication_seconds": 0.004301141016185284,
+        "total_seconds": 14.120829472958576
+      },
+      {
+        "point_id": "4",
+        "spectrum_seconds": 9.549126611964311,
+        "waterfall_seconds": 3.8660947420285083,
+        "map_seconds": 0.3601848990074359,
+        "publication_seconds": 0.003889345971401781,
+        "total_seconds": 13.917952399991918
+      },
+      {
+        "point_id": "7",
+        "spectrum_seconds": 9.736264546983875,
+        "waterfall_seconds": 3.8757666799938306,
+        "map_seconds": 0.3640078739845194,
+        "publication_seconds": 0.0035127729643136263,
+        "total_seconds": 14.10639422701206
+      },
+      {
+        "point_id": "8",
+        "spectrum_seconds": 9.704534870979842,
+        "waterfall_seconds": 3.9741841650102288,
+        "map_seconds": 0.3678467250429094,
+        "publication_seconds": 0.0035678850254043937,
+        "total_seconds": 14.17621947202133
+      },
+      {
+        "point_id": "9",
+        "spectrum_seconds": 8.98608196497662,
+        "waterfall_seconds": 3.9367724579642527,
+        "map_seconds": 0.3495503399753943,
+        "publication_seconds": 0.0035414790036156774,
+        "total_seconds": 13.42392122396268
+      }
+    ],
+    "point_history": [
+      {
+        "point_id": "1",
+        "spectrum_seconds": 8.559369319002144,
+        "waterfall_seconds": 4.029250166029669,
+        "map_seconds": 0.30382736201863736,
+        "publication_seconds": 0.003136863000690937,
+        "total_seconds": 13.029155606986023
+      },
+      {
+        "point_id": "2",
+        "spectrum_seconds": 9.401273691968527,
+        "waterfall_seconds": 4.04830194497481,
+        "map_seconds": 0.26875990303233266,
+        "publication_seconds": 0.00481757998932153,
+        "total_seconds": 13.873874548997264
+      },
+      {
+        "point_id": "3",
+        "spectrum_seconds": 9.519660182006191,
+        "waterfall_seconds": 3.991233832028229,
+        "map_seconds": 0.38955216703470796,
+        "publication_seconds": 0.0045890629990026355,
+        "total_seconds": 14.038105220999569
+      },
+      {
+        "point_id": "6",
+        "spectrum_seconds": 9.548758947988972,
+        "waterfall_seconds": 4.058104574971367,
+        "map_seconds": 0.3580278889858164,
+        "publication_seconds": 0.0033069190103560686,
+        "total_seconds": 14.10899999603862
+      },
+      {
+        "point_id": "5",
+        "spectrum_seconds": 9.65804492001189,
+        "waterfall_seconds": 3.972804359975271,
+        "map_seconds": 0.35712327098008245,
+        "publication_seconds": 0.004301141016185284,
+        "total_seconds": 14.120829472958576
+      },
+      {
+        "point_id": "4",
+        "spectrum_seconds": 9.549126611964311,
+        "waterfall_seconds": 3.8660947420285083,
+        "map_seconds": 0.3601848990074359,
+        "publication_seconds": 0.003889345971401781,
+        "total_seconds": 13.917952399991918
+      },
+      {
+        "point_id": "7",
+        "spectrum_seconds": 9.736264546983875,
+        "waterfall_seconds": 3.8757666799938306,
+        "map_seconds": 0.3640078739845194,
+        "publication_seconds": 0.0035127729643136263,
+        "total_seconds": 14.10639422701206
+      },
+      {
+        "point_id": "8",
+        "spectrum_seconds": 9.704534870979842,
+        "waterfall_seconds": 3.9741841650102288,
+        "map_seconds": 0.3678467250429094,
+        "publication_seconds": 0.0035678850254043937,
+        "total_seconds": 14.17621947202133
+      },
+      {
+        "point_id": "9",
+        "spectrum_seconds": 8.98608196497662,
+        "waterfall_seconds": 3.9367724579642527,
+        "map_seconds": 0.3495503399753943,
+        "publication_seconds": 0.0035414790036156774,
+        "total_seconds": 13.42392122396268
+      }
+    ],
+    "peak_rss_mib": 1541.16015625,
+    "approx_sustainable_points_per_minute": 4.232440116945004
+  },
+  "known_limitations": [
+    "polling V1",
+    "sequential Spectrum then Waterfall then Map",
+    "relative instrumental only",
+    "capture launch integration intentionally absent"
+  ]
+}

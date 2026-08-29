@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0",
+  "execution_utc": "2026-08-27T12:27:02Z",
+  "verdict": "BLOCKED BY SOFTWARE",
+  "afc00_software_preflight": "FAIL",
+  "mode": {"offline": true, "read_only": true, "non_destructive": true},
+  "python": {
+    "status": "PASS",
+    "version": "3.11.2",
+    "executable": "/home/stellarmate/almita/.venv/bin/python",
+    "platform": "Linux-6.6.31+rpt-rpi-v8-aarch64-with-glibc2.36",
+    "architecture": "aarch64"
+  },
+  "git": {
+    "head": "d5c83ecb2128984e38a2524cf739f167a327a14a",
+    "worktree_clean": false,
+    "release_snapshot_required": true,
+    "stage_commit_push_performed": false
+  },
+  "imports": {"status": "PASS", "modules_passed": 17, "failures": []},
+  "offline_first": "PASS",
+  "iers": {"status": "PASS", "auto_download": false, "altaz_transform": "PASS", "sidereal_time": "PASS"},
+  "calibration": {
+    "status": "PASS",
+    "calibration_level": "RELATIVE_INSTRUMENTAL",
+    "absolute_calibration": false,
+    "gain_db": 40.2,
+    "sample_rate_hz": 2400000,
+    "center_frequency_hz": 1420405752,
+    "fft_size": 8192,
+    "json_sha256": "92684bd387a702b6ae6a9c55faa1ca8ccbd0a18af916c466560fdee69efc9118",
+    "npz_sha256": "fc8b68ab13335b9ead5da0c7aeeeb4b5eae8054fa9b661611e8cdb1054730391"
+  },
+  "storage": {"status": "PASS", "free_bytes": 394009636864, "estimated_5s_point_capacity": 72178},
+  "capture_pipeline": "FAIL",
+  "metadata_ready_for_real_map": false,
+  "metadata_gates": {
+    "session_contract": "FAIL",
+    "topology": "FAIL",
+    "coordinates": "WARN",
+    "notes": [
+      "point_id and commanded/optional actual coordinates exist",
+      "coordinate_source is not persisted explicitly",
+      "instrument topology and Bias-T are not persisted by production Capture",
+      "a complete Quicklook Live session.csv contract is not emitted"
+    ]
+  },
+  "gain_policy": {"status": "FAIL", "required": "MANUAL 40.2 dB", "observed_in_capture_code": "auto"},
+  "sdr_config_sequence": {"implementation_status": "PASS", "production_capture_usage": "FAIL"},
+  "sole_iq_consumer": "PASS",
+  "mount_architecture": {
+    "status": "FAIL",
+    "single_stream_reader": true,
+    "goto_review_hash_match": false,
+    "goto_keyboard_interrupt_contained": false
+  },
+  "atomic_hdf5": "PASS",
+  "quicklook_pipeline": "PASS",
+  "dashboard": "PASS",
+  "telemetry": "PASS",
+  "field_static_service": "PASS",
+  "telemetry_snapshot": {
+    "status": "OK",
+    "cpu_percent": 30.0,
+    "memory_percent": 20.558791167189945,
+    "disk_percent": 18.705488088437214,
+    "sdr_temperature_c": 31.687,
+    "lna_temperature_c": 22.625,
+    "rtl_tcp_process_detected": true,
+    "rtl_tcp_port_listening": true,
+    "iq_connect_calls": 0,
+    "mount": "NOT_EXPOSED"
+  },
+  "time_readiness": {"status": "WARN", "timezone": "Etc/UTC", "ntp_synchronized_now": true, "local_rtc": false, "field_time_source_confirmation_required": true},
+  "airplane_mode_software_ready": true,
+  "tests": {
+    "status": "FAIL",
+    "passed": 352,
+    "failed": 1,
+    "deselected": 1,
+    "aborted_by_keyboard_interrupt": true,
+    "duration_seconds": 835.38
+  },
+  "py_compile": "PASS",
+  "software_blockers": [
+    "Capture uses automatic gain instead of mandatory manual 40.2 dB",
+    "Capture does not persist explicit instrument topology and Bias-T metadata",
+    "Capture/session output does not satisfy the complete future map metadata contract",
+    "GOTO reviewed source hash mismatch and KeyboardInterrupt escapes unit-test execution"
+  ],
+  "configuration_blockers": [],
+  "field_only_actions_remaining": true,
+  "afc00_field_deployment": "NO-GO",
+  "persistent_services_started": false,
+  "hardware_or_control_actions": false
+}

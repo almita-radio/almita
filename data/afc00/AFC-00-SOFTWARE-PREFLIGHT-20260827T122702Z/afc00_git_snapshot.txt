@@ -1,0 +1,32 @@
+AFC-00 GIT SNAPSHOT
+UTC: 2026-08-27T12:43:42Z
+HEAD: d5c83ecb2128984e38a2524cf739f167a327a14a
+
+TRACKED MODIFIED:
+alignment.py
+capture.py
+data/IQ/session.csv
+grid_generator.py
+indi_telescope_control.py
+mount_benchmark.py
+mount_slew_model.py
+sdr_capture.py
+temperature_sensors.py
+test_capture_visibility_tracking.py
+test_mount_benchmark.py
+test_temperature_sensors.py
+
+RELEVANT UNTRACKED GROUPS:
+- Calibration Foundation implementation, profile and tests
+- Quicklook Spectrum/Waterfall/Map/Live implementation, evidence and tests
+- Dashboard implementation, evidence and tests
+- Telemetry and Field Service implementation, evidence and tests
+- AFC-00 evidence directory
+
+DIFF STAT:
+12 files changed, 1634 insertions(+), 480 deletions(-)
+
+DIFF CHECK:
+Non-clean due to pre-existing trailing whitespace in data/IQ/session.csv lines 2-43.
+
+No stage, commit, push, reset, checkout or cleanup was performed.

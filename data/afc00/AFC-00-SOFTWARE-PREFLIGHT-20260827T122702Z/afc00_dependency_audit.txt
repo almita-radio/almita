@@ -1,0 +1,23 @@
+AFC-00 OFFLINE DEPENDENCY AUDIT
+UTC: 2026-08-27T12:27:02Z
+
+RESULT: PASS
+
+RUNTIME:
+- No critical Internet dependency found.
+- serve_dashboard.py prints a localhost URL only; this is a local runtime endpoint.
+- Astropy field entry points apply iers.conf.auto_download = False.
+
+INSTALLATION_ONLY:
+- sdr_capture.py contains error messages suggesting pip install if dependencies are absent.
+- grid_generator.py contains an error message suggesting pip install astropy if absent.
+- Required dependencies are already installed; these strings are not runtime installers.
+
+DOCUMENTATION:
+- Dashboard documentation contains only http://127.0.0.1 local URLs.
+
+FALSE_POSITIVE / ABSENT:
+- No requests, urllib, aiohttp, astroquery, SIMBAD, Horizons, Google Fonts, CDN, unpkg, jsdelivr, external fetch, npm runtime install, apt install, or dnf install in the audited runtime.
+
+AIRPLANE MODE SOFTWARE READINESS: PASS
+Physical network disconnection remains a field-only validation.

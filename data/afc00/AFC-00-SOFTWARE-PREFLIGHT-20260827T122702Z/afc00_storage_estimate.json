@@ -1,0 +1,22 @@
+{
+  "status": "PASS",
+  "filesystem": "/home/stellarmate/almita",
+  "total_bytes": 503609339904,
+  "used_bytes": 94202609664,
+  "free_bytes": 394009636864,
+  "percent_used": 18.70549296841025,
+  "hdf5_files_inventoried": 2010,
+  "hdf5_files_with_duration": 1998,
+  "median_capture_bytes_per_second": 1091758.3,
+  "estimates": {
+    "5_seconds": {"bytes_per_point": 5458791, "approximate_point_capacity": 72178},
+    "20_seconds": {"bytes_per_point": 21835165, "approximate_point_capacity": 18044},
+    "60_seconds": {"bytes_per_point": 65505497, "approximate_point_capacity": 6014}
+  },
+  "afc00_initial_campaign": {
+    "map_points": 9,
+    "seconds_per_map_point": 5,
+    "estimated_map_capture_bytes": 49129119,
+    "criterion": "PASS with generous margin for baselines, stationary antenna, Quicklook derivatives, and logs"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "timestamp_utc": "2026-08-27T23:58:26.099797+00:00",
+  "git_commit": "86dba5bfd22e2f18a5e6ebf9621d0cac0db4ba7b",
+  "reference": "hi",
+  "center_coordinates": {
+    "ra_hours": 15.000000000000002,
+    "dec_deg": -68.0488
+  },
+  "measured_positions": [],
+  "measured_hi_metric": [],
+  "expected_template_metric": {
+    "selection": {
+      "selection_score": 27.605600077599934,
+      "template_mean": 33.37798963662204,
+      "template_contrast": 7.803887355244161,
+      "auto_fallback_from_sun": true
+    },
+    "sample_values": []
+  },
+  "offsets": null,
+  "confidence": null,
+  "residual": null,
+  "gain": 40.2,
+  "temperatures": [],
+  "beam_fwhm_deg": 14.0,
+  "beam_provisional": true,
+  "sync_applied": false,
+  "sync_executed": false,
+  "status": "PASS",
+  "result_status": "PASS"
+}

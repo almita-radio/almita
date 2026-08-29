@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "status": "OK",
+  "created_utc": "2026-08-27T13:57:07.107020+00:00",
+  "hostname": "stellarmate",
+  "uptime_seconds": 230677.91,
+  "system": {
+    "cpu_percent": 38.095238095238095,
+    "load_1m": 0.51,
+    "load_5m": 0.26,
+    "load_15m": 0.46,
+    "memory_total_bytes": 8331108352,
+    "memory_used_bytes": 1716346880,
+    "memory_available_bytes": 6614761472,
+    "memory_percent": 20.601663157915436
+  },
+  "storage": {
+    "filesystem": "/home/stellarmate/almita",
+    "total_bytes": 503609339904,
+    "used_bytes": 94281297920,
+    "available_bytes": 393930948608,
+    "percent": 18.72111782874644
+  },
+  "network": {
+    "interface": "wlan0",
+    "rx_bytes": 1645775143,
+    "tx_bytes": 1604132267
+  },
+  "sdr": {
+    "rtl_tcp_process_detected": true,
+    "rtl_tcp_processes": [
+      {
+        "pid": 65101,
+        "cmdline": "/usr/bin/rtl_tcp -a 127.0.0.1 -p 1234 -f 1420405000 -s 2400000 -g 40.2 -T"
+      }
+    ],
+    "rtl_tcp_port": 1234,
+    "rtl_tcp_port_listening": true,
+    "expected_frequency_hz": 1420405752,
+    "expected_sample_rate_hz": 2400000,
+    "expected_gain_db": 40.2,
+    "bias_tee_expected": true,
+    "observed_frequency_hz": null,
+    "observed_sample_rate_hz": null,
+    "observed_gain_db": null,
+    "observed_bias_tee": null
+  },
+  "temperatures": {
+    "sdr_c": 32.625,
+    "sdr_status": "OK",
+    "lna_c": 23.375,
+    "lna_status": "OK"
+  },
+  "mount": {
+    "status": "NOT_EXPOSED",
+    "tracking": null,
+    "ra": null,
+    "dec": null
+  },
+  "limitations": [
+    "read-only local snapshot",
+    "network values are cumulative counters, not rates",
+    "SDR runtime configuration is not observed because rtl_tcp stream is never connected",
+    "mount connection intentionally not opened"
+  ],
+  "warnings": [],
+  "generation_seconds": 1.6924753619823605
+}

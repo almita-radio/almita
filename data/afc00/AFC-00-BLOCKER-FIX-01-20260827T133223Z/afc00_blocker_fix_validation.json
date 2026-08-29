@@ -1,0 +1,67 @@
+{
+  "status": "PASS",
+  "classification": "SOFTWARE_VALIDATION_FIXTURE",
+  "capture_fixed_gain": {
+    "status": "PASS",
+    "mode": "manual",
+    "gain_requested_db": 40.2,
+    "agc": false
+  },
+  "capture_contract": {
+    "status": "PASS",
+    "topologies": {
+      "antenna": "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR",
+      "50ohm": "50_OHM_TO_LNA_FILTER_CABLING_TO_RTL_SDR"
+    },
+    "bias_tee_enabled": true,
+    "coordinate_sources": ["ACTUAL", "COMMANDED"],
+    "manifest_atomic": true,
+    "part_sources_rejected": true
+  },
+  "fixture": {
+    "session": "SOFTWARE_VALIDATION_FIXTURE",
+    "success_points": 3,
+    "calibration_compatibility": ["COMPATIBLE", "COMPATIBLE", "COMPATIBLE"],
+    "quicklook_points_processed": 3,
+    "map_points": 3,
+    "map_status": "INTERPOLATED",
+    "coordinate_source": "COMMANDED",
+    "hdf5_sha256": {
+      "point_1.h5": "ec551c579136849e94f2488a737b2a11ade695f18d8b9149b53d9743f1bc1018",
+      "point_2.h5": "ef2aa96293e1fd0c5778e3ae2904fe7284a81345c1674a84a1f2597719eed833",
+      "point_3.h5": "2514eaa12bc84528d37223c888c7dfb77db91d64cb1dfb0478f436681378c5e9"
+    }
+  },
+  "goto": {
+    "status": "PASS",
+    "cause_of_original_hash_mismatch": "pre-existing compact-console trace suppression",
+    "keyboard_interrupt": "returns False after warning",
+    "cancelled_error": "propagates unchanged",
+    "algorithm_changed": false,
+    "reviewed_hash_updated": true,
+    "reviewed_hash": "e19aaa55df91c292c50c64beedf50fb6acd02edf938408126485017f09d6c8d8"
+  },
+  "architecture": {
+    "sole_indi_reader": "PASS",
+    "sole_rtl_tcp_stream_consumer": "PASS"
+  },
+  "tests": {
+    "full_regression": "368 passed",
+    "full_regression_seconds": 885.02,
+    "post_duration_adjustment_targeted": "59 passed",
+    "failed": 0,
+    "uncontrolled_keyboard_interrupt": 0,
+    "py_compile": "PASS"
+  },
+  "integrity": {
+    "calibration_profile_json_sha256": "92684bd387a702b6ae6a9c55faa1ca8ccbd0a18af916c466560fdee69efc9118",
+    "calibration_profile_npz_sha256": "fc8b68ab13335b9ead5da0c7aeeeb4b5eae8054fa9b661611e8cdb1054730391",
+    "observer_config_sha256": "adc7b6dd0aa971281b283bb1ab83e17cb8f5687c83f221fb3fbaba062a7d5668",
+    "historical_hdf5_modified": false,
+    "quicklook_science_modified": false,
+    "sdr_capture_modified_by_task": false,
+    "hardware_actions": false
+  },
+  "git_head": "d5c83ecb2128984e38a2524cf739f167a327a14a",
+  "remaining_blockers": []
+}
