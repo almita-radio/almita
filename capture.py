@@ -184,32 +184,10 @@ class CaptureExecutor:
                 self.log(f"  Location: {self.observer_config.get('observer', {}).get('name', 'Unknown')}")
         except FileNotFoundError:
             self.log(f"⚠️  Observer config not found: {config_full_path}", "WARNING", force=True)
-            if config_full_path.name.endswith(".part"):
-                self.log("   Refusing to create observer config at temporary path", "ERROR", force=True)
-                self.observer_config = {}
-            else:
-                self.log(f"   Creating default config...", "WARNING", force=True)
-                # Create default config with Santiago coordinates
-                generated_config = {
-                    "observer": {
-                        "name": "Default Observatory",
-                        "latitude_deg": -33.4489,
-                        "longitude_deg": -70.6693,
-                        "elevation_m": 570,
-                        "timezone": "America/Santiago"
-                    }
-                }
-                # Save default config
-                try:
-                    with open(config_full_path, 'w') as f:
-                        json.dump(generated_config, f, indent=2)
-                    self.observer_config = generated_config
-                    self.observer_config_valid = True
-                    self.observer_config_generated_by_capture = True
-                    self.log(f"   ✓ Default config created at: {config_full_path}", "INFO", force=True)
-                except Exception as e:
-                    self.observer_config = {}
-                    self.log(f"   Could not create config file: {e}", "WARNING")
+            self.log("   Refusing to fabricate a default observer config for a real campaign; "
+                      "the grid session must carry its own observer_config.json "
+                      "(see grid_generator.py persist_observer_config)", "ERROR", force=True)
+            self.observer_config = {}
         except json.JSONDecodeError as e:
             self.log(f"⚠️  Invalid JSON in observer config: {e}", "ERROR", force=True)
             self.observer_config = {}
@@ -690,6 +668,18 @@ class CaptureExecutor:
             True if loaded successfully
         """
         try:
+            if not self.observer_config_valid:
+                self.log("", "ERROR")
+                self.log("=" * 80, "ERROR")
+                self.log("OBSERVER CONFIG MISSING OR INVALID - REFUSING TO GUESS", "ERROR")
+                self.log("=" * 80, "ERROR")
+                self.log(f"Expected: {self.observer_config_path}", "ERROR")
+                self.log("A real campaign must carry the exact observer_config.json it was "
+                          "generated with (grid_generator.py persists a copy alongside the CSV). "
+                          "Capture will not fabricate a default for a real session.", "ERROR")
+                self.log("", "ERROR")
+                return False
+
             self.log("📄 Reading observation plan from CSV...", force=True)
 
             with open(self.csv_path, 'r', newline='') as csvfile:

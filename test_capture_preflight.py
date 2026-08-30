@@ -48,7 +48,10 @@ async def test_complete_preflight_pass(tmp_path):
     report=await run(make_executor(tmp_path,statuses=("planned","planned")));assert report["success"];assert all(c["status"] in {"PASS","WARN"} for c in report["checks"])
 
 @pytest.mark.asyncio
-async def test_generated_valid_observer_config_passes_preflight(tmp_path):
+async def test_missing_observer_config_fails_preflight_and_creates_no_default(tmp_path):
+    """A real campaign must carry its own observer_config.json (persisted by
+    grid_generator.py alongside the CSV). Capture must never fabricate a
+    default for a missing one - see ALMITA-CAPTURE-FINAL-DEMO-PREFLIGHT-FIX."""
     plan=tmp_path/"plan.csv"
     with plan.open("w",newline="") as h:
         w=csv.DictWriter(h,fieldnames=FIELDS);w.writeheader()
@@ -57,10 +60,11 @@ async def test_generated_valid_observer_config_passes_preflight(tmp_path):
     assert not config.exists()
     ex=CaptureExecutor(str(plan),config_path="observer_config.json",sdr_mode="network")
     ex.telescope=FakeTelescope()
-    assert config.is_file()
+    assert not config.exists(), "Capture must never create a default observer_config.json"
+    assert ex.observer_config_valid is False
     report=await run(ex)
-    assert status(report,"Observer config")=="PASS"
-    assert report["success"]
+    assert status(report,"Observer config")=="FAIL"
+    assert not report["success"]
 
 @pytest.mark.asyncio
 async def test_invalid_observer_config_json_fails_preflight(tmp_path):

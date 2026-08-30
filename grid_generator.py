@@ -16,6 +16,7 @@ import argparse
 import csv
 import json
 import math
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -226,6 +227,28 @@ class GridGenerator:
         ]
 
         self._initialize_csv()
+
+    def persist_observer_config(self, config_path: Path) -> Optional[Path]:
+        """Copy the exact observer config this grid was generated with into
+        the grid's own session directory, byte-for-byte (no re-serialization,
+        no derived/invented values). This makes the session self-contained:
+        Capture resolves observer_config.json relative to the CSV it is
+        given, so without this copy Capture cannot find the real config and
+        would otherwise have to fabricate a default for a real campaign.
+
+        Returns the destination path if copied, or None if config_path does
+        not exist (nothing to copy - Capture will then correctly fail closed
+        instead of silently using a wrong config).
+        """
+        config_path = Path(config_path)
+        if not config_path.is_file():
+            self.log(f"No observer config found at {config_path}; session will have no "
+                      f"persisted observer_config.json (Capture will fail closed, not guess)", "WARNING")
+            return None
+        destination = self.output_dir / "observer_config.json"
+        shutil.copyfile(config_path, destination)
+        self.log(f"Observer config persisted: {destination}")
+        return destination
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -788,6 +811,7 @@ via CLI flags.
         beam_fwhm_deg=beam_fwhm_deg,
         beam_sampling_fraction=beam_sampling_fraction,
     )
+    generator.persist_observer_config(config_path)
 
     try:
         success = generator.generate_grid_plan(
