@@ -28,6 +28,26 @@ def row(pid,status,source,ra="10",dec="20"):
             "ra_deg":ra,"dec_deg":dec,"environment":"INDOOR_DEPARTMENT"}
 
 
+def make_grid(session,rows,cols,width_deg=30.0,height_deg=30.0,coords=None):
+    """Write grid_generator.py's own canonical artifacts (mosaic.csv,
+    grid_metadata.json) directly into the session dir so
+    find_grid_directory() locates them at level 0 - point_id is row-major
+    (row*cols+col+1), independent of any capture/scan order."""
+    (session/"grid_metadata.json").write_text(json.dumps({"grid":{"rows":rows,"columns":cols,
+        "total_points":rows*cols,"width_deg":width_deg,"height_deg":height_deg}}))
+    fields=["point_number","point_id","scan_order","grid_row","grid_col","row","column","ra","dec",
+            "capture_status","visibility_deferred","session_name"]
+    with (session/"mosaic.csv").open("w",newline="") as f:
+        w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
+        for r in range(rows):
+            for c in range(cols):
+                pid=r*cols+c+1
+                ra,dec=(coords[pid] if coords and pid in coords else (10.0+c,20.0+r))
+                w.writerow({"point_number":pid,"point_id":pid,"scan_order":pid,"grid_row":r,"grid_col":c,
+                            "row":r,"column":c,"ra":ra,"dec":dec,"capture_status":"planned",
+                            "visibility_deferred":"false","session_name":"s"})
+
+
 def fake_products(monkeypatch):
     def spectrum(source,profile,out):
         out=Path(out);out.mkdir(parents=True,exist_ok=True)
@@ -52,24 +72,33 @@ def test_empty_session(tmp_path):
 
 
 def test_success_latest_restart_and_source_immutability(tmp_path,monkeypatch):
-    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();source=session/"one.h5";capture(source)
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,1)
+    source=session/"one.h5";capture(source)
     before=source.read_bytes();manifest(session,[row("1","SUCCESS","one.h5")])
     out=tmp_path/"out";first=ql.QuicklookLive(session,PROFILE,out).run(True)
     assert first["points_processed"]==1 and (out/"latest_spectrum.json").exists()
     assert (out/"latest_waterfall.png").exists() and (out/"quicklook_map.json").exists()
-    assert json.loads((out/"quicklook_map.json").read_text())["status"]=="POINT_ONLY"
+    doc=json.loads((out/"quicklook_map.json").read_text())
+    assert doc["status"]=="NATIVE_GRID" and doc["map_mode"]=="NATIVE_GRID"
+    assert doc["quicklook_metrics"]["total_cells"]==1 and doc["quicklook_metrics"]["observed_cells"]==1
     second=ql.QuicklookLive(session,PROFILE,out).run(True)
     assert second["points_processed"]==1 and second["performance"]["points"]==[]
     assert source.read_bytes()==before
 
 
-def test_one_two_three_point_map_modes(tmp_path,monkeypatch):
-    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();capture(session/"x.h5")
+def test_native_grid_observed_cells_grow_without_changing_mode(tmp_path,monkeypatch):
+    """Replaces the old POINT_ONLY/LINE_ONLY/INTERPOLATED progression: the
+    map mode is always NATIVE_GRID regardless of how many points have been
+    observed - only observed_cells grows."""
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,2,2);capture(session/"x.h5")
     out=tmp_path/"out";rows=[]
-    for pid,ra,dec,mode in [("1",10,20,"POINT_ONLY"),("2",11,20,"LINE_ONLY"),("3",10,21,"INTERPOLATED")]:
-        rows.append(row(pid,"SUCCESS","x.h5",str(ra),str(dec)));manifest(session,rows)
+    for pid,expected_observed in [("1",1),("2",2),("3",3)]:
+        rows.append(row(pid,"SUCCESS","x.h5"));manifest(session,rows)
         ql.QuicklookLive(session,PROFILE,out).run(True)
-        assert json.loads((out/"quicklook_map.json").read_text())["status"]==mode
+        doc=json.loads((out/"quicklook_map.json").read_text())
+        assert doc["status"]=="NATIVE_GRID"
+        assert doc["quicklook_metrics"]["total_cells"]==4
+        assert doc["quicklook_metrics"]["observed_cells"]==expected_observed
 
 
 def test_failed_deferred_part_ignored_then_final_processed(tmp_path,monkeypatch):

@@ -65,8 +65,11 @@ def test_render_global_states(tmp_path,kind):
     assert f'>{kind}<' in html and "RELATIVE_INSTRUMENTAL" in html and "INDOOR VALIDATION DATA" in html
 
 
-@pytest.mark.parametrize("mode",["POINT_ONLY","LINE_ONLY","INTERPOLATED"])
+@pytest.mark.parametrize("mode",["NATIVE_GRID"])
 def test_map_states(tmp_path,mode):
+    """The dashboard renders map status verbatim (no hardcoded mode logic);
+    NATIVE_GRID is now the only mode Quicklook ever publishes - interpolated
+    modes (POINT_ONLY/LINE_ONLY/INTERPOLATED) were removed."""
     assert mode in dom(fixture(tmp_path,"OK",mode))
 
 
