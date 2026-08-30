@@ -54,6 +54,9 @@ class MapPoint:
     valid_fraction: float = 0.0
     masked_fraction: float = 1.0
     outlier: bool = False
+    row: int = -1
+    column: int = -1
+    cell_status: str = "UNKNOWN"
 
 
 def sha256(path: str | Path) -> str:
@@ -147,8 +150,183 @@ def interpolate_visual(points: list[MapPoint], grid_size: int = 100) -> dict[str
             "coverage_mask": np.isfinite(grid), "method": "linear triangulation inside convex hull"}
 
 
+def _uniform_axis_offsets(extent_deg: float, n_samples: int) -> list[float]:
+    """Exact positions grid_generator.py itself placed each row/column at
+    (its own _axis_offsets formula, duplicated here so this module never has
+    to re-derive - and therefore never risks distorting - the real planned
+    geometry). Not an interpolation: these are the literal planned centers."""
+    if n_samples < 2:
+        return [0.0]
+    step = extent_deg / (n_samples - 1)
+    start = -extent_deg / 2.0
+    return [start + i * step for i in range(n_samples)]
+
+
+def find_grid_directory(session_dir: str | Path, max_levels: int = 6) -> Path | None:
+    """Walk upward from the Capture IQ output directory (--session-dir) to
+    find the grid session directory that holds grid_generator.py's own
+    canonical planning artifacts (mosaic.csv, grid_metadata.json). This is
+    the same directory-nesting convention capture.py already uses internally
+    (output_dir = grid_dir/'data'/'iq'/<session>-<timestamp>); walking
+    upward avoids hardcoding an exact level count."""
+    current = Path(session_dir).resolve()
+    for _ in range(max_levels + 1):
+        if (current / "mosaic.csv").is_file() and (current / "grid_metadata.json").is_file():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def load_native_grid_geometry(grid_dir: str | Path) -> dict[str, Any]:
+    """Read the FULL planned grid geometry from grid_generator.py's own
+    artifacts: every logical cell's true row/column and RA/DEC, independent
+    of scan/capture order. This is the single source of truth for the map
+    canvas - it exists before any point is ever captured."""
+    grid_dir = Path(grid_dir)
+    metadata = json.loads((grid_dir / "grid_metadata.json").read_text())["grid"]
+    rows_count, cols_count = int(metadata["rows"]), int(metadata["columns"])
+    cells: dict[str, dict[str, Any]] = {}
+    with (grid_dir / "mosaic.csv").open(newline="") as stream:
+        for csv_row in csv.DictReader(stream):
+            point_id = csv_row["point_id"]
+            cells[point_id] = {
+                "row": int(csv_row["grid_row"]), "column": int(csv_row["grid_col"]),
+                "ra_deg": float(csv_row["ra"]), "dec_deg": float(csv_row["dec"]),
+            }
+    if len(cells) != rows_count * cols_count:
+        raise MapError(f"grid geometry mismatch: mosaic.csv has {len(cells)} planned points "
+                       f"but grid_metadata.json declares rows*columns={rows_count * cols_count}")
+    return {
+        "rows": rows_count, "columns": cols_count,
+        "width_deg": float(metadata.get("width_deg", metadata.get("region_width_deg", 0.0))),
+        "height_deg": float(metadata.get("height_deg", metadata.get("region_height_deg", 0.0))),
+        "cells": cells,
+    }
+
+
+def read_cell_status(grid_dir: str | Path) -> dict[str, str]:
+    """Fresh read of mosaic.csv's own capture_status per point_id (PLANNED,
+    SUCCESS, FAILED, ...) - purely for distinguishing why a cell has no
+    measurement yet. Never used to derive a value."""
+    grid_dir = Path(grid_dir)
+    status_by_id: dict[str, str] = {}
+    with (grid_dir / "mosaic.csv").open(newline="") as stream:
+        for csv_row in csv.DictReader(stream):
+            deferred = str(csv_row.get("visibility_deferred", "")).strip().lower() == "true"
+            raw_status = (csv_row.get("capture_status") or "unknown").strip().upper()
+            status_by_id[csv_row["point_id"]] = "DEFERRED" if deferred and raw_status == "PLANNED" else raw_status
+    return status_by_id
+
+
+def build_native_grid_document(geometry: dict[str, Any], points_state: dict[str, dict[str, Any]],
+                               cell_status_by_id: dict[str, str], session_id: str,
+                               environment: str = "UNKNOWN") -> dict[str, Any]:
+    """Build the Quicklook map as an exact, uninterpolated rendering of the
+    original observation grid: one cell per planned point, never more, never
+    fewer, never a value invented between two real measurements."""
+    rows, cols = geometry["rows"], geometry["columns"]
+    value_grid = np.full((rows, cols), np.nan)
+    status_grid = [["UNKNOWN"] * cols for _ in range(rows)]
+    cell_points: list[MapPoint] = []
+    for point_id, cell in geometry["cells"].items():
+        r, c = cell["row"], cell["column"]
+        item = points_state.get(point_id, {})
+        map_point = item.get("map_point") if item.get("result") == "PROCESSED" else None
+        cell_status = cell_status_by_id.get(point_id, "UNKNOWN")
+        value = math.nan
+        uncertainty = math.nan
+        if map_point is not None:
+            value = float(map_point["map_value"])
+            uncertainty = float(map_point["map_uncertainty"])
+            value_grid[r, c] = value
+            cell_status = "SUCCESS"
+        status_grid[r][c] = cell_status
+        cell_points.append(MapPoint(point_id, item.get("source_hdf5", ""),
+                                    "COMPATIBLE" if map_point is not None else cell_status,
+                                    (map_point or {}).get("coordinate_source", "PLANNED"),
+                                    cell["ra_deg"], cell["dec_deg"],
+                                    x_offset_deg=math.nan, y_offset_deg=math.nan,
+                                    map_value=value, map_uncertainty=uncertainty,
+                                    row=r, column=c, cell_status=cell_status))
+    flag_outliers(cell_points)
+    finite = value_grid[np.isfinite(value_grid)]
+    if finite.size >= 2:
+        lo, hi = np.percentile(finite, [2, 98])
+    elif finite.size == 1:
+        lo = hi = float(finite[0])
+    else:
+        lo, hi = 0.0, 1.0
+    if np.isclose(lo, hi):
+        delta = max(abs(float(lo)) * .01, 1e-4)
+        lo -= delta; hi += delta
+    x_offsets = _uniform_axis_offsets(geometry["width_deg"], cols)
+    y_offsets = _uniform_axis_offsets(geometry["height_deg"], rows)
+    observed_cells = int(np.isfinite(value_grid).sum())
+    document = {
+        "schema_version": "1.0", "status": "NATIVE_GRID", "map_mode": "NATIVE_GRID",
+        "created_utc": datetime.now(timezone.utc).isoformat(), "source_campaign": session_id,
+        "dataset_classification": "LIVE_DERIVED",
+        "calibration_level": "RELATIVE_INSTRUMENTAL", "absolute_calibration": False, "environment": environment,
+        "astronomical_interpretation": "NOT_PERMITTED" if environment == "INDOOR_DEPARTMENT" else "NOT_ASSERTED",
+        "coordinate_system": "ICRS / SkyOffsetFrame", "coordinate_convention": "x positive East; y positive North",
+        "grid_shape": {"rows": rows, "columns": cols, "total_cells": rows * cols},
+        "points": [_point_json(p) for p in cell_points],
+        "grid": {"x_offset_deg": x_offsets, "y_offset_deg": y_offsets,
+                 "values": [[_json_float(v) for v in row_values] for row_values in value_grid],
+                 "coverage_mask": np.isfinite(value_grid).tolist(),
+                 "cell_status": status_grid,
+                 "method": "NATIVE_GRID_NO_INTERPOLATION"},
+        "color_scale": {"minimum": float(lo), "maximum": float(hi), "method": "point percentiles 2-98"},
+        "quicklook_metrics": {"total_cells": rows * cols, "observed_cells": observed_cells,
+            "coverage_fraction": observed_cells / (rows * cols) if rows * cols else 0.0},
+        "known_limitations": ["relative instrumental only", "no source or HI classification",
+            "exact native grid - no spatial interpolation, no smoothing, no synthesized values"],
+    }
+    return document
+
+
+def write_native_grid_png(path: Path, document: dict[str, Any]) -> None:
+    grid = document["grid"]
+    rows, cols = document["grid_shape"]["rows"], document["grid_shape"]["columns"]
+    value_grid = np.array([[np.nan if v is None else v for v in row_values] for row_values in grid["values"]])
+    status_grid = grid["cell_status"]
+    x = grid["x_offset_deg"]; y = grid["y_offset_deg"]
+    step_x = (x[-1] - x[0]) / max(cols - 1, 1) if cols > 1 else 1.0
+    step_y = (y[-1] - y[0]) / max(rows - 1, 1) if rows > 1 else 1.0
+    extent = [x[0] - step_x / 2, x[-1] + step_x / 2, y[0] - step_y / 2, y[-1] + step_y / 2]
+    cmap = matplotlib.colormaps["viridis"].with_extremes(bad="#20262b")
+    masked = np.ma.masked_invalid(value_grid)
+    fig, axis = plt.subplots(figsize=(9, 8), constrained_layout=True)
+    image = axis.imshow(masked, origin="lower", extent=extent, aspect="auto", cmap=cmap,
+                        interpolation="none", vmin=document["color_scale"]["minimum"],
+                        vmax=document["color_scale"]["maximum"])
+    failed_xy = [(x[c], y[r]) for r in range(rows) for c in range(cols) if status_grid[r][c] == "FAILED"]
+    deferred_xy = [(x[c], y[r]) for r in range(rows) for c in range(cols) if status_grid[r][c] == "DEFERRED"]
+    if failed_xy:
+        axis.scatter(*zip(*failed_xy), marker="x", c="#e36b6b", s=45, linewidths=1.6, label="failed")
+    if deferred_xy:
+        axis.scatter(*zip(*deferred_xy), marker="o", facecolors="none", edgecolors="#e6b85c",
+                     s=60, linewidths=1.2, label="deferred")
+    axis.set(title=f"ALMITA — Quicklook Map ({document['status']})",
+             xlabel="East offset [deg]", ylabel="North offset [deg]")
+    metrics = document["quicklook_metrics"]
+    axis.text(.01, .01, f"{document['environment']} | {metrics['observed_cells']}/{metrics['total_cells']} cells observed",
+              transform=axis.transAxes, color="white", fontsize=9,
+              bbox={"facecolor": "black", "alpha": .45, "edgecolor": "none"})
+    if failed_xy or deferred_xy:
+        axis.legend(loc="upper right", fontsize=8)
+    fig.colorbar(image, ax=axis, label="Median fractional excess")
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
+
+
 def flag_outliers(points: list[MapPoint]) -> None:
     good = [p for p in points if np.isfinite(p.map_value)]
+    if not good:
+        return
     values = np.asarray([p.map_value for p in good])
     median = np.median(values); sigma = 1.4826 * np.median(np.abs(values - median))
     if sigma > 0:

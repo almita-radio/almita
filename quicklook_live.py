@@ -15,14 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
 from calibration_foundation import check_calibration_compatibility, load_calibration_profile
-from quicklook_map import (MapPoint, MapError, flag_outliers, interpolate_visual,
-                           map_metric, project_offsets, robust_spherical_center, sha256)
+from quicklook_map import (MapError, build_native_grid_document, find_grid_directory,
+                           load_native_grid_geometry, map_metric, read_cell_status, sha256,
+                           write_native_grid_png)
 from quicklook_spectrum import generate_quicklook
 from quicklook_waterfall import generate_waterfall
 from runtime_state import read_json_safe
@@ -113,52 +111,6 @@ def _log(path: Path, event: str, detail: str="") -> None:
     with path.open("a") as stream: stream.write(f"{utcnow()} {event}{' '+detail if detail else ''}\n")
 
 
-def _map_document(points: list[MapPoint], session_id: str, environment: str="UNKNOWN") -> tuple[dict[str,Any], dict[str,np.ndarray]|None]:
-    center=robust_spherical_center([p.ra_deg for p in points],[p.dec_deg for p in points])
-    x,y=project_offsets([p.ra_deg for p in points],[p.dec_deg for p in points],center)
-    for p,px,py in zip(points,x,y): p.x_offset_deg=float(px);p.y_offset_deg=float(py)
-    flag_outliers(points)
-    grid=None; mode="POINT_ONLY" if len(points)==1 else "LINE_ONLY"
-    if len(points)>=3:
-        try: grid=interpolate_visual(points,100); mode="INTERPOLATED"
-        except MapError: mode="POINTS_ONLY_NON_TRIANGULABLE"
-    values=np.asarray([p.map_value for p in points]); lo,hi=np.percentile(values,[2,98]) if len(values)>1 else (values[0],values[0])
-    if np.isclose(lo,hi):
-        delta=max(abs(float(lo))*.01,1e-4);lo-=delta;hi+=delta
-    document={"schema_version":"1.0","status":mode,"created_utc":utcnow(),"source_campaign":session_id,
-      "dataset_classification":"LIVE_DERIVED","calibration_level":"RELATIVE_INSTRUMENTAL","absolute_calibration":False,
-      "environment":environment,
-      "astronomical_interpretation":"NOT_PERMITTED" if environment=="INDOOR_DEPARTMENT" else "NOT_ASSERTED",
-      "coordinate_system":"ICRS / SkyOffsetFrame",
-      "coordinate_convention":"x positive East; y positive North",
-      "map_center":{"ra_deg":center.ra.deg,"dec_deg":center.dec.deg,"center_source":"ROBUST_SPHERICAL_MEDIAN"},
-      "points":[{**p.__dict__, **{k:(None if not np.isfinite(p.__dict__[k]) else float(p.__dict__[k])) for k in
-        ("ra_deg","dec_deg","x_offset_deg","y_offset_deg","map_value","map_uncertainty","valid_fraction","masked_fraction")}} for p in points],
-      "grid":None if grid is None else {"x_offset_deg":grid["x_deg"].tolist(),"y_offset_deg":grid["y_deg"].tolist(),
-        "values":[[None if not np.isfinite(v) else float(v) for v in row] for row in grid["value"]],
-        "coverage_mask":grid["coverage_mask"].tolist(),"method":grid["method"]},
-      "color_scale":{"minimum":float(lo),"maximum":float(hi),"method":"point percentiles 2–98"},
-      "known_limitations":["relative instrumental only","no source or HI classification","map interpolation is visual"]}
-    return document,grid
-
-
-def _write_map_png(path: Path, document: dict[str,Any], grid) -> None:
-    points=document["points"]; fig,ax=plt.subplots(figsize=(8,6),constrained_layout=True)
-    if grid is not None:
-        extent=[grid["x_deg"][0],grid["x_deg"][-1],grid["y_deg"][0],grid["y_deg"][-1]]
-        im=ax.imshow(grid["value"],origin="lower",extent=extent,aspect="auto",cmap="viridis",
-          vmin=document["color_scale"]["minimum"],vmax=document["color_scale"]["maximum"])
-    else:
-        im=ax.scatter([p["x_offset_deg"] for p in points],[p["y_offset_deg"] for p in points],
-          c=[p["map_value"] for p in points],cmap="viridis",s=80,edgecolors="black",
-          vmin=document["color_scale"]["minimum"],vmax=document["color_scale"]["maximum"])
-    ax.scatter([p["x_offset_deg"] for p in points],[p["y_offset_deg"] for p in points],
-      c=[p["map_value"] for p in points],cmap="viridis",s=55,edgecolors="white",
-      vmin=document["color_scale"]["minimum"],vmax=document["color_scale"]["maximum"])
-    ax.set(title=f"ALMITA — Quicklook Map ({document['status']})",xlabel="East offset [deg]",ylabel="North offset [deg]")
-    fig.colorbar(im,ax=ax,label="Median fractional excess");fig.savefig(path,dpi=130);plt.close(fig)
-
-
 class QuicklookLive:
     def __init__(self, session_dir, profile_path, output_dir, poll_interval=1.0, runtime_dir=None):
         self.session_dir=Path(session_dir); self.output=Path(output_dir); self.output.mkdir(parents=True,exist_ok=True)
@@ -171,6 +123,14 @@ class QuicklookLive:
         self.log_path=self.output/"quicklook_live.log"; self.state=load_state(self.state_path,self.session_id)
         self.state.setdefault("performance_history",[])
         self.performance=[]; self.started=time.perf_counter(); self.resume_seconds=time.perf_counter()-self.started
+        # Native-grid map geometry: best-effort, never fatal. Spectrum/Waterfall
+        # must keep working even if the planned grid cannot be located (e.g. a
+        # historical session, or one launched without grid_generator.py).
+        try:
+            self._grid_dir=find_grid_directory(self.session_dir)
+            self._grid_geometry=load_native_grid_geometry(self._grid_dir) if self._grid_dir else None
+        except Exception:
+            self._grid_dir=None; self._grid_geometry=None
 
     def _publish_latest(self, point_dir:Path)->float:
         start=time.perf_counter()
@@ -183,19 +143,24 @@ class QuicklookLive:
         return time.perf_counter()-start
 
     def _update_map(self)->float:
-        start=time.perf_counter(); points=[]
-        for point_id,item in self.state["points"].items():
-            mp=item.get("map_point")
-            if item.get("result")=="PROCESSED" and mp:
-                points.append(MapPoint(point_id,item["source_hdf5"],"COMPATIBLE",mp["coordinate_source"],
-                  mp["ra_deg"],mp["dec_deg"],map_value=mp["map_value"],map_uncertainty=mp["map_uncertainty"],
-                  valid_fraction=mp["valid_fraction"],masked_fraction=mp["masked_fraction"]))
-        if not points: return time.perf_counter()-start
-        environments={v.get("environment","UNKNOWN") for v in self.state["points"].values() if v.get("result")=="PROCESSED"}
+        start=time.perf_counter()
+        if self._grid_geometry is None:
+            return time.perf_counter()-start
+        processed={pid:item for pid,item in self.state["points"].items()
+                  if item.get("result")=="PROCESSED" and item.get("map_point")}
+        if not processed: return time.perf_counter()-start
+        environments={v.get("environment","UNKNOWN") for v in processed.values()}
         environment=environments.pop() if len(environments)==1 else "MIXED_OR_UNKNOWN"
-        document,grid=_map_document(points,self.session_id,environment)
-        temporary=self.output/"quicklook_map.png.tmp.png";_write_map_png(temporary,document,grid)
-        os.replace(temporary,self.output/"quicklook_map.png");atomic_json(self.output/"quicklook_map.json",document)
+        try:
+            cell_status=read_cell_status(self._grid_dir)
+        except Exception:
+            cell_status={}
+        document=build_native_grid_document(self._grid_geometry,self.state["points"],cell_status,
+                                            self.session_id,environment)
+        temporary=self.output/"quicklook_map.png.tmp.png"
+        write_native_grid_png(temporary,document)
+        os.replace(temporary,self.output/"quicklook_map.png")
+        atomic_json(self.output/"quicklook_map.json",document)
         return time.perf_counter()-start
 
     def _process(self,row:dict[str,str],source:Path)->None:
