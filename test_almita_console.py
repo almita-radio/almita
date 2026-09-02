@@ -872,16 +872,22 @@ document.getElementById("out").textContent = lines.join("\\n") +
     assert "RESULT: ALL PASSED" in html, html
 
 
-def test_61_spectral_stack_panel_sits_beside_antenna_a_thumbs(tmp_path):
-    """Requested layout: to the right of ANTENNA A's thumbs, same row, still
-    before the ANTENNA B section - not literally between RFI and LAST
-    KNOWN SESSION (that's the unrelated ACTIVITY LOG panel's spot)."""
+def test_61_spectral_stack_panel_sits_beside_antenna_a_and_b_column(tmp_path):
+    """Requested layout: a single tall panel to the right of a left column
+    holding BOTH ANTENNA A and ANTENNA B stacked, so it visually spans the
+    combined height of both (flex row, align-items:stretch) - not literally
+    between RFI and LAST KNOWN SESSION (that's the ACTIVITY LOG panel)."""
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     thumbs_index = html.find('id="quicklook-thumbs"')
-    panel_index = html.find('id="spectral-stack-panel"')
     antenna_b_index = html.find("ANTENNA B")
-    assert thumbs_index != -1 and panel_index != -1 and antenna_b_index != -1
-    assert thumbs_index < panel_index < antenna_b_index
+    rfi_thumbs_index = html.find('id="rfi-thumbs"')
+    panel_index = html.find('id="spectral-stack-panel"')
+    last_session_index = html.find('id="last-session"')
+    assert -1 not in (thumbs_index, antenna_b_index, rfi_thumbs_index, panel_index, last_session_index)
+    # Antenna A, then Antenna B, both before the panel (left column comes
+    # first in source order); the panel itself comes after both, and
+    # everything is still before the unrelated LAST KNOWN SESSION panel.
+    assert thumbs_index < antenna_b_index < rfi_thumbs_index < panel_index < last_session_index
     assert "SPECTRAL STACK 3D" in html and "FREQUENCY × CAPTURE × POWER" in html
 
 

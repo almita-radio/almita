@@ -72,7 +72,7 @@
       this.lastSessionId = null; this.lastUpdatedUtc = null; this.lastFetchFailed = false;
       this.fetchInFlight = false;
       this.webglAvailable = true;
-      this.lines = []; this.freq = []; this.rows = [];
+      this.lines = []; this.surfaceMesh = null; this.freq = []; this.rows = [];
       try {
         this._initScene();
       } catch (error) {
@@ -155,6 +155,11 @@
     _clearGeometry() {
       for (const line of this.lines) { this.group.remove(line); line.geometry.dispose(); line.material.dispose(); }
       this.lines = [];
+      if (this.surfaceMesh) {
+        this.group.remove(this.surfaceMesh);
+        this.surfaceMesh.geometry.dispose(); this.surfaceMesh.material.dispose();
+        this.surfaceMesh = null;
+      }
     }
 
     _buildGeometry(freq, rows) {
@@ -172,20 +177,26 @@
       };
       const zFor = (scanOrder) => -((scanOrder - minScan) / scanSpan) * 10;
 
-      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-        const row = rows[rowIndex];
+      // Shared per-vertex position/color, indexed [row][freqBin] - reused
+      // both by the per-capture ridge lines and the filled surface below,
+      // so the DSP-derived values are only walked once.
+      const rowVertices = rows.map((row) => {
         const positions = new Float32Array(freq.length * 3);
         const colors = new Float32Array(freq.length * 3);
         const z = zFor(row.scanOrder);
         for (let i = 0; i < freq.length; i++) {
           const raw = row.values[i];
-          const y = yFor(raw);
           positions[i * 3] = xFor(i);
-          positions[i * 3 + 1] = y;
+          positions[i * 3 + 1] = yFor(raw);
           positions[i * 3 + 2] = z;
           const [r, g, b] = colormap(((Number.isFinite(raw) ? raw : lo) - lo) / span);
           colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
         }
+        return { positions, colors };
+      });
+
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const { positions, colors } = rowVertices[rowIndex];
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
@@ -194,6 +205,37 @@
         line.userData = { rowIndex };
         this.group.add(line);
         this.lines.push(line);
+      }
+
+      // Semi-transparent filled surface between consecutive captures, so
+      // the gap between ridge lines doesn't read as empty space - the
+      // lines drawn on top stay the crisp per-capture profile.
+      if (rows.length >= 2 && freq.length >= 2) {
+        const vertexCount = rows.length * freq.length;
+        const positions = new Float32Array(vertexCount * 3);
+        const colors = new Float32Array(vertexCount * 3);
+        for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+          positions.set(rowVertices[rowIndex].positions, rowIndex * freq.length * 3);
+          colors.set(rowVertices[rowIndex].colors, rowIndex * freq.length * 3);
+        }
+        const indices = [];
+        for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex++) {
+          for (let i = 0; i < freq.length - 1; i++) {
+            const a = rowIndex * freq.length + i, b = a + 1;
+            const c = (rowIndex + 1) * freq.length + i, d = c + 1;
+            indices.push(a, c, b, b, c, d);
+          }
+        }
+        const surfaceGeometry = new THREE.BufferGeometry();
+        surfaceGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+        surfaceGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+        surfaceGeometry.setIndex(indices);
+        surfaceGeometry.computeVertexNormals();
+        const surfaceMaterial = new THREE.MeshBasicMaterial({
+          vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.5,
+        });
+        this.surfaceMesh = new THREE.Mesh(surfaceGeometry, surfaceMaterial);
+        this.group.add(this.surfaceMesh);
       }
       this._limits = { lo, hi, minScan, maxScan };
     }
@@ -250,6 +292,13 @@
       this.fetchInFlight = true;
       try {
         const response = await fetch(DATA_URL, { cache: "no-store" });
+        if (response.status === 404) {
+          // Normal at the start of a session: Quicklook hasn't produced its
+          // first point yet, so the symlinked artifact doesn't exist yet -
+          // that's WAITING, not a broken/corrupt artifact (ERROR).
+          this._setState("WAITING");
+          return;
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const doc = await response.json();
         const parsed = parseDocument(doc, sessionId);

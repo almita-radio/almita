@@ -27,16 +27,29 @@
       <article class="panel"><header><h2>RFI REFERENCE</h2><span id="rfi-ref-badge" class="badge">—</span></header>
         <div id="rfi-ref-kv" class="kv"></div></article>
     </section>
-    <h3 class="antenna-label">ANTENNA A — SCIENCE</h3>
-    <div class="antenna-a-row">
-      <section id="quicklook-thumbs" class="thumbs" hidden>
-        <a id="thumb-spectrum-link" target="_blank" rel="noopener"><img id="thumb-spectrum" alt="Spectrum"><span>SPECTRUM</span></a>
-        <a id="thumb-waterfall-link" target="_blank" rel="noopener"><img id="thumb-waterfall" alt="Waterfall"><span>WATERFALL</span></a>
-        <a id="thumb-map-link" target="_blank" rel="noopener"><img id="thumb-map" alt="Map"><span>MAP</span></a>
-        <a id="thumb-map-interpolated-link" target="_blank" rel="noopener">
-          <img id="thumb-map-interpolated" alt="Native Grid (Interpolated Preview)" hidden>
-          <span>NATIVE GRID (INTERPOLATED PREVIEW)</span></a>
-      </section>
+    <div class="science-row">
+      <div class="science-row-left">
+        <h3 class="antenna-label">ANTENNA A — SCIENCE</h3>
+        <section id="quicklook-thumbs" class="thumbs" hidden>
+          <a id="thumb-spectrum-link" target="_blank" rel="noopener"><img id="thumb-spectrum" alt="Spectrum"><span>SPECTRUM</span></a>
+          <a id="thumb-waterfall-link" target="_blank" rel="noopener"><img id="thumb-waterfall" alt="Waterfall"><span>WATERFALL</span></a>
+          <a id="thumb-map-link" target="_blank" rel="noopener"><img id="thumb-map" alt="Map"><span>MAP</span></a>
+          <a id="thumb-map-interpolated-link" target="_blank" rel="noopener">
+            <img id="thumb-map-interpolated" alt="Native Grid (Interpolated Preview)" hidden>
+            <span>NATIVE GRID (INTERPOLATED PREVIEW)</span></a>
+        </section>
+        <h3 class="antenna-label">ANTENNA B — RFI REFERENCE</h3>
+        <div id="rfi-caption" class="rfi-spectrum-caption">—</div>
+        <section id="rfi-thumbs" class="thumbs" hidden>
+          <a id="rfi-spectrum-link" target="_blank" rel="noopener" class="thumb-canvas">
+            <canvas id="rfi-spectrum-canvas" width="320" height="140"></canvas><span>RFI SPECTRUM</span></a>
+          <a id="rfi-waterfall-link" target="_blank" rel="noopener" class="thumb-canvas">
+            <canvas id="rfi-waterfall-canvas" width="320" height="140"></canvas><span>RFI WATERFALL</span></a>
+          <a id="rfi-map-link" target="_blank" rel="noopener">
+            <img id="rfi-map-thumb" alt="RFI Occupancy Map" hidden><span>RFI OCCUPANCY MAP</span></a>
+        </section>
+        <div id="rfi-products-placeholder" class="rfi-spectrum-placeholder">DISABLED</div>
+      </div>
       <section id="spectral-stack-panel" class="spectral-stack-panel">
         <header>
           <div><h2>SPECTRAL STACK 3D</h2><span class="spectral-stack-subtitle">FREQUENCY × CAPTURE × POWER</span></div>
@@ -50,17 +63,6 @@
         </div>
       </section>
     </div>
-    <h3 class="antenna-label">ANTENNA B — RFI REFERENCE</h3>
-    <div id="rfi-caption" class="rfi-spectrum-caption">—</div>
-    <section id="rfi-thumbs" class="thumbs" hidden>
-      <a id="rfi-spectrum-link" target="_blank" rel="noopener" class="thumb-canvas">
-        <canvas id="rfi-spectrum-canvas" width="320" height="140"></canvas><span>RFI SPECTRUM</span></a>
-      <a id="rfi-waterfall-link" target="_blank" rel="noopener" class="thumb-canvas">
-        <canvas id="rfi-waterfall-canvas" width="320" height="140"></canvas><span>RFI WATERFALL</span></a>
-      <a id="rfi-map-link" target="_blank" rel="noopener">
-        <img id="rfi-map-thumb" alt="RFI Occupancy Map" hidden><span>RFI OCCUPANCY MAP</span></a>
-    </section>
-    <div id="rfi-products-placeholder" class="rfi-spectrum-placeholder">DISABLED</div>
     <section id="activity-log-panel" class="panel compact" hidden>
       <h2>ACTIVITY LOG</h2><pre id="activity-log-lines" class="activity-log"></pre>
     </section>
