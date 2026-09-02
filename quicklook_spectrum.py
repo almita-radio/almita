@@ -27,7 +27,7 @@ from hi_spectral_metric import HI_REST_HZ
 
 SCHEMA_VERSION = "1.0"
 TITLE = "ALMITA — Quicklook Spectrum"
-SPECTRUM_Y_EXPAND = 2.5
+SPECTRUM_Y_EXPAND = 5.0
 
 
 class QuicklookError(RuntimeError):

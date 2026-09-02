@@ -159,7 +159,7 @@ function _drawXAxis(ctx,a,xMin,xMax,fmt){
 // around the data's midpoint compresses the noise floor into a thinner
 // band so a real peak — which sits outside the noise's typical spread —
 // stands out by contrast instead of being lost in it.
-const SPECTRUM_Y_EXPAND=2.5;
+const SPECTRUM_Y_EXPAND=5.0;
 
 function drawRfiSpectrum(canvas,freqMHz,powerDbfs){
   const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
