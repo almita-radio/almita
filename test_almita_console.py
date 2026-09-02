@@ -224,12 +224,13 @@ def test_15_server_binds_0000_8088_by_default():
 def test_15b_prepare_console_web_cache_busts_static_assets(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    for name in ("index.html", "styles.css", "app.js"):
+    for name in ("index.html", "styles.css", "app.js", "spectral_stack_3d.js"):
         (source / name).write_text((CONSOLE / name).read_text())
     public = server_module.prepare_console_web(source, tmp_path / "runtime", tmp_path / "public1")
     html = (public / "index.html").read_text()
     assert 'href="styles.css?v=' in html
     assert 'src="app.js?v=' in html
+    assert 'src="spectral_stack_3d.js?v=' in html
 
     # Changing app.js's content changes its cache-busting version, so a
     # browser that cached the old URL is forced to fetch the new one.
@@ -243,6 +244,20 @@ def test_15b_prepare_console_web_cache_busts_static_assets(tmp_path):
     old_css_version = html.split('href="styles.css?v=')[1].split('"')[0]
     new_css_version = html2.split('href="styles.css?v=')[1].split('"')[0]
     assert old_css_version == new_css_version
+
+
+def test_15c_prepare_console_web_symlinks_vendor_directory(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("index.html", "styles.css", "app.js", "spectral_stack_3d.js"):
+        (source / name).write_text((CONSOLE / name).read_text())
+    vendor = source / "vendor" / "three"
+    vendor.mkdir(parents=True)
+    (vendor / "three.min.js").write_text("/* fake three.js for this test */")
+    public = server_module.prepare_console_web(source, tmp_path / "runtime", tmp_path / "public")
+    link = public / "vendor"
+    assert link.is_symlink()
+    assert (link / "three" / "three.min.js").read_text() == "/* fake three.js for this test */"
 
 
 @contextlib.contextmanager
@@ -259,8 +274,15 @@ def running(root):
 def console_root(tmp_path, status=None):
     public = tmp_path / "public"
     public.mkdir()
-    for name in ("index.html", "styles.css", "app.js"):
+    for name in ("index.html", "styles.css", "app.js", "spectral_stack_3d.js"):
         (public / name).write_text((CONSOLE / name).read_text())
+    vendor = public / "vendor" / "three"
+    vendor.mkdir(parents=True)
+    for name in ("three.min.js", "OrbitControls.js"):
+        # Symlinked, not copied: these are large vendored (non-CDN) files
+        # unrelated to this test's content and would otherwise add real I/O
+        # cost across dozens of tests that call this helper.
+        (vendor / name).symlink_to(CONSOLE / "vendor" / "three" / name)
     runtime = public / "runtime"
     runtime.mkdir()
     if status is not None:
@@ -800,6 +822,86 @@ def test_49_frontend_antenna_a_interpolated_preview_hidden_when_unavailable(tmp_
         or 'thumb-map-interpolated" hidden' in html
     # Antenna A's exact map is completely unaffected by preview availability.
     assert 'id="thumb-map" alt="Map" hidden' not in html and 'thumb-map" hidden' not in html
+
+
+# ---------------------------------------------------------------- SPECTRAL STACK 3D (Antenna A)
+
+
+def test_60_spectral_stack_pure_functions(tmp_path):
+    """Exercises parseDocument/colormap/robustLimits for real in a browser
+    (reusing the chromium harness already required by every dom() test
+    above, rather than adding a `node`-on-PATH dependency this suite can't
+    rely on) - no THREE.js or canvas needed since boot() no-ops without one,
+    leaving window.AlmitaSpectralStack3D free to exercise directly."""
+    root = tmp_path / "public"
+    root.mkdir()
+    (root / "spectral_stack_3d.js").write_text((CONSOLE / "spectral_stack_3d.js").read_text())
+    harness = """<!doctype html><html><body><pre id="out"></pre>
+<script src="spectral_stack_3d.js"></script>
+<script>
+const {colormap, robustLimits, parseDocument} = window.AlmitaSpectralStack3D;
+const lines = [];
+function check(name, cond) { lines.push((cond ? "ok: " : "FAIL: ") + name); }
+
+check("colormap clamps below 0", JSON.stringify(colormap(-5)) === JSON.stringify(colormap(0)));
+check("colormap clamps above 1", JSON.stringify(colormap(5)) === JSON.stringify(colormap(1)));
+
+const values = Array.from({length:100}, (_,i)=>i+1).concat([-10000, 10000]);
+const limits = robustLimits([{values}]);
+check("robustLimits clips low outlier", limits.lo > -100);
+check("robustLimits clips high outlier", limits.hi < 200);
+const nullLimits = robustLimits([{values:[null,null]}]);
+check("robustLimits handles all-null", Number.isFinite(nullLimits.lo) && Number.isFinite(nullLimits.hi));
+
+const doc = {session_id:"s1", frequency_mhz:[1,2,3],
+  rows:[{point_id:"3",relative_db:[.3,.3,.3]},{point_id:"1",relative_db:[.1,.1,.1]},{point_id:"2",relative_db:[.2,.2,.2]}]};
+check("parseDocument rejects session mismatch", parseDocument(doc,"s2")===null);
+const parsed = parseDocument(doc,"s1");
+check("parseDocument sorts by scan_order", JSON.stringify(parsed.rows.map(r=>r.scanOrder))==='[1,2,3]');
+
+const badDoc = {session_id:"s1", frequency_mhz:[1,2,3],
+  rows:[{point_id:"1",relative_db:[.1,.2]},{point_id:"2",relative_db:[.1,.2,.3]},{point_id:"nope",relative_db:[.1,.2,.3]}]};
+const badParsed = parseDocument(badDoc,"s1");
+check("parseDocument drops mismatched-length and non-numeric rows", badParsed.rows.length===1 && badParsed.rows[0].pointId==="2");
+
+document.getElementById("out").textContent = lines.join("\\n") +
+  "\\n" + (lines.some(l=>l.startsWith("FAIL")) ? "RESULT: FAILURES" : "RESULT: ALL PASSED");
+</script></body></html>"""
+    (root / "index.html").write_text(harness)
+    html = dom(root, query="/")
+    assert "RESULT: ALL PASSED" in html, html
+
+
+def test_61_spectral_stack_panel_sits_beside_antenna_a_thumbs(tmp_path):
+    """Requested layout: to the right of ANTENNA A's thumbs, same row, still
+    before the ANTENNA B section - not literally between RFI and LAST
+    KNOWN SESSION (that's the unrelated ACTIVITY LOG panel's spot)."""
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    thumbs_index = html.find('id="quicklook-thumbs"')
+    panel_index = html.find('id="spectral-stack-panel"')
+    antenna_b_index = html.find("ANTENNA B")
+    assert thumbs_index != -1 and panel_index != -1 and antenna_b_index != -1
+    assert thumbs_index < panel_index < antenna_b_index
+    assert "SPECTRAL STACK 3D" in html and "FREQUENCY × CAPTURE × POWER" in html
+
+
+def test_62_spectral_stack_degrades_gracefully_without_webgl(tmp_path):
+    """This sandbox's headless chromium has no GPU/WebGL - real proof the
+    panel's own try/catch keeps the rest of the console working rather than
+    breaking the page, not just an assumption. A real desktop browser has
+    WebGL and reaches LIVE/COMPLETED instead - only verifiable by a human,
+    hence the SSH-visual-check steps handed back to the operator."""
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert 'id="spectral-stack-badge" class="badge status-error">ERROR<' in html
+    # The rest of the console must be completely unaffected by that failure.
+    assert ">RUNNING<" in html and "demo" in html
+    assert 'id="quicklook-thumbs"' in html
+
+
+def test_63_spectral_stack_existing_thumbs_layout_unaffected(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert "SPECTRUM" in html and "WATERFALL" in html and "MAP" in html
+    assert 'id="thumb-spectrum-link"' in html and 'id="thumb-waterfall-link"' in html
 
 
 # ---------------------------------------------------------------- activity log (orchestrator_capture.log tail)

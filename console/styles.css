@@ -12,7 +12,7 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,san
 .topbar dd{margin:2px 0 0;font-family:ui-monospace,monospace}
 .badge{font-weight:700}
 .status-ready,.status-ok,.status-running,.status-completed,.status-available,.status-detected,.status-listening,.status-live,.status-no,.status-stopped{color:var(--ok)}
-.status-degraded,.status-idle,.status-starting,.status-waiting,.status-stale,.status-unknown,.status-yes,.status-unavailable{color:var(--warn)}
+.status-degraded,.status-idle,.status-starting,.status-waiting,.status-stale,.status-unknown,.status-yes,.status-unavailable,.status-loading{color:var(--warn)}
 .status-aborted,.status-error,.status-not_detected,.status-failed{color:var(--error)}
 .banner{padding:9px 14px;margin:0;border-bottom:1px solid #814d4d;background:#281818;color:#f39b9b}
 main{padding:14px;max-width:1400px;margin:auto}
@@ -38,6 +38,19 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .activity-log .log-error{color:var(--error)}
 .activity-log .log-point{color:var(--accent);font-weight:700}
 .activity-log .log-session{color:var(--warn)}
+.antenna-a-row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-top:10px}
+.antenna-a-row #quicklook-thumbs{flex:0 0 auto;margin-top:0}
+.spectral-stack-panel{flex:1 1 460px;min-width:340px;background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column}
+.spectral-stack-panel>header{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--line)}
+.spectral-stack-subtitle{display:block;font-size:10px;letter-spacing:.1em;color:var(--muted);margin-top:2px}
+.spectral-stack-viewport{position:relative;flex:1;min-height:340px;background:#f4f6f8}
+.spectral-stack-viewport canvas{display:block;width:100%;height:100%}
+.spectral-stack-message{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#5b6874;letter-spacing:.1em;font-size:12px;text-align:center;padding:20px;pointer-events:none}
+.spectral-stack-message[hidden]{display:none}
+.spectral-stack-tooltip{position:absolute;pointer-events:none;background:rgba(18,26,32,.92);color:#e6edf1;border:1px solid var(--line);padding:6px 9px;font:11px/1.5 ui-monospace,monospace;white-space:pre;transform:translate(-50%,-115%)}
+.spectral-stack-reset{position:absolute;right:8px;bottom:8px;background:rgba(18,26,32,.85);color:var(--text);border:1px solid var(--line);padding:5px 9px;font:700 10px/1 monospace;letter-spacing:.08em;cursor:pointer}
+.spectral-stack-reset:hover{background:rgba(18,26,32,1)}
+@media(max-width:820px){.antenna-a-row{flex-direction:column}.spectral-stack-panel{min-width:0;width:100%}}
 @media(max-width:900px){.grid3{grid-template-columns:1fr}.topbar{display:block}.topbar dl{margin-top:10px}}
 
 /* OBSERVE page (console/observe.html) + shared nav — additive only,

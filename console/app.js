@@ -362,6 +362,7 @@ function render(status){
   renderRfiRef(rfiRef);
   renderRfiProducts(rfiRef,quicklook,(status.acquisition||{}).session_id||null);
   renderActivityLog(status.activity_log);
+  if(window.SpectralStack3D)window.SpectralStack3D.update((status.acquisition||{}).session_id||null,(status.acquisition||{}).state);
   renderLastSession(status.last_session);
 }
 

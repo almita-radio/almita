@@ -46,12 +46,23 @@ def prepare_console_web(source_dir: Path, runtime_dir: Path, public_root: Path) 
     source_dir = Path(source_dir)
     public_root = Path(public_root)
     public_root.mkdir(parents=True, exist_ok=True)
-    for name in ("styles.css", "app.js"):
+    for name in ("styles.css", "app.js", "spectral_stack_3d.js"):
         shutil.copyfile(source_dir / name, public_root / name)
     html = (source_dir / "index.html").read_text()
     html = html.replace('href="styles.css"', f'href="styles.css?v={_asset_version(source_dir / "styles.css")}"')
     html = html.replace('src="app.js"', f'src="app.js?v={_asset_version(source_dir / "app.js")}"')
+    html = html.replace(
+        'src="spectral_stack_3d.js"',
+        f'src="spectral_stack_3d.js?v={_asset_version(source_dir / "spectral_stack_3d.js")}"',
+    )
     (public_root / "index.html").write_text(html)
+    # Vendored third-party (SPECTRAL STACK 3D's three.js) - large and never
+    # edited by us, so symlinked whole rather than copied like the small
+    # first-party assets above; same pattern as the runtime/ symlink below.
+    vendor_source = source_dir / "vendor"
+    vendor_link = public_root / "vendor"
+    if vendor_source.is_dir() and not vendor_link.exists():
+        vendor_link.symlink_to(vendor_source.resolve(), target_is_directory=True)
     runtime_dir = Path(runtime_dir).resolve()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     link = public_root / "runtime"
