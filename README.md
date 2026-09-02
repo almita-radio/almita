@@ -54,7 +54,9 @@ The current setup includes:
 - **Raspberry Pi 5**
 - **RTL-SDR Blog V4** — primary science receiver
 - **RTL-SDR Blog V3** — secondary RFI reference receiver
-- **Nooelec Hydrogen LNA**
+- **Nooelec Hydrogen LNA** — primary 1420 MHz science-chain LNA
+- **RTL-SDR.com Wideband LNA (SPF5189Z-based)** — secondary RFI reference-chain LNA
+- **Nooelec Flamingo FM** — FM broadcast notch filter for the RFI reference chain
 - 1420 MHz feed
 - Modified ~90 × 60 cm WiFi grid/parabolic reflector
 - Equatorial mount
@@ -252,22 +254,24 @@ This improves:
 Constantly changing gain in the middle of a sky map is considered bad manners.
 
 ---
-
 ## RFI reference receiver
 
-ALMITA is adding a second RTL-SDR dedicated to monitoring the local RF environment.
+ALMITA includes a second RTL-SDR dedicated to monitoring the local RF environment independently from the primary science receiver.
 
-Planned architecture:
+Current architecture:
 
 ```text
 MAIN
-RTL-SDR V4
-→ science antenna
-→ full acquisition
+1420 MHz science feed
+→ Nooelec Hydrogen LNA
+→ RTL-SDR Blog V4
+→ full science acquisition
 → HDF5
 
 RFI_REF
-RTL-SDR V3
-→ small 1420 MHz dipole
+1420 MHz dipole
+→ Nooelec Flamingo FM notch filter
+→ RTL-SDR.com Wideband LNA
+→ RTL-SDR Blog V3
 → lightweight FFT monitoring
 → RFI diagnostics
