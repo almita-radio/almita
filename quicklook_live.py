@@ -21,6 +21,8 @@ from calibration_foundation import check_calibration_compatibility, load_calibra
 from quicklook_map import (MapError, build_native_grid_document, find_grid_directory,
                            load_native_grid_geometry, map_metric, read_cell_status, sha256,
                            write_native_grid_png)
+from quicklook_map_interpolated_preview import (build_interpolated_preview_document,
+                                                write_interpolated_preview_png)
 from quicklook_spectrum import generate_quicklook
 from quicklook_waterfall import generate_waterfall
 from rfi_occupancy_map import (build_rfi_occupancy_map_document, correlate_rfi_with_points,
@@ -163,7 +165,25 @@ class QuicklookLive:
         write_native_grid_png(temporary,document)
         os.replace(temporary,self.output/"quicklook_map.png")
         atomic_json(self.output/"quicklook_map.json",document)
+        self._update_interpolated_preview()
         return time.perf_counter()-start
+
+    def _update_interpolated_preview(self)->None:
+        """OPTIONAL, purely visual companion to the NATIVE_GRID map above -
+        best-effort, never fatal: the exact science map (quicklook_map.json)
+        must keep working whether or not this preview succeeds. Written to
+        distinctly-named files so it can never be confused with or
+        overwrite the NATIVE_GRID product."""
+        try:
+            document=build_interpolated_preview_document(self._grid_geometry,self.state["points"],
+                                                          self.session_id)
+            atomic_json(self.output/"quicklook_map_interpolated.json",document)
+            if document.get("available"):
+                temporary=self.output/"quicklook_map_interpolated.png.tmp.png"
+                write_interpolated_preview_png(temporary,document)
+                os.replace(temporary,self.output/"quicklook_map_interpolated.png")
+        except Exception:
+            pass
 
     def _update_rfi_occupancy_map(self)->float:
         """ANTENNA B diagnostic overlay on Antenna A's own native grid -

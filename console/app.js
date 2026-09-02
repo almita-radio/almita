@@ -51,7 +51,10 @@ function renderSession(acquisition){
 function renderThumbs(quicklook){
   const items=[["spectrum","latest_spectrum.png",quicklook.spectrum_available],
     ["waterfall","latest_waterfall.png",quicklook.waterfall_available],
-    ["map","quicklook_map.png",quicklook.map_available]];
+    ["map","quicklook_map.png",quicklook.map_available],
+    // OPTIONAL visual-only companion to the exact NATIVE_GRID map above -
+    // never the science product itself.
+    ["map-interpolated","quicklook_map_interpolated.png",quicklook.interpolated_map_available]];
   const version=encodeURIComponent(quicklook.last_product_utc||"unversioned");
   let any=false;
   for(const [id,file,available] of items){

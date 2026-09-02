@@ -48,6 +48,9 @@ FULL_SCALE_AMPLITUDE = 127.5  # unsigned-8 IQ centered at 127/128
 N_SPECTRUM_BINS = 256  # bounded ANTENNA B/RFI_REF spectrum product size
 N_WATERFALL_MAX_ROWS = 120  # ~4 minutes at the default 2s publish cadence
 N_HISTORY_MAX_SAMPLES = 3600  # ~2 hours at the default 2s publish cadence
+DC_GUARD_HZ = 1000.0  # +/- half-width blanked around 0 Hz to suppress the
+# RTL-SDR zero-IF/LO-leakage "DC spike" - a hardware artifact of the
+# R820T/R828D tuner (present on both V3 and V4), not real RF content.
 
 STATES = ("DISABLED", "STARTING", "RUNNING", "DEGRADED", "UNAVAILABLE", "FAILED", "STOPPED")
 
@@ -68,12 +71,36 @@ def _downsample_bins(values: np.ndarray, n_bins: int, reducer) -> np.ndarray:
     return np.array([reducer(g) for g in groups], dtype=np.float32)
 
 
+def _suppress_dc_spike(power_dbfs: np.ndarray, sample_rate: int, n: int,
+                        guard_hz: float = DC_GUARD_HZ) -> np.ndarray:
+    """Blanks the +/-guard_hz region around 0 Hz (the fftshift'd array's
+    center bin) by linear interpolation from its immediate neighbors -
+    standard DC-spike/LO-leakage suppression for zero-IF receivers like the
+    RTL-SDR R820T/R828D, applied only to this auxiliary RFI diagnostic
+    (never to MAIN's own science path/HDF5, which never runs this code)."""
+    center = n // 2
+    bin_hz = sample_rate / n
+    half_bins = max(1, int(round(guard_hz / bin_hz)))
+    lo = max(0, center - half_bins)
+    hi = min(n, center + half_bins + 1)
+    if lo <= 0:
+        power_dbfs[lo:hi] = power_dbfs[hi] if hi < n else power_dbfs[lo]
+    elif hi >= n:
+        power_dbfs[lo:hi] = power_dbfs[lo - 1]
+    else:
+        power_dbfs[lo:hi] = np.linspace(power_dbfs[lo - 1], power_dbfs[hi], hi - lo)
+    return power_dbfs
+
+
 def _quicklook_fft(chunk: bytes, sample_rate: int, test_delay_s: float = 0.0):
     """Runs in a worker thread; never touches the asyncio loop. Returns
     (peak_dbfs, clip_fraction, occupancy_fraction, spectrum_freq_offsets_hz,
     spectrum_power_dbfs). The bounded spectrum arrays are downsampled from
     the SAME FFT computed for peak/occupancy below - no second FFT is ever
-    performed for visualization."""
+    performed for visualization. The DC spike is suppressed once, here,
+    before peak/occupancy/downsampling, so every downstream product
+    (spectrum, waterfall, status metrics, the RFI occupancy map) reflects
+    real RFI rather than the RTL-SDR's own hardware LO-leakage artifact."""
     if test_delay_s > 0:
         time.sleep(test_delay_s)  # SATANIC-test-only: simulate a slow consumer
     u8 = np.frombuffer(chunk, dtype=np.uint8)
@@ -91,6 +118,7 @@ def _quicklook_fft(chunk: bytes, sample_rate: int, test_delay_s: float = 0.0):
     # Normalize by N * full-scale amplitude so ~0 dBFS means a full-scale tone.
     norm_mag = np.abs(spectrum) / (n * FULL_SCALE_AMPLITUDE)
     power_dbfs = 20 * np.log10(norm_mag + 1e-12)
+    power_dbfs = _suppress_dc_spike(power_dbfs, sample_rate, n)
     peak_dbfs = float(np.max(power_dbfs))
     noise_floor = float(np.median(power_dbfs))
     occupancy = float(np.mean(power_dbfs > (noise_floor + 10.0)))

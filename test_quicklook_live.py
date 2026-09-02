@@ -223,3 +223,51 @@ def test_rfi_occupancy_map_missing_history_file_produces_nothing(tmp_path,monkey
     status=ql.QuicklookLive(session,PROFILE,out,runtime_dir=runtime).run(True)
     assert status["points_processed"]==1  # science quicklook unaffected
     assert not (out/"rfi_occupancy_map.json").exists()
+
+
+# ---------------------------------------------------------------- ANTENNA A interpolated preview (optional)
+
+
+def test_interpolated_preview_available_alongside_unmodified_native_grid(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,3)
+    for pid in (1,2,3):
+        capture(session/f"p{pid}.h5")
+    manifest(session,[row(str(pid),"SUCCESS",f"p{pid}.h5",ra=str(10.0+pid),dec="-30") for pid in (1,2,3)])
+    out=tmp_path/"out"
+    ql.QuicklookLive(session,PROFILE,out).run(True)
+    native=json.loads((out/"quicklook_map.json").read_text())
+    assert native["map_mode"]=="NATIVE_GRID"  # untouched by the preview feature
+    preview=json.loads((out/"quicklook_map_interpolated.json").read_text())
+    assert preview["available"] is True
+    assert preview["interpolated"] is True
+    assert preview["n_points_used"]==3
+    assert (out/"quicklook_map_interpolated.png").exists()
+
+
+def test_interpolated_preview_unavailable_with_few_points_native_grid_still_updates(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,1)
+    source=session/"one.h5";capture(source);manifest(session,[row("1","SUCCESS","one.h5")])
+    out=tmp_path/"out"
+    ql.QuicklookLive(session,PROFILE,out).run(True)
+    assert (out/"quicklook_map.json").exists()  # native grid: 1 point is enough to update
+    preview=json.loads((out/"quicklook_map_interpolated.json").read_text())
+    assert preview["available"] is False  # fewer than 3 points: interpolation undefined
+    assert not (out/"quicklook_map_interpolated.png").exists()
+
+
+def test_interpolated_preview_failure_never_breaks_native_grid(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,3)
+    for pid in (1,2,3):
+        capture(session/f"p{pid}.h5")
+    manifest(session,[row(str(pid),"SUCCESS",f"p{pid}.h5",ra=str(10.0+pid),dec="-30") for pid in (1,2,3)])
+    out=tmp_path/"out"
+
+    def boom(*a,**k):
+        raise RuntimeError("simulated interpolation failure")
+    monkeypatch.setattr(ql,"build_interpolated_preview_document",boom)
+    status=ql.QuicklookLive(session,PROFILE,out).run(True)
+    assert status["points_processed"]==3
+    native=json.loads((out/"quicklook_map.json").read_text())
+    assert native["map_mode"]=="NATIVE_GRID"
+    assert native["quicklook_metrics"]["observed_cells"]==3
+    assert not (out/"quicklook_map_interpolated.json").exists()

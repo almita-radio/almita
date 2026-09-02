@@ -166,7 +166,7 @@ def build_acquisition(now_utc: str, current_session: Optional[dict], capture_pro
 _QUICKLOOK_IDLE = {
     "state": "IDLE", "points_processed": None, "last_product_utc": None,
     "spectrum_available": False, "waterfall_available": False, "map_available": False,
-    "rfi_occupancy_map_available": False,
+    "rfi_occupancy_map_available": False, "interpolated_map_available": False,
     "quicklook_stale": False, "error": None,
 }
 _QUICKLOOK_WAITING = {**_QUICKLOOK_IDLE, "state": "WAITING"}
@@ -195,6 +195,12 @@ def build_quicklook(now_utc: str, runtime_dir: Path, session_id: Optional[str]) 
         # ANTENNA B diagnostic overlay on Antenna A's own grid - a distinct
         # product from Antenna A's own map above (quicklook_map.json).
         "rfi_occupancy_map_available": (root / "rfi_occupancy_map.json").is_file(),
+        # OPTIONAL, purely visual companion to Antenna A's own NATIVE_GRID
+        # map above - distinct file, only "available" once its own document
+        # says so (fewer than 3 real points means the file exists but
+        # interpolation is undefined yet).
+        "interpolated_map_available": bool(
+            (read_json_safe(root / "quicklook_map_interpolated.json") or {}).get("available")),
         "quicklook_stale": stale,
         "error": errors[0].get("warning") if errors and isinstance(errors[0], dict) else None,
     }

@@ -574,7 +574,8 @@ def _quicklook_running(**overrides):
     base = {
         "state": "OK", "points_processed": 3, "last_product_utc": utcnow(),
         "spectrum_available": True, "waterfall_available": True, "map_available": True,
-        "rfi_occupancy_map_available": True, "quicklook_stale": False, "error": None,
+        "rfi_occupancy_map_available": True, "interpolated_map_available": True,
+        "quicklook_stale": False, "error": None,
     }
     base.update(overrides)
     return base
@@ -678,6 +679,22 @@ def test_47_frontend_rfi_thumbs_stopped_state_retains_products(tmp_path):
     html = dom(public)
     assert ">STOPPED<" in html
     assert "WAITING FOR RFI PRODUCTS" not in html
+
+
+def test_48_frontend_antenna_a_interpolated_preview_thumb_shown_when_available(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", quicklook=_quicklook_running(interpolated_map_available=True))))
+    assert "NATIVE GRID (INTERPOLATED PREVIEW)" in html
+    assert 'id="thumb-map-interpolated" alt="Native Grid (Interpolated Preview)" hidden' not in html
+
+
+def test_49_frontend_antenna_a_interpolated_preview_hidden_when_unavailable(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", quicklook=_quicklook_running(interpolated_map_available=False))))
+    assert 'id="thumb-map-interpolated" alt="Native Grid (Interpolated Preview)" hidden' in html \
+        or 'thumb-map-interpolated" hidden' in html
+    # Antenna A's exact map is completely unaffected by preview availability.
+    assert 'id="thumb-map" alt="Map" hidden' not in html and 'thumb-map" hidden' not in html
 
 
 # ---------------------------------------------------------------- closeout: canonical runtime_dir

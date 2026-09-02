@@ -73,6 +73,22 @@ def _quiet_block(n_bytes=131072):
     return bytes([127, 128] * (n_bytes // 2))
 
 
+def _dc_biased_noise_block(n_bytes=131072, dc_offset=15.0, seed=42):
+    """Broadband-noise-like I/Q with a strong DC bias, mimicking the real
+    RTL-SDR zero-IF LO-leakage artifact observed on real V3/V4 hardware
+    (a narrow spike exactly at the tuned center frequency, ~24 dB above
+    the noise floor, confirmed via data/runtime/rfi_ref_spectrum.json
+    during a real field session)."""
+    n = n_bytes // 2
+    rng = np.random.default_rng(seed)
+    i = np.clip(rng.normal(0, 3.0, n) + dc_offset + 127.5, 0, 255).astype(np.uint8)
+    q = np.clip(rng.normal(0, 3.0, n) + dc_offset + 127.5, 0, 255).astype(np.uint8)
+    chunk = np.empty(2 * n, dtype=np.uint8)
+    chunk[0::2] = i
+    chunk[1::2] = q
+    return chunk.tobytes()
+
+
 # ---------------------------------------------------------------- lifecycle
 
 
@@ -302,6 +318,35 @@ def test_quicklook_fft_quiet_block_has_low_occupancy():
     peak_dbfs, clip_fraction, occupancy, freq, power = rfi_monitor._quicklook_fft(quiet_block, 2_400_000)
     assert clip_fraction == 0.0
     assert 0.0 <= occupancy <= 1.0
+
+
+def test_quicklook_fft_suppresses_rtl_sdr_dc_spike():
+    """Regression test for the real-hardware finding: RTL-SDR's zero-IF/LO
+    leakage produces a narrow, strong spike exactly at the tuned center
+    frequency (0 Hz baseband) on both V3 and V4 - a hardware artifact, not
+    real RFI. _quicklook_fft must blank/interpolate it so peak_dbfs,
+    occupancy, the spectrum, waterfall, and (downstream) the RFI occupancy
+    map all reflect genuine RF content instead."""
+    sample_rate = 2_400_000
+    block = _dc_biased_noise_block(dc_offset=15.0)
+    peak_dbfs, clip_fraction, occupancy, freq, power = rfi_monitor._quicklook_fft(block, sample_rate)
+    center_idx = len(power) // 2
+    peak_idx = int(np.argmax(power))
+    # The peak must not land in the DC-guarded region - if suppression were
+    # absent, the DC-biased synthetic block would peak exactly there.
+    assert abs(peak_idx - center_idx) > 1
+    noise_floor = float(np.median(power))
+    assert peak_dbfs < noise_floor + 10.0  # no longer a dominant spike
+
+
+def test_suppress_dc_spike_blanks_only_the_guard_band():
+    sample_rate = 2_400_000
+    n = 1024
+    power = np.full(n, -80.0, dtype=np.float32)
+    power[n // 2] = 0.0  # a lone, unrealistically strong DC bin
+    result = rfi_monitor._suppress_dc_spike(power.copy(), sample_rate, n, guard_hz=1000.0)
+    assert result[n // 2] < -70.0  # the spike itself is gone
+    assert result[0] == -80.0 and result[-1] == -80.0  # far bins untouched
 
 
 # ---------------------------------------------------------------- ANTENNA B spectrum product
