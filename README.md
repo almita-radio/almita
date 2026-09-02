@@ -80,6 +80,7 @@ ALMITA is mainly written in **Python** and runs locally on the Raspberry Pi.
 
 Core technologies include:
 
+- Linux
 - Python
 - NumPy
 - Astropy
