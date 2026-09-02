@@ -72,3 +72,6 @@ mount_benchmark_physical_*/
 # Almita Console V1 - runtime outputs generados (no versionar)
 data/runtime/
 data/console_web/
+
+# Dual-SDR benchmark - evidencia de corridas (CSV/JSON/logs), no versionar
+data/dual_sdr_bench/
