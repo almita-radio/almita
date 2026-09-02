@@ -27,7 +27,7 @@ from hi_spectral_metric import HI_REST_HZ
 
 SCHEMA_VERSION = "1.0"
 TITLE = "ALMITA — Quicklook Spectrum"
-SPECTRUM_Y_EXPAND = 5.0
+SPECTRUM_Y_FIXED_RANGE_DB = 5.0
 
 
 class QuicklookError(RuntimeError):
@@ -80,15 +80,11 @@ def _mask_regions(frequency_hz: np.ndarray, mask: np.ndarray):
     ]
 
 
-def _robust_limits(values: np.ndarray, valid: np.ndarray, low=1.0, high=99.0, expand=1.0):
+def _robust_limits(values: np.ndarray, valid: np.ndarray, low=1.0, high=99.0):
     selected = np.asarray(values)[valid & np.isfinite(values)]
     if selected.size < 16:
         raise QuicklookError("insufficient valid bins for robust autoscale")
     lower, upper = np.percentile(selected, [low, high])
-    if expand != 1.0:
-        mid = (float(lower) + float(upper)) / 2
-        half_span = max(float(upper - lower) / 2, 1e-6) * expand
-        return mid - half_span, mid + half_span
     padding = max(float(upper - lower) * 0.08, 1e-6)
     return float(lower - padding), float(upper + padding)
 
@@ -124,7 +120,7 @@ def _write_plots(output: Path, document: dict[str, Any], arrays: dict[str, np.nd
     axis.axvline(HI_REST_HZ / 1e6, color="tab:green", linestyle="--", linewidth=1,
                  label="HI rest frequency (marker only)")
     _draw_masks(axis, frequency_hz, dc, spur)
-    axis.set_ylim(*_robust_limits(relative_db, valid, expand=SPECTRUM_Y_EXPAND))
+    axis.set_ylim(-SPECTRUM_Y_FIXED_RANGE_DB, SPECTRUM_Y_FIXED_RANGE_DB)
     axis.set(xlabel="Frequency (MHz)", ylabel="Relative PSD (dB)", title=TITLE)
     axis.text(0.01, 0.01, metadata_line, transform=axis.transAxes, fontsize=8)
     axis.grid(True, alpha=0.3)

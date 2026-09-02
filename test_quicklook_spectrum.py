@@ -7,7 +7,12 @@ import numpy as np
 import pytest
 
 from calibration_foundation import apply_relative_calibration, load_calibration_profile
-from quicklook_spectrum import QuicklookError, SPECTRUM_Y_EXPAND, _robust_limits, generate_quicklook
+from quicklook_spectrum import (
+    QuicklookError,
+    SPECTRUM_Y_FIXED_RANGE_DB,
+    _robust_limits,
+    generate_quicklook,
+)
 
 
 ROOT = Path(__file__).parent
@@ -136,7 +141,7 @@ def test_deterministic_numerical_arrays(generated, tmp_path):
         assert np.array_equal(first[key], second[key])
 
 
-def test_robust_limits_default_expand_matches_legacy_padding_behavior():
+def test_robust_limits_matches_legacy_padding_behavior():
     rng = np.random.default_rng(0)
     values = rng.normal(size=1000)
     valid = np.ones_like(values, dtype=bool)
@@ -147,45 +152,32 @@ def test_robust_limits_default_expand_matches_legacy_padding_behavior():
     assert upper == pytest.approx(percentile_upper + padding)
 
 
-def test_robust_limits_expand_one_explicit_equals_default():
-    rng = np.random.default_rng(1)
-    values = rng.normal(size=1000)
-    valid = np.ones_like(values, dtype=bool)
-    assert _robust_limits(values, valid) == _robust_limits(values, valid, expand=1.0)
-
-
-def test_robust_limits_expand_widens_symmetrically_around_percentile_midpoint():
-    rng = np.random.default_rng(2)
-    values = rng.normal(size=1000)
-    valid = np.ones_like(values, dtype=bool)
-    percentile_lower, percentile_upper = np.percentile(values, [1.0, 99.0])
-    mid = (percentile_lower + percentile_upper) / 2
-    half_span = (percentile_upper - percentile_lower) / 2 * SPECTRUM_Y_EXPAND
-    lower, upper = _robust_limits(values, valid, expand=SPECTRUM_Y_EXPAND)
-    assert lower == pytest.approx(mid - half_span)
-    assert upper == pytest.approx(mid + half_span)
-
-
-def test_robust_limits_expand_still_raises_on_insufficient_bins():
+def test_robust_limits_still_raises_on_insufficient_bins():
     values = np.array([1.0, 2.0, 3.0])
     valid = np.array([True, True, True])
     with pytest.raises(QuicklookError, match="insufficient valid bins"):
-        _robust_limits(values, valid, expand=SPECTRUM_Y_EXPAND)
+        _robust_limits(values, valid)
 
 
-def test_fractional_excess_ylim_still_uses_default_unexpanded_padding(generated):
-    _, _, arrays, _, _ = generated
-    valid = arrays["valid_mask"]
-    fractional = arrays["fractional_excess"]
-    expected_lower, expected_upper = _robust_limits(fractional, valid)
-    expanded_lower, expanded_upper = _robust_limits(fractional, valid, expand=SPECTRUM_Y_EXPAND)
-    assert (expected_upper - expected_lower) < (expanded_upper - expanded_lower)
+def test_spectrum_fixed_and_fractional_excess_robust_ylim_calls(monkeypatch, tmp_path):
+    # matplotlib's own autoscale machinery also calls set_ylim internally
+    # (with a single [lower, upper] list argument) while rendering; only
+    # our explicit two-float calls are the ones under test here.
+    from matplotlib.axes import Axes
 
+    calls = []
+    original_set_ylim = Axes.set_ylim
 
-def test_spectrum_ylim_wider_than_legacy_default_for_real_capture(generated):
-    _, _, arrays, _, _ = generated
-    valid = arrays["valid_mask"]
-    relative_db = arrays["relative_psd_db"]
-    legacy_lower, legacy_upper = _robust_limits(relative_db, valid)
-    spectrum_lower, spectrum_upper = _robust_limits(relative_db, valid, expand=SPECTRUM_Y_EXPAND)
-    assert (spectrum_upper - spectrum_lower) > (legacy_upper - legacy_lower)
+    def recording_set_ylim(self, *args, **kwargs):
+        if len(args) == 2:
+            calls.append(args)
+        return original_set_ylim(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "set_ylim", recording_set_ylim)
+    _, arrays = generate_quicklook(SOURCE, PROFILE, tmp_path / "ylim_check")
+
+    expected_fractional = _robust_limits(arrays["fractional_excess"], arrays["valid_mask"])
+    assert calls == [
+        (-SPECTRUM_Y_FIXED_RANGE_DB, SPECTRUM_Y_FIXED_RANGE_DB),
+        pytest.approx(expected_fractional),
+    ]
