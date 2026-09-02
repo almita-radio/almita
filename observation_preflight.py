@@ -221,11 +221,45 @@ def _rtl_tcp_service_check() -> Dict[str, Any]:
                        f"systemctl unavailable: {type(exc).__name__}: {exc}; skipped (informational only)")
 
 
+def _listening_address_candidates(host: str, port: int) -> List[str]:
+    """Resolve host to the literal address form(s) `ss -lntp` actually prints
+    (e.g. "localhost" -> "127.0.0.1", and "[::1]" for IPv6) — read-only DNS/
+    hosts-file resolution via the stdlib, no network I/O to the SDR itself.
+    Lets dual_sdr_benchmark.listening_pid()'s exact-substring match (which we
+    do not modify — it's an existing, tested, reused function) be checked
+    against what the system will really show, instead of the raw hostname
+    the caller happened to pass in."""
+    candidates: List[str] = []
+    seen = set()
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except OSError:
+        # Not just socket.gaierror: empirically, a name that fails to
+        # resolve on this system's NSS chain (hosts: files mdns4_minimal
+        # dns) can raise a plain OSError (observed: errno 16, "Device or
+        # resource busy", via the mdns4_minimal NSS plugin) rather than the
+        # "textbook" gaierror. gaierror is itself an OSError subclass, so
+        # this still catches that case too — strictly broader, not looser.
+        return candidates
+    for family, _socktype, _proto, _canonname, sockaddr in infos:
+        addr = sockaddr[0]
+        if addr in seen:
+            continue
+        seen.add(addr)
+        candidates.append(f"[{addr}]" if family == socket.AF_INET6 else addr)
+    return candidates
+
+
 def _main_port_check(host: str, port: int) -> Dict[str, Any]:
-    pid = dual_sdr_benchmark.listening_pid(host, port)
-    if pid is None:
-        return _check("MAIN / port listening", "MAIN", REQUIRED, BLOCK, f"nothing listening on {host}:{port}")
-    return _check("MAIN / port listening", "MAIN", REQUIRED, PASS, f"{host}:{port} owned by pid={pid}")
+    candidates = _listening_address_candidates(host, port)
+    for addr in candidates:
+        pid = dual_sdr_benchmark.listening_pid(addr, port)
+        if pid is not None:
+            return _check("MAIN / port listening", "MAIN", REQUIRED, PASS,
+                          f"{addr}:{port} (resolved from {host!r}) owned by pid={pid}")
+    tried = ", ".join(candidates) or "(host did not resolve)"
+    return _check("MAIN / port listening", "MAIN", REQUIRED, BLOCK,
+                  f"nothing listening on {host}:{port} — checked resolved address(es): {tried}")
 
 
 async def _main_sdr_presence_check(host: str, port: int) -> Dict[str, Any]:

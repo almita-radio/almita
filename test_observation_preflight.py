@@ -337,6 +337,124 @@ def test_plan_preflight_detects_main_absent_via_read_only_checks(monkeypatch):
     assert result["criticality"] == pf.REQUIRED
 
 
+# --------------------------------------------------------------------------
+# _main_port_check: semantic host resolution (regression for the real
+# false-positive found during field validation — "localhost" was compared
+# as a literal string against ss -lntp's numeric "127.0.0.1:1234" output).
+# --------------------------------------------------------------------------
+
+def _fake_getaddrinfo(records):
+    """records: list of (family, ip) tuples to hand back from getaddrinfo()."""
+    def fake(host, port, proto=None):
+        return [(family, pf.socket.SOCK_STREAM, 6, "", (ip, port)) for family, ip in records]
+    return fake
+
+
+def test_main_port_check_localhost_resolves_to_ipv4_listener_pass(monkeypatch):
+    """Scenario 1: host="localhost", ss shows 127.0.0.1:1234 (the real
+    observed case — rtl_tcp bound with -a 127.0.0.1)."""
+    monkeypatch.setattr(pf.socket, "getaddrinfo", _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1")]))
+
+    def fake_listening_pid(host, port):
+        return 3763 if (host, port) == ("127.0.0.1", 1234) else None
+
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid", fake_listening_pid)
+    result = pf._main_port_check("localhost", 1234)
+    assert result["status"] == pf.PASS
+    assert "127.0.0.1:1234" in result["detail"]
+    assert "pid=3763" in result["detail"]
+
+
+def test_main_port_check_localhost_resolves_to_ipv6_listener_pass(monkeypatch):
+    """Scenario 2: host="localhost" resolves to both families, but only the
+    IPv6 loopback is actually listening — must still PASS, matched via the
+    bracketed [::1] form ss would print."""
+    monkeypatch.setattr(pf.socket, "getaddrinfo",
+                         _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1"), (pf.socket.AF_INET6, "::1")]))
+
+    def fake_listening_pid(host, port):
+        return 4242 if (host, port) == ("[::1]", 1234) else None
+
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid", fake_listening_pid)
+    result = pf._main_port_check("localhost", 1234)
+    assert result["status"] == pf.PASS
+    assert "[::1]:1234" in result["detail"]
+
+
+def test_main_port_check_literal_ip_direct_pass(monkeypatch):
+    """Scenario 3: host="127.0.0.1" passed directly (no hostname resolution
+    ambiguity at all) must still PASS via the same code path."""
+    monkeypatch.setattr(pf.socket, "getaddrinfo", _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1")]))
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid",
+                         lambda host, port: 3763 if (host, port) == ("127.0.0.1", 1234) else None)
+    result = pf._main_port_check("127.0.0.1", 1234)
+    assert result["status"] == pf.PASS
+
+
+def test_main_port_check_no_listener_at_all_blocks(monkeypatch):
+    """Scenario 4: host resolves fine, but nothing is actually listening on
+    any resolved address — must BLOCK, and list what was checked."""
+    monkeypatch.setattr(pf.socket, "getaddrinfo", _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1")]))
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid", lambda host, port: None)
+    result = pf._main_port_check("localhost", 1234)
+    assert result["status"] == pf.BLOCK
+    assert result["criticality"] == pf.REQUIRED
+    assert "127.0.0.1" in result["detail"]
+
+
+def test_main_port_check_wrong_port_blocks(monkeypatch):
+    """Scenario 5: something is listening on the resolved address, but on a
+    different port — must not be mistaken for a match."""
+    monkeypatch.setattr(pf.socket, "getaddrinfo", _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1")]))
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid",
+                         lambda host, port: 9999 if (host, port) == ("127.0.0.1", 9999) else None)
+    result = pf._main_port_check("127.0.0.1", 1234)
+    assert result["status"] == pf.BLOCK
+
+
+def test_main_port_check_never_touches_sdrcapture(monkeypatch):
+    """Scenario 6: _main_port_check is pure ss/getaddrinfo bookkeeping — it
+    must never reference SDRCapture.configure() at all (structural
+    guarantee, not just behavioral)."""
+    def boom_configure(self, *args, **kwargs):
+        raise AssertionError("_main_port_check must never touch SDRCapture.configure()")
+
+    monkeypatch.setattr(pf.SDRCapture, "configure", boom_configure)
+    monkeypatch.setattr(pf.socket, "getaddrinfo", _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1")]))
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid",
+                         lambda host, port: 3763 if (host, port) == ("127.0.0.1", 1234) else None)
+    result = pf._main_port_check("localhost", 1234)
+    assert result["status"] == pf.PASS  # never raised AssertionError above
+
+
+def test_main_port_check_unresolvable_host_blocks_gracefully_gaierror(monkeypatch):
+    def raising_getaddrinfo(host, port, proto=None):
+        raise pf.socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(pf.socket, "getaddrinfo", raising_getaddrinfo)
+    result = pf._main_port_check("no-such-host.invalid", 1234)
+    assert result["status"] == pf.BLOCK
+
+
+def test_main_port_check_unresolvable_host_blocks_gracefully_plain_oserror(monkeypatch):
+    """Regression test: empirically, getaddrinfo() on this system's real NSS
+    chain (hosts: files mdns4_minimal [NOTFOUND=return] dns) raises a plain
+    OSError (observed: errno 16, "Device or resource busy" via the
+    mdns4_minimal plugin) for a name that fails to resolve — NOT
+    socket.gaierror. Catching only gaierror would let this propagate
+    uncaught. Confirmed live on the real host, not just theorized:
+        >>> socket.getaddrinfo('no-such-host.invalid.', 1234, proto=socket.IPPROTO_TCP)
+        OSError: [Errno 16] Device or resource busy
+    """
+    def raising_getaddrinfo(host, port, proto=None):
+        raise OSError(16, "Device or resource busy")
+
+    monkeypatch.setattr(pf.socket, "getaddrinfo", raising_getaddrinfo)
+    result = pf._main_port_check("no-such-host.invalid", 1234)
+    assert result["status"] == pf.BLOCK
+    assert "did not resolve" in result["detail"]
+
+
 def test_main_sdr_presence_check_never_configures(monkeypatch):
     """_main_sdr_presence_check itself: connect+close only, .configure()
     must never be called, even on a real SDRCapture instance."""
