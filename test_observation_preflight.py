@@ -4,6 +4,7 @@ INDI/SDR connection is required.
 """
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -91,40 +92,96 @@ def _fake_process(stdout_bytes: bytes):
     return _FakeProcess()
 
 
-def test_onstep_clock_pass_within_threshold(monkeypatch):
+# --------------------------------------------------------------------------
+# _onstep_time_snapshot_check: TIME_UTC.UTC is NOT a live clock (proven by
+# read-only field investigation on 2026-09-02 — frozen across repeated
+# reads and across fresh client reconnects; INDI's own timestamp= attribute
+# tracks message-send time, not value-update time). Its apparent offset
+# from host UTC is an indeterminate mix of real drift + unknown staleness,
+# so this check is WARNING-only, OPTIONAL criticality, and NEVER BLOCKs —
+# see the function's own docstring for the full evidence record.
+# --------------------------------------------------------------------------
+
+def _onstep_offset_seconds(seconds_ago: float, monkeypatch):
     import datetime
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    snapshot = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds_ago)).isoformat()
 
     async def fake_exec(*args, **kwargs):
-        return _fake_process(f"Mount.TIME_UTC.UTC={now_iso}\n".encode())
+        return _fake_process(f"Mount.TIME_UTC.UTC={snapshot}\n".encode())
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    result = asyncio.run(pf._onstep_clock_check("localhost", 7624, "Mount"))
+    return asyncio.run(pf._onstep_time_snapshot_check("localhost", 7624, "Mount"))
+
+
+def test_onstep_time_snapshot_offset_20s_pass(monkeypatch):
+    result = _onstep_offset_seconds(20, monkeypatch)
     assert result["status"] == pf.PASS
-    assert result["criticality"] == pf.REQUIRED
+    assert result["criticality"] == pf.OPTIONAL
+    assert "within" in result["detail"]
 
 
-def test_onstep_clock_block_on_large_drift(monkeypatch):
-    import datetime
-    drifted = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)).isoformat()
+def test_onstep_time_snapshot_offset_59s_pass(monkeypatch):
+    result = _onstep_offset_seconds(59, monkeypatch)
+    assert result["status"] == pf.PASS
 
+
+def test_onstep_time_snapshot_offset_61s_warning_never_block(monkeypatch):
+    result = _onstep_offset_seconds(61, monkeypatch)
+    assert result["status"] == pf.WARNING
+    assert result["status"] != pf.BLOCK
+    assert "clock drift cannot be inferred" in result["detail"]
+
+
+def test_onstep_time_snapshot_offset_218s_warning_never_block(monkeypatch):
+    """The real value observed during field validation (2026-09-02)."""
+    result = _onstep_offset_seconds(218.1, monkeypatch)
+    assert result["status"] == pf.WARNING
+    assert result["status"] != pf.BLOCK
+
+
+def test_onstep_time_snapshot_offset_3377s_warning_never_block(monkeypatch):
+    """Also a real value observed the same day, at its most extreme (~56
+    min). Even this large an apparent offset must not BLOCK: there is no
+    evidence-backed threshold past which staleness can be ruled out."""
+    result = _onstep_offset_seconds(3377, monkeypatch)
+    assert result["status"] == pf.WARNING
+    assert result["status"] != pf.BLOCK
+    assert result["criticality"] == pf.OPTIONAL
+
+
+def test_onstep_time_snapshot_frozen_value_never_reported_as_live_drift(monkeypatch):
+    """A snapshot that is identical across repeated reads (the empirically
+    observed real behavior) must never be labeled "clock drift" in the
+    check's own output — only "snapshot"/"offset" language."""
+    result = _onstep_offset_seconds(90, monkeypatch)
+    assert "clock drift" not in result["name"].lower()
+    assert "drift" not in result["detail"] or "cannot be inferred" in result["detail"]
+    assert result["name"] == "OnStep time snapshot"
+
+
+def test_onstep_time_snapshot_timezone_parsing_still_correct(monkeypatch):
+    """Z-suffixed and naive-but-UTC timestamps must both parse correctly —
+    unchanged behavior from before this fix."""
     async def fake_exec(*args, **kwargs):
-        return _fake_process(f"Mount.TIME_UTC.UTC={drifted}\n".encode())
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return _fake_process(f"Mount.TIME_UTC.UTC={now.isoformat().replace('+00:00', 'Z')}\n".encode())
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    result = asyncio.run(pf._onstep_clock_check("localhost", 7624, "Mount", threshold_sec=60.0))
-    assert result["status"] == pf.BLOCK
-    assert "drift=" in result["detail"]
+    result = asyncio.run(pf._onstep_time_snapshot_check("localhost", 7624, "Mount"))
+    assert result["status"] == pf.PASS
 
 
-def test_onstep_clock_warning_when_property_not_exposed(monkeypatch):
+def test_onstep_time_snapshot_property_missing_is_warning_not_block(monkeypatch):
     async def fake_exec(*args, **kwargs):
         return _fake_process(b"")  # no "=" line: property not returned by indi_getprop
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    result = asyncio.run(pf._onstep_clock_check("localhost", 7624, "Mount"))
+    result = asyncio.run(pf._onstep_time_snapshot_check("localhost", 7624, "Mount"))
     assert result["status"] == pf.WARNING
+    assert result["status"] != pf.BLOCK
     assert "not exposed" in result["detail"]
+    assert result["criticality"] == pf.OPTIONAL
 
 
 # --------------------------------------------------------------- software / hash check
@@ -498,3 +555,72 @@ def test_rtl_tcp_service_check_blocks_when_inactive(monkeypatch):
     result = pf._rtl_tcp_service_check()
     assert result["status"] == pf.BLOCK
     assert result["criticality"] == pf.REQUIRED
+
+
+# --------------------------------------------------------------------------
+# Aggregation: OnStep time snapshot WARNING must never hide/downgrade a real
+# REQUIRED BLOCK elsewhere, and other REQUIRED checks must keep BLOCKing
+# exactly as before this fix.
+# --------------------------------------------------------------------------
+
+def test_overall_warning_when_only_time_snapshot_warns_main_and_visibility_pass():
+    """Item 9: MAIN PASS + mount PASS + time snapshot WARNING -> overall
+    WARNING, never BLOCK."""
+    checks = [
+        pf._check("MAIN / rtl_tcp.service", "MAIN", pf.REQUIRED, pf.PASS, "active"),
+        pf._check("MAIN / port listening", "MAIN", pf.REQUIRED, pf.PASS, "127.0.0.1:1234 owned by pid=3763"),
+        pf._check("MAIN / SDR presence", "MAIN", pf.REQUIRED, pf.PASS, "handshake OK"),
+        pf._check("INDI/mount", "MOUNT", pf.REQUIRED, pf.PASS, "valid coordinates"),
+        pf._check("OnStep time snapshot", "MOUNT", pf.OPTIONAL, pf.WARNING, "differs by 218.1s, freshness unknown"),
+    ]
+    assert pf._overall(checks) == pf.WARNING
+
+
+def test_real_required_block_is_never_hidden_by_onstep_time_snapshot_warning():
+    """Adversarial check: does the new OPTIONAL/WARNING OnStep check
+    accidentally swallow a genuine REQUIRED BLOCK elsewhere (e.g. disk)?
+    _overall() checks REQUIRED+BLOCK first, unconditionally — must stay BLOCK."""
+    checks = [
+        pf._check("Disk space", "SYSTEM", pf.REQUIRED, pf.BLOCK, "free_bytes=0, required_bytes=999999999"),
+        pf._check("OnStep time snapshot", "MOUNT", pf.OPTIONAL, pf.WARNING, "differs by 3377.0s, freshness unknown"),
+    ]
+    assert pf._overall(checks) == pf.BLOCK
+
+
+def test_main_port_block_unaffected_by_onstep_fix(monkeypatch):
+    """Item 11: MAIN port BLOCK still BLOCKs (independent check, untouched by this fix)."""
+    monkeypatch.setattr(pf.socket, "getaddrinfo", _fake_getaddrinfo([(pf.socket.AF_INET, "127.0.0.1")]))
+    monkeypatch.setattr(pf.dual_sdr_benchmark, "listening_pid", lambda host, port: None)
+    result = pf._main_port_check("localhost", 1234)
+    assert result["status"] == pf.BLOCK
+    checks = [result, pf._check("OnStep time snapshot", "MOUNT", pf.OPTIONAL, pf.WARNING, "differs by 90.0s")]
+    assert pf._overall(checks) == pf.BLOCK
+
+
+def test_disk_block_unaffected_by_onstep_fix():
+    """Item 12: disk BLOCK still BLOCKs."""
+    result = pf._disk_check(Path("/"), required_bytes=10 ** 30)  # absurdly large requirement -> guaranteed BLOCK
+    assert result["status"] == pf.BLOCK
+    checks = [result, pf._check("OnStep time snapshot", "MOUNT", pf.OPTIONAL, pf.WARNING, "differs by 90.0s")]
+    assert pf._overall(checks) == pf.BLOCK
+
+
+def test_mount_state_block_unaffected_by_onstep_fix():
+    """Item 13: mount state (INDI/mount) BLOCK still BLOCKs — independent of
+    the OnStep time snapshot check, which is a separate MOUNT-category entry."""
+    checks = [
+        pf._check("INDI/mount", "MOUNT", pf.REQUIRED, pf.BLOCK, "EOD=Alert"),
+        pf._check("OnStep time snapshot", "MOUNT", pf.OPTIONAL, pf.WARNING, "differs by 90.0s, freshness unknown"),
+    ]
+    assert pf._overall(checks) == pf.BLOCK
+
+
+def test_no_stray_clock_drift_terminology_in_source():
+    """Terminology guard: the check must never be described as measuring
+    "clock drift" as a positive claim — only as something explicitly
+    disclaimed. Guards against regressing the honest naming this fix
+    introduced."""
+    source = open("observation_preflight.py").read()
+    assert '"OnStep clock"' not in source
+    assert "_onstep_clock_check" not in source
+    assert "DEFAULT_CLOCK_DRIFT_THRESHOLD_SEC" not in source

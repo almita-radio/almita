@@ -21,8 +21,8 @@ Two entry points with deliberately different depth:
   configure MAIN's SDR (frequency/rate/gain) because RUN is the real
   operational path about to hand MAIN over to capture.py anyway.
 
-Both layer on SYSTEM, OnStep-clock, RFI_REF-port, QUICKLOOK, CONSOLE, and
-SOFTWARE checks that don't exist in capture.py today.
+Both layer on SYSTEM, OnStep-time-snapshot, RFI_REF-port, QUICKLOOK, CONSOLE,
+and SOFTWARE checks that don't exist in capture.py today.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from sdr_capture import SDRCapture
 PASS, WARNING, BLOCK = "PASS", "WARNING", "BLOCK"
 REQUIRED, OPTIONAL = "REQUIRED", "OPTIONAL"
 
-DEFAULT_CLOCK_DRIFT_THRESHOLD_SEC = 60.0
+DEFAULT_ONSTEP_TIME_SNAPSHOT_THRESHOLD_SEC = 60.0
 DEFAULT_TRACKING_TIMEOUT_SEC = 5.0
 DEFAULT_MAIN_SDR_HOST = "localhost"
 DEFAULT_MAIN_SDR_PORT = 1234
@@ -120,8 +120,28 @@ def _disk_check(output_root: Path, required_bytes: int) -> Dict[str, Any]:
         return _check("Disk space", "SYSTEM", REQUIRED, BLOCK, f"{type(exc).__name__}: {exc}")
 
 
-async def _onstep_clock_check(host: str, port: int, device_name: str,
-                               threshold_sec: float = DEFAULT_CLOCK_DRIFT_THRESHOLD_SEC) -> Dict[str, Any]:
+async def _onstep_time_snapshot_check(host: str, port: int, device_name: str,
+                                       threshold_sec: float = DEFAULT_ONSTEP_TIME_SNAPSHOT_THRESHOLD_SEC
+                                       ) -> Dict[str, Any]:
+    """MOUNT / OnStep time snapshot — informational, WARNING-only (never BLOCK).
+
+    LX200 OnStep.TIME_UTC.UTC is NOT a live-ticking INDI property. Read-only
+    field investigation (2026-09-02) proved:
+      - the value stays frozen across repeated reads seconds apart;
+      - a brand-new client connection (the real production
+        INDITelescopeControl.connect() path) does not refresh it either;
+      - INDI's own per-message `timestamp=` XML attribute tracks when the
+        *response* was generated, not when the *value* last changed — it
+        cannot be used to measure property staleness;
+      - the value does eventually change on the driver's own internal
+        cycle, of unknown/unconfirmed cadence, never triggered by a client.
+    So `abs(host_now - TIME_UTC.UTC)` is an indeterminate mix of real mount
+    clock drift and unknown property staleness — it must never be reported
+    as "clock drift", and must never hard-BLOCK on its own: there is no
+    known threshold past which staleness can be ruled out. If a genuine
+    live-clock read-only query is found in the future, a true CLOCK_DRIFT
+    REQUIRED/BLOCK check can be reinstated — this is deliberately not that.
+    """
     try:
         process = await asyncio.create_subprocess_exec(
             "indi_getprop", "-h", host, "-p", str(port), f"{device_name}.TIME_UTC.UTC",
@@ -130,19 +150,27 @@ async def _onstep_clock_check(host: str, port: int, device_name: str,
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=5.0)
         line = stdout.decode(errors="replace").strip()
         if "=" not in line:
-            return _check("OnStep clock", "MOUNT", REQUIRED, WARNING,
-                           "OnStep clock property not exposed via INDI; skipped")
+            return _check("OnStep time snapshot", "MOUNT", OPTIONAL, WARNING,
+                           "TIME_UTC property not exposed via INDI; skipped")
         _, raw_value = line.split("=", 1)
-        mount_time = datetime.fromisoformat(raw_value.strip().replace("Z", "+00:00"))
-        if mount_time.tzinfo is None:
-            mount_time = mount_time.replace(tzinfo=timezone.utc)
-        drift = abs((datetime.now(timezone.utc) - mount_time).total_seconds())
-        status = PASS if drift <= threshold_sec else BLOCK
-        return _check("OnStep clock", "MOUNT", REQUIRED, status,
-                       f"drift={drift:.1f}s (threshold={threshold_sec:.0f}s)")
+        snapshot_time = datetime.fromisoformat(raw_value.strip().replace("Z", "+00:00"))
+        if snapshot_time.tzinfo is None:
+            snapshot_time = snapshot_time.replace(tzinfo=timezone.utc)
+        offset = abs((datetime.now(timezone.utc) - snapshot_time).total_seconds())
+        if offset <= threshold_sec:
+            return _check("OnStep time snapshot", "MOUNT", OPTIONAL, PASS,
+                           f"TIME_UTC snapshot is within {offset:.1f}s of host UTC. "
+                           "Property freshness is not guaranteed by this INDI driver.")
+        return _check(
+            "OnStep time snapshot", "MOUNT", OPTIONAL, WARNING,
+            f"OnStep TIME_UTC snapshot differs from host UTC by {offset:.1f}s, but this INDI property "
+            "has unknown freshness and has been observed remaining unchanged for minutes. Actual mount "
+            "clock drift cannot be inferred from this value. Verify mount time in the INDI/OnStep "
+            "operator interface before RUN.",
+        )
     except Exception as exc:
-        return _check("OnStep clock", "MOUNT", REQUIRED, WARNING,
-                       f"OnStep clock property not exposed via INDI; skipped ({type(exc).__name__}: {exc})")
+        return _check("OnStep time snapshot", "MOUNT", OPTIONAL, WARNING,
+                       f"TIME_UTC property not exposed via INDI; skipped ({type(exc).__name__}: {exc})")
 
 
 def _rfi_ref_check(rfi_ref_cfg: Dict[str, Any], port: int) -> Dict[str, Any]:
@@ -320,7 +348,8 @@ async def _indi_read_only_check(executor: "capture_module.CaptureExecutor") -> D
 async def run_plan_preflight(resolved_plan: Dict[str, Any], *, host: str = "localhost", port: int = 7624,
                               device_name: Optional[str] = None,
                               sdr_host: str = DEFAULT_MAIN_SDR_HOST, sdr_port: int = DEFAULT_MAIN_SDR_PORT,
-                              clock_drift_threshold_sec: float = DEFAULT_CLOCK_DRIFT_THRESHOLD_SEC) -> Dict[str, Any]:
+                              onstep_time_snapshot_threshold_sec: float =
+                              DEFAULT_ONSTEP_TIME_SNAPSHOT_THRESHOLD_SEC) -> Dict[str, Any]:
     """PLAN-time preflight. Strictly read-only: zero hardware mutation.
 
     Never calls SDRCapture.configure() (no SET_FREQUENCY/SET_SAMPLE_RATE/
@@ -358,7 +387,8 @@ async def run_plan_preflight(resolved_plan: Dict[str, Any], *, host: str = "loca
             checks.append(_check("INDI/mount", "MOUNT", REQUIRED, BLOCK, "failed to connect to INDI server"))
         else:
             checks.append(await _indi_read_only_check(executor))
-            checks.append(await _onstep_clock_check(host, port, executor.device_name, clock_drift_threshold_sec))
+            checks.append(await _onstep_time_snapshot_check(
+                host, port, executor.device_name, onstep_time_snapshot_threshold_sec))
     finally:
         if telescope.writer:
             telescope.writer.close()
@@ -369,7 +399,8 @@ async def run_plan_preflight(resolved_plan: Dict[str, Any], *, host: str = "loca
 
 async def run_execution_preflight(resolved_plan: Dict[str, Any], *, host: str = "localhost", port: int = 7624,
                                    device_name: Optional[str] = None, runtime_dir: Optional[str] = None,
-                                   clock_drift_threshold_sec: float = DEFAULT_CLOCK_DRIFT_THRESHOLD_SEC) -> Dict[str, Any]:
+                                   onstep_time_snapshot_threshold_sec: float =
+                                   DEFAULT_ONSTEP_TIME_SNAPSHOT_THRESHOLD_SEC) -> Dict[str, Any]:
     """RUN-time preflight (after operator GO, before spawning capture.py).
 
     Reuses CaptureExecutor.run_preflight() in full — including the real
@@ -425,7 +456,8 @@ async def run_execution_preflight(resolved_plan: Dict[str, Any], *, host: str = 
                     )
                 )
                 checks.append(_check(c["name"], category, REQUIRED, status_map.get(c["status"], BLOCK), c["detail"]))
-            checks.append(await _onstep_clock_check(host, port, executor.device_name, clock_drift_threshold_sec))
+            checks.append(await _onstep_time_snapshot_check(
+                host, port, executor.device_name, onstep_time_snapshot_threshold_sec))
     finally:
         if telescope.writer:
             telescope.writer.close()
