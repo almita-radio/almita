@@ -453,18 +453,59 @@ class GridGenerator:
 
         return {"meridians": meridians, "parallels": parallels}
 
-    def _draw_equatorial_overlay(self, ax, center_ra_deg: float, center_dec_deg: float, span_deg: float, show_labels: bool = True, alpha: float = 0.28, zorder: float = 1.0) -> None:
-        """Draw a subtle equatorial RA/DEC overlay in the tangent-plane view."""
+    def _draw_equatorial_overlay(self, ax, center_ra_deg: float, center_dec_deg: float, span_deg: float,
+                                  show_labels: bool = True, alpha: float = 0.28, zorder: float = 1.0,
+                                  view_bounds: Optional[Tuple[float, float, float, float]] = None) -> None:
+        """Draw a subtle equatorial RA/DEC overlay in the tangent-plane view.
+
+        view_bounds, if given, is (x_min, x_max, y_min, y_max) of the local
+        plotting field in the same tangent-plane data units as the caller's
+        axes. Overlay lines/labels are cropped to it (with a small margin)
+        before being plotted.
+
+        Why this matters: parallels sweep the full 360 deg of RA and
+        meridians a wide DEC range, so most of each line's sampled points
+        fall far outside the local field — previously that was fine
+        visually (the axes clip the render), but matplotlib's
+        bbox_inches="tight" sizing (used by savefig) includes each artist's
+        FULL, unclipped data extent. A label or line point ~180 deg away
+        from the field center could make savefig() compute a canvas
+        hundreds of inches across — confirmed in production to occasionally
+        exceed matplotlib's 65536px format limit and crash savefig()
+        outright while briefly allocating a multi-GB raster buffer first
+        (2026-09-02 incident: 5.3 GiB RSS in a single request). Cropping to
+        the local field before plotting produces the identical visible
+        render (anything outside view_bounds was never drawn/visible
+        anyway) while keeping the tight-bbox computation bounded.
+        """
         overlay = self._build_equatorial_grid_overlay(center_ra_deg, center_dec_deg, span_deg)
 
+        if view_bounds is not None:
+            x_lo, x_hi, y_lo, y_hi = view_bounds
+            pad_x = (x_hi - x_lo) * 0.05
+            pad_y = (y_hi - y_lo) * 0.05
+            x_lo, x_hi, y_lo, y_hi = x_lo - pad_x, x_hi + pad_x, y_lo - pad_y, y_hi + pad_y
+
+            def _crop(points):
+                return [p for p in points if x_lo <= p[0] <= x_hi and y_lo <= p[1] <= y_hi]
+        else:
+            def _crop(points):
+                return points
+
         for meridian in overlay["meridians"]:
-            xs = [p[0] for p in meridian["points"]]
-            ys = [p[1] for p in meridian["points"]]
+            pts = _crop(meridian["points"])
+            if not pts:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
             ax.plot(xs, ys, color="#2563eb", linewidth=0.7, alpha=alpha, linestyle=(0, (2, 2)), zorder=zorder)
 
         for parallel in overlay["parallels"]:
-            xs = [p[0] for p in parallel["points"]]
-            ys = [p[1] for p in parallel["points"]]
+            pts = _crop(parallel["points"])
+            if not pts:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
             ax.plot(xs, ys, color="#f59e0b", linewidth=0.7, alpha=alpha, linestyle=(0, (2, 2)), zorder=zorder)
 
         if not show_labels:
@@ -474,8 +515,11 @@ class GridGenerator:
         for idx, meridian in enumerate(overlay["meridians"]):
             if idx % meridian_stride != 0:
                 continue
-            p_idx = min(len(meridian["points"]) - 1, max(0, len(meridian["points"]) // 2))
-            x_label, y_label = meridian["points"][p_idx]
+            pts = _crop(meridian["points"])
+            if not pts:
+                continue
+            p_idx = min(len(pts) - 1, max(0, len(pts) // 2))
+            x_label, y_label = pts[p_idx]
             ra_hours = float(meridian["ra_hours"]) % 24.0
             label = f"{int(ra_hours)}h"
             ax.text(x_label, y_label, label, color="#1e3a8a", fontsize=7, ha="center", va="center", zorder=zorder + 1)
@@ -484,8 +528,11 @@ class GridGenerator:
         for idx, parallel in enumerate(overlay["parallels"]):
             if idx % parallel_stride != 0:
                 continue
-            p_idx = min(len(parallel["points"]) - 1, max(0, len(parallel["points"]) // 4))
-            x_label, y_label = parallel["points"][p_idx]
+            pts = _crop(parallel["points"])
+            if not pts:
+                continue
+            p_idx = min(len(pts) - 1, max(0, len(pts) // 4))
+            x_label, y_label = pts[p_idx]
             dec_label = f"{parallel['dec_deg']:+.0f}°"
             ax.text(x_label, y_label, dec_label, color="#92400e", fontsize=7, ha="center", va="center", zorder=zorder + 1)
 
@@ -522,6 +569,7 @@ class GridGenerator:
                     show_labels=True,
                     alpha=0.22,
                     zorder=1.0,
+                    view_bounds=(plot_data["x_min"], plot_data["x_max"], plot_data["y_min"], plot_data["y_max"]),
                 )
 
                 ax.text(
@@ -639,6 +687,7 @@ class GridGenerator:
                     show_labels=True,
                     alpha=0.48,
                     zorder=3.0,
+                    view_bounds=(x_min, x_max, y_min, y_max),
                 )
                 ax.plot(outline_x, outline_y, "k--", linewidth=1.2, alpha=0.7, zorder=6, label="Requested region")
                 ax.scatter([0.0], [0.0], s=140, color="red", marker="*", zorder=6)
