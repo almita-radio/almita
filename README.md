@@ -1,309 +1,147 @@
 <p align="center">
   <img src="almita-logo.png" alt="ALMITA logo" width="100%">
 </p>
+
+# ALMITA
+
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
+ALMITA is an amateur 21 cm neutral hydrogen radio telescope built by **Felipe Fridman G.**
 
-ALMITA is an amateur 21 cm hydrogen line radio telescope project created by **Felipe Fridman G.**
+It combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky grids, HDF5 acquisition, live quicklook products and a lightweight web console.
 
-The project observes the neutral hydrogen line at **1420.405 MHz** using accessible hardware, Python software, INDI/OnStep mount control, SDR acquisition, temperature-aware calibration, HDF5 storage and post-processing tools for spectra and simple hydrogen map generation.
+The goal is simple:
 
-ALMITA was mostly vibe-coded, field-tested and debugged through RF suffering. It is built in the spirit of amateur radio astronomy: modest hardware, careful measurements, stubborn iteration and a sincere attempt to listen to the Galaxy.
+> point at the Galaxy, record what the hardware actually saw, and avoid lying to ourselves about the parts we have not calibrated yet.
 
----
-
-## What ALMITA does
-
-ALMITA automates basic hydrogen line radio observations.
-
-It can:
-
-* Generate observation plans over a selected sky region.
-* Control an equatorial mount through **INDI** and **OnStep**.
-* Capture I/Q samples using an SDR receiver.
-* Store raw observations and metadata in **HDF5**.
-* Record pointing information such as RA, Dec, altitude, azimuth and timestamp.
-* Store observatory coordinates in the observation metadata.
-* Measure and store LNA and SDR temperatures.
-* Support hot sky, cold sky and 50 ohm calibration references.
-* Apply calibration and temperature correction during spectrum processing.
-* Generate spectra from recorded I/Q data.
-* Plot spectra with and without interpolation.
-* Build image-like hydrogen maps from multiple pointings.
-* Provide command-line operation with a lightweight web monitoring interface.
+Mostly vibe-coded. Extensively tested. Occasionally threatened with a hammer.
 
 ---
 
-## Hardware
+## What it does
 
-The current ALMITA setup uses:
+ALMITA can:
 
-* **Raspberry Pi 5**
-* **SDR V4**
-* **Nooelec Hydrogen LNA**
-* Custom 1420 MHz feed for the 21 cm line
-* Modified **2.4 GHz WiFi grid/parabolic antenna**, approximately **90 × 60 cm**
-* **Meade EQ5 equatorial mount**
-* **OnStep** mount controller
-* **INDI Server** for mount communication
-* Ferrite chokes and short RF cabling near the feed
-* Temperature sensors for LNA and SDR monitoring
-* 50 ohm reference load for calibration
+- Generate physically consistent sky mosaics from beam width, sampling and angular field size.
+- Plan observations in equatorial coordinates.
+- Control an equatorial mount through **INDI + OnStep**.
+- Acquire raw I/Q data from an **RTL-SDR Blog V4**.
+- Store observations and metadata in **HDF5**.
+- Record RA, Dec, altitude, azimuth, UTC time and observatory coordinates.
+- Record SDR and LNA temperatures.
+- Keep SDR gain fixed during an observation for repeatable measurements.
+- Generate live **Spectrum**, **Waterfall** and sky-map quicklooks.
+- Monitor running sessions through a local web console.
+- Operate completely offline in the field.
+- Preserve raw observations for later reprocessing.
 
-The hardware is intentionally accessible and experimental. This is not a commercial radio telescope kit.
-
----
-
-## Software stack
-
-ALMITA is mainly written in **Python** and runs inside a Python virtual environment.
-
-Main components:
-
-* Python
-* INDI / PyINDI
-* OnStep
-* SDR capture tooling
-* NumPy
-* Astropy
-* h5py / HDF5
-* Local hydrogen map/catalog database
-* HIPASS-derived catalog/map resources where applicable
-* Command-line tools
-* Lightweight web monitoring interface
+ALMITA currently treats HI intensity as a **relative/instrumental measurement**. Absolute calibration in Kelvin is a development goal, not a currently claimed capability.
 
 ---
 
-## Installation
+## Current hardware
 
-Create and activate a virtual environment:
+- **Raspberry Pi 5**
+- **RTL-SDR Blog V4** — primary science receiver
+- **RTL-SDR V3** — secondary RFI reference receiver
+- **Nooelec Hydrogen LNA**
+- 1420 MHz feed
+- Modified ~90 × 60 cm WiFi grid/parabolic reflector
+- Equatorial mount
+- **OnStep** controller
+- **INDI**
+- LNA and SDR temperature sensors
+- Local 50 Ω RF reference loads
+- Experimental 1420 MHz RFI-monitor dipole
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
+The secondary SDR is being developed as an independent RFI monitor so ALMITA can ask an important scientific question:
 
-Install Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-INDI Server, OnStep support and SDR system packages must be installed separately according to the operating system and hardware.
-
-Example:
-
-```bash
-sudo apt install indi-full
-```
-
-Additional SDR packages may be required depending on the receiver used.
+> “Is that hydrogen, or did somebody turn on another horrible electronic device nearby?”
 
 ---
 
-## Basic workflow
+## Software
 
-A typical ALMITA session works like this:
+ALMITA is mainly Python and runs locally on the Raspberry Pi.
 
-1. Start INDI Server.
-2. Connect the OnStep-controlled Meade EQ5 mount.
-3. Generate or load an observation plan.
-4. Move the antenna through the planned sky positions.
-5. Capture I/Q data at each pointing.
-6. Record pointing metadata, observatory coordinates and temperature readings.
-7. Store each observation in HDF5.
-8. Monitor the session from the web interface.
-9. Process the captured files offline.
-10. Apply calibration and temperature correction.
-11. Generate spectra and hydrogen maps.
+Core technologies include:
 
-Example capture command:
+- Python
+- NumPy
+- Astropy
+- h5py / HDF5
+- INDI / PyINDI
+- OnStep
+- rtl_tcp
+- Matplotlib
+- systemd
+- local web monitoring
+- local HI sky reference data
 
-```bash
-python scripts/hi_capture.py --ra <RA> --dec <DEC> --duration <seconds> --output data/
-```
-
-Example planned session:
-
-```bash
-source .venv/bin/activate
-
-python scripts/generate_plan.py \
-  --center-ra <RA> \
-  --center-dec <DEC> \
-  --width-deg <WIDTH> \
-  --height-deg <HEIGHT> \
-  --points <N> \
-  --output plans/session_plan.csv
-
-python scripts/capture.py \
-  --plan plans/session_plan.csv \
-  --output data/session_001/
-```
-
-Command names and parameters may change as the project evolves.
+No cloud connection is required for observation.
 
 ---
 
-## Calibration and temperature correction
+## Observation workflow
 
-ALMITA supports a practical amateur calibration workflow using:
+A typical session is:
 
-* Hot sky reference
-* Cold sky reference
-* 50 ohm load reference
-* LNA temperature
-* SDR temperature
+1. Start the mount and SDR services.
+2. Generate an observation grid.
+3. Verify visibility and RF conditions.
+4. Select and freeze SDR gain.
+5. Start acquisition.
+6. Move through the planned sky positions.
+7. Store raw I/Q and metadata in HDF5.
+8. Generate live quicklook products.
+9. Monitor progress from the ALMITA Console.
+10. Process and compare observations offline.
 
-Calibration is mainly applied during post-processing. Raw captures are stored with enough metadata to allow later correction, comparison and reprocessing.
-
-The processing chain generally includes:
-
-1. Load I/Q data from HDF5.
-2. Calculate the power spectrum.
-3. Apply hot/cold/50 ohm calibration references.
-4. Apply temperature-related correction when available.
-5. Generate raw and corrected spectra.
-6. Plot spectra with and without interpolation.
-7. Build image-like maps from the observation grid.
+The science receiver remains the primary data source. Auxiliary monitoring must never block or interfere with the main capture path.
 
 ---
 
-## HDF5 data format
+## Grid Generator
 
-Each capture is stored as an HDF5 file.
+The grid system is based on real angular geometry rather than an arbitrary point count.
 
-A typical file contains:
+The current design supports or is evolving toward three main planning modes:
 
-* I/Q complex samples
-* Timestamp
-* Frequency configuration
-* Sample rate
-* Gain settings
-* RA / Dec
-* Altitude / azimuth
-* Observatory latitude / longitude / elevation
-* Mount metadata
-* LNA and SDR temperatures
-* Calibration metadata
-* Session information
+- **EQUATORIAL_RECT**
+- **EQUATORIAL_ROTATED**
+- **GALACTIC_RECT**
 
-The main I/Q dataset is stored as:
+Future observation planning will include Galactic strip/scan modes for longitudinal and transverse HI surveys.
+
+Galactic plans are intended to generate multiple views:
+
+- Galactic coordinates — for understanding the science.
+- Equatorial coordinates — for understanding what the mount will execute.
+- Local observer sky projection — for understanding what the field actually looks like from the ground.
+
+A local HI dataset can be used as a visual planning background.
+
+One particularly important future campaign has an unofficial scientific name:
+
+**the little Milky Way arm survey.**
+
+---
+
+## RFI reference receiver
+
+ALMITA is adding a second RTL-SDR receiver dedicated to monitoring the local RF environment.
+
+Planned architecture:
 
 ```text
-/iq
-```
+MAIN
+RTL-SDR V4
+→ science antenna
+→ full capture
+→ HDF5
 
-Example conceptual structure:
-
-```text
-observation_001.h5
-├── /iq
-└── attributes
-    ├── ra
-    ├── dec
-    ├── alt
-    ├── az
-    ├── observatory_latitude
-    ├── observatory_longitude
-    ├── observatory_elevation_m
-    ├── timestamp_utc
-    ├── center_frequency_hz
-    ├── sample_rate
-    ├── gain
-    ├── lna_temperature
-    ├── sdr_temperature
-    ├── calibration_type
-    └── session_id
-```
-
----
-
-## Hydrogen catalog / map database
-
-ALMITA uses a local hydrogen map/catalog database to support observation planning, calibration and comparison against known HI regions.
-
-The current concept includes locally stored HI survey/catalog information, including HIPASS-derived resources where applicable.
-
-This helps select useful sky regions, compare expected hydrogen emission and support future pointing and calibration workflows.
-
----
-
-## Web monitoring interface
-
-ALMITA is operated mainly from the command line, but includes a lightweight web monitoring interface for:
-
-* Current capture status
-* Active target
-* Mount position
-* Session progress
-* Recent files
-* Temperature readings
-* Basic SDR/LNA state
-* Observation grid progress
-
-The web interface is a monitoring layer, not a replacement for the command-line workflow.
-
----
-
-## Project status
-
-ALMITA is an amateur experimental project under active development.
-
-Current goals:
-
-* Reliable 21 cm capture
-* Stable mount control through INDI and OnStep
-* Repeatable HDF5 data format
-* Observatory coordinate metadata
-* Temperature recording
-* Hot/cold/50 ohm calibration
-* Temperature-aware spectrum correction
-* Local hydrogen catalog integration
-* Spectra plotting with and without interpolation
-* Simple hydrogen map generation
-* Documentation good enough for other amateur radio astronomy humans to reproduce the system
-
----
-
-## Disclaimer
-
-This software is provided **as is**, with **no warranty**, **no guarantee** and **no formal support**.
-
-It may contain bugs, wrong assumptions, incomplete documentation, unstable interfaces, questionable RF wisdom, calibration mistakes, broken scripts and traces of late-night debugging.
-
-Use it at your own risk.
-
-ALMITA is not intended for professional observatory operations, safety-critical systems, commercial use or any situation where failure could cause damage, injury, data loss, financial loss or excessive sadness.
-
-This is an amateur radio astronomy project built for learning, experimentation, reproducibility and fun.
-
----
-
-## License
-
-License to be defined.
-
-A permissive open-source license such as MIT, BSD-3-Clause or Apache-2.0 is recommended if the goal is to allow others to use, modify and share the code.
-
----
-
-## Author
-
-Created by **Felipe Fridman G.**
-
-Mostly vibe-coded, field-tested, calibrated with patience and built for amateur hydrogen line radio astronomy.
-
----
-
-## Repository
-
-Project home:
-
-```text
-github.com/almita-radio
-```
-
-Public code is intended to represent the stable, cleaned-up version of the project.
-
-Development history, experiments and unstable work may live separately in private repositories.
+RFI_REF
+RTL-SDR V3
+→ small 1420 MHz dipole
+→ lightweight FFT monitoring
+→ RFI diagnostics
