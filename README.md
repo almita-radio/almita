@@ -39,7 +39,7 @@ ALMITA can:
 - Monitor sessions through a local web console.
 - Operate completely offline in the field.
 - Preserve raw observations for future reprocessing.
-- Use a secondary SDR as an independent RFI reference receiver.
+- Monitor the local RF environment through an independent filtered and amplified secondary SDR chain.
 
 ALMITA currently treats HI measurements as **relative/instrumental data**.
 
