@@ -6,9 +6,10 @@
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
-ALMITA is an amateur 21 cm neutral hydrogen radio telescope built in **Chile** by **Felipe Fridman G.** (ffridman@gmail.com)
+ALMITA is an amateur 21 cm neutral hydrogen radio telescope built in **Chile** by **Felipe Fridman G.**  
+Contact: **ffridman@gmail.com**
 
-The project combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky planning, HDF5 acquisition, live quicklook products and a lightweight web console.
+The project combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky planning, HDF5 acquisition, live quicklook products and a lightweight local web console.
 
 Being based in Chile was a lucky accident.
 
@@ -34,7 +35,7 @@ ALMITA can:
 - Store observations and metadata in **HDF5**.
 - Record RA, Dec, altitude, azimuth, UTC time and observatory coordinates.
 - Measure and store SDR and LNA temperatures.
-- Keep SDR gain fixed during science observations.
+- Perform receiver gain characterization to determine a safe nominal operating point, then keep SDR gain fixed throughout each science observation.
 - Generate live **Spectrum**, **Waterfall** and sky-map quicklooks.
 - Monitor sessions through a local web console.
 - Operate completely offline in the field.
@@ -65,12 +66,18 @@ The current setup includes:
 - LNA and SDR temperature sensors
 - 50 Ω RF reference loads
 - Experimental 1420 MHz RFI-monitor dipole
-- Ferrites, coaxial cable, SMA connectors
+- Ferrites, coaxial cable and SMA connectors
 - More plastic cable ties than a serious observatory would probably admit to
 
 The hardware is intentionally accessible, experimental and repairable.
 
 It is not a commercial telescope kit.
+
+Some parts are carefully engineered.
+
+Some parts are carefully attached with zip ties.
+
+Both approaches have survived surprisingly well so far.
 
 ---
 
@@ -152,6 +159,8 @@ One particularly important campaign has an unofficial scientific name:
 
 **the little Milky Way arm survey.**
 
+The eventual goal is to make the planning image look close enough to a real sky observation that the operator can understand the intended field at a glance, while still clearly separating simulated/contextual backgrounds from measured radio data.
+
 ---
 
 ## Alignment
@@ -174,7 +183,11 @@ The goal is not simply to make the mount “look correct”.
 
 The goal is to know **why** it is correct.
 
-If no defensible reference is available, ALMITA prefers an honest pointing uncertainty over a fake precision.
+If no defensible reference is available, ALMITA prefers an honest pointing uncertainty over fake precision.
+
+Alignment work is intentionally separated from normal capture operations so that pointing corrections are explicit, auditable and reproducible.
+
+No random SYNC operations are allowed simply because the telescope “looks a little off”.
 
 ---
 
@@ -207,6 +220,8 @@ This matters because the beam determines:
 - overlap between observations
 - interpretation of apparent source size
 
+Beam characterization will also help determine whether the current sampling density is appropriate or unnecessarily excessive.
+
 ALMITA would rather admit that the beam is provisional than claim twenty decimal places of precision from a mesh dish attached with cable ties.
 
 ---
@@ -215,13 +230,13 @@ ALMITA would rather admit that the beam is provisional than claim twenty decimal
 
 ALMITA does **not** use AGC during science observations.
 
-Instead, the intended strategy is to determine a **nominal operating gain** for the complete RF chain.
+Instead, the system is designed around an explicit receiver gain characterization process.
 
-The question is:
+The central question is:
 
 > What gain gives the best useful sensitivity without approaching clipping, compression or non-linear behavior?
 
-The characterization process will test several gain values while measuring:
+The characterization process evaluates multiple receiver gain settings while measuring:
 
 - ADC headroom
 - clipping
@@ -231,17 +246,19 @@ The characterization process will test several gain values while measuring:
 - stability
 - repeatability
 
-Once a nominal gain is established, normal sessions will use that same value by default.
+The objective is to identify a **nominal operating gain** for the complete RF chain.
 
-Before each observation, ALMITA performs a short RF preflight.
+Once established, normal observations use that same nominal value by default.
+
+Before each session, ALMITA performs a short RF preflight.
 
 If the nominal gain is safe:
 
 - keep it fixed
 - do not touch it
-- observe the full mosaic
+- observe the complete mosaic
 
-If strong RFI or saturation is detected, gain may be reduced before the session begins.
+If strong RFI or saturation is detected, gain may be reduced before the science session begins.
 
 Once acquisition starts, gain remains fixed.
 
@@ -250,23 +267,31 @@ This improves:
 - repeatability
 - comparison between sessions
 - relative calibration
+- map consistency
 - scientific honesty
+
+The gain is therefore not simply “fixed”.
+
+It is **characterized first, validated before observing, and then frozen for the duration of the session**.
 
 Constantly changing gain in the middle of a sky map is considered bad manners.
 
 ---
+
 ## RFI reference receiver
 
 ALMITA includes a second RTL-SDR dedicated to monitoring the local RF environment independently from the primary science receiver.
 
 Current architecture:
 
+```text
 MAIN
 1420 MHz science feed
 → Nooelec Hydrogen LNA
 → RTL-SDR Blog V4
 → full science acquisition
 → HDF5
+
 
 RFI_REF
 1420 MHz dipole
