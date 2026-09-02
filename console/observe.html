@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Observe</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header class="topbar">
+    <div><h1>ALMITA OBSERVE</h1><span class="readonly">ORCHESTRATOR</span></div>
+    <nav class="obs-nav">
+      <a class="obs-nav-link active" href="#">OBSERVE</a>
+      <a class="obs-nav-link" id="nav-monitor" href="#">MONITOR</a>
+      <a class="obs-nav-link" id="nav-last-session" href="#">LAST SESSION</a>
+    </nav>
+  </header>
+
+  <main id="app">
+    <section id="form-section" class="panel obs-form">
+      <header><h2>OBSERVATION SPECIFICATION</h2></header>
+      <form id="observe-form">
+        <div class="obs-row"><label>OBSERVATION NAME</label>
+          <input type="text" id="f-name" required pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" value="ALMITA-OBSERVE"></div>
+
+        <div class="obs-row"><label>MODE</label>
+          <select id="f-mode"><option value="EQUATORIAL_RECT">EQUATORIAL_RECT</option></select></div>
+        <div class="obs-row"><label>PLACEMENT</label>
+          <select id="f-placement">
+            <option value="EASTMOST_SAFE">EASTMOST_SAFE</option>
+            <option value="FIXED_CENTER">FIXED_CENTER</option>
+          </select></div>
+        <div class="obs-row" id="row-center-ra" hidden><label>CENTER RA (hours)</label>
+          <input type="number" id="f-center-ra" step="any" min="0" max="24"></div>
+        <div class="obs-row" id="row-center-dec"><label>CENTER DEC (deg, optional)</label>
+          <input type="number" id="f-center-dec" step="any" min="-90" max="90" placeholder="defaults to observer latitude"></div>
+
+        <div class="obs-row"><label>WIDTH (deg)</label><input type="number" id="f-width" step="any" min="0.01" value="30"></div>
+        <div class="obs-row"><label>HEIGHT (deg)</label><input type="number" id="f-height" step="any" min="0.01" value="30"></div>
+        <div class="obs-row"><label>ROWS</label><input type="number" id="f-rows" min="2" value="20"></div>
+        <div class="obs-row"><label>COLS</label><input type="number" id="f-cols" min="2" value="20"></div>
+        <div class="obs-row"><label>MIN PLANNING ALTITUDE (deg)</label><input type="number" id="f-min-alt" step="any" min="0" max="89" value="10"></div>
+
+        <div class="obs-row"><label>CAPTURE (s)</label><input type="number" id="f-capture" step="any" min="0.1" value="10"></div>
+        <div class="obs-row"><label>SETTLE (s)</label><input type="number" id="f-settle" step="any" min="0" value="2"></div>
+
+        <h3>MAIN</h3>
+        <div class="obs-row"><label>Frequency (Hz)</label><input type="number" id="f-freq" value="1420405000"></div>
+        <div class="obs-row"><label>Sample rate (Hz)</label><input type="number" id="f-rate" value="2400000"></div>
+        <div class="obs-row"><label>Gain (dB)</label><input type="number" id="f-gain" step="any" value="40.2"></div>
+        <div class="obs-row"><label><input type="checkbox" id="f-bias-tee" checked disabled> Bias-T (always enabled)</label></div>
+
+        <h3>RFI_REF</h3>
+        <div class="obs-row"><label><input type="checkbox" id="f-rfi-enabled" checked> Enabled</label></div>
+        <div class="obs-row"><label>Gain (dB)</label><input type="number" id="f-rfi-gain" step="any" value="25.0"></div>
+
+        <h3>QUICKLOOK</h3>
+        <div class="obs-row"><label><input type="checkbox" id="f-ql-enabled" checked> Enabled</label></div>
+        <div class="obs-row"><label><input type="checkbox" id="f-ql-native" checked> Native Grid</label></div>
+        <div class="obs-row"><label><input type="checkbox" id="f-ql-interp" checked> Interpolated Preview</label></div>
+        <div class="obs-row"><label>Calibration profile path</label><input type="text" id="f-ql-cal" placeholder="data/calibration/.../calibration_profile_v1.json"></div>
+
+        <h3>CONSOLE</h3>
+        <div class="obs-row"><label><input type="checkbox" id="f-console-enabled" checked> Enabled</label></div>
+
+        <button type="submit" id="btn-plan">PLAN OBSERVATION</button>
+      </form>
+    </section>
+
+    <section id="plan-result" class="panel obs-plan-result" hidden>
+      <header><h2>ALMITA OBSERVATION PLAN</h2><span id="plan-badge" class="badge">—</span></header>
+      <pre id="plan-summary" class="obs-summary"></pre>
+      <div id="plan-images" class="obs-images"></div>
+      <h3>PREFLIGHT</h3>
+      <div id="preflight-list" class="obs-checks"></div>
+      <div class="obs-actions">
+        <button id="btn-start" disabled>START OBSERVATION</button>
+        <button id="btn-replan">RE-PLAN</button>
+      </div>
+    </section>
+
+    <section id="run-status" class="panel obs-run-status" hidden>
+      <header><h2>OBSERVATION RUN</h2><span id="run-badge" class="badge">—</span></header>
+      <pre id="run-summary" class="obs-summary"></pre>
+      <div class="obs-actions">
+        <a id="btn-monitor" class="obs-button-link" href="#" target="_blank" rel="noopener">OPEN MONITOR</a>
+        <button id="btn-stop">STOP OBSERVATION</button>
+      </div>
+    </section>
+
+    <div id="error-banner" class="banner connection" hidden></div>
+  </main>
+  <script src="observe.js"></script>
+</body></html>

@@ -5,6 +5,11 @@
 <body>
   <header class="topbar">
     <div><h1>ALMITA FIELD CONSOLE</h1><span class="readonly">READ ONLY</span></div>
+    <nav class="obs-nav">
+      <a class="obs-nav-link" id="nav-observe" href="#">OBSERVE</a>
+      <a class="obs-nav-link active" href="#">MONITOR</a>
+      <a class="obs-nav-link" href="#last-session">LAST SESSION</a>
+    </nav>
     <dl><div><dt>SYSTEM</dt><dd id="system-badge" class="badge">—</dd></div>
       <div><dt>UTC</dt><dd id="clock">—</dd></div>
       <div><dt>UPDATED</dt><dd id="updated">—</dd></div></dl>
@@ -47,4 +52,10 @@
     </section>
   </main>
   <script src="app.js"></script>
+  <script>
+    // Points OBSERVE at the orchestrator's own API/UI server (a separate
+    // process/port from this read-only console) — never touches app.js.
+    document.getElementById("nav-observe").href =
+      location.protocol + "//" + location.hostname + ":8090/observe.html";
+  </script>
 </body></html>

@@ -1,0 +1,28 @@
+[Unit]
+Description=ALMITA Observation Orchestrator - Web API + OBSERVE page (0.0.0.0:8090)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=stellarmate
+WorkingDirectory=/home/stellarmate/almita
+ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/almita_orchestrator_server.py --host 0.0.0.0 --port 8090
+Restart=on-failure
+RestartSec=5
+# Observation lifecycle != Web API lifecycle: this API launches capture.py/
+# quicklook_live.py as detached (start_new_session=True) children it does
+# NOT want killed when this unit stops/restarts/fails. The systemd default,
+# KillMode=control-group, kills the whole cgroup on stop/restart regardless
+# of start_new_session=True (start_new_session only escapes the POSIX
+# process group/session, not the cgroup) — verified empirically with a
+# dummy `sleep` child launched via the exact production _popen_detached()
+# mechanism: it died under the default KillMode, survived (reparented to
+# init) under KillMode=process. Only ever kill the tracked main process;
+# orphaned science children are intentionally left running.
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

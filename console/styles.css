@@ -34,3 +34,29 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .rfi-spectrum-caption b{color:var(--text)}
 .rfi-spectrum-placeholder{padding:24px;text-align:center;color:var(--muted);letter-spacing:.08em;font-size:11px;background:#0d1317;border:1px solid var(--line)}
 @media(max-width:900px){.grid3{grid-template-columns:1fr}.topbar{display:block}.topbar dl{margin-top:10px}}
+
+/* OBSERVE page (console/observe.html) + shared nav — additive only,
+   the rules above are unchanged. */
+.obs-nav{display:flex;gap:14px;margin-left:20px}
+.obs-nav-link{color:var(--muted);text-decoration:none;font:700 11px/1 monospace;letter-spacing:.1em;padding:4px 0;border-bottom:2px solid transparent}
+.obs-nav-link.active{color:var(--accent);border-bottom-color:var(--accent)}
+.obs-nav-link:hover{color:var(--text)}
+.obs-form form{padding:11px;display:grid;gap:8px}
+.obs-form h3{font-size:11px;letter-spacing:.1em;color:var(--muted);margin:10px 0 0}
+.obs-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.obs-row label{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.obs-row input[type=text],.obs-row input[type=number]{background:#0d1317;border:1px solid var(--line);color:var(--text);padding:5px 8px;font-family:ui-monospace,monospace;width:220px}
+.obs-row select{background:#0d1317;border:1px solid var(--line);color:var(--text);padding:5px 8px}
+#observe-form button,.obs-actions button,.obs-button-link{background:var(--accent);color:#06121a;border:0;padding:9px 16px;font:700 12px/1 monospace;letter-spacing:.08em;cursor:pointer;text-decoration:none;display:inline-block}
+#observe-form button:disabled,.obs-actions button:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
+#btn-stop{background:var(--error);color:#180808}
+.obs-summary{padding:11px;margin:0;white-space:pre-wrap;font:12px/1.5 ui-monospace,monospace}
+.obs-images{display:flex;gap:10px;padding:0 11px 11px}
+.obs-images img{width:260px;background:#0d1317;border:1px solid var(--line)}
+.obs-images a{color:var(--muted);font-size:10px;text-align:center;display:block}
+.obs-checks{padding:0 11px 11px;display:grid;gap:3px}
+.obs-check-row{font:11px/1.5 ui-monospace,monospace;padding:2px 6px}
+.obs-check-row.status-pass{color:var(--ok)}
+.obs-check-row.status-warning{color:var(--warn)}
+.obs-check-row.status-block{color:var(--error)}
+.obs-actions{display:flex;gap:10px;padding:11px}

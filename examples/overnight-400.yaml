@@ -1,0 +1,50 @@
+# ALMITA Observation Specification — 400-point overnight survey template.
+#
+# No RA/Dec is hardcoded here: grid.placement=EASTMOST_SAFE means the
+# orchestrator PLAN step resolves the center automatically (see
+# observation_plan.py::_resolve_eastmost_safe), evaluating predicted
+# altitude across the whole conservative session window, not just T0.
+#
+# Usage:
+#   python3 almita_observe.py plan examples/overnight-400.yaml
+#   python3 almita_observe.py run <printed observation_resolved.json path> --yes
+
+session:
+  name: ALMITA-OVERNIGHT-400PT
+
+grid:
+  mode: EQUATORIAL_RECT
+  placement: EASTMOST_SAFE
+  width_deg: 30
+  height_deg: 30
+  rows: 20
+  cols: 20
+  min_altitude_deg: 10
+  traversal: SERPENTINE
+
+capture:
+  seconds: 10
+  settle_seconds: 2
+
+main:
+  center_frequency_hz: 1420405000
+  sample_rate: 2400000
+  gain_db: 40.2
+  bias_tee: true
+
+rfi_ref:
+  enabled: true
+  serial: "00000002"
+  gain_db: 25.0
+
+quicklook:
+  enabled: true
+  native_grid: true
+  interpolated_preview: true
+  calibration_profile_path: "data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.json"
+
+console:
+  enabled: true
+
+execution:
+  unattended: true
