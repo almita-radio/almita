@@ -137,6 +137,7 @@ _ACQUISITION_IDLE = {
     "points_deferred": None, "current_point_id": None, "last_successful_point_id": None,
     "last_capture_utc": None, "capture_process_detected": False,
     "acquisition_stale": False, "error": None,
+    "started_utc": None, "settle_seconds": None, "capture_seconds": None,
 }
 
 
@@ -165,6 +166,13 @@ def build_acquisition(now_utc: str, current_session: Optional[dict], capture_pro
         "capture_process_detected": capture_process_detected,
         "acquisition_stale": stale,
         "error": error,
+        # started_utc: capture.py already announces this at SESSION_STARTED;
+        # settle_seconds/capture_seconds: not announced yet (would need a
+        # capture.py change) - both simply read as None until it is, so the
+        # console degrades cleanly rather than needing a second watcher edit.
+        "started_utc": current_session.get("started_utc"),
+        "settle_seconds": current_session.get("settle_seconds"),
+        "capture_seconds": current_session.get("capture_seconds"),
     }
 
 

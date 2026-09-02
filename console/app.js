@@ -8,6 +8,20 @@ const pair=(label,value)=>`<dt>${label}</dt><dd>${safe(value)}</dd>`;
 const badgeClass=v=>`badge status-${String(v).toLowerCase()}`;
 let lastValid=null;
 
+// Strips an ISO timestamp down to just its HH:MM:SS — drops the date, the
+// "T" separator, sub-second decimals, and the timezone offset.
+function _shortTime(iso){
+  if(!iso)return"—";
+  const match=/T(\d{2}:\d{2}:\d{2})/.exec(iso);
+  return match?match[1]:iso;
+}
+function _hhmm(seconds){
+  if(seconds==null||!isFinite(seconds))return"--:--";
+  const total=Math.max(0,Math.round(seconds));
+  const h=Math.floor(total/3600),m=Math.floor((total%3600)/60);
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
 async function fetchJson(name){
   const response=await fetch(`${CONFIG.root}/${name}`,{cache:"no-store"});
   if(!response.ok)throw new Error(`${name}: HTTP ${response.status}`);
@@ -34,12 +48,29 @@ function renderSession(acquisition){
   const state=acquisition.state||"IDLE";
   $("session-badge").textContent=state;$("session-badge").className=badgeClass(state);
   if(state==="IDLE"){$("session-kv").innerHTML=pair("SESSION","IDLE — NO ACTIVE SESSION");return}
+  // Elapsed/total/remaining: same "average time per completed point" estimator
+  // capture.py's own compact console summary uses server-side, computed here
+  // client-side from started_utc + progress so it updates every poll tick.
+  const started=acquisition.started_utc?Date.parse(acquisition.started_utc):NaN;
+  const pointCurrent=Number(acquisition.point_current),pointsTotal=Number(acquisition.points_total);
+  let elapsedSec=null,totalSec=null,remainingSec=null;
+  if(!isNaN(started)){
+    elapsedSec=(Date.now()-started)/1000;
+    if(pointCurrent>0&&pointsTotal>0){
+      const perPoint=elapsedSec/pointCurrent;
+      totalSec=perPoint*pointsTotal;
+      remainingSec=Math.max(0,totalSec-elapsedSec);
+    }
+  }
   $("session-kv").innerHTML=[
     pair("SESSION ID",acquisition.session_id),
     pair("SESSION NAME",acquisition.session_name),
     pair("PROGRESS",`${safe(acquisition.point_current,"—")} / ${safe(acquisition.points_total,"—")}`),
     pair("CURRENT POINT",acquisition.current_point_id),
-    pair("SUCCESS",acquisition.points_success),
+    pair("SETTLE / CAPTURE",
+      `${acquisition.settle_seconds==null?"—":num(acquisition.settle_seconds,1)+"s"} / `+
+      `${acquisition.capture_seconds==null?"—":num(acquisition.capture_seconds,1)+"s"}`),
+    pair("ELAPSED / TOTAL / REMAINING",`${_hhmm(elapsedSec)} / ${_hhmm(totalSec)} / ${_hhmm(remainingSec)}`),
     pair("FAILED",acquisition.points_failed),
     pair("DEFERRED",acquisition.points_deferred),
     pair("LAST SUCCESS POINT",acquisition.last_successful_point_id),
@@ -100,7 +131,7 @@ function renderRfiRef(rfiRef){
     pair("CLIPPING",rfiRef.clipping_fraction==null?"N/A":`${num(rfiRef.clipping_fraction*100,2)}%`),
     pair("PEAK",rfiRef.peak_dbfs==null?"N/A":`${num(rfiRef.peak_dbfs,1)} dBFS`),
     pair("PROCESSED / SKIPPED / DROPPED",`${safe(rfiRef.processed_blocks)} / ${safe(rfiRef.skipped_blocks)} / ${safe(rfiRef.dropped_blocks)}`),
-    pair("LAST UPDATE",rfiRef.last_update_utc),
+    pair("LAST UPDATE",_shortTime(rfiRef.last_update_utc)),
     pair("ERROR",rfiRef.last_error),
   ].join("");
 }

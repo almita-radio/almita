@@ -1240,6 +1240,7 @@ class CaptureExecutor:
             point_current=None, current_point_id=None, last_successful_point_id=None,
             last_capture_utc=None, session_root=None, quicklook_root=None, error=None,
             mount_device=self.device_name,
+            settle_seconds=settle_time, capture_seconds=capture_time,
         )
 
         self._live_timing_csv_path = (

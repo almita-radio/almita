@@ -162,6 +162,21 @@ async def test_rfi_ref_disabled_by_default_capture_unaffected(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_session_started_announces_settle_and_capture_seconds(monkeypatch, tmp_path):
+    """The console's Session panel needs these to show requested SETTLE/
+    CAPTURE times - previously SESSION_STARTED never announced them."""
+    monkeypatch.setattr(capture, "SDRCapture", FakeMainSDR)
+
+    runtime_dir = tmp_path / "runtime"
+    ex = make_executor(tmp_path, runtime_dir=str(runtime_dir))
+
+    assert await ex.execute_observation_plan(settle_time=3.5, capture_time=12.0)
+    current_session = read_json_safe(runtime_dir / "current_session.json")
+    assert current_session["settle_seconds"] == 3.5
+    assert current_session["capture_seconds"] == 12.0
+
+
+@pytest.mark.asyncio
 async def test_rfi_ref_enabled_uses_canonical_session_id_and_own_config(monkeypatch, tmp_path):
     monkeypatch.setattr(capture, "SDRCapture", FakeMainSDR)
 

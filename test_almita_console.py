@@ -4,6 +4,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,22 @@ def test_4_point_completed_updates_counters(tmp_path):
                                    lambda: fake_telemetry(), capture_process_detected=True)
     assert status["acquisition"]["points_success"] == 1
     assert status["acquisition"]["last_successful_point_id"] == "p001"
+
+
+def test_4b_started_utc_passed_through_for_client_side_elapsed_estimate(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="STARTING",
+                      started_utc="2026-09-02T18:00:00+00:00", points_total=9)
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["acquisition"]["started_utc"] == "2026-09-02T18:00:00+00:00"
+
+
+def test_4c_settle_and_capture_seconds_default_to_none_until_capture_announces_them(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="STARTING")
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["acquisition"]["settle_seconds"] is None
+    assert status["acquisition"]["capture_seconds"] is None
 
 
 def test_5_session_completed_persists_final_state(tmp_path):
@@ -339,6 +356,24 @@ def test_20_frontend_idle_render(tmp_path):
 def test_21_frontend_running_render(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     assert ">RUNNING<" in html and "p003" in html and "demo" in html
+
+
+def test_21c_frontend_session_panel_shows_elapsed_and_no_standalone_success_line(tmp_path):
+    started = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", acquisition={**status_fixture("RUNNING")["acquisition"], "started_utc": started})))
+    assert "ELAPSED / TOTAL / REMAINING" in html
+    assert "SETTLE / CAPTURE" in html
+    assert "<dt>SUCCESS</dt>" not in html
+
+
+def test_21d_frontend_rfi_last_update_shows_time_only(tmp_path):
+    # The RFI REFERENCE panel's own "LAST UPDATE" row is trimmed to HH:MM:SS;
+    # the unrelated ANTENNA B products caption ("updated ...") intentionally
+    # still shows the full timestamp, so this only checks the KV row itself.
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "last_update_utc": "2026-09-02T18:23:45.123456+00:00"})))
+    assert "<dt>LAST UPDATE</dt><dd>18:23:45</dd>" in html
 
 
 def test_21b_frontend_shows_spectrum_thumbnail_when_available(tmp_path):
