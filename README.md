@@ -6,7 +6,7 @@
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
-ALMITA is an amateur 21 cm neutral hydrogen radio telescope built in **Chile** by **Felipe Fridman G.**
+ALMITA is an amateur 21 cm neutral hydrogen radio telescope built in **Chile** by **Felipe Fridman G.** (ffridman@gmail.com)
 
 The project combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky planning, HDF5 acquisition, live quicklook products and a lightweight web console.
 
