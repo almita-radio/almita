@@ -28,7 +28,7 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .thumbs{display:flex;gap:10px;margin-top:10px}
 .thumbs a{display:block;background:var(--panel);border:1px solid var(--line);padding:6px;text-decoration:none;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center}
 .thumbs img{display:block;width:100%;height:110px;object-fit:contain;background:#0d1317;margin-bottom:4px}
-.thumbs canvas{display:block;width:100%;height:110px;background:#0d1317;margin-bottom:4px}
+.thumbs canvas{display:block;width:100%;height:140px;background:#0d1317;margin-bottom:4px}
 .antenna-label{font-size:11px;letter-spacing:.14em;color:var(--muted);margin:16px 0 6px;font-weight:700}
 .rfi-spectrum-caption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:6px}
 .rfi-spectrum-caption b{color:var(--text)}
@@ -43,10 +43,10 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .obs-nav-link:hover{color:var(--text)}
 .obs-form form{padding:11px;display:grid;gap:8px}
 .obs-form h3{font-size:11px;letter-spacing:.1em;color:var(--muted);margin:10px 0 0}
-.obs-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.obs-row{display:grid;grid-template-columns:210px minmax(0,220px);align-items:center;gap:10px}
 .obs-row label{font-size:11px;color:var(--muted);letter-spacing:.04em}
-.obs-row input[type=text],.obs-row input[type=number]{background:#0d1317;border:1px solid var(--line);color:var(--text);padding:5px 8px;font-family:ui-monospace,monospace;width:220px}
-.obs-row select{background:#0d1317;border:1px solid var(--line);color:var(--text);padding:5px 8px}
+.obs-row input[type=text],.obs-row input[type=number]{background:#0d1317;border:1px solid var(--line);color:var(--text);padding:5px 8px;font-family:ui-monospace,monospace;width:100%}
+.obs-row select{background:#0d1317;border:1px solid var(--line);color:var(--text);padding:5px 8px;width:100%}
 #observe-form button,.obs-actions button,.obs-button-link{background:var(--accent);color:#06121a;border:0;padding:9px 16px;font:700 12px/1 monospace;letter-spacing:.08em;cursor:pointer;text-decoration:none;display:inline-block}
 #observe-form button:disabled,.obs-actions button:disabled{background:var(--line);color:var(--muted);cursor:not-allowed}
 #btn-stop{background:var(--error);color:#180808}

@@ -101,15 +101,78 @@ function renderRfiRef(rfiRef){
   ].join("");
 }
 
+// Axis styling shared by drawRfiSpectrum/drawRfiWaterfall, matched to
+// Antenna A's matplotlib-rendered PNGs (light background, thin frame,
+// small tick labels) so both antennas read the same way at a glance.
+const AXIS_MARGIN={l:36,r:8,t:6,b:16};
+const AXIS_BG="#f7f7f7",AXIS_LINE="#94a3b8",AXIS_GRID="#d9dee3",AXIS_TEXT="#374151";
+
+function _niceStep(span,targetCount){
+  const raw=span/Math.max(1,targetCount);
+  const mag=Math.pow(10,Math.floor(Math.log10(raw||1)));
+  const norm=raw/mag;
+  return (norm<1.5?1:norm<3?2:norm<7?5:10)*mag;
+}
+function _axisTicks(min,max,targetCount){
+  if(!(max>min))return[min];
+  const step=_niceStep(max-min,targetCount)||1;
+  const start=Math.ceil(min/step)*step;
+  const ticks=[];
+  for(let v=start;v<=max+step*1e-6;v+=step)ticks.push(Math.abs(v)<step*1e-9?0:v);
+  return ticks;
+}
+function _plotArea(w,h){
+  return{x0:AXIS_MARGIN.l,x1:w-AXIS_MARGIN.r,y0:AXIS_MARGIN.t,y1:h-AXIS_MARGIN.b};
+}
+function _drawFrameAndBg(ctx,w,h){
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle=AXIS_BG;ctx.fillRect(0,0,w,h);
+  const a=_plotArea(w,h);
+  ctx.strokeStyle=AXIS_LINE;ctx.lineWidth=1;
+  ctx.strokeRect(a.x0+.5,a.y0+.5,a.x1-a.x0,a.y1-a.y0);
+  return a;
+}
+function _drawYAxis(ctx,a,yMin,yMax,fmt){
+  ctx.font="9px ui-monospace,monospace";ctx.fillStyle=AXIS_TEXT;
+  ctx.textAlign="right";ctx.textBaseline="middle";
+  for(const v of _axisTicks(yMin,yMax,4)){
+    const py=a.y1-(v-yMin)/(yMax-yMin)*(a.y1-a.y0);
+    if(py<a.y0-1||py>a.y1+1)continue;
+    ctx.strokeStyle=AXIS_GRID;ctx.beginPath();ctx.moveTo(a.x0,py);ctx.lineTo(a.x1,py);ctx.stroke();
+    ctx.fillText(fmt(v),a.x0-4,py);
+  }
+}
+function _drawXAxis(ctx,a,xMin,xMax,fmt){
+  ctx.font="9px ui-monospace,monospace";ctx.fillStyle=AXIS_TEXT;
+  ctx.textAlign="center";ctx.textBaseline="top";
+  for(const v of _axisTicks(xMin,xMax,4)){
+    const px=a.x0+(v-xMin)/(xMax-xMin)*(a.x1-a.x0);
+    if(px<a.x0-1||px>a.x1+1)continue;
+    ctx.strokeStyle=AXIS_GRID;ctx.beginPath();ctx.moveTo(px,a.y0);ctx.lineTo(px,a.y1);ctx.stroke();
+    ctx.fillText(fmt(v),px,a.y1+2);
+  }
+}
+
+// Y range is deliberately wider than the live data's own min/max: at 1x
+// (auto-scaled to the exact sample range) normal receiver noise fills the
+// whole plot height and looks like solid static. Expanding the range
+// around the data's midpoint compresses the noise floor into a thinner
+// band so a real peak — which sits outside the noise's typical spread —
+// stands out by contrast instead of being lost in it.
+const SPECTRUM_Y_EXPAND=2.5;
+
 function drawRfiSpectrum(canvas,freqMHz,powerDbfs){
   const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
-  ctx.clearRect(0,0,w,h);
+  const a=_drawFrameAndBg(ctx,w,h);
   if(!freqMHz.length)return;
-  const pad=6;
-  const minP=Math.min(...powerDbfs),maxP=Math.max(...powerDbfs),spanP=(maxP-minP)||1;
-  const f0=freqMHz[0],f1=freqMHz[freqMHz.length-1],spanF=(f1-f0)||1;
-  const x=v=>pad+(v-f0)/spanF*(w-2*pad),y=v=>h-pad-(v-minP)/spanP*(h-2*pad);
-  ctx.strokeStyle="#65b7d8";ctx.lineWidth=1.3;ctx.beginPath();
+  const minP=Math.min(...powerDbfs),maxP=Math.max(...powerDbfs);
+  const midP=(minP+maxP)/2,halfSpan=Math.max((maxP-minP)/2,0.5)*SPECTRUM_Y_EXPAND;
+  const yMin=midP-halfSpan,yMax=midP+halfSpan;
+  const f0=freqMHz[0],f1=freqMHz[freqMHz.length-1];
+  _drawYAxis(ctx,a,yMin,yMax,v=>v.toFixed(0));
+  _drawXAxis(ctx,a,f0,f1,v=>v.toFixed(1));
+  const x=v=>a.x0+(v-f0)/(f1-f0||1)*(a.x1-a.x0),y=v=>a.y1-(v-yMin)/(yMax-yMin)*(a.y1-a.y0);
+  ctx.strokeStyle="#2563a8";ctx.lineWidth=1.1;ctx.beginPath();
   freqMHz.forEach((f,idx)=>{const px=x(f),py=y(powerDbfs[idx]);idx===0?ctx.moveTo(px,py):ctx.lineTo(px,py)});
   ctx.stroke();
 }
@@ -119,25 +182,33 @@ function drawRfiSpectrum(canvas,freqMHz,powerDbfs){
 // newest-last (bottom), matching "time flows downward".
 function drawRfiWaterfall(canvas,rows,freqMHz){
   const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
-  ctx.clearRect(0,0,w,h);
+  const a=_drawFrameAndBg(ctx,w,h);
   if(!rows.length||!freqMHz.length)return;
   let minP=Infinity,maxP=-Infinity;
   for(const row of rows)for(const p of row.power_dbfs){if(p<minP)minP=p;if(p>maxP)maxP=p}
   const spanP=(maxP-minP)||1;
-  const image=ctx.createImageData(w,h);
+  const f0=freqMHz[0],f1=freqMHz[freqMHz.length-1];
+  const pw=a.x1-a.x0,ph=a.y1-a.y0;
+  const image=ctx.createImageData(pw,ph);
   const nRows=rows.length,nBins=freqMHz.length;
-  for(let y=0;y<h;y++){
-    const power=rows[Math.min(nRows-1,Math.floor(y/h*nRows))].power_dbfs;
-    for(let x=0;x<w;x++){
-      const t=Math.max(0,Math.min(1,(power[Math.min(nBins-1,Math.floor(x/w*nBins))]-minP)/spanP));
-      const i=(y*w+x)*4;
+  for(let y=0;y<ph;y++){
+    const power=rows[Math.min(nRows-1,Math.floor(y/ph*nRows))].power_dbfs;
+    for(let x=0;x<pw;x++){
+      const t=Math.max(0,Math.min(1,(power[Math.min(nBins-1,Math.floor(x/pw*nBins))]-minP)/spanP));
+      const i=(y*pw+x)*4;
       image.data[i]=Math.round(255*Math.min(1,t*2));
       image.data[i+1]=Math.round(255*Math.min(1,Math.max(0,1-Math.abs(t-.5)*2)));
       image.data[i+2]=Math.round(255*Math.min(1,(1-t)*2));
       image.data[i+3]=255;
     }
   }
-  ctx.putImageData(image,0,0);
+  ctx.putImageData(image,a.x0,a.y0);
+  ctx.strokeStyle=AXIS_LINE;ctx.lineWidth=1;ctx.strokeRect(a.x0+.5,a.y0+.5,pw,ph);
+  _drawXAxis(ctx,a,f0,f1,v=>v.toFixed(1));
+  ctx.font="9px ui-monospace,monospace";ctx.fillStyle=AXIS_TEXT;
+  ctx.textAlign="right";ctx.textBaseline="middle";
+  ctx.fillText("new",a.x0-4,a.y0+6);
+  ctx.fillText("old",a.x0-4,a.y1-6);
 }
 
 async function renderRfiProducts(rfiRef,quicklook,sessionId){
