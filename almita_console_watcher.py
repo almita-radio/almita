@@ -195,6 +195,26 @@ def build_quicklook(now_utc: str, runtime_dir: Path, session_id: Optional[str]) 
     }
 
 
+_RFI_REF_DISABLED = {
+    "enabled": False, "status": "DISABLED", "device_serial": None,
+    "center_frequency_hz": None, "sample_rate": None, "gain_db": None,
+    "fft_duty_fraction": None, "clipping_fraction": None, "occupancy_fraction": None,
+    "peak_dbfs": None, "processed_blocks": None, "skipped_blocks": None,
+    "dropped_blocks": None, "last_update_utc": None, "last_error": None,
+}
+
+
+def build_rfi_ref(runtime_dir: Path, session_id: Optional[str]) -> dict:
+    """RFI_REF is an auxiliary sidecar: this never affects acquisition/
+    quicklook state above, and a missing/stale/malformed status file (older
+    sessions that predate RFI_REF, or RFI_REF simply disabled) safely reads
+    as DISABLED rather than raising or degrading anything else."""
+    status = read_json_safe(Path(runtime_dir) / "rfi_ref_status.json")
+    if not status or status.get("session_id") != session_id:
+        return dict(_RFI_REF_DISABLED)
+    return {**_RFI_REF_DISABLED, **{k: status.get(k) for k in _RFI_REF_DISABLED}}
+
+
 def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtime_dir: Path,
                   collect_fn: Callable[[], dict], capture_process_detected: bool) -> dict:
     current_session = read_json_safe(Path(runtime_dir) / "current_session.json")
@@ -205,6 +225,7 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
     instrument["mount_device"] = (current_session or {}).get("mount_device")
     acquisition = build_acquisition(now_utc, current_session, capture_process_detected)
     quicklook = build_quicklook(now_utc, runtime_dir, acquisition["session_id"])
+    rfi_ref = build_rfi_ref(runtime_dir, acquisition["session_id"])
 
     if acquisition["state"] in ("COMPLETED", "DEGRADED", "ABORTED") and acquisition["session_id"]:
         archive = {
@@ -236,6 +257,7 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
         "instrument": instrument,
         "acquisition": acquisition,
         "quicklook": quicklook,
+        "rfi_ref": rfi_ref,
         "last_session": last_session,
     }
 

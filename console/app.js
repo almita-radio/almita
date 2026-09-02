@@ -81,6 +81,23 @@ function renderQuicklook(quicklook){
   renderThumbs(quicklook);
 }
 
+function renderRfiRef(rfiRef){
+  const state=rfiRef.status||"DISABLED";
+  $("rfi-ref-badge").textContent=state;$("rfi-ref-badge").className=badgeClass(state);
+  if(state==="DISABLED"){$("rfi-ref-kv").innerHTML=pair("RFI REFERENCE","DISABLED");return}
+  $("rfi-ref-kv").innerHTML=[
+    pair("RECEIVER / SERIAL",rfiRef.device_serial?`V3 / ${rfiRef.device_serial}`:"—"),
+    pair("GAIN",rfiRef.gain_db==null?"N/A":`${num(rfiRef.gain_db,1)} dB`),
+    pair("FFT DUTY",rfiRef.fft_duty_fraction==null?"N/A":`${num(rfiRef.fft_duty_fraction*100,1)}%`),
+    pair("OCCUPANCY",rfiRef.occupancy_fraction==null?"N/A":`${num(rfiRef.occupancy_fraction*100,2)}%`),
+    pair("CLIPPING",rfiRef.clipping_fraction==null?"N/A":`${num(rfiRef.clipping_fraction*100,2)}%`),
+    pair("PEAK",rfiRef.peak_dbfs==null?"N/A":`${num(rfiRef.peak_dbfs,1)} dBFS`),
+    pair("PROCESSED / SKIPPED / DROPPED",`${safe(rfiRef.processed_blocks)} / ${safe(rfiRef.skipped_blocks)} / ${safe(rfiRef.dropped_blocks)}`),
+    pair("LAST UPDATE",rfiRef.last_update_utc),
+    pair("ERROR",rfiRef.last_error),
+  ].join("");
+}
+
 function renderLastSession(lastSession){
   $("last-session").hidden=!lastSession;
   if(!lastSession)return;
@@ -101,6 +118,7 @@ function render(status){
   renderInstrument(status.instrument||{});
   renderSession(status.acquisition||{state:"IDLE"});
   renderQuicklook(status.quicklook||{state:"IDLE"});
+  renderRfiRef(status.rfi_ref||{status:"DISABLED"});
   renderLastSession(status.last_session);
 }
 
@@ -122,5 +140,5 @@ function start(){
   poll();setInterval(poll,CONFIG.pollMs);
   setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z"},1000);
 }
-window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderLastSession,render,CONFIG};
+window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderLastSession,render,CONFIG};
 start();

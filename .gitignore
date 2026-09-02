@@ -75,3 +75,6 @@ data/console_web/
 
 # Dual-SDR benchmark - evidencia de corridas (CSV/JSON/logs), no versionar
 data/dual_sdr_bench/
+
+# RFI_REF SATANIC hardware validation - evidencia de corridas, no versionar
+data/rfi_ref_satanic/

@@ -11,12 +11,12 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,san
 .topbar dt{font-size:10px;letter-spacing:.1em;color:var(--muted)}
 .topbar dd{margin:2px 0 0;font-family:ui-monospace,monospace}
 .badge{font-weight:700}
-.status-ready,.status-ok,.status-running,.status-completed,.status-available,.status-detected,.status-listening,.status-live,.status-no{color:var(--ok)}
-.status-degraded,.status-idle,.status-starting,.status-waiting,.status-stale,.status-unknown,.status-yes{color:var(--warn)}
-.status-aborted,.status-error,.status-not_detected{color:var(--error)}
+.status-ready,.status-ok,.status-running,.status-completed,.status-available,.status-detected,.status-listening,.status-live,.status-no,.status-stopped{color:var(--ok)}
+.status-degraded,.status-idle,.status-starting,.status-waiting,.status-stale,.status-unknown,.status-yes,.status-unavailable{color:var(--warn)}
+.status-aborted,.status-error,.status-not_detected,.status-failed{color:var(--error)}
 .banner{padding:9px 14px;margin:0;border-bottom:1px solid #814d4d;background:#281818;color:#f39b9b}
 main{padding:14px;max-width:1400px;margin:auto}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
 .panel{background:var(--panel);border:1px solid var(--line);min-width:0}
 .panel>header{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--line)}
 h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}

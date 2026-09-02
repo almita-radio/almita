@@ -356,6 +356,72 @@ def test_24_frontend_shows_mount_device_when_announced_by_capture(tmp_path):
     assert "LX200 OnStep" in html
 
 
+# ---------------------------------------------------------------- 25-28: RFI_REF sidecar
+
+
+def test_25_watcher_rfi_ref_missing_status_file_defaults_to_disabled(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["status"] == "DISABLED"
+    assert status["rfi_ref"]["enabled"] is False
+
+
+def test_26_watcher_rfi_ref_matching_session_is_reflected(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {
+        "schema_version": 1, "session_id": "s1", "enabled": True, "status": "RUNNING",
+        "device_serial": "00000002", "center_frequency_hz": 1420405000, "sample_rate": 2400000,
+        "gain_db": 25.0, "fft_duty_fraction": 0.05, "clipping_fraction": 0.0,
+        "occupancy_fraction": 0.0016, "peak_dbfs": -42.3, "processed_blocks": 100,
+        "skipped_blocks": 1900, "dropped_blocks": 0, "last_update_utc": utcnow(), "last_error": None,
+    })
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["status"] == "RUNNING"
+    assert status["rfi_ref"]["gain_db"] == 25.0
+    assert status["rfi_ref"]["device_serial"] == "00000002"
+    # RFI_REF degradation must never be conflated with acquisition state.
+    assert status["acquisition"]["state"] == "RUNNING"
+
+
+def test_27_watcher_rfi_ref_stale_session_falls_back_to_disabled(tmp_path):
+    """A leftover rfi_ref_status.json from a previous session (older/mismatched
+    session_id) must never bleed into the current session's console view -
+    same discipline the existing quicklook_announcement.json check already
+    applies, so older sessions/artifacts stay compatible."""
+    announce_session(tmp_path, session_id="s2", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {
+        "schema_version": 1, "session_id": "s1-old", "enabled": True, "status": "RUNNING",
+        "device_serial": "00000002", "last_update_utc": utcnow(), "last_error": None,
+    })
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["status"] == "DISABLED"
+
+
+def test_28_frontend_rfi_ref_panel_shows_running_metrics(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={
+            "enabled": True, "status": "RUNNING", "device_serial": "00000002",
+            "center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 25.0,
+            "fft_duty_fraction": 0.05, "clipping_fraction": 0.0, "occupancy_fraction": 0.0016,
+            "peak_dbfs": -42.3, "processed_blocks": 100, "skipped_blocks": 1900,
+            "dropped_blocks": 0, "last_update_utc": utcnow(), "last_error": None,
+        })))
+    assert "RFI REFERENCE" in html
+    assert ">RUNNING<" in html
+    assert "00000002" in html
+
+
+def test_29_frontend_rfi_ref_missing_field_renders_disabled_not_broken(tmp_path):
+    """Backward compatibility: a status.json produced by a watcher/session
+    that predates RFI_REF (no 'rfi_ref' key at all) must still render."""
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert "RFI REFERENCE" in html
+    assert "DISABLED" in html
+
+
 # ---------------------------------------------------------------- closeout: canonical runtime_dir
 
 

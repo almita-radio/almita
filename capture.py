@@ -34,6 +34,7 @@ from session_manager import SessionManager
 from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 from runtime_state import announce_session, atomic_write_json
+from rfi_monitor import RFIReferenceMonitor
 
 
 def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
@@ -112,7 +113,11 @@ class CaptureExecutor:
                  bias_tee_enabled: bool = True,
                  min_altitude_deg: Optional[float] = None,
                  tracking_timeout: float = 5.0,
-                 runtime_dir: Optional[str] = None):
+                 runtime_dir: Optional[str] = None,
+                 rfi_ref_enabled: bool = False,
+                 rfi_ref_gain_db: float = 25.0,
+                 rfi_ref_port: int = 1235,
+                 rfi_ref_serial: str = "00000002"):
         """
         Initialize capture executor
 
@@ -165,7 +170,22 @@ class CaptureExecutor:
             raise ValueError(f"unsupported input topology: {input_topology}")
         self.bias_tee_enabled = bool(bias_tee_enabled)
         self.sdr = None
-        
+
+        # RFI_REF: optional, disposable secondary receiver (auxiliary RFI
+        # monitoring only). MAIN above is the sole authoritative science
+        # path; RFI_REF's own gain/frequency/lifecycle never touch it.
+        self.rfi_ref_enabled = bool(rfi_ref_enabled)
+        self.rfi_ref = RFIReferenceMonitor(
+            enabled=self.rfi_ref_enabled,
+            runtime_dir=self.runtime_dir,
+            device_serial=rfi_ref_serial,
+            port=rfi_ref_port,
+            center_frequency_hz=sdr_freq,
+            sample_rate=sdr_sample_rate,
+            gain_db=rfi_ref_gain_db,
+            log=lambda message: self.log(message, "WARNING", force=True),
+        )
+
         # Load observer configuration
         config_full_path = Path(config_path)
         if not config_full_path.is_absolute():
@@ -1208,6 +1228,10 @@ class CaptureExecutor:
         else:
             self.log(f"📋 Resuming Session ID: {self.session_id}", force=True)
 
+        # RFI_REF status is tagged with this same canonical session_id -
+        # never a second, independent identity.
+        self.rfi_ref.session_id = self.session_id
+
         self._announce(
             event="SESSION_STARTED", session_name=session_name, state="STARTING",
             started_utc=datetime.now(timezone.utc).isoformat(),
@@ -1270,6 +1294,24 @@ class CaptureExecutor:
             return False
 
         try:
+            # RFI_REF sidecar: optional and disposable. Started only after
+            # MAIN's own SDR is already connected and configured above, and
+            # only ever inside this try/finally so the finally below always
+            # stops it. Any failure here is caught and logged; it can never
+            # abort the session or block/alter MAIN acquisition.
+            if self.rfi_ref_enabled:
+                try:
+                    await self.rfi_ref.start()
+                    if self.rfi_ref.status == "RUNNING" or self.rfi_ref.status == "STARTING":
+                        self.log(f"📡 RFI_REF sidecar starting on {self.rfi_ref.host}:{self.rfi_ref.port} "
+                                 f"(serial={self.rfi_ref.device_serial}, auxiliary only)", force=True)
+                    else:
+                        self.log(f"RFI_REF sidecar {self.rfi_ref.status}: {self.rfi_ref.last_error} "
+                                 f"(auxiliary only - MAIN continues)", "WARNING", force=True)
+                except Exception as exc:  # noqa: BLE001 - RFI_REF must never abort MAIN
+                    self.log(f"RFI_REF sidecar failed to start (auxiliary only, MAIN unaffected): {exc}",
+                             "WARNING", force=True)
+
             actual_session_count = 0
             timing_totals = {key: 0.0 for key in (
                 "slew", "settle", "flush", "capture", "hdf5",
@@ -2242,6 +2284,14 @@ class CaptureExecutor:
             if self.sdr:
                 await self.sdr.close()
                 if self.verbose:self.log("SDR closed")
+            # RFI_REF: stop only the subprocess this instance itself owns.
+            # Best-effort by design (mirrors _announce) - a failure here must
+            # never mask or replace the real outcome of the session above.
+            if self.rfi_ref_enabled:
+                try:
+                    await self.rfi_ref.stop()
+                except Exception:
+                    pass
 
 
 async def main():
@@ -2332,6 +2382,19 @@ Useful for re-observations or after fixing equipment issues.
     parser.add_argument('--runtime-dir', default=DEFAULT_RUNTIME_DIR,
                         help=f'Canonical field-console runtime dir for the console watcher (default: {DEFAULT_RUNTIME_DIR})')
 
+    # RFI_REF: optional, disposable secondary receiver (auxiliary RFI
+    # monitoring only). Disabled by default - existing behavior/users are
+    # unaffected unless explicitly opted in. Never shares MAIN's gain.
+    parser.add_argument('--rfi-ref-enabled', action='store_true',
+                        help='Enable the optional RFI_REF sidecar (disposable secondary rtl_tcp, '
+                             'auxiliary monitoring only; never blocks MAIN). Default: disabled')
+    parser.add_argument('--rfi-ref-gain-db', type=float, default=25.0,
+                        help='RFI_REF manual tuner gain in dB (default: 25.0; independent of --sdr-gain)')
+    parser.add_argument('--rfi-ref-port', type=int, default=1235,
+                        help='RFI_REF disposable rtl_tcp port (default: 1235)')
+    parser.add_argument('--rfi-ref-serial', default='00000002',
+                        help='RFI_REF RTL-SDR device serial (default: 00000002)')
+
     args = parser.parse_args()
 
     # Initialize session manager
@@ -2397,6 +2460,10 @@ Useful for re-observations or after fixing equipment issues.
             min_altitude_deg=args.min_altitude,
             tracking_timeout=args.tracking_timeout,
             runtime_dir=args.runtime_dir,
+            rfi_ref_enabled=args.rfi_ref_enabled,
+            rfi_ref_gain_db=args.rfi_ref_gain_db,
+            rfi_ref_port=args.rfi_ref_port,
+            rfi_ref_serial=args.rfi_ref_serial,
         )
         executor.compact_console = not executor.verbose
 
@@ -2422,6 +2489,10 @@ Useful for re-observations or after fixing equipment issues.
             min_altitude_deg=args.min_altitude,
             tracking_timeout=args.tracking_timeout,
             runtime_dir=args.runtime_dir,
+            rfi_ref_enabled=args.rfi_ref_enabled,
+            rfi_ref_gain_db=args.rfi_ref_gain_db,
+            rfi_ref_port=args.rfi_ref_port,
+            rfi_ref_serial=args.rfi_ref_serial,
         )
         executor.compact_console = not executor.verbose
 
