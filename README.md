@@ -6,40 +6,52 @@
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
-ALMITA is an amateur 21 cm neutral hydrogen radio telescope built by **Felipe Fridman G.**
+ALMITA is an amateur 21 cm neutral hydrogen radio telescope built in **Chile** by **Felipe Fridman G.**
 
-It combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky grids, HDF5 acquisition, live quicklook products and a lightweight web console.
+The project combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky planning, HDF5 acquisition, live quicklook products and a lightweight web console.
 
-The goal is simple:
+Being based in Chile was a lucky accident.
 
-> point at the Galaxy, record what the hardware actually saw, and avoid lying to ourselves about the parts we have not calibrated yet.
+We just happened to build a radio telescope in a country with some of the best skies on Earth.
 
-Mostly vibe-coded. Extensively tested. Occasionally threatened with a hammer.
+No pressure.
+
+ALMITA is mostly vibe-coded, extensively field-tested, occasionally threatened with a hammer, and still held together in suspiciously many places by **plastic cable ties**.
+
+This is considered temporary.
+
+It has also been considered temporary for quite some time.
 
 ---
 
-## What it does
+## What ALMITA does
 
 ALMITA can:
 
 - Generate physically consistent sky mosaics from beam width, sampling and angular field size.
 - Plan observations in equatorial coordinates.
+- Support rotated and Galactic observation geometries.
 - Control an equatorial mount through **INDI + OnStep**.
 - Acquire raw I/Q data from an **RTL-SDR Blog V4**.
 - Store observations and metadata in **HDF5**.
 - Record RA, Dec, altitude, azimuth, UTC time and observatory coordinates.
-- Record SDR and LNA temperatures.
-- Keep SDR gain fixed during an observation for repeatable measurements.
+- Measure and store SDR and LNA temperatures.
+- Keep SDR gain fixed during science observations.
 - Generate live **Spectrum**, **Waterfall** and sky-map quicklooks.
-- Monitor running sessions through a local web console.
+- Monitor sessions through a local web console.
 - Operate completely offline in the field.
-- Preserve raw observations for later reprocessing.
+- Preserve raw observations for future reprocessing.
+- Use a secondary SDR as an independent RFI reference receiver.
 
-ALMITA currently treats HI intensity as a **relative/instrumental measurement**. Absolute calibration in Kelvin is a development goal, not a currently claimed capability.
+ALMITA currently treats HI measurements as **relative/instrumental data**.
+
+Absolute calibration in Kelvin is an active development goal, not a capability we pretend to already have.
 
 ---
 
-## Current hardware
+## Hardware
+
+The current setup includes:
 
 - **Raspberry Pi 5**
 - **RTL-SDR Blog V4** — primary science receiver
@@ -48,21 +60,23 @@ ALMITA currently treats HI intensity as a **relative/instrumental measurement**.
 - 1420 MHz feed
 - Modified ~90 × 60 cm WiFi grid/parabolic reflector
 - Equatorial mount
-- **OnStep** controller
+- **OnStep** mount controller
 - **INDI**
 - LNA and SDR temperature sensors
-- Local 50 Ω RF reference loads
+- 50 Ω RF reference loads
 - Experimental 1420 MHz RFI-monitor dipole
+- Ferrites, coaxial cable, SMA connectors
+- More plastic cable ties than a serious observatory would probably admit to
 
-The secondary SDR is being developed as an independent RFI monitor so ALMITA can ask an important scientific question:
+The hardware is intentionally accessible, experimental and repairable.
 
-> “Is that hydrogen, or did somebody turn on another horrible electronic device nearby?”
+It is not a commercial telescope kit.
 
 ---
 
-## Software
+## Software stack
 
-ALMITA is mainly Python and runs locally on the Raspberry Pi.
+ALMITA is mainly written in **Python** and runs locally on the Raspberry Pi.
 
 Core technologies include:
 
@@ -78,58 +92,172 @@ Core technologies include:
 - local web monitoring
 - local HI sky reference data
 
-No cloud connection is required for observation.
+Internet access is not required for observation.
 
 ---
 
 ## Observation workflow
 
-A typical session is:
+A typical session looks like this:
 
-1. Start the mount and SDR services.
-2. Generate an observation grid.
-3. Verify visibility and RF conditions.
-4. Select and freeze SDR gain.
-5. Start acquisition.
-6. Move through the planned sky positions.
-7. Store raw I/Q and metadata in HDF5.
-8. Generate live quicklook products.
-9. Monitor progress from the ALMITA Console.
-10. Process and compare observations offline.
+1. Start mount and SDR services.
+2. Generate an observation plan.
+3. Verify visibility and geometry.
+4. Perform RF preflight.
+5. Confirm nominal SDR gain and headroom.
+6. Start acquisition.
+7. Move through the planned sky positions.
+8. Store raw I/Q and metadata in HDF5.
+9. Generate live quicklook products.
+10. Monitor progress from the ALMITA Console.
+11. Process and compare observations offline.
 
-The science receiver remains the primary data source. Auxiliary monitoring must never block or interfere with the main capture path.
+The science receiver remains the primary acquisition path.
+
+Auxiliary monitoring must never block or interfere with the main capture.
 
 ---
 
 ## Grid Generator
 
-The grid system is based on real angular geometry rather than an arbitrary point count.
+ALMITA does not define a grid as “some number of points that looks nice”.
 
-The current design supports or is evolving toward three main planning modes:
+The observation geometry is derived from:
+
+- beam width
+- sampling factor
+- angular field size
+- sky position
+- coordinate frame
+- observation mode
+
+The current design supports or is evolving toward:
 
 - **EQUATORIAL_RECT**
 - **EQUATORIAL_ROTATED**
 - **GALACTIC_RECT**
 
-Future observation planning will include Galactic strip/scan modes for longitudinal and transverse HI surveys.
+Future modes include Galactic strips and scans for longitudinal and transverse HI surveys.
 
-Galactic plans are intended to generate multiple views:
+Galactic plans are intended to always produce multiple views:
 
-- Galactic coordinates — for understanding the science.
-- Equatorial coordinates — for understanding what the mount will execute.
-- Local observer sky projection — for understanding what the field actually looks like from the ground.
+- **Galactic coordinates** — to understand the science.
+- **Equatorial coordinates** — to understand what the mount will execute.
+- **Local observer sky projection** — to understand what the field actually looks like from the ground.
 
-A local HI dataset can be used as a visual planning background.
+A local HI dataset may be used as a contextual sky background for planning.
 
-One particularly important future campaign has an unofficial scientific name:
+One particularly important campaign has an unofficial scientific name:
 
 **the little Milky Way arm survey.**
 
 ---
 
+## Alignment
+
+ALMITA includes an alignment workflow, but alignment is treated conservatively.
+
+The system does **not** perform arbitrary mount synchronization just because a software model says it should.
+
+A valid alignment requires a physically defensible reference.
+
+The intended workflow is:
+
+1. Select a known reference direction or source.
+2. Compare expected and measured pointing.
+3. Evaluate the angular offset.
+4. Apply correction only when the reference is trustworthy.
+5. Preserve the resulting alignment state in session metadata.
+
+The goal is not simply to make the mount “look correct”.
+
+The goal is to know **why** it is correct.
+
+If no defensible reference is available, ALMITA prefers an honest pointing uncertainty over a fake precision.
+
+---
+
+## Antenna characterization
+
+The antenna beam is currently represented by a configured approximate beam width.
+
+This allows ALMITA to generate consistent mosaics, sampling patterns and coverage maps.
+
+However, the final physical beam must eventually be measured.
+
+A proper beam-characterization campaign will include:
+
+- controlled angular sweeps
+- a suitable reference source
+- repeatable pointing
+- measured signal versus angular offset
+- estimation of the real beam profile
+- measured FWHM
+- sidelobe inspection
+- uncertainty reporting
+
+Until that campaign is completed, the configured beam value should be treated as an operational model, not a final metrological truth.
+
+This matters because the beam determines:
+
+- spatial resolution
+- sampling density
+- map smoothness
+- overlap between observations
+- interpretation of apparent source size
+
+ALMITA would rather admit that the beam is provisional than claim twenty decimal places of precision from a mesh dish attached with cable ties.
+
+---
+
+## Gain characterization
+
+ALMITA does **not** use AGC during science observations.
+
+Instead, the intended strategy is to determine a **nominal operating gain** for the complete RF chain.
+
+The question is:
+
+> What gain gives the best useful sensitivity without approaching clipping, compression or non-linear behavior?
+
+The characterization process will test several gain values while measuring:
+
+- ADC headroom
+- clipping
+- RMS level
+- noise floor
+- RFI response
+- stability
+- repeatability
+
+Once a nominal gain is established, normal sessions will use that same value by default.
+
+Before each observation, ALMITA performs a short RF preflight.
+
+If the nominal gain is safe:
+
+- keep it fixed
+- do not touch it
+- observe the full mosaic
+
+If strong RFI or saturation is detected, gain may be reduced before the session begins.
+
+Once acquisition starts, gain remains fixed.
+
+This improves:
+
+- repeatability
+- comparison between sessions
+- relative calibration
+- scientific honesty
+
+Constantly changing gain in the middle of a sky map is considered bad manners.
+
+---
+
 ## RFI reference receiver
 
-ALMITA is adding a second RTL-SDR receiver dedicated to monitoring the local RF environment.
+ALMITA is adding a second RTL-SDR dedicated to monitoring the local RF environment.
 
 Planned architecture:
 
@@ -137,7 +265,7 @@ Planned architecture:
 MAIN
 RTL-SDR V4
 → science antenna
-→ full capture
+→ full acquisition
 → HDF5
 
 RFI_REF
