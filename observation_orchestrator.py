@@ -387,17 +387,34 @@ def stop_observation(*, runtime_dir: str = DEFAULT_RUNTIME_DIR, confirm: bool = 
     orchestrator never signals them directly, it only ever signals the one
     PID it itself launched and can still verify by kernel start_time +
     cmdline + expected mosaic_csv_path (see _capture_ownership_matches).
+
+    quicklook_pid cleanup is independent of capture_pid's own ownership
+    check: capture.py can legitimately finish on its own (or its PID get
+    recycled after exiting) while a still-live, still-verifiable
+    quicklook_pid is orphaned watching a session that will never receive
+    more data — confirmed in production (2026-09-02) — so it must be
+    signaled regardless of whether capture_pid's own check passed.
     """
     runtime = _read_runtime(runtime_dir)
     if not runtime or not runtime.get("capture_pid"):
         raise OrchestratorError("no orchestrator-owned observation is currently running")
 
     capture_pid = runtime["capture_pid"]
+
+    def _signal_quicklook_best_effort() -> None:
+        if runtime.get("quicklook_pid") and _quicklook_ownership_matches(runtime):
+            try:
+                os.kill(runtime["quicklook_pid"], signal.SIGINT)
+            except ProcessLookupError:
+                pass
+
     if not _capture_ownership_matches(runtime):
+        _signal_quicklook_best_effort()
         _write_runtime(runtime_dir, orchestrator_state="DEGRADED",
                         note=f"pid {capture_pid} no longer matches the exact process this orchestrator "
                              "launched (start-time/cmdline/csv-path mismatch) — refusing to signal an "
-                             "unverified PID; possible PID recycling or an unrelated capture.py")
+                             "unverified PID; possible PID recycling or an unrelated capture.py "
+                             "(quicklook_pid, if still owned and alive, was signaled independently)")
         return _read_runtime(runtime_dir)
 
     _write_runtime(runtime_dir, orchestrator_state="STOPPING")
@@ -406,11 +423,7 @@ def stop_observation(*, runtime_dir: str = DEFAULT_RUNTIME_DIR, confirm: bool = 
     except ProcessLookupError:
         pass
 
-    if runtime.get("quicklook_pid") and _quicklook_ownership_matches(runtime):
-        try:
-            os.kill(runtime["quicklook_pid"], signal.SIGINT)
-        except ProcessLookupError:
-            pass
+    _signal_quicklook_best_effort()
 
     deadline = time.monotonic() + STOP_WAIT_TIMEOUT_SEC
     while time.monotonic() < deadline:

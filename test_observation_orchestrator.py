@@ -319,6 +319,26 @@ def test_stop_observation_refuses_to_signal_unverified_pid(tmp_path, monkeypatch
     assert result["orchestrator_state"] == "DEGRADED"
 
 
+def test_stop_observation_signals_quicklook_even_when_capture_ownership_fails(tmp_path, monkeypatch):
+    """Regression test for the production incident (2026-09-02): capture.py
+    finished on its own and its pid was later recycled/no longer matched,
+    while quicklook_pid was still a live, independently-verifiable orphan
+    (watching a stale session that would never receive more data). STOP
+    must not let capture_pid's failed ownership check gate quicklook's own,
+    separate cleanup — both checks are independent."""
+    pid, start_time, needle = _self_identity()
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                         capture_pid=999999999, capture_start_time=1, capture_cmd_needle="capture.py",
+                         quicklook_pid=pid, quicklook_start_time=start_time, quicklook_cmd_needle=needle)
+    signals_sent = []
+    monkeypatch.setattr(os, "kill", lambda p, sig: signals_sent.append((p, sig)))
+
+    result = orch.stop_observation(runtime_dir=str(runtime_dir))
+    assert signals_sent == [(pid, signal.SIGINT)]  # quicklook signaled despite capture mismatch
+    assert result["orchestrator_state"] == "DEGRADED"  # capture_pid mismatch still reported honestly
+
+
 def test_stop_observation_sends_sigint_to_exact_pid_never_killpg(tmp_path, monkeypatch):
     pid, start_time, needle = _self_identity()
     runtime_dir = tmp_path / "runtime"
