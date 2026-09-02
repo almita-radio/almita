@@ -37,6 +37,11 @@ TELEMETRY_STALE_SECONDS = 10.0
 ACQUISITION_STALE_SECONDS = 30.0
 QUICKLOOK_STALE_SECONDS = 30.0
 RFI_SPECTRUM_STALE_SECONDS = 30.0
+# The session-wide waterfall updates far less often than the live spectrum/
+# waterfall above (see rfi_monitor.py's SESSION_WATERFALL_INTERVAL_S), so it
+# needs its own, looser staleness budget rather than sharing the one tuned
+# for a ~2s product.
+RFI_SESSION_WATERFALL_STALE_SECONDS = 90.0
 SCHEMA_VERSION = 1
 
 STOP_REQUESTED = False
@@ -214,13 +219,16 @@ _RFI_REF_DISABLED = {
     "dropped_blocks": None, "last_update_utc": None, "last_error": None,
     "spectrum_available": False, "spectrum_updated_utc": None,
     "waterfall_available": False, "waterfall_updated_utc": None,
+    "session_waterfall_available": False, "session_waterfall_updated_utc": None,
 }
 _RFI_REF_PRODUCT_FIELDS = ("spectrum_available", "spectrum_updated_utc",
-                           "waterfall_available", "waterfall_updated_utc")
+                           "waterfall_available", "waterfall_updated_utc",
+                           "session_waterfall_available", "session_waterfall_updated_utc")
 
 
 def _rfi_ref_product_availability(runtime_dir: Path, filename: str, session_id: Optional[str],
-                                   rfi_ref_status: str, now_utc: str):
+                                   rfi_ref_status: str, now_utc: str,
+                                   stale_seconds: float = RFI_SPECTRUM_STALE_SECONDS):
     """Shared session/staleness gate for every ANTENNA B product that lives
     directly under runtime_dir (spectrum, waterfall): a leftover product
     from an older/different observation is never shown as current. While
@@ -233,7 +241,7 @@ def _rfi_ref_product_availability(runtime_dir: Path, filename: str, session_id: 
         return False, None
     if rfi_ref_status in ("RUNNING", "DEGRADED"):
         age = _age_seconds(product.get("updated_utc"), now_utc)
-        ok = age is not None and age <= RFI_SPECTRUM_STALE_SECONDS
+        ok = age is not None and age <= stale_seconds
     else:
         ok = True
     return ok, (product.get("updated_utc") if ok else None)
@@ -254,6 +262,9 @@ def build_rfi_ref(runtime_dir: Path, session_id: Optional[str], now_utc: str) ->
         runtime_dir, "rfi_ref_spectrum.json", session_id, result["status"], now_utc)
     result["waterfall_available"], result["waterfall_updated_utc"] = _rfi_ref_product_availability(
         runtime_dir, "rfi_ref_waterfall.json", session_id, result["status"], now_utc)
+    result["session_waterfall_available"], result["session_waterfall_updated_utc"] = _rfi_ref_product_availability(
+        runtime_dir, "rfi_ref_session_waterfall.json", session_id, result["status"], now_utc,
+        stale_seconds=RFI_SESSION_WATERFALL_STALE_SECONDS)
     return result
 
 

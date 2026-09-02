@@ -23,6 +23,7 @@ from quicklook_map import (MapError, build_native_grid_document, find_grid_direc
                            write_native_grid_png)
 from quicklook_map_interpolated_preview import (build_interpolated_preview_document,
                                                 write_interpolated_preview_png)
+from quicklook_session_waterfall import update_session_waterfall
 from quicklook_spectrum import generate_quicklook
 from quicklook_waterfall import generate_waterfall
 from rfi_occupancy_map import (build_rfi_occupancy_map_document, correlate_rfi_with_points,
@@ -232,6 +233,13 @@ class QuicklookLive:
         frequency=np.asarray(arrays["frequency_hz"]);span=frequency[-1]-frequency[0]
         metric=map_metric(arrays["fractional_excess"],arrays["fractional_uncertainty"],arrays["valid_mask"],frequency,
                           frequency[0]+.1*span,frequency[-1]-.1*span)
+        session_waterfall_start=time.perf_counter()
+        try:
+            update_session_waterfall(self.output,session_id=self.session_id,point_id=point_id,
+              frequency_hz=frequency,relative_db=arrays["relative_psd_db"],valid_mask=arrays["valid_mask"])
+        except Exception:
+            _log(self.log_path,"SESSION WATERFALL FAILED",point_id)
+        session_waterfall_seconds=time.perf_counter()-session_waterfall_start
         del arrays, frequency
         gc.collect()
         waterfall_start=time.perf_counter();_log(self.log_path,"PROCESS WATERFALL",point_id)
@@ -257,7 +265,8 @@ class QuicklookLive:
           "processed_utc":utcnow()}
         map_seconds=self._update_map();self.state["last_success_point"]=point_id
         record={"point_id":point_id,"spectrum_seconds":spectrum_seconds,
-          "waterfall_seconds":waterfall_seconds,"map_seconds":map_seconds,"publication_seconds":publication_seconds,
+          "waterfall_seconds":waterfall_seconds,"session_waterfall_seconds":session_waterfall_seconds,
+          "map_seconds":map_seconds,"publication_seconds":publication_seconds,
           "total_seconds":time.perf_counter()-started}
         self.performance.append(record);self.state["performance_history"].append(record)
 

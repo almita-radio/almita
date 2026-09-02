@@ -715,6 +715,92 @@ async def test_waterfall_write_failure_isolated_from_status_and_spectrum(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_session_waterfall_bounded_rows_via_deque_eviction(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 60, session_id="s1", session_waterfall_max_rows=3,
+        session_waterfall_interval=0.0, spectrum_write_interval=0.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.5)
+        session_waterfall = read_json_safe(tmp_path / "rfi_ref_session_waterfall.json")
+        assert session_waterfall is not None
+        assert len(session_waterfall["rows"]) <= 3
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_session_waterfall_reuses_spectrum_no_second_fft(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 61, session_id="s1",
+        spectrum_write_interval=60.0, session_waterfall_interval=60.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.3)
+        m._maybe_publish(force=True)
+        spectrum = read_json_safe(tmp_path / "rfi_ref_spectrum.json")
+        session_waterfall = read_json_safe(tmp_path / "rfi_ref_session_waterfall.json")
+        assert session_waterfall["frequency_hz"] == spectrum["frequency_hz"]
+        assert session_waterfall["rows"][-1]["power_dbfs"] == spectrum["power_dbfs"]
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_session_waterfall_cadence_independent_of_live_waterfall(tmp_path, monkeypatch):
+    """The whole point of the session product: it must accumulate far
+    slower than the live ~2s waterfall, so the same row cap spans a full
+    session instead of only a few minutes."""
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 62, session_id="s1",
+        spectrum_write_interval=0.0, session_waterfall_interval=60.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.5)  # many fast publish ticks at 0s interval
+        live_waterfall = read_json_safe(tmp_path / "rfi_ref_waterfall.json")
+        session_waterfall = read_json_safe(tmp_path / "rfi_ref_session_waterfall.json")
+        assert len(session_waterfall["rows"]) == 1
+        assert len(live_waterfall["rows"]) > len(session_waterfall["rows"])
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_session_waterfall_write_failure_isolated_from_status_and_spectrum(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 63, session_id="s1",
+        spectrum_write_interval=0.0, session_waterfall_interval=0.0)
+    real_atomic_write = rfi_monitor.atomic_write_json
+
+    def selective_boom(path, value):
+        if str(path).endswith("rfi_ref_session_waterfall.json"):
+            raise OSError("simulated disk failure writing session waterfall")
+        return real_atomic_write(path, value)
+    monkeypatch.setattr(rfi_monitor, "atomic_write_json", selective_boom)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.3)
+        assert m.status == "RUNNING"
+        assert read_json_safe(tmp_path / "rfi_ref_status.json")["status"] == "RUNNING"
+        assert read_json_safe(tmp_path / "rfi_ref_waterfall.json") is not None
+        assert not (tmp_path / "rfi_ref_session_waterfall.json").exists()
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_history_bounded_and_session_tagged_no_full_iq(tmp_path, monkeypatch):
     m, server, connected = await _running_monitor(
         tmp_path, monkeypatch, 55, session_id="s1", history_max_samples=3, spectrum_write_interval=0.0)

@@ -50,7 +50,11 @@ function renderSession(acquisition){
 
 function renderThumbs(quicklook){
   const items=[["spectrum","latest_spectrum.png",quicklook.spectrum_available],
-    ["waterfall","latest_waterfall.png",quicklook.waterfall_available],
+    // session_waterfall.png accumulates one row per point for the whole
+    // session (see quicklook_session_waterfall.py); latest_waterfall.png
+    // stays the per-point intra-capture product, kept for provenance but
+    // no longer shown here.
+    ["waterfall","session_waterfall.png",quicklook.waterfall_available],
     ["map","quicklook_map.png",quicklook.map_available],
     // OPTIONAL visual-only companion to the exact NATIVE_GRID map above -
     // never the science product itself.
@@ -226,7 +230,7 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
     placeholder.textContent=state==="DISABLED"?"DISABLED":`${state} — ${safe(rfiRef.last_error,"")}`;
     return;
   }
-  const anyAvailable=rfiRef.spectrum_available||rfiRef.waterfall_available||(quicklook&&quicklook.rfi_occupancy_map_available);
+  const anyAvailable=rfiRef.spectrum_available||rfiRef.session_waterfall_available||(quicklook&&quicklook.rfi_occupancy_map_available);
   if(!anyAvailable){
     thumbs.hidden=true;placeholder.hidden=false;placeholder.textContent="WAITING FOR RFI PRODUCTS…";
     return;
@@ -250,12 +254,15 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
     specCanvas.getContext("2d").clearRect(0,0,specCanvas.width,specCanvas.height);
   }
 
-  if(rfiRef.waterfall_available){
+  // session_waterfall (not the live ~2s waterfall) so the panel spans the
+  // whole session instead of only the last few minutes - see
+  // rfi_monitor.py's _append_and_write_session_waterfall().
+  if(rfiRef.session_waterfall_available){
     try{
-      const data=await fetchJson("rfi_ref_waterfall.json");
+      const data=await fetchJson("rfi_ref_session_waterfall.json");
       if(data.session_id===sessionId&&Array.isArray(data.rows)&&data.rows.length){
         drawRfiWaterfall(wfCanvas,data.rows,data.frequency_hz);
-        $("rfi-waterfall-link").href=`${CONFIG.root}/rfi_ref_waterfall.json`;
+        $("rfi-waterfall-link").href=`${CONFIG.root}/rfi_ref_session_waterfall.json`;
       }else{
         wfCanvas.getContext("2d").clearRect(0,0,wfCanvas.width,wfCanvas.height);
       }

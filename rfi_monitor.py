@@ -48,6 +48,10 @@ FULL_SCALE_AMPLITUDE = 127.5  # unsigned-8 IQ centered at 127/128
 N_SPECTRUM_BINS = 256  # bounded ANTENNA B/RFI_REF spectrum product size
 N_WATERFALL_MAX_ROWS = 120  # ~4 minutes at the default 2s publish cadence
 N_HISTORY_MAX_SAMPLES = 3600  # ~2 hours at the default 2s publish cadence
+N_SESSION_WATERFALL_MAX_ROWS = 600  # bounded like the products above
+SESSION_WATERFALL_INTERVAL_S = 20.0  # coarser cadence than the ~2s live
+# waterfall above, so the same modest row cap spans a whole multi-hour
+# session (600 rows * 20s ~= 3.3h) instead of only the last few minutes.
 DC_GUARD_HZ = 1000.0  # +/- half-width blanked around 0 Hz to suppress the
 # RTL-SDR zero-IF/LO-leakage "DC spike" - a hardware artifact of the
 # R820T/R828D tuner (present on both V3 and V4), not real RF content.
@@ -142,6 +146,8 @@ class RFIReferenceMonitor:
                  spectrum_write_interval: float = 2.0,
                  waterfall_max_rows: int = N_WATERFALL_MAX_ROWS,
                  history_max_samples: int = N_HISTORY_MAX_SAMPLES,
+                 session_waterfall_max_rows: int = N_SESSION_WATERFALL_MAX_ROWS,
+                 session_waterfall_interval: float = SESSION_WATERFALL_INTERVAL_S,
                  log=None):
         self.enabled = bool(enabled)
         self.runtime_dir = runtime_dir
@@ -182,6 +188,13 @@ class RFIReferenceMonitor:
         # regardless of session length.
         self._waterfall_rows = collections.deque(maxlen=max(1, int(waterfall_max_rows)))
         self._history_samples = collections.deque(maxlen=max(1, int(history_max_samples)))
+        # ANTENNA B session-wide waterfall: same bounded-deque design as
+        # above, but appended at a much coarser interval (see class
+        # docstring) so it spans the whole session instead of only the
+        # last few minutes, without writing a growing file every ~2s.
+        self.session_waterfall_interval = float(session_waterfall_interval)
+        self._session_waterfall_rows = collections.deque(maxlen=max(1, int(session_waterfall_max_rows)))
+        self._last_session_waterfall_monotonic: Optional[float] = None
 
         self.proc: Optional[subprocess.Popen] = None
         self._task: Optional[asyncio.Task] = None
@@ -401,6 +414,7 @@ class RFIReferenceMonitor:
         self._write_spectrum()
         self._append_and_write_waterfall()
         self._append_and_write_history()
+        self._append_and_write_session_waterfall(now)
 
     def _current_frequency_hz(self):
         return [self.center_frequency_hz + float(off) for off in self.spectrum_freq_offsets_hz]
@@ -469,6 +483,38 @@ class RFIReferenceMonitor:
                 "session_id": self.session_id,
                 "device_serial": self.device_serial,
                 "samples": list(self._history_samples),
+                "updated_utc": utcnow(),
+            })
+        except Exception:
+            pass
+
+    def _append_and_write_session_waterfall(self, now: float) -> None:
+        """ANTENNA B session-wide waterfall: the same reused spectrum as
+        _append_and_write_waterfall() above, but appended only every
+        session_waterfall_interval seconds (independent of and much
+        slower than the ~2s live waterfall's own publish tick) so a
+        modest, still-bounded row cap spans the whole session instead of
+        only the last few minutes."""
+        if self.runtime_dir is None or self.spectrum_power_dbfs is None:
+            return
+        if self._last_session_waterfall_monotonic is not None \
+                and (now - self._last_session_waterfall_monotonic) < self.session_waterfall_interval:
+            return
+        self._last_session_waterfall_monotonic = now
+        try:
+            self._session_waterfall_rows.append({
+                "utc": utcnow(),
+                "power_dbfs": [float(p) for p in self.spectrum_power_dbfs],
+            })
+            atomic_write_json(f"{self.runtime_dir}/rfi_ref_session_waterfall.json", {
+                "schema_version": 1,
+                "session_id": self.session_id,
+                "device_serial": self.device_serial,
+                "center_frequency_hz": self.center_frequency_hz,
+                "sample_rate": self.sample_rate,
+                "gain_db": self.gain_db,
+                "frequency_hz": self._current_frequency_hz(),
+                "rows": list(self._session_waterfall_rows),
                 "updated_utc": utcnow(),
             })
         except Exception:

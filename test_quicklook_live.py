@@ -57,7 +57,8 @@ def fake_products(monkeypatch):
         (out/"quicklook_spectrum.png").write_bytes(b"png")
         (out/"quicklook_fractional_excess.png").write_bytes(b"png")
         f=np.linspace(1419e6,1422e6,16);v=np.linspace(0,.1,16);u=np.full(16,.01);m=np.ones(16,bool)
-        return {},{"frequency_hz":f,"fractional_excess":v,"fractional_uncertainty":u,"valid_mask":m}
+        return {},{"frequency_hz":f,"fractional_excess":v,"fractional_uncertainty":u,"valid_mask":m,
+          "relative_psd_db":v}
     def waterfall(source,profile,out):
         out=Path(out);out.mkdir(parents=True,exist_ok=True)
         (out/"quicklook_waterfall.json").write_text('{"calibration_level":"RELATIVE_INSTRUMENTAL","absolute_calibration":false}')
@@ -79,6 +80,7 @@ def test_success_latest_restart_and_source_immutability(tmp_path,monkeypatch):
     out=tmp_path/"out";first=ql.QuicklookLive(session,PROFILE,out).run(True)
     assert first["points_processed"]==1 and (out/"latest_spectrum.json").exists()
     assert (out/"latest_waterfall.png").exists() and (out/"quicklook_map.json").exists()
+    assert (out/"session_waterfall.png").exists() and (out/"session_waterfall.json").exists()
     doc=json.loads((out/"quicklook_map.json").read_text())
     assert doc["status"]=="NATIVE_GRID" and doc["map_mode"]=="NATIVE_GRID"
     assert doc["quicklook_metrics"]["total_cells"]==1 and doc["quicklook_metrics"]["observed_cells"]==1
@@ -100,6 +102,17 @@ def test_native_grid_observed_cells_grow_without_changing_mode(tmp_path,monkeypa
         assert doc["status"]=="NATIVE_GRID"
         assert doc["quicklook_metrics"]["total_cells"]==4
         assert doc["quicklook_metrics"]["observed_cells"]==expected_observed
+
+
+def test_session_waterfall_accumulates_one_row_per_point(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,2,2);capture(session/"x.h5")
+    out=tmp_path/"out";rows=[]
+    for pid in ("1","2","3"):
+        rows.append(row(pid,"SUCCESS","x.h5"));manifest(session,rows)
+        ql.QuicklookLive(session,PROFILE,out).run(True)
+    document=json.loads((out/"session_waterfall.json").read_text())
+    assert document["point_ids"]==["1","2","3"]
+    assert document["point_count"]==3
 
 
 def test_failed_deferred_part_ignored_then_final_processed(tmp_path,monkeypatch):

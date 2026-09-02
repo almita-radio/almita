@@ -623,6 +623,48 @@ def test_42_watcher_rfi_waterfall_stopped_retains_final_regardless_of_age(tmp_pa
     assert status["rfi_ref"]["waterfall_available"] is True
 
 
+def test_42b_watcher_rfi_session_waterfall_available_when_session_matches(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["session_waterfall_available"] is True
+    assert status["rfi_ref"]["session_waterfall_updated_utc"] is not None
+
+
+def test_42c_watcher_rfi_session_waterfall_rejected_on_session_mismatch(tmp_path):
+    announce_session(tmp_path, session_id="s2", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s2"})
+    atomic_write_json(tmp_path / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1-old"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["session_waterfall_available"] is False
+    assert status["rfi_ref"]["session_waterfall_updated_utc"] is None
+
+
+def test_42d_watcher_rfi_session_waterfall_stale_during_running_is_rejected(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_session_waterfall.json",
+                       _rfi_ref_waterfall("s1", updated_utc="2000-01-01T00:00:00+00:00"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["session_waterfall_available"] is False
+
+
+def test_42e_watcher_rfi_session_waterfall_stopped_retains_final_regardless_of_age(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_COMPLETED", state="COMPLETED")
+    atomic_write_json(tmp_path / "rfi_ref_status.json",
+                       {**_rfi_ref_running(status="STOPPED"), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_session_waterfall.json",
+                       _rfi_ref_waterfall("s1", updated_utc="2000-01-01T00:00:00+00:00"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=False)
+    assert status["rfi_ref"]["status"] == "STOPPED"
+    assert status["rfi_ref"]["session_waterfall_available"] is True
+
+
 def test_43_watcher_quicklook_rfi_occupancy_map_available_via_existing_gate(tmp_path):
     """The occupancy map rides the SAME session/staleness gate already
     applied to Antenna A's own quicklook products - no separate mechanism."""
@@ -642,10 +684,11 @@ def test_43_watcher_quicklook_rfi_occupancy_map_available_via_existing_gate(tmp_
 
 def test_44_frontend_rfi_thumbs_show_all_three_when_available(tmp_path):
     public = console_root(tmp_path, status=status_fixture(
-        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True, "waterfall_available": True},
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,
+                             "session_waterfall_available": True},
         quicklook=_quicklook_running()))
     atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
-    atomic_write_json(public / "runtime" / "rfi_ref_waterfall.json", _rfi_ref_waterfall("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
     html = dom(public)
     assert "RFI SPECTRUM" in html and "RFI WATERFALL" in html and "RFI OCCUPANCY MAP" in html
     assert 'id="rfi-waterfall-canvas"' in html
@@ -672,10 +715,10 @@ def test_46_frontend_antenna_a_thumbs_unaffected_by_antenna_b(tmp_path):
 def test_47_frontend_rfi_thumbs_stopped_state_retains_products(tmp_path):
     public = console_root(tmp_path, status=status_fixture(
         "COMPLETED", rfi_ref={**_rfi_ref_running(status="STOPPED"), "spectrum_available": True,
-                              "waterfall_available": True},
+                              "session_waterfall_available": True},
         quicklook=_quicklook_running()))
     atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
-    atomic_write_json(public / "runtime" / "rfi_ref_waterfall.json", _rfi_ref_waterfall("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
     html = dom(public)
     assert ">STOPPED<" in html
     assert "WAITING FOR RFI PRODUCTS" not in html
