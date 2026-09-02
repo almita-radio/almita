@@ -331,7 +331,7 @@ function render(status){
   lastValid=status;$("loading").hidden=true;$("app").hidden=false;$("connection").hidden=true;
   const systemState=status.system_state||"READY";
   $("system-badge").textContent=systemState;$("system-badge").className=badgeClass(systemState);
-  $("updated").textContent=safe(status.updated_utc);
+  $("updated").textContent=_shortTime(status.updated_utc);
   renderInstrument(status.instrument||{});
   renderSession(status.acquisition||{state:"IDLE"});
   const quicklook=status.quicklook||{state:"IDLE"};

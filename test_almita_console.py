@@ -376,6 +376,12 @@ def test_21d_frontend_rfi_last_update_shows_time_only(tmp_path):
     assert "<dt>LAST UPDATE</dt><dd>18:23:45</dd>" in html
 
 
+def test_21e_frontend_topbar_updated_shows_time_only(tmp_path):
+    html = dom(console_root(tmp_path, status={
+        **status_fixture("RUNNING"), "updated_utc": "2026-09-02T19:05:12.654321+00:00"}))
+    assert '<dd id="updated">19:05:12</dd>' in html
+
+
 def test_21b_frontend_shows_spectrum_thumbnail_when_available(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     assert 'id="quicklook-thumbs"' in html and "quicklook-thumbs\" hidden" not in html
