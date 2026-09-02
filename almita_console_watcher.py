@@ -276,6 +276,40 @@ def build_rfi_ref(runtime_dir: Path, session_id: Optional[str], now_utc: str) ->
     return result
 
 
+ACTIVITY_LOG_MAX_LINES = 60
+ACTIVITY_LOG_MAX_BYTES = 65536  # only the tail is ever read, regardless of
+# how large orchestrator_capture.log grows over a long session.
+
+
+def _tail_lines(path: Path, max_lines: int, max_bytes: int) -> list:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - max_bytes))
+            data = handle.read()
+    except OSError:
+        return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return lines[-max_lines:]
+
+
+def build_activity_log(runtime_dir: Path, session_id: Optional[str]) -> dict:
+    """Tail of capture.py's own compact-console output (orchestrator_capture.log,
+    written by observation_orchestrator.py) - already a human-readable, low-noise
+    narrative of what's happening (GOTO/tracking/settle/capture per point, session
+    progress), so this reuses it verbatim rather than inventing a second log format."""
+    if not session_id:
+        return {"available": False, "lines": []}
+    runtime = read_json_safe(Path(runtime_dir) / "observation_runtime.json")
+    if not runtime or runtime.get("session_id") != session_id or not runtime.get("capture_log"):
+        return {"available": False, "lines": []}
+    log_path = Path(runtime["capture_log"])
+    if not log_path.is_absolute():
+        log_path = ROOT / log_path
+    lines = _tail_lines(log_path, ACTIVITY_LOG_MAX_LINES, ACTIVITY_LOG_MAX_BYTES)
+    return {"available": bool(lines), "lines": lines}
+
+
 def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtime_dir: Path,
                   collect_fn: Callable[[], dict], capture_process_detected: bool) -> dict:
     current_session = read_json_safe(Path(runtime_dir) / "current_session.json")
@@ -287,6 +321,7 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
     acquisition = build_acquisition(now_utc, current_session, capture_process_detected)
     quicklook = build_quicklook(now_utc, runtime_dir, acquisition["session_id"])
     rfi_ref = build_rfi_ref(runtime_dir, acquisition["session_id"], now_utc)
+    activity_log = build_activity_log(runtime_dir, acquisition["session_id"])
 
     if acquisition["state"] in ("COMPLETED", "DEGRADED", "ABORTED") and acquisition["session_id"]:
         archive = {
@@ -319,6 +354,7 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
         "acquisition": acquisition,
         "quicklook": quicklook,
         "rfi_ref": rfi_ref,
+        "activity_log": activity_log,
         "last_session": last_session,
     }
 

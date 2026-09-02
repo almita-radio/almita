@@ -315,6 +315,28 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
   }
 }
 
+function _escapeHtml(text){
+  return text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function _logLineClass(line){
+  if(line.startsWith("✓"))return"log-ok";
+  if(/FAIL|❌|ERROR/.test(line))return"log-error";
+  if(line.startsWith("POINT "))return"log-point";
+  if(line.startsWith("SESSION "))return"log-session";
+  return"";
+}
+function renderActivityLog(activityLog){
+  const panel=$("activity-log-panel"),pre=$("activity-log-lines");
+  const lines=(activityLog&&activityLog.available&&activityLog.lines)||[];
+  panel.hidden=lines.length===0;
+  if(!lines.length)return;
+  pre.innerHTML=lines.map(line=>{
+    const cls=_logLineClass(line);
+    return `<span${cls?` class="${cls}"`:""}>${_escapeHtml(line)}</span>`;
+  }).join("\n");
+  pre.scrollTop=pre.scrollHeight;
+}
+
 function renderLastSession(lastSession){
   $("last-session").hidden=!lastSession;
   if(!lastSession)return;
@@ -339,6 +361,7 @@ function render(status){
   const rfiRef=status.rfi_ref||{status:"DISABLED"};
   renderRfiRef(rfiRef);
   renderRfiProducts(rfiRef,quicklook,(status.acquisition||{}).session_id||null);
+  renderActivityLog(status.activity_log);
   renderLastSession(status.last_session);
 }
 
@@ -361,5 +384,5 @@ function start(){
   setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z"},1000);
 }
 window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,
-  drawRfiSpectrum,drawRfiWaterfall,renderLastSession,render,CONFIG};
+  drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG};
 start();

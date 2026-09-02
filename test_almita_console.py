@@ -382,6 +382,27 @@ def test_21e_frontend_topbar_updated_shows_time_only(tmp_path):
     assert '<dd id="updated">19:05:12</dd>' in html
 
 
+def test_21f_frontend_activity_log_hidden_when_unavailable(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert 'id="activity-log-panel" class="panel compact" hidden' in html \
+        or 'activity-log-panel" hidden' in html
+
+
+def test_21g_frontend_activity_log_shows_lines_with_coloring(tmp_path):
+    html = dom(console_root(tmp_path, status={
+        **status_fixture("RUNNING"),
+        "activity_log": {"available": True, "lines": [
+            "POINT 003/010  HA=-1.20h",
+            "✓ POINT 003/010   total=12.3s",
+            "SESSION  elapsed=00:01:02   remaining≈00:05:00",
+        ]},
+    }))
+    assert 'activity-log-panel" hidden' not in html
+    assert '<span class="log-point">POINT 003/010  HA=-1.20h</span>' in html
+    assert '<span class="log-ok">✓ POINT 003/010   total=12.3s</span>' in html
+    assert '<span class="log-session">SESSION  elapsed=00:01:02   remaining≈00:05:00</span>' in html
+
+
 def test_21b_frontend_shows_spectrum_thumbnail_when_available(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     assert 'id="quicklook-thumbs"' in html and "quicklook-thumbs\" hidden" not in html
@@ -779,6 +800,66 @@ def test_49_frontend_antenna_a_interpolated_preview_hidden_when_unavailable(tmp_
         or 'thumb-map-interpolated" hidden' in html
     # Antenna A's exact map is completely unaffected by preview availability.
     assert 'id="thumb-map" alt="Map" hidden' not in html and 'thumb-map" hidden' not in html
+
+
+# ---------------------------------------------------------------- activity log (orchestrator_capture.log tail)
+
+
+def test_50_activity_log_unavailable_without_session_id(tmp_path):
+    result = watcher.build_activity_log(tmp_path, None)
+    assert result == {"available": False, "lines": []}
+
+
+def test_51_activity_log_unavailable_without_observation_runtime_file(tmp_path):
+    result = watcher.build_activity_log(tmp_path, "s1")
+    assert result == {"available": False, "lines": []}
+
+
+def test_52_activity_log_unavailable_on_session_mismatch(tmp_path):
+    log = tmp_path / "orchestrator_capture.log"
+    log.write_text("POINT 001/010\nline2\n")
+    atomic_write_json(tmp_path / "observation_runtime.json",
+                       {"session_id": "other-session", "capture_log": str(log)})
+    result = watcher.build_activity_log(tmp_path, "s1")
+    assert result == {"available": False, "lines": []}
+
+
+def test_53_activity_log_tails_matching_session_log(tmp_path):
+    log = tmp_path / "orchestrator_capture.log"
+    log.write_text("line1\nline2\nline3\n")
+    atomic_write_json(tmp_path / "observation_runtime.json",
+                       {"session_id": "s1", "capture_log": str(log)})
+    result = watcher.build_activity_log(tmp_path, "s1")
+    assert result == {"available": True, "lines": ["line1", "line2", "line3"]}
+
+
+def test_54_activity_log_caps_at_max_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher, "ACTIVITY_LOG_MAX_LINES", 3)
+    log = tmp_path / "orchestrator_capture.log"
+    log.write_text("\n".join(f"line{n}" for n in range(1, 21)) + "\n")
+    atomic_write_json(tmp_path / "observation_runtime.json",
+                       {"session_id": "s1", "capture_log": str(log)})
+    result = watcher.build_activity_log(tmp_path, "s1")
+    assert result == {"available": True, "lines": ["line18", "line19", "line20"]}
+
+
+def test_55_activity_log_missing_log_file_is_clean_unavailable(tmp_path):
+    atomic_write_json(tmp_path / "observation_runtime.json",
+                       {"session_id": "s1", "capture_log": str(tmp_path / "missing.log")})
+    result = watcher.build_activity_log(tmp_path, "s1")
+    assert result == {"available": False, "lines": []}
+
+
+def test_56_watcher_build_status_includes_activity_log(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="STARTING")
+    log = tmp_path / "orchestrator_capture.log"
+    log.write_text("POINT 001/010\n✓ POINT 001/010   total=12.3s\n")
+    atomic_write_json(tmp_path / "observation_runtime.json",
+                       {"session_id": "s1", "capture_log": str(log)})
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["activity_log"]["available"] is True
+    assert status["activity_log"]["lines"][-1] == "✓ POINT 001/010   total=12.3s"
 
 
 # ---------------------------------------------------------------- closeout: canonical runtime_dir

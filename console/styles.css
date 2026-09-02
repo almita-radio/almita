@@ -33,6 +33,11 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .rfi-spectrum-caption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:6px}
 .rfi-spectrum-caption b{color:var(--text)}
 .rfi-spectrum-placeholder{padding:24px;text-align:center;color:var(--muted);letter-spacing:.08em;font-size:11px;background:#0d1317;border:1px solid var(--line)}
+.activity-log{margin:0;padding:11px;max-height:260px;overflow-y:auto;background:#0d1317;color:#c4d1d8;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}
+.activity-log .log-ok{color:var(--ok)}
+.activity-log .log-error{color:var(--error)}
+.activity-log .log-point{color:var(--accent);font-weight:700}
+.activity-log .log-session{color:var(--warn)}
 @media(max-width:900px){.grid3{grid-template-columns:1fr}.topbar{display:block}.topbar dl{margin-top:10px}}
 
 /* OBSERVE page (console/observe.html) + shared nav — additive only,
