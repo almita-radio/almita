@@ -260,7 +260,6 @@ ALMITA includes a second RTL-SDR dedicated to monitoring the local RF environmen
 
 Current architecture:
 
-```text
 MAIN
 1420 MHz science feed
 → Nooelec Hydrogen LNA
