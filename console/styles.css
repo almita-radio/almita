@@ -45,7 +45,7 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .spectral-stack-panel{flex:1 1 460px;min-width:340px;background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column}
 .spectral-stack-panel>header{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--line)}
 .spectral-stack-subtitle{display:block;font-size:10px;letter-spacing:.1em;color:var(--muted);margin-top:2px}
-.spectral-stack-viewport{position:relative;flex:1;min-height:520px;background:#f4f6f8}
+.spectral-stack-viewport{position:relative;flex:1;min-height:260px;background:#f4f6f8}
 .spectral-stack-viewport canvas{display:block;width:100%;height:100%}
 .spectral-stack-message{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#5b6874;letter-spacing:.1em;font-size:12px;text-align:center;padding:20px;pointer-events:none}
 .spectral-stack-message[hidden]{display:none}
