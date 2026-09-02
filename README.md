@@ -13,8 +13,6 @@ The project combines accessible RF hardware, a Raspberry Pi 5, RTL-SDR receivers
 
 Being based in Chile was a lucky accident.
 
-We just happened to build a radio telescope in a country with some of the best skies on Earth.
-
 ALMITA is mostly vibe-coded, extensively field-tested, occasionally threatened with a hammer, and still held together in suspiciously many places by **plastic cable ties**.
 
 This is considered temporary.
