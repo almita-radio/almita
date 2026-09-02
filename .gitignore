@@ -80,3 +80,4 @@ data/dual_sdr_bench/
 data/rfi_ref_satanic/
 data/rfi_ref_real_gotosanity/
 data/rfi_ref_spectrum_hw_validation/
+data/rfi_ref_occupancy_hw_validation/

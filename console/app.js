@@ -111,34 +111,95 @@ function drawRfiSpectrum(canvas,freqMHz,powerDbfs){
   ctx.stroke();
 }
 
-async function renderRfiSpectrum(rfiRef,sessionId){
+// Simple blue (low) -> yellow (mid) -> red (high) heatmap, no external
+// colormap dependency. Rows are chronological oldest-first (top) to
+// newest-last (bottom), matching "time flows downward".
+function drawRfiWaterfall(canvas,rows,freqMHz){
+  const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
+  ctx.clearRect(0,0,w,h);
+  if(!rows.length||!freqMHz.length)return;
+  let minP=Infinity,maxP=-Infinity;
+  for(const row of rows)for(const p of row.power_dbfs){if(p<minP)minP=p;if(p>maxP)maxP=p}
+  const spanP=(maxP-minP)||1;
+  const image=ctx.createImageData(w,h);
+  const nRows=rows.length,nBins=freqMHz.length;
+  for(let y=0;y<h;y++){
+    const power=rows[Math.min(nRows-1,Math.floor(y/h*nRows))].power_dbfs;
+    for(let x=0;x<w;x++){
+      const t=Math.max(0,Math.min(1,(power[Math.min(nBins-1,Math.floor(x/w*nBins))]-minP)/spanP));
+      const i=(y*w+x)*4;
+      image.data[i]=Math.round(255*Math.min(1,t*2));
+      image.data[i+1]=Math.round(255*Math.min(1,Math.max(0,1-Math.abs(t-.5)*2)));
+      image.data[i+2]=Math.round(255*Math.min(1,(1-t)*2));
+      image.data[i+3]=255;
+    }
+  }
+  ctx.putImageData(image,0,0);
+}
+
+async function renderRfiProducts(rfiRef,quicklook,sessionId){
   const state=rfiRef.status||"DISABLED";
-  const placeholder=$("rfi-spectrum-placeholder"),canvas=$("rfi-spectrum-canvas");
   const freqLabel=rfiRef.center_frequency_hz==null?"—":`${num(rfiRef.center_frequency_hz/1e6,3)} MHz`;
   const gainLabel=rfiRef.gain_db==null?"—":`${num(rfiRef.gain_db,1)} dB`;
-  $("rfi-spectrum-caption").innerHTML=
+  $("rfi-caption").innerHTML=
     `<b>ANTENNA B / RFI REF</b> — RTL-SDR V3 — ${freqLabel} — gain ${gainLabel} — `+
-    `updated ${safe(rfiRef.spectrum_updated_utc||rfiRef.last_update_utc)}`;
-  const waiting=()=>{canvas.hidden=true;placeholder.hidden=false;placeholder.textContent="WAITING FOR SPECTRUM…"};
-  if(!rfiRef.spectrum_available){
-    canvas.hidden=true;placeholder.hidden=false;
-    placeholder.textContent=
-      state==="DISABLED"?"DISABLED":
-      state==="FAILED"?`FAILED — ${safe(rfiRef.last_error,"")}`:
-      state==="UNAVAILABLE"?`UNAVAILABLE — ${safe(rfiRef.last_error,"")}`:
-      "WAITING FOR SPECTRUM…";
+    `updated ${safe(rfiRef.spectrum_updated_utc||rfiRef.waterfall_updated_utc||rfiRef.last_update_utc)}`;
+
+  const thumbs=$("rfi-thumbs"),placeholder=$("rfi-products-placeholder");
+  const specCanvas=$("rfi-spectrum-canvas"),wfCanvas=$("rfi-waterfall-canvas"),mapImg=$("rfi-map-thumb");
+  if(state==="DISABLED"||state==="FAILED"||state==="UNAVAILABLE"){
+    thumbs.hidden=true;placeholder.hidden=false;
+    placeholder.textContent=state==="DISABLED"?"DISABLED":`${state} — ${safe(rfiRef.last_error,"")}`;
     return;
   }
-  try{
-    const data=await fetchJson("rfi_ref_spectrum.json");
-    // Defense in depth: the watcher already rejects a session mismatch, but
-    // an old spectrum file must never be drawn as if it belongs to this
-    // session even if fetched a moment before the watcher's next tick.
-    if(data.session_id!==sessionId||!Array.isArray(data.frequency_hz)||!data.frequency_hz.length){waiting();return}
-    canvas.hidden=false;placeholder.hidden=true;
-    drawRfiSpectrum(canvas,data.frequency_hz.map(f=>f/1e6),data.power_dbfs);
-  }catch(error){
-    waiting();
+  const anyAvailable=rfiRef.spectrum_available||rfiRef.waterfall_available||(quicklook&&quicklook.rfi_occupancy_map_available);
+  if(!anyAvailable){
+    thumbs.hidden=true;placeholder.hidden=false;placeholder.textContent="WAITING FOR RFI PRODUCTS…";
+    return;
+  }
+  thumbs.hidden=false;placeholder.hidden=true;
+
+  if(rfiRef.spectrum_available){
+    try{
+      const data=await fetchJson("rfi_ref_spectrum.json");
+      // Defense in depth: the watcher already rejects a session mismatch,
+      // but an old product must never be drawn as if it belongs to this
+      // session even if fetched a moment before the watcher's next tick.
+      if(data.session_id===sessionId&&Array.isArray(data.frequency_hz)&&data.frequency_hz.length){
+        drawRfiSpectrum(specCanvas,data.frequency_hz.map(f=>f/1e6),data.power_dbfs);
+        $("rfi-spectrum-link").href=`${CONFIG.root}/rfi_ref_spectrum.json`;
+      }else{
+        specCanvas.getContext("2d").clearRect(0,0,specCanvas.width,specCanvas.height);
+      }
+    }catch(error){specCanvas.getContext("2d").clearRect(0,0,specCanvas.width,specCanvas.height)}
+  }else{
+    specCanvas.getContext("2d").clearRect(0,0,specCanvas.width,specCanvas.height);
+  }
+
+  if(rfiRef.waterfall_available){
+    try{
+      const data=await fetchJson("rfi_ref_waterfall.json");
+      if(data.session_id===sessionId&&Array.isArray(data.rows)&&data.rows.length){
+        drawRfiWaterfall(wfCanvas,data.rows,data.frequency_hz);
+        $("rfi-waterfall-link").href=`${CONFIG.root}/rfi_ref_waterfall.json`;
+      }else{
+        wfCanvas.getContext("2d").clearRect(0,0,wfCanvas.width,wfCanvas.height);
+      }
+    }catch(error){wfCanvas.getContext("2d").clearRect(0,0,wfCanvas.width,wfCanvas.height)}
+  }else{
+    wfCanvas.getContext("2d").clearRect(0,0,wfCanvas.width,wfCanvas.height);
+  }
+
+  // RFI OCCUPANCY MAP: server-rendered PNG in the same quicklook product
+  // family as Antenna A's own map (reuses the existing runtime symlink and
+  // session/staleness gate already applied to `quicklook` above) - a
+  // distinct file, never confused with Antenna A's quicklook_map.png.
+  if(quicklook&&quicklook.rfi_occupancy_map_available){
+    const version=encodeURIComponent(quicklook.last_product_utc||"unversioned");
+    const src=`${CONFIG.root}/quicklook_products/rfi_occupancy_map.png?v=${version}`;
+    mapImg.src=src;$("rfi-map-link").href=src;mapImg.hidden=false;
+  }else{
+    mapImg.hidden=true;
   }
 }
 
@@ -161,10 +222,11 @@ function render(status){
   $("updated").textContent=safe(status.updated_utc);
   renderInstrument(status.instrument||{});
   renderSession(status.acquisition||{state:"IDLE"});
-  renderQuicklook(status.quicklook||{state:"IDLE"});
+  const quicklook=status.quicklook||{state:"IDLE"};
+  renderQuicklook(quicklook);
   const rfiRef=status.rfi_ref||{status:"DISABLED"};
   renderRfiRef(rfiRef);
-  renderRfiSpectrum(rfiRef,(status.acquisition||{}).session_id||null);
+  renderRfiProducts(rfiRef,quicklook,(status.acquisition||{}).session_id||null);
   renderLastSession(status.last_session);
 }
 
@@ -186,5 +248,6 @@ function start(){
   poll();setInterval(poll,CONFIG.pollMs);
   setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z"},1000);
 }
-window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiSpectrum,drawRfiSpectrum,renderLastSession,render,CONFIG};
+window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,
+  drawRfiSpectrum,drawRfiWaterfall,renderLastSession,render,CONFIG};
 start();

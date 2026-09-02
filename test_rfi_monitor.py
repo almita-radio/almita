@@ -527,3 +527,165 @@ async def test_spectrum_publication_failure_does_not_break_rfi_ref_or_propagate(
         await m.stop()
         server.close()
         await server.wait_closed()
+
+
+# ---------------------------------------------------------------- ANTENNA B waterfall + history
+
+
+async def _running_monitor(tmp_path, monkeypatch, pid, **kwargs):
+    """Shared setup: a fake in-process rtl_tcp server + a monitor pointed at
+    it, ownership-faked exactly like the other hardware-free tests above.
+    Returns (monitor, server, connected_event) - caller awaits connected,
+    exercises the monitor, then must stop() the monitor and close() the
+    server (no try/finally here so callers control exact sequencing)."""
+    connected = asyncio.Event()
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=pid)
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, port=port,
+                                         quicklook_every=2, bind_timeout=2.0, **kwargs)
+    return m, server, connected
+
+
+@pytest.mark.asyncio
+async def test_waterfall_bounded_rows_via_deque_eviction(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 50, session_id="s1", waterfall_max_rows=3, spectrum_write_interval=0.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.5)  # far more than 3 throttle ticks at 0s interval
+        waterfall = read_json_safe(tmp_path / "rfi_ref_waterfall.json")
+        assert waterfall is not None
+        assert len(waterfall["rows"]) <= 3
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_waterfall_reuses_spectrum_no_second_fft(tmp_path, monkeypatch):
+    """The waterfall's latest row must be the exact same power_dbfs/
+    frequency_hz already published in the spectrum product from the same
+    publish tick - proof it is downsampled from the one FFT already
+    computed, never a second one."""
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 51, session_id="s1", spectrum_write_interval=60.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.3)
+        m._maybe_publish(force=True)
+        spectrum = read_json_safe(tmp_path / "rfi_ref_spectrum.json")
+        waterfall = read_json_safe(tmp_path / "rfi_ref_waterfall.json")
+        assert waterfall["frequency_hz"] == spectrum["frequency_hz"]
+        assert waterfall["rows"][-1]["power_dbfs"] == spectrum["power_dbfs"]
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_waterfall_timestamps_monotonic_and_session_tagged(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 52, session_id="waterfall-session", spectrum_write_interval=0.05)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.4)
+        waterfall = read_json_safe(tmp_path / "rfi_ref_waterfall.json")
+        assert waterfall["session_id"] == "waterfall-session"
+        assert waterfall["device_serial"] == "00000002"
+        rows = waterfall["rows"]
+        assert len(rows) >= 2
+        timestamps = [row["utc"] for row in rows]
+        assert timestamps == sorted(timestamps)
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_waterfall_stopped_preserves_final_waterfall(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 53, session_id="s1", spectrum_write_interval=60.0)
+    await m.start()
+    await asyncio.wait_for(connected.wait(), timeout=2.0)
+    await asyncio.sleep(0.3)
+    await m.stop()
+    server.close()
+    await server.wait_closed()
+
+    status = read_json_safe(tmp_path / "rfi_ref_status.json")
+    waterfall = read_json_safe(tmp_path / "rfi_ref_waterfall.json")
+    assert status["status"] == "STOPPED"
+    assert waterfall is not None and waterfall["session_id"] == "s1"
+    assert len(waterfall["rows"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_waterfall_write_failure_isolated_from_status_and_spectrum(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 54, session_id="s1", spectrum_write_interval=0.0)
+    real_atomic_write = rfi_monitor.atomic_write_json
+
+    def selective_boom(path, value):
+        if str(path).endswith("rfi_ref_waterfall.json"):
+            raise OSError("simulated disk failure writing waterfall")
+        return real_atomic_write(path, value)
+    monkeypatch.setattr(rfi_monitor, "atomic_write_json", selective_boom)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.3)
+        assert m.status == "RUNNING"
+        assert read_json_safe(tmp_path / "rfi_ref_status.json")["status"] == "RUNNING"
+        assert read_json_safe(tmp_path / "rfi_ref_spectrum.json") is not None
+        assert not (tmp_path / "rfi_ref_waterfall.json").exists()
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_history_bounded_and_session_tagged_no_full_iq(tmp_path, monkeypatch):
+    m, server, connected = await _running_monitor(
+        tmp_path, monkeypatch, 55, session_id="s1", history_max_samples=3, spectrum_write_interval=0.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.5)
+        history = read_json_safe(tmp_path / "rfi_ref_history.json")
+        assert history is not None
+        assert history["session_id"] == "s1"
+        assert len(history["samples"]) <= 3
+        sample = history["samples"][-1]
+        assert set(sample) == {"utc", "occupancy_fraction", "clipping_fraction", "peak_dbfs"}
+        # No spectrum/IQ arrays anywhere in the scalar history product.
+        assert "power_dbfs" not in sample and "frequency_hz" not in sample
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()

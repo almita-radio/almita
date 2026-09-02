@@ -29,11 +29,16 @@
       <a id="thumb-map-link" target="_blank" rel="noopener"><img id="thumb-map" alt="Map"><span>MAP</span></a>
     </section>
     <h3 class="antenna-label">ANTENNA B — RFI REFERENCE</h3>
-    <section id="rfi-spectrum-panel" class="panel compact rfi-spectrum">
-      <div id="rfi-spectrum-caption" class="rfi-spectrum-caption">—</div>
-      <canvas id="rfi-spectrum-canvas" width="900" height="160" hidden></canvas>
-      <div id="rfi-spectrum-placeholder" class="rfi-spectrum-placeholder">DISABLED</div>
+    <div id="rfi-caption" class="rfi-spectrum-caption">—</div>
+    <section id="rfi-thumbs" class="thumbs" hidden>
+      <a id="rfi-spectrum-link" target="_blank" rel="noopener" class="thumb-canvas">
+        <canvas id="rfi-spectrum-canvas" width="300" height="110"></canvas><span>RFI SPECTRUM</span></a>
+      <a id="rfi-waterfall-link" target="_blank" rel="noopener" class="thumb-canvas">
+        <canvas id="rfi-waterfall-canvas" width="300" height="110"></canvas><span>RFI WATERFALL</span></a>
+      <a id="rfi-map-link" target="_blank" rel="noopener">
+        <img id="rfi-map-thumb" alt="RFI Occupancy Map" hidden><span>RFI OCCUPANCY MAP</span></a>
     </section>
+    <div id="rfi-products-placeholder" class="rfi-spectrum-placeholder">DISABLED</div>
     <section id="last-session" class="panel compact" hidden>
       <h2>LAST KNOWN SESSION</h2><div id="last-session-kv" class="kv"></div>
     </section>

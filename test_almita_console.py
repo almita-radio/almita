@@ -539,20 +539,145 @@ def test_36_frontend_rfi_spectrum_renders_when_available(tmp_path):
     html = dom(public)
     assert "ANTENNA B / RFI REF" in html
     assert "RTL-SDR V3" in html
-    assert "WAITING FOR SPECTRUM" not in html
+    assert "WAITING FOR RFI PRODUCTS" not in html
     assert 'id="rfi-spectrum-canvas"' in html
 
 
 def test_37_frontend_rfi_spectrum_disabled_shows_placeholder(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))  # no rfi_ref -> DISABLED
-    assert 'id="rfi-spectrum-placeholder"' in html
-    assert "WAITING FOR SPECTRUM" not in html
+    assert 'id="rfi-products-placeholder"' in html
+    assert "WAITING FOR RFI PRODUCTS" not in html
 
 
 def test_38_frontend_rfi_spectrum_waiting_when_enabled_but_not_yet_available(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture(
-        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": False})))
-    assert "WAITING FOR SPECTRUM" in html
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": False, "waterfall_available": False})))
+    assert "WAITING FOR RFI PRODUCTS" in html
+
+
+# ---------------------------------------------------------------- 39-47: ANTENNA B waterfall + occupancy map
+
+
+def _rfi_ref_waterfall(session_id, **overrides):
+    base = {
+        "schema_version": 1, "session_id": session_id, "device_serial": "00000002",
+        "center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 25.0,
+        "frequency_hz": [1420405000 + i * 1000 for i in range(-5, 5)],
+        "rows": [{"utc": utcnow(), "power_dbfs": [-60.0 + i for i in range(10)]}],
+        "updated_utc": utcnow(),
+    }
+    base.update(overrides)
+    return base
+
+
+def _quicklook_running(**overrides):
+    base = {
+        "state": "OK", "points_processed": 3, "last_product_utc": utcnow(),
+        "spectrum_available": True, "waterfall_available": True, "map_available": True,
+        "rfi_occupancy_map_available": True, "quicklook_stale": False, "error": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_39_watcher_rfi_waterfall_available_when_session_matches(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_waterfall.json", _rfi_ref_waterfall("s1"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["waterfall_available"] is True
+    assert status["rfi_ref"]["waterfall_updated_utc"] is not None
+
+
+def test_40_watcher_rfi_waterfall_rejected_on_session_mismatch(tmp_path):
+    announce_session(tmp_path, session_id="s2", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s2"})
+    atomic_write_json(tmp_path / "rfi_ref_waterfall.json", _rfi_ref_waterfall("s1-old"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["waterfall_available"] is False
+    assert status["rfi_ref"]["waterfall_updated_utc"] is None
+
+
+def test_41_watcher_rfi_waterfall_stale_during_running_is_rejected(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_waterfall.json",
+                       _rfi_ref_waterfall("s1", updated_utc="2000-01-01T00:00:00+00:00"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["waterfall_available"] is False
+
+
+def test_42_watcher_rfi_waterfall_stopped_retains_final_regardless_of_age(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_COMPLETED", state="COMPLETED")
+    atomic_write_json(tmp_path / "rfi_ref_status.json",
+                       {**_rfi_ref_running(status="STOPPED"), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_waterfall.json",
+                       _rfi_ref_waterfall("s1", updated_utc="2000-01-01T00:00:00+00:00"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=False)
+    assert status["rfi_ref"]["status"] == "STOPPED"
+    assert status["rfi_ref"]["waterfall_available"] is True
+
+
+def test_43_watcher_quicklook_rfi_occupancy_map_available_via_existing_gate(tmp_path):
+    """The occupancy map rides the SAME session/staleness gate already
+    applied to Antenna A's own quicklook products - no separate mechanism."""
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    quicklook_root = tmp_path / "quicklook_out"
+    quicklook_root.mkdir()
+    atomic_write_json(tmp_path / "quicklook_announcement.json",
+                       {"schema_version": 1, "session_id": "s1", "quicklook_root": str(quicklook_root)})
+    atomic_write_json(quicklook_root / "quicklook_live_status.json",
+                       {"status": "OK", "points_processed": 1, "updated_utc": utcnow()})
+    (quicklook_root / "rfi_occupancy_map.json").write_text("{}")
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["quicklook"]["rfi_occupancy_map_available"] is True
+    assert status["quicklook"]["map_available"] is False  # Antenna A's own map is a distinct file
+
+
+def test_44_frontend_rfi_thumbs_show_all_three_when_available(tmp_path):
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True, "waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_waterfall.json", _rfi_ref_waterfall("s1"))
+    html = dom(public)
+    assert "RFI SPECTRUM" in html and "RFI WATERFALL" in html and "RFI OCCUPANCY MAP" in html
+    assert 'id="rfi-waterfall-canvas"' in html
+    assert "WAITING FOR RFI PRODUCTS" not in html
+
+
+def test_45_frontend_rfi_map_thumb_hidden_when_occupancy_map_unavailable(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True},
+        quicklook=_quicklook_running(rfi_occupancy_map_available=False))))
+    assert 'id="rfi-map-thumb" alt="RFI Occupancy Map" hidden' in html \
+        or 'rfi-map-thumb" hidden' in html
+
+
+def test_46_frontend_antenna_a_thumbs_unaffected_by_antenna_b(tmp_path):
+    """Antenna A's own three thumbnails must keep working exactly as before,
+    independent of whatever Antenna B is doing."""
+    public = console_root(tmp_path, status=status_fixture("RUNNING", quicklook=_quicklook_running()))
+    html = dom(public)
+    assert 'id="quicklook-thumbs"' in html and "quicklook-thumbs\" hidden" not in html
+    assert "SPECTRUM" in html and "WATERFALL" in html and "MAP" in html
+
+
+def test_47_frontend_rfi_thumbs_stopped_state_retains_products(tmp_path):
+    public = console_root(tmp_path, status=status_fixture(
+        "COMPLETED", rfi_ref={**_rfi_ref_running(status="STOPPED"), "spectrum_available": True,
+                              "waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_waterfall.json", _rfi_ref_waterfall("s1"))
+    html = dom(public)
+    assert ">STOPPED<" in html
+    assert "WAITING FOR RFI PRODUCTS" not in html
 
 
 # ---------------------------------------------------------------- closeout: canonical runtime_dir

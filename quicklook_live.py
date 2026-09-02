@@ -23,6 +23,8 @@ from quicklook_map import (MapError, build_native_grid_document, find_grid_direc
                            write_native_grid_png)
 from quicklook_spectrum import generate_quicklook
 from quicklook_waterfall import generate_waterfall
+from rfi_occupancy_map import (build_rfi_occupancy_map_document, correlate_rfi_with_points,
+                               read_point_timing, read_rfi_history, write_rfi_occupancy_png)
 from runtime_state import read_json_safe
 
 
@@ -163,6 +165,38 @@ class QuicklookLive:
         atomic_json(self.output/"quicklook_map.json",document)
         return time.perf_counter()-start
 
+    def _update_rfi_occupancy_map(self)->float:
+        """ANTENNA B diagnostic overlay on Antenna A's own native grid -
+        best-effort and entirely optional: Spectrum/Waterfall/the science
+        map above must keep working whether or not RFI_REF was ever
+        enabled, whether or not it has produced any history yet, and
+        regardless of any error in this correlation. Never a second FFT,
+        never a fake sky measurement from a fixed reference dipole."""
+        start=time.perf_counter()
+        if self._grid_geometry is None or self.runtime_dir is None:
+            return time.perf_counter()-start
+        try:
+            rfi_samples=read_rfi_history(self.runtime_dir,self.session_id)
+            if not rfi_samples:
+                return time.perf_counter()-start
+            point_timing=read_point_timing(self._grid_dir)
+            point_metrics=correlate_rfi_with_points(point_timing,rfi_samples)
+            if not point_metrics:
+                return time.perf_counter()-start
+            try:
+                cell_status=read_cell_status(self._grid_dir)
+            except Exception:
+                cell_status={}
+            document=build_rfi_occupancy_map_document(self._grid_geometry,point_metrics,cell_status,
+                                                       self.session_id)
+            temporary=self.output/"rfi_occupancy_map.png.tmp.png"
+            write_rfi_occupancy_png(temporary,document)
+            os.replace(temporary,self.output/"rfi_occupancy_map.png")
+            atomic_json(self.output/"rfi_occupancy_map.json",document)
+        except Exception:
+            pass
+        return time.perf_counter()-start
+
     def _process(self,row:dict[str,str],source:Path)->None:
         point_id=row["point_id"]; started=time.perf_counter(); point_dir=self.output/"points"/point_id
         point_dir.mkdir(parents=True,exist_ok=True); _log(self.log_path,"NEW SUCCESS",point_id)
@@ -235,6 +269,7 @@ class QuicklookLive:
                   "source_hdf5":str(source),"fingerprint":_fingerprint(source),"products":{}}
                 _log(self.log_path,"POINT ERROR",f"{row['point_id']} {type(error).__name__}")
         self.state["updated_utc"]=utcnow();state_start=time.perf_counter();atomic_json(self.state_path,self.state);state_seconds=time.perf_counter()-state_start
+        self._update_rfi_occupancy_map()
         return self._status(rows,discovery_seconds,backlog_initial,state_seconds)
 
     def _status(self,rows,discovery_seconds,backlog_initial,state_seconds):

@@ -18,10 +18,18 @@ persisted. FFT work runs in a dedicated single-worker thread so it can never
 block the asyncio event loop that MAIN's own SDR consumer shares; if RFI_REF
 falls behind, it drops its own quicklook work (dropped_blocks) rather than
 ever creating backpressure anyone else could observe.
+
+ANTENNA B products (spectrum, waterfall, scalar history) are all reused
+from that same throttled FFT result - never a second FFT - and published
+at an independently-throttled ~2s cadence, each bounded (256 bins; a
+capped rolling window of rows/samples via deque eviction) so neither
+memory nor the on-disk runtime products grow without bound over a long
+session.
 """
 from __future__ import annotations
 
 import asyncio
+import collections
 import concurrent.futures
 import contextlib
 import os
@@ -38,6 +46,8 @@ RTL_TCP_BIN = "rtl_tcp"
 BYTES_PER_SAMPLE = 2  # 8-bit I + 8-bit Q, rtl_tcp default format
 FULL_SCALE_AMPLITUDE = 127.5  # unsigned-8 IQ centered at 127/128
 N_SPECTRUM_BINS = 256  # bounded ANTENNA B/RFI_REF spectrum product size
+N_WATERFALL_MAX_ROWS = 120  # ~4 minutes at the default 2s publish cadence
+N_HISTORY_MAX_SAMPLES = 3600  # ~2 hours at the default 2s publish cadence
 
 STATES = ("DISABLED", "STARTING", "RUNNING", "DEGRADED", "UNAVAILABLE", "FAILED", "STOPPED")
 
@@ -102,6 +112,8 @@ class RFIReferenceMonitor:
                  gain_db: float = 25.0, quicklook_every: int = 20, block_bytes: int = 131072,
                  bind_timeout: float = 5.0, connect_timeout: float = 5.0,
                  spectrum_write_interval: float = 2.0,
+                 waterfall_max_rows: int = N_WATERFALL_MAX_ROWS,
+                 history_max_samples: int = N_HISTORY_MAX_SAMPLES,
                  log=None):
         self.enabled = bool(enabled)
         self.runtime_dir = runtime_dir
@@ -133,7 +145,15 @@ class RFIReferenceMonitor:
         # the same FFT above, never a second FFT computed for visualization.
         self.spectrum_freq_offsets_hz = None
         self.spectrum_power_dbfs = None
-        self._last_spectrum_write_monotonic: Optional[float] = None
+        self._last_publish_monotonic: Optional[float] = None
+        # ANTENNA B waterfall/history: bounded rolling products, both
+        # appended at the same throttled publish tick as the spectrum -
+        # never once per FFT, always independent of and slower than the
+        # ~5% FFT rate itself. deque(maxlen=...) evicts the oldest entry
+        # automatically, so memory and the on-disk product both stay bounded
+        # regardless of session length.
+        self._waterfall_rows = collections.deque(maxlen=max(1, int(waterfall_max_rows)))
+        self._history_samples = collections.deque(maxlen=max(1, int(history_max_samples)))
 
         self.proc: Optional[subprocess.Popen] = None
         self._task: Optional[asyncio.Task] = None
@@ -206,7 +226,7 @@ class RFIReferenceMonitor:
         # Best-effort final flush so the operator can inspect the last real
         # spectrum from this session, even if the throttle interval hadn't
         # elapsed yet at the moment of stop.
-        self._maybe_write_spectrum(force=True)
+        self._maybe_publish(force=True)
         self._write_status()
         self._executor.shutdown(wait=False)
 
@@ -291,7 +311,7 @@ class RFIReferenceMonitor:
                         if len(power):
                             self.spectrum_freq_offsets_hz, self.spectrum_power_dbfs = freq, power
                         self.processed_blocks += 1
-                        self._maybe_write_spectrum()
+                        self._maybe_publish()
 
                 self._fft_future = loop.run_in_executor(
                     self._executor, _quicklook_fft, chunk, self.sample_rate, self._test_fft_delay_s
@@ -335,26 +355,32 @@ class RFIReferenceMonitor:
                 proc.kill()
                 proc.wait(timeout=5.0)
 
-    def _maybe_write_spectrum(self, force: bool = False) -> None:
+    def _maybe_publish(self, force: bool = False) -> None:
         """Throttled publication: the FFT itself still runs at the existing
         ~5% duty (unchanged) - this only limits how often that already-
-        computed result is persisted to disk, independent of and always
-        less frequent than the FFT rate."""
+        computed result is persisted to disk (spectrum, one waterfall row,
+        one history sample), independent of and always less frequent than
+        the FFT rate. A failure in any one of the three writes below is
+        isolated to that write (`_write_*` each catch their own exceptions)
+        so a single bad write can never take down the others or RFI_REF."""
         if self.spectrum_power_dbfs is None:
             return
         now = time.monotonic()
-        if not force and self._last_spectrum_write_monotonic is not None \
-                and (now - self._last_spectrum_write_monotonic) < self.spectrum_write_interval:
+        if not force and self._last_publish_monotonic is not None \
+                and (now - self._last_publish_monotonic) < self.spectrum_write_interval:
             return
-        self._last_spectrum_write_monotonic = now
+        self._last_publish_monotonic = now
         self._write_spectrum()
+        self._append_and_write_waterfall()
+        self._append_and_write_history()
+
+    def _current_frequency_hz(self):
+        return [self.center_frequency_hz + float(off) for off in self.spectrum_freq_offsets_hz]
 
     def _write_spectrum(self) -> None:
         if self.runtime_dir is None or self.spectrum_power_dbfs is None:
             return
         try:
-            frequency_hz = [self.center_frequency_hz + float(off) for off in self.spectrum_freq_offsets_hz]
-            power_dbfs = [float(p) for p in self.spectrum_power_dbfs]
             atomic_write_json(f"{self.runtime_dir}/rfi_ref_spectrum.json", {
                 "schema_version": 1,
                 "session_id": self.session_id,
@@ -363,8 +389,59 @@ class RFIReferenceMonitor:
                 "sample_rate": self.sample_rate,
                 "gain_db": self.gain_db,
                 "device_serial": self.device_serial,
-                "frequency_hz": frequency_hz,
-                "power_dbfs": power_dbfs,
+                "frequency_hz": self._current_frequency_hz(),
+                "power_dbfs": [float(p) for p in self.spectrum_power_dbfs],
+            })
+        except Exception:
+            pass
+
+    def _append_and_write_waterfall(self) -> None:
+        """ANTENNA B waterfall: reuses the same 256-bin spectrum already
+        computed above - never a second FFT. One row per publish tick
+        (~2s default), bounded to waterfall_max_rows via deque eviction."""
+        if self.runtime_dir is None or self.spectrum_power_dbfs is None:
+            return
+        try:
+            self._waterfall_rows.append({
+                "utc": utcnow(),
+                "power_dbfs": [float(p) for p in self.spectrum_power_dbfs],
+            })
+            atomic_write_json(f"{self.runtime_dir}/rfi_ref_waterfall.json", {
+                "schema_version": 1,
+                "session_id": self.session_id,
+                "device_serial": self.device_serial,
+                "center_frequency_hz": self.center_frequency_hz,
+                "sample_rate": self.sample_rate,
+                "gain_db": self.gain_db,
+                "frequency_hz": self._current_frequency_hz(),
+                "rows": list(self._waterfall_rows),
+                "updated_utc": utcnow(),
+            })
+        except Exception:
+            pass
+
+    def _append_and_write_history(self) -> None:
+        """Bounded scalar history (occupancy/clipping/peak per publish tick)
+        - the input the future A<->B coincidence work and the RFI occupancy
+        map correlate against MAIN's per-point timing. No raw IQ, no
+        spectra: just the same three scalars already in rfi_ref_status.json,
+        timestamped, kept for longer than that status file's single latest
+        snapshot."""
+        if self.runtime_dir is None:
+            return
+        try:
+            self._history_samples.append({
+                "utc": utcnow(),
+                "occupancy_fraction": self.occupancy_fraction,
+                "clipping_fraction": self.clipping_fraction,
+                "peak_dbfs": self.peak_dbfs,
+            })
+            atomic_write_json(f"{self.runtime_dir}/rfi_ref_history.json", {
+                "schema_version": 1,
+                "session_id": self.session_id,
+                "device_serial": self.device_serial,
+                "samples": list(self._history_samples),
+                "updated_utc": utcnow(),
             })
         except Exception:
             pass

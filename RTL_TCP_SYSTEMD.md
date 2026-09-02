@@ -191,3 +191,51 @@ sin pasar por el loop de puntos con INDI/mount — la integración con el mount
 real (GOTO/tracking) queda cubierta por los tests de integración offline en
 `test_capture_rfi_ref_integration.py`, que sí ejercitan el ciclo de vida
 completo de `execute_observation_plan()` con un telescopio simulado.
+
+## ANTENNA B: tres productos, ninguno un mapa de cielo falso
+
+RFI_REF (ANTENNA B) es una antena de referencia fija — nunca reproduce la
+geometría de apuntado de MAIN (ANTENNA A). Por eso expone tres productos
+paralelos a los de MAIN, pero honestos sobre lo que realmente son:
+
+1. **RFI Spectrum** (`data/runtime/rfi_ref_spectrum.json`) — 256 bins,
+   max-pooling desde la misma FFT de ~5% duty (nunca una segunda FFT), eje
+   de frecuencia en Hz absolutos, potencia en dBFS.
+2. **RFI Waterfall** (`data/runtime/rfi_ref_waterfall.json`) — reutiliza el
+   mismo array de 256 bins ya calculado para el spectrum en cada tick de
+   publicación (~2s por defecto, independiente y siempre más lento que la
+   FFT), acumulando una ventana acotada (`waterfall_max_rows`, default 120
+   filas ≈ 4 min) vía `deque(maxlen=...)`. Cada fila: `{"utc", "power_dbfs"}`.
+3. **RFI Occupancy Map** (`rfi_occupancy_map.json`/`.png`, servido junto a
+   `quicklook_map.json` de ANTENNA A bajo `quicklook_products/`) — **no es
+   un mapa de cielo**: superpone un diagnóstico de contaminación RFI sobre
+   la geometría nativa de grilla de MAIN (`rfi_occupancy_map.py`, reutiliza
+   `quicklook_map.load_native_grid_geometry`/`read_cell_status` sin
+   modificarlos). Para cada punto MAIN exitoso, correlaciona por
+   superposición de timestamp (`start_time`/`end_time` de `mosaic.csv`) las
+   muestras de `data/runtime/rfi_ref_history.json` (historial acotado de
+   `{utc, occupancy_fraction, clipping_fraction, peak_dbfs}`, mismo tick de
+   publicación que el waterfall) que caen dentro de esa ventana. Sin
+   interpolación, sin celdas inventadas: un punto sin muestras RFI
+   superpuestas queda ausente (NaN/`null` en el JSON, nunca un 0 falso).
+   Lo construye `quicklook_live.py` (proceso desacoplado, ya existente) en
+   cada `scan_once()` — nunca capture.py, nunca una segunda identidad de
+   sesión.
+
+Los tres productos llevan el `session_id` canónico y se descartan si no
+coincide con la sesión actual (mismo criterio que el spectrum ya validado);
+mientras `RUNNING`/`DEGRADED` también deben ser recientes, y una vez
+`STOPPED` se preserva el último producto válido de esa sesión para
+inspección posterior, sin importar la antigüedad.
+
+**Validación de hardware real:** spectrum y waterfall se corrieron contra el
+V3 real (sin mover la montura): 256 bins, 10 filas de waterfall (acotadas
+correctamente), historial acotado, mismo array de frecuencia entre spectrum
+y waterfall (prueba de reuso sin segunda FFT), FFT duty medido ~4.9%, CPU/RAM
+estables, cero resets USB, `rtl_tcp.service` intacto. El occupancy map se
+validó con la geometría y el timing **reales** de una sesión GOTO exitosa
+anterior (9/9 puntos reales) más un historial RFI realista (mismo rango de
+valores medido en hardware real) posicionado dentro de esas ventanas
+temporales reales — 9/9 celdas observadas, PNG generado correctamente,
+corriendo el camino de producción completo (`QuicklookLive._update_rfi_occupancy_map`)
+sin reimplementar ni mockear la lógica.

@@ -166,6 +166,7 @@ def build_acquisition(now_utc: str, current_session: Optional[dict], capture_pro
 _QUICKLOOK_IDLE = {
     "state": "IDLE", "points_processed": None, "last_product_utc": None,
     "spectrum_available": False, "waterfall_available": False, "map_available": False,
+    "rfi_occupancy_map_available": False,
     "quicklook_stale": False, "error": None,
 }
 _QUICKLOOK_WAITING = {**_QUICKLOOK_IDLE, "state": "WAITING"}
@@ -191,6 +192,9 @@ def build_quicklook(now_utc: str, runtime_dir: Path, session_id: Optional[str]) 
         "spectrum_available": (root / "latest_spectrum.json").is_file(),
         "waterfall_available": (root / "latest_waterfall.json").is_file(),
         "map_available": (root / "quicklook_map.json").is_file(),
+        # ANTENNA B diagnostic overlay on Antenna A's own grid - a distinct
+        # product from Antenna A's own map above (quicklook_map.json).
+        "rfi_occupancy_map_available": (root / "rfi_occupancy_map.json").is_file(),
         "quicklook_stale": stale,
         "error": errors[0].get("warning") if errors and isinstance(errors[0], dict) else None,
     }
@@ -203,38 +207,47 @@ _RFI_REF_DISABLED = {
     "peak_dbfs": None, "processed_blocks": None, "skipped_blocks": None,
     "dropped_blocks": None, "last_update_utc": None, "last_error": None,
     "spectrum_available": False, "spectrum_updated_utc": None,
+    "waterfall_available": False, "waterfall_updated_utc": None,
 }
+_RFI_REF_PRODUCT_FIELDS = ("spectrum_available", "spectrum_updated_utc",
+                           "waterfall_available", "waterfall_updated_utc")
+
+
+def _rfi_ref_product_availability(runtime_dir: Path, filename: str, session_id: Optional[str],
+                                   rfi_ref_status: str, now_utc: str):
+    """Shared session/staleness gate for every ANTENNA B product that lives
+    directly under runtime_dir (spectrum, waterfall): a leftover product
+    from an older/different observation is never shown as current. While
+    RUNNING/DEGRADED it must also be recent (guards against a hung FFT
+    thread that stopped updating without the status reflecting it); once
+    STOPPED, the final product from that session is preserved for
+    inspection regardless of age. Returns (available, updated_utc)."""
+    product = read_json_safe(Path(runtime_dir) / filename)
+    if not product or product.get("session_id") != session_id:
+        return False, None
+    if rfi_ref_status in ("RUNNING", "DEGRADED"):
+        age = _age_seconds(product.get("updated_utc"), now_utc)
+        ok = age is not None and age <= RFI_SPECTRUM_STALE_SECONDS
+    else:
+        ok = True
+    return ok, (product.get("updated_utc") if ok else None)
 
 
 def build_rfi_ref(runtime_dir: Path, session_id: Optional[str], now_utc: str) -> dict:
     """RFI_REF is an auxiliary sidecar: this never affects acquisition/
     quicklook state above, and a missing/stale/malformed status file (older
     sessions that predate RFI_REF, or RFI_REF simply disabled) safely reads
-    as DISABLED rather than raising or degrading anything else.
-
-    The ANTENNA B spectrum product (rfi_ref_spectrum.json) is exposed only
-    when it carries the same canonical session_id as the current session -
-    a leftover spectrum from an older observation must never be displayed
-    as if it belongs to this one. While RUNNING/DEGRADED it must also be
-    recent (guards against a hung FFT thread that stopped updating without
-    the status reflecting it); once STOPPED, the final spectrum from that
-    session is preserved for inspection regardless of age."""
+    as DISABLED rather than raising or degrading anything else."""
     status = read_json_safe(Path(runtime_dir) / "rfi_ref_status.json")
     if not status or status.get("session_id") != session_id:
         return dict(_RFI_REF_DISABLED)
-    status_fields = [k for k in _RFI_REF_DISABLED if k not in ("spectrum_available", "spectrum_updated_utc")]
+    status_fields = [k for k in _RFI_REF_DISABLED if k not in _RFI_REF_PRODUCT_FIELDS]
     result = {**_RFI_REF_DISABLED, **{k: status.get(k) for k in status_fields}}
 
-    spectrum = read_json_safe(Path(runtime_dir) / "rfi_ref_spectrum.json")
-    spectrum_ok = False
-    if spectrum and spectrum.get("session_id") == session_id:
-        if result["status"] in ("RUNNING", "DEGRADED"):
-            age = _age_seconds(spectrum.get("updated_utc"), now_utc)
-            spectrum_ok = age is not None and age <= RFI_SPECTRUM_STALE_SECONDS
-        else:
-            spectrum_ok = True
-    result["spectrum_available"] = spectrum_ok
-    result["spectrum_updated_utc"] = spectrum.get("updated_utc") if spectrum_ok else None
+    result["spectrum_available"], result["spectrum_updated_utc"] = _rfi_ref_product_availability(
+        runtime_dir, "rfi_ref_spectrum.json", session_id, result["status"], now_utc)
+    result["waterfall_available"], result["waterfall_updated_utc"] = _rfi_ref_product_availability(
+        runtime_dir, "rfi_ref_waterfall.json", session_id, result["status"], now_utc)
     return result
 
 

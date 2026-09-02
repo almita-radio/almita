@@ -4,6 +4,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 
 import quicklook_live as ql
 
@@ -146,3 +147,79 @@ def test_source_changed_not_reprocessed(tmp_path,monkeypatch):
 def test_atomic_helpers_and_stop(tmp_path):
     path=tmp_path/"x.json";ql.atomic_json(path,{"x":1});assert json.loads(path.read_text())=={"x":1}
     assert not (tmp_path/"x.json.tmp").exists();ql.request_stop();assert ql.STOP_REQUESTED
+
+
+# ---------------------------------------------------------------- ANTENNA B occupancy map wiring
+
+
+def mark_success(grid_dir,point_id,start,end):
+    """Rewrite mosaic.csv's capture_status/start_time/end_time for one
+    point, the same way capture.py's own update_point_status does - so the
+    RFI occupancy map correlation has a real [start,end] window to use."""
+    path=grid_dir/"mosaic.csv"
+    with path.open(newline="") as f:
+        reader=csv.DictReader(f);fieldnames=list(reader.fieldnames or []);rows=list(reader)
+    for field in ("start_time","end_time"):
+        if field not in fieldnames:fieldnames.append(field)
+    for r in rows:
+        if r["point_id"]==str(point_id):
+            r["capture_status"]="SUCCESS";r["start_time"]=start;r["end_time"]=end
+    with path.open("w",newline="") as f:
+        w=csv.DictWriter(f,fieldnames=fieldnames);w.writeheader();w.writerows(rows)
+
+
+def write_rfi_history(runtime_dir,session_id,samples):
+    ql.atomic_json(runtime_dir/"rfi_ref_history.json",{"schema_version":1,"session_id":session_id,
+        "device_serial":"00000002","samples":samples,"updated_utc":"2026-09-02T00:00:00+00:00"})
+
+
+def test_rfi_occupancy_map_built_from_matching_session_history(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,2)
+    mark_success(session,1,"2026-09-02T00:00:00+00:00","2026-09-02T00:00:10+00:00")
+    source=session/"one.h5";capture(source);manifest(session,[row("1","SUCCESS","one.h5")])
+    runtime=tmp_path/"runtime";runtime.mkdir()
+    write_rfi_history(runtime,"s",[{"utc":"2026-09-02T00:00:05+00:00","occupancy_fraction":0.12,
+        "clipping_fraction":0.0,"peak_dbfs":-58.0}])
+    out=tmp_path/"out"
+    live=ql.QuicklookLive(session,PROFILE,out,runtime_dir=runtime)
+    assert live.session_id=="s"
+    live.run(True)
+    doc=json.loads((out/"rfi_occupancy_map.json").read_text())
+    assert doc["title"]=="ANTENNA B - RFI OCCUPANCY MAP"
+    assert doc["grid"]["values"][0][0]==pytest.approx(0.12)
+    assert doc["grid"]["values"][0][1] is None
+    assert (out/"rfi_occupancy_map.png").exists()
+
+
+def test_rfi_occupancy_map_absent_without_runtime_dir_never_fatal(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,1)
+    mark_success(session,1,"2026-09-02T00:00:00+00:00","2026-09-02T00:00:10+00:00")
+    source=session/"one.h5";capture(source);manifest(session,[row("1","SUCCESS","one.h5")])
+    out=tmp_path/"out"
+    status=ql.QuicklookLive(session,PROFILE,out).run(True)  # no runtime_dir at all
+    assert status["points_processed"]==1
+    assert not (out/"rfi_occupancy_map.json").exists()
+    assert (out/"quicklook_map.json").exists()  # Antenna A's own map is unaffected
+
+
+def test_rfi_occupancy_map_session_mismatch_produces_nothing(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,1)
+    mark_success(session,1,"2026-09-02T00:00:00+00:00","2026-09-02T00:00:10+00:00")
+    source=session/"one.h5";capture(source);manifest(session,[row("1","SUCCESS","one.h5")])
+    runtime=tmp_path/"runtime";runtime.mkdir()
+    write_rfi_history(runtime,"different-session",[{"utc":"2026-09-02T00:00:05+00:00",
+        "occupancy_fraction":0.5,"clipping_fraction":0.0,"peak_dbfs":-40.0}])
+    out=tmp_path/"out"
+    ql.QuicklookLive(session,PROFILE,out,runtime_dir=runtime).run(True)
+    assert not (out/"rfi_occupancy_map.json").exists()
+
+
+def test_rfi_occupancy_map_missing_history_file_produces_nothing(tmp_path,monkeypatch):
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,1)
+    mark_success(session,1,"2026-09-02T00:00:00+00:00","2026-09-02T00:00:10+00:00")
+    source=session/"one.h5";capture(source);manifest(session,[row("1","SUCCESS","one.h5")])
+    runtime=tmp_path/"runtime";runtime.mkdir()  # no rfi_ref_history.json written at all
+    out=tmp_path/"out"
+    status=ql.QuicklookLive(session,PROFILE,out,runtime_dir=runtime).run(True)
+    assert status["points_processed"]==1  # science quicklook unaffected
+    assert not (out/"rfi_occupancy_map.json").exists()
