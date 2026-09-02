@@ -53,7 +53,7 @@ The current setup includes:
 
 - **Raspberry Pi 5**
 - **RTL-SDR Blog V4** — primary science receiver
-- **RTL-SDR V3** — secondary RFI reference receiver
+- **RTL-SDR Blog V3** — secondary RFI reference receiver
 - **Nooelec Hydrogen LNA**
 - 1420 MHz feed
 - Modified ~90 × 60 cm WiFi grid/parabolic reflector
