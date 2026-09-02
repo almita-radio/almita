@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -445,3 +446,91 @@ def test_generate_final_report_counts_and_verdict(tmp_path, monkeypatch):
     assert report["final_verdict"] == "DEGRADED"  # one failure -> not SUCCESS
     assert (session_dir / "final_report.json").exists()
     assert (session_dir / "final_report.md").exists()
+
+
+# --------------------------------------------------------------------------
+# _wait_for_session_announcement: regression tests for the production
+# incident (2026-09-02) where quicklook_live.py was launched against a
+# 3-hour-old session_root left over from an unrelated completed campaign.
+# current_session.json is never cleared between runs, so "any non-empty
+# session_root" (the pre-fix acceptance test) can be satisfied on the very
+# first poll by stale content. Only a current_session.json whose own
+# updated_utc is at or after the launch instant may be accepted.
+# --------------------------------------------------------------------------
+
+def _write_current_session(runtime_dir, **fields):
+    runtime_state.atomic_write_json(Path(runtime_dir) / "current_session.json", fields)
+
+
+def test_wait_for_session_announcement_ignores_stale_prior_session(tmp_path, monkeypatch):
+    """The exact production scenario: a fully-valid session_root already
+    sits on disk from a run that finished hours ago. Must not be returned."""
+    runtime_dir = str(tmp_path)
+    stale_time = datetime.now(timezone.utc) - timedelta(hours=3)
+    _write_current_session(runtime_dir, session_id="STALE-OLD-SESSION",
+                            session_root="/old/session/root", updated_utc=stale_time.isoformat())
+    after_utc = datetime.now(timezone.utc)
+    monkeypatch.setattr(orch, "SESSION_ANNOUNCE_POLL_SEC", 0.05)
+    result = orch._wait_for_session_announcement(runtime_dir, timeout=0.3, after_utc=after_utc)
+    assert result is None, "must never return a session announced before the launch instant"
+
+
+def test_wait_for_session_announcement_accepts_fresh_announcement_over_stale_one(tmp_path, monkeypatch):
+    """Stale content is on disk when the wait starts (as in production);
+    capture.py then overwrites it shortly after with the real, new
+    session — that one, and only that one, must be returned."""
+    runtime_dir = str(tmp_path)
+    stale_time = datetime.now(timezone.utc) - timedelta(hours=3)
+    _write_current_session(runtime_dir, session_id="STALE-OLD-SESSION",
+                            session_root="/old/session/root", updated_utc=stale_time.isoformat())
+    after_utc = datetime.now(timezone.utc)
+    monkeypatch.setattr(orch, "SESSION_ANNOUNCE_POLL_SEC", 0.05)
+
+    def _announce_fresh_session_shortly():
+        time.sleep(0.15)
+        _write_current_session(runtime_dir, session_id="NEW-REAL-SESSION",
+                                session_root="/new/session/root",
+                                updated_utc=datetime.now(timezone.utc).isoformat())
+
+    writer = threading.Thread(target=_announce_fresh_session_shortly)
+    writer.start()
+    result = orch._wait_for_session_announcement(runtime_dir, timeout=3.0, after_utc=after_utc)
+    writer.join()
+    assert result is not None
+    assert result["session_id"] == "NEW-REAL-SESSION"
+    assert result["session_root"] == "/new/session/root"
+
+
+def test_wait_for_session_announcement_missing_updated_utc_never_accepted(tmp_path, monkeypatch):
+    """A session_root without a parseable updated_utc can never be proven
+    to be the one we just launched — treat it the same as stale content."""
+    runtime_dir = str(tmp_path)
+    _write_current_session(runtime_dir, session_id="NO-TIMESTAMP", session_root="/no/timestamp/root")
+    after_utc = datetime.now(timezone.utc)
+    monkeypatch.setattr(orch, "SESSION_ANNOUNCE_POLL_SEC", 0.05)
+    result = orch._wait_for_session_announcement(runtime_dir, timeout=0.3, after_utc=after_utc)
+    assert result is None
+
+
+def test_run_observation_passes_launch_time_before_popen_to_session_wait(tmp_path, monkeypatch):
+    """Confirms run_observation() actually wires the fix in: after_utc must
+    be captured before capture.py is launched (not after), so a
+    fast-writing capture.py can never race ahead of it."""
+    path, plan = _fixture_resolved_plan(tmp_path)
+    popen_calls, runtime_dir = _patch_common(monkeypatch, tmp_path, preflight_overall="PASS")
+
+    captured = {}
+
+    def fake_wait(runtime_dir_arg, *, timeout, after_utc):
+        captured["after_utc"] = after_utc
+        captured["popen_calls_at_wait_time"] = len(popen_calls)
+        return {"session_id": "SID-X", "session_root": "/x"}
+
+    before_call = datetime.now(timezone.utc)
+    monkeypatch.setattr(orch, "_wait_for_session_announcement", fake_wait)
+    orch.run_observation(path, yes=True, runtime_dir=runtime_dir)
+    after_call = datetime.now(timezone.utc)
+
+    assert captured["popen_calls_at_wait_time"] == 1, "capture.py must already be launched by the time we wait"
+    assert before_call <= captured["after_utc"] <= after_call, \
+        "after_utc must be captured during this run_observation() call, not stale from an earlier one"

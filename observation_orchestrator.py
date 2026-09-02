@@ -284,6 +284,11 @@ def _run_observation_locked(resolved_plan_path: str, *, yes: bool, runtime_dir: 
 
     log_dir = Path(plan["grid_session_dir"])
     capture_log = log_dir / "orchestrator_capture.log"
+    # Captured strictly before Popen(): the announcement wait below only
+    # accepts a current_session.json updated at or after this instant, so a
+    # stale session_root left over from an unrelated prior run can never be
+    # mistaken for the one we're about to launch.
+    launch_utc = datetime.now(timezone.utc)
     with capture_log.open("wb") as handle:
         capture_proc = _popen_detached(_capture_args(plan, runtime_dir), handle)
     # Read identity immediately after Popen() returns: the kernel assigns
@@ -300,7 +305,8 @@ def _run_observation_locked(resolved_plan_path: str, *, yes: bool, runtime_dir: 
         preflight=report, started_utc=runtime_state.utcnow(),
     )
 
-    announced = _wait_for_session_announcement(runtime_dir, timeout=SESSION_ANNOUNCE_TIMEOUT_SEC)
+    announced = _wait_for_session_announcement(runtime_dir, timeout=SESSION_ANNOUNCE_TIMEOUT_SEC,
+                                                after_utc=launch_utc)
     if announced is None:
         _write_runtime(runtime_dir, orchestrator_state="DEGRADED",
                         note="capture.py did not announce current_session.json in time; "
@@ -327,12 +333,36 @@ def _popen_detached(args: List[str], log_handle) -> subprocess.Popen:
     return subprocess.Popen(args, stdout=log_handle, stderr=subprocess.STDOUT, start_new_session=True)
 
 
-def _wait_for_session_announcement(runtime_dir: str, *, timeout: float) -> Optional[Dict[str, Any]]:
+def _wait_for_session_announcement(runtime_dir: str, *, timeout: float,
+                                    after_utc: datetime) -> Optional[Dict[str, Any]]:
+    """Poll current_session.json for the announcement of the session we
+    JUST launched — never a stale one left over from a previous run.
+
+    current_session.json is a persistent, shared file: it is never cleared
+    between runs, so a prior session's fully-valid session_root can still
+    be sitting there the instant this orchestrator launches a new
+    capture.py. Accepting "any non-empty session_root" (the pre-fix
+    behavior) could return that stale content on the very first poll —
+    confirmed in production: quicklook_live.py was launched with a
+    3-hour-old session_root from an unrelated completed campaign
+    (2026-09-02T16:17Z), so it watched a directory that would never receive
+    new files for the entire run. Only a current_session.json whose own
+    updated_utc is at or after after_utc (captured immediately before
+    capture.py was launched) can be the session this call started.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         current = runtime_state.read_json_safe(Path(runtime_dir) / "current_session.json")
         if current and current.get("session_root"):
-            return current
+            updated_raw = current.get("updated_utc")
+            updated = None
+            if updated_raw:
+                try:
+                    updated = datetime.fromisoformat(updated_raw)
+                except ValueError:
+                    updated = None
+            if updated is not None and updated >= after_utc:
+                return current
         time.sleep(SESSION_ANNOUNCE_POLL_SEC)
     return None
 
