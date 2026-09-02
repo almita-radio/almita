@@ -1,5 +1,6 @@
 import contextlib
 import json
+import re
 import subprocess
 import threading
 import urllib.error
@@ -908,6 +909,17 @@ def test_63_spectral_stack_existing_thumbs_layout_unaffected(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     assert "SPECTRUM" in html and "WATERFALL" in html and "MAP" in html
     assert 'id="thumb-spectrum-link"' in html and 'id="thumb-waterfall-link"' in html
+
+
+def test_64_spectral_stack_panel_height_pinned_to_antenna_column(tmp_path):
+    """align-items:stretch alone was unreliable (real screenshot showed the
+    panel far taller than the antenna column, with a big empty area) - the
+    panel's height is now set explicitly in JS from the antenna column's
+    own measured height, verified here as a real non-empty pixel value."""
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    match = re.search(r'id="spectral-stack-panel"[^>]*style="height: (\d+)px;"', html)
+    assert match, html
+    assert int(match.group(1)) > 0
 
 
 # ---------------------------------------------------------------- activity log (orchestrator_capture.log tail)

@@ -326,7 +326,23 @@
     }
   }
 
+  function syncPanelHeightToLeftColumn() {
+    // Flexbox align-items:stretch alone proved unreliable here (the panel
+    // ended up far taller than the antenna column at some viewport widths,
+    // leaving a big empty area) - so the panel's height is pinned to the
+    // antenna column's own measured height explicitly instead of hoping
+    // the browser's flex layout infers the same thing.
+    const left = document.querySelector(".science-row-left");
+    const panel = document.getElementById("spectral-stack-panel");
+    if (!left || !panel) return;
+    const apply = () => { panel.style.height = `${left.getBoundingClientRect().height}px`; };
+    apply();
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(apply).observe(left);
+    else window.addEventListener("resize", apply);
+  }
+
   function boot() {
+    syncPanelHeightToLeftColumn();
     const canvas = document.getElementById("spectral-stack-canvas");
     if (!canvas || typeof THREE === "undefined") return;
     const instance = new SpectralStack3D({
