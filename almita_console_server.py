@@ -13,6 +13,7 @@ startup is purely informational (read from local interface configuration).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 import signal
 import socket
@@ -25,17 +26,32 @@ ROOT = Path(__file__).parent.resolve()
 CONSOLE_SOURCE = ROOT / "console"
 
 
+def _asset_version(path: Path) -> str:
+    """Short content hash used to cache-bust a static asset's URL. Changes
+    only when the file's own bytes change, so a browser that already cached
+    an older app.js/styles.css always picks up a changed one on the next
+    console load - with no manual query-string editing required."""
+    return hashlib.sha1(path.read_bytes()).hexdigest()[:8]
+
+
 def prepare_console_web(source_dir: Path, runtime_dir: Path, public_root: Path) -> Path:
     """Assemble the served public root: static assets + a runtime/ symlink.
 
     Idempotent: safe to call on every startup. Copies only the three known
     static files (no directory-wide copy) and symlinks only the canonical
-    runtime directory - never the wider data/ tree.
+    runtime directory - never the wider data/ tree. index.html's references
+    to styles.css/app.js are rewritten with a per-file content-hash query
+    string (durable cache-busting, fully offline).
     """
+    source_dir = Path(source_dir)
     public_root = Path(public_root)
     public_root.mkdir(parents=True, exist_ok=True)
-    for name in ("index.html", "styles.css", "app.js"):
-        shutil.copyfile(Path(source_dir) / name, public_root / name)
+    for name in ("styles.css", "app.js"):
+        shutil.copyfile(source_dir / name, public_root / name)
+    html = (source_dir / "index.html").read_text()
+    html = html.replace('href="styles.css"', f'href="styles.css?v={_asset_version(source_dir / "styles.css")}"')
+    html = html.replace('src="app.js"', f'src="app.js?v={_asset_version(source_dir / "app.js")}"')
+    (public_root / "index.html").write_text(html)
     runtime_dir = Path(runtime_dir).resolve()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     link = public_root / "runtime"

@@ -9,6 +9,7 @@ SATANIC test (data/rfi_ref_satanic/...), not this suite.
 """
 import asyncio
 
+import numpy as np
 import pytest
 
 import rfi_monitor
@@ -291,13 +292,238 @@ async def test_cleanup_escalates_to_kill_only_for_its_own_pid(tmp_path, monkeypa
 
 def test_quicklook_fft_detects_full_clipping():
     clipped_block = bytes([0, 255] * 65536)
-    peak_dbfs, clip_fraction, occupancy = rfi_monitor._quicklook_fft(clipped_block)
+    peak_dbfs, clip_fraction, occupancy, freq, power = rfi_monitor._quicklook_fft(clipped_block, 2_400_000)
     assert clip_fraction == 1.0
     assert peak_dbfs <= 0.5  # ~dBFS scale, never wildly above full scale
 
 
 def test_quicklook_fft_quiet_block_has_low_occupancy():
     quiet_block = _quiet_block()
-    peak_dbfs, clip_fraction, occupancy = rfi_monitor._quicklook_fft(quiet_block)
+    peak_dbfs, clip_fraction, occupancy, freq, power = rfi_monitor._quicklook_fft(quiet_block, 2_400_000)
     assert clip_fraction == 0.0
     assert 0.0 <= occupancy <= 1.0
+
+
+# ---------------------------------------------------------------- ANTENNA B spectrum product
+
+
+def test_quicklook_fft_spectrum_is_bounded_with_correct_frequency_axis():
+    sample_rate = 2_400_000
+    block = _quiet_block()
+    peak_dbfs, clip_fraction, occupancy, freq_offsets, power = rfi_monitor._quicklook_fft(block, sample_rate)
+    assert len(freq_offsets) == rfi_monitor.N_SPECTRUM_BINS
+    assert len(power) == rfi_monitor.N_SPECTRUM_BINS
+    # Complex-baseband FFT spans the full +/- sample_rate/2 bandwidth.
+    assert freq_offsets[0] < -sample_rate / 2 * 0.9
+    assert freq_offsets[-1] > sample_rate / 2 * 0.9
+    assert all(freq_offsets[i] < freq_offsets[i + 1] for i in range(len(freq_offsets) - 1))
+
+
+def test_quicklook_fft_reuses_single_fft_no_second_computation(monkeypatch):
+    calls = {"n": 0}
+    real_fft = np.fft.fft
+
+    def counting_fft(*a, **k):
+        calls["n"] += 1
+        return real_fft(*a, **k)
+    monkeypatch.setattr(rfi_monitor.np.fft, "fft", counting_fft)
+    rfi_monitor._quicklook_fft(_quiet_block(), 2_400_000)
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_spectrum_published_from_real_fft_block_with_session_id(tmp_path, monkeypatch):
+    connected = asyncio.Event()
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=42)
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="spec-session-1",
+                                         port=port, quicklook_every=2, spectrum_write_interval=0.0,
+                                         center_frequency_hz=1420405000, sample_rate=2_400_000,
+                                         bind_timeout=2.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.3)
+
+        spectrum = read_json_safe(tmp_path / "rfi_ref_spectrum.json")
+        assert spectrum is not None
+        assert spectrum["session_id"] == "spec-session-1"
+        assert spectrum["center_frequency_hz"] == 1420405000
+        assert spectrum["sample_rate"] == 2_400_000
+        assert spectrum["device_serial"] == "00000002"
+        assert len(spectrum["frequency_hz"]) == rfi_monitor.N_SPECTRUM_BINS
+        assert len(spectrum["power_dbfs"]) == rfi_monitor.N_SPECTRUM_BINS
+        # Bounded product only - never raw IQ (65536 complex samples/block).
+        assert len(spectrum["frequency_hz"]) < 65536
+        # Absolute frequency axis is centered on the tuned frequency.
+        assert min(spectrum["frequency_hz"]) < 1420405000 < max(spectrum["frequency_hz"])
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_spectrum_write_is_throttled_independent_of_fft_rate(tmp_path, monkeypatch):
+    connected = asyncio.Event()
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=43)
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    write_calls = []
+    real_atomic_write = rfi_monitor.atomic_write_json
+
+    def counting_write(path, value):
+        if str(path).endswith("rfi_ref_spectrum.json"):
+            write_calls.append(1)
+        return real_atomic_write(path, value)
+    monkeypatch.setattr(rfi_monitor, "atomic_write_json", counting_write)
+
+    # quicklook_every=2 against a ~5ms block cadence makes many FFTs
+    # complete well within a 60s throttle window.
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         port=port, quicklook_every=2, spectrum_write_interval=60.0,
+                                         bind_timeout=2.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.5)
+        assert m.processed_blocks > 5  # many FFTs completed
+        assert len(write_calls) == 1  # but the spectrum file was written only once
+    finally:
+        await m.stop()  # the final stop() flush adds exactly one more write
+        server.close()
+        await server.wait_closed()
+    assert len(write_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_stop_preserves_final_spectrum_from_the_session(tmp_path, monkeypatch):
+    connected = asyncio.Event()
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=44)
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="stopped-session",
+                                         port=port, quicklook_every=2, spectrum_write_interval=60.0,
+                                         bind_timeout=2.0)
+    await m.start()
+    await asyncio.wait_for(connected.wait(), timeout=2.0)
+    await asyncio.sleep(0.3)
+    await m.stop()
+    server.close()
+    await server.wait_closed()
+
+    status = read_json_safe(tmp_path / "rfi_ref_status.json")
+    spectrum = read_json_safe(tmp_path / "rfi_ref_spectrum.json")
+    assert status["status"] == "STOPPED"
+    assert spectrum is not None
+    assert spectrum["session_id"] == "stopped-session"
+    assert len(spectrum["power_dbfs"]) == rfi_monitor.N_SPECTRUM_BINS
+
+
+@pytest.mark.asyncio
+async def test_spectrum_publication_failure_does_not_break_rfi_ref_or_propagate(tmp_path, monkeypatch):
+    connected = asyncio.Event()
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=45)
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    # Only the spectrum write is broken - status writes go through the real
+    # implementation via a wrapper.
+    real_atomic_write = rfi_monitor.atomic_write_json
+
+    def selective_boom(path, value):
+        if str(path).endswith("rfi_ref_spectrum.json"):
+            raise OSError("simulated disk failure writing spectrum")
+        return real_atomic_write(path, value)
+    monkeypatch.setattr(rfi_monitor, "atomic_write_json", selective_boom)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         port=port, quicklook_every=2, spectrum_write_interval=0.0,
+                                         bind_timeout=2.0)
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        await asyncio.sleep(0.3)
+        # RFI_REF itself must be entirely unaffected by the spectrum write
+        # failure: still RUNNING, still updating its own status/metrics.
+        assert m.status == "RUNNING"
+        assert m.processed_blocks > 0
+        status = read_json_safe(tmp_path / "rfi_ref_status.json")
+        assert status["status"] == "RUNNING"
+        assert not (tmp_path / "rfi_ref_spectrum.json").exists()
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()

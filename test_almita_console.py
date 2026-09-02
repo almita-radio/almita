@@ -204,6 +204,30 @@ def test_15_server_binds_0000_8088_by_default():
     assert '"--port", type=int, default=8088' in source
 
 
+def test_15b_prepare_console_web_cache_busts_static_assets(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("index.html", "styles.css", "app.js"):
+        (source / name).write_text((CONSOLE / name).read_text())
+    public = server_module.prepare_console_web(source, tmp_path / "runtime", tmp_path / "public1")
+    html = (public / "index.html").read_text()
+    assert 'href="styles.css?v=' in html
+    assert 'src="app.js?v=' in html
+
+    # Changing app.js's content changes its cache-busting version, so a
+    # browser that cached the old URL is forced to fetch the new one.
+    (source / "app.js").write_text((source / "app.js").read_text() + "\n// changed\n")
+    public2 = server_module.prepare_console_web(source, tmp_path / "runtime", tmp_path / "public2")
+    html2 = (public2 / "index.html").read_text()
+    old_app_version = html.split('src="app.js?v=')[1].split('"')[0]
+    new_app_version = html2.split('src="app.js?v=')[1].split('"')[0]
+    assert old_app_version != new_app_version
+    # styles.css was untouched, so its own version stays stable.
+    old_css_version = html.split('href="styles.css?v=')[1].split('"')[0]
+    new_css_version = html2.split('href="styles.css?v=')[1].split('"')[0]
+    assert old_css_version == new_css_version
+
+
 @contextlib.contextmanager
 def running(root):
     server = make_server(root, port=0)
@@ -420,6 +444,115 @@ def test_29_frontend_rfi_ref_missing_field_renders_disabled_not_broken(tmp_path)
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     assert "RFI REFERENCE" in html
     assert "DISABLED" in html
+
+
+# ---------------------------------------------------------------- 30-38: ANTENNA B / RFI_REF spectrum
+
+
+def _rfi_ref_running(**overrides):
+    base = {
+        "enabled": True, "status": "RUNNING", "device_serial": "00000002",
+        "center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 25.0,
+        "fft_duty_fraction": 0.05, "clipping_fraction": 0.0, "occupancy_fraction": 0.0016,
+        "peak_dbfs": -42.3, "processed_blocks": 100, "skipped_blocks": 1900,
+        "dropped_blocks": 0, "last_update_utc": utcnow(), "last_error": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _rfi_ref_spectrum(session_id, **overrides):
+    base = {
+        "schema_version": 1, "session_id": session_id, "updated_utc": utcnow(),
+        "center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 25.0,
+        "device_serial": "00000002",
+        "frequency_hz": [1420405000 + i * 1000 for i in range(-5, 5)],
+        "power_dbfs": [-60.0 + i for i in range(10)],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_30_watcher_rfi_spectrum_available_when_session_matches(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["spectrum_available"] is True
+    assert status["rfi_ref"]["spectrum_updated_utc"] is not None
+
+
+def test_31_watcher_rfi_spectrum_rejected_on_session_mismatch(tmp_path):
+    announce_session(tmp_path, session_id="s2", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s2"})
+    atomic_write_json(tmp_path / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1-old"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["status"] == "RUNNING"  # aggregate status still reflects this session
+    assert status["rfi_ref"]["spectrum_available"] is False
+    assert status["rfi_ref"]["spectrum_updated_utc"] is None
+
+
+def test_32_watcher_rfi_spectrum_stale_during_running_is_rejected(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_spectrum.json",
+                       _rfi_ref_spectrum("s1", updated_utc="2000-01-01T00:00:00+00:00"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["spectrum_available"] is False
+
+
+def test_33_watcher_rfi_spectrum_stopped_retains_final_spectrum_regardless_of_age(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_COMPLETED", state="COMPLETED")
+    atomic_write_json(tmp_path / "rfi_ref_status.json",
+                       {**_rfi_ref_running(status="STOPPED"), "session_id": "s1"})
+    atomic_write_json(tmp_path / "rfi_ref_spectrum.json",
+                       _rfi_ref_spectrum("s1", updated_utc="2000-01-01T00:00:00+00:00"))
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=False)
+    assert status["rfi_ref"]["status"] == "STOPPED"
+    assert status["rfi_ref"]["spectrum_available"] is True
+
+
+def test_34_watcher_rfi_spectrum_missing_file_is_clean_unavailable(tmp_path):
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    atomic_write_json(tmp_path / "rfi_ref_status.json", {**_rfi_ref_running(), "session_id": "s1"})
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["rfi_ref"]["spectrum_available"] is False
+    assert status["rfi_ref"]["spectrum_updated_utc"] is None
+
+
+def test_35_frontend_antenna_labels_present(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert "ANTENNA A" in html and "SCIENCE" in html
+    assert "ANTENNA B" in html and "RFI REFERENCE" in html
+
+
+def test_36_frontend_rfi_spectrum_renders_when_available(tmp_path):
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,
+                             "spectrum_updated_utc": utcnow()}))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    html = dom(public)
+    assert "ANTENNA B / RFI REF" in html
+    assert "RTL-SDR V3" in html
+    assert "WAITING FOR SPECTRUM" not in html
+    assert 'id="rfi-spectrum-canvas"' in html
+
+
+def test_37_frontend_rfi_spectrum_disabled_shows_placeholder(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))  # no rfi_ref -> DISABLED
+    assert 'id="rfi-spectrum-placeholder"' in html
+    assert "WAITING FOR SPECTRUM" not in html
+
+
+def test_38_frontend_rfi_spectrum_waiting_when_enabled_but_not_yet_available(tmp_path):
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": False})))
+    assert "WAITING FOR SPECTRUM" in html
 
 
 # ---------------------------------------------------------------- closeout: canonical runtime_dir

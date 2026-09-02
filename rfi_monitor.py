@@ -37,6 +37,7 @@ from runtime_state import atomic_write_json, utcnow
 RTL_TCP_BIN = "rtl_tcp"
 BYTES_PER_SAMPLE = 2  # 8-bit I + 8-bit Q, rtl_tcp default format
 FULL_SCALE_AMPLITUDE = 127.5  # unsigned-8 IQ centered at 127/128
+N_SPECTRUM_BINS = 256  # bounded ANTENNA B/RFI_REF spectrum product size
 
 STATES = ("DISABLED", "STARTING", "RUNNING", "DEGRADED", "UNAVAILABLE", "FAILED", "STOPPED")
 
@@ -46,9 +47,23 @@ STATES = ("DISABLED", "STARTING", "RUNNING", "DEGRADED", "UNAVAILABLE", "FAILED"
 _TEST_FFT_DELAY_ENV = "ALMITA_RFI_TEST_FFT_DELAY_S"
 
 
-def _quicklook_fft(chunk: bytes, test_delay_s: float = 0.0):
+def _downsample_bins(values: np.ndarray, n_bins: int, reducer) -> np.ndarray:
+    """Groups `values` into (up to) n_bins contiguous segments and reduces
+    each with `reducer` (np.max for power - preserves spectral peaks/RFI
+    spikes rather than averaging them away; np.mean for the frequency axis
+    so each output bin's frequency is the center of its group)."""
+    if len(values) <= n_bins:
+        return values.astype(np.float32)
+    groups = np.array_split(values, n_bins)
+    return np.array([reducer(g) for g in groups], dtype=np.float32)
+
+
+def _quicklook_fft(chunk: bytes, sample_rate: int, test_delay_s: float = 0.0):
     """Runs in a worker thread; never touches the asyncio loop. Returns
-    (peak_dbfs, clip_fraction, occupancy_fraction)."""
+    (peak_dbfs, clip_fraction, occupancy_fraction, spectrum_freq_offsets_hz,
+    spectrum_power_dbfs). The bounded spectrum arrays are downsampled from
+    the SAME FFT computed for peak/occupancy below - no second FFT is ever
+    performed for visualization."""
     if test_delay_s > 0:
         time.sleep(test_delay_s)  # SATANIC-test-only: simulate a slow consumer
     u8 = np.frombuffer(chunk, dtype=np.uint8)
@@ -57,8 +72,9 @@ def _quicklook_fft(chunk: bytes, test_delay_s: float = 0.0):
     i = iq[0::2]
     q = iq[1::2]
     n = min(len(i), len(q))
+    empty = np.zeros(0, dtype=np.float32)
     if n < 16:
-        return -120.0, clip_fraction, 0.0
+        return -120.0, clip_fraction, 0.0, empty, empty
     complex_samples = i[:n] + 1j * q[:n]
     window = np.hanning(n)
     spectrum = np.fft.fftshift(np.fft.fft(complex_samples * window))
@@ -68,7 +84,11 @@ def _quicklook_fft(chunk: bytes, test_delay_s: float = 0.0):
     peak_dbfs = float(np.max(power_dbfs))
     noise_floor = float(np.median(power_dbfs))
     occupancy = float(np.mean(power_dbfs > (noise_floor + 10.0)))
-    return peak_dbfs, clip_fraction, occupancy
+
+    freq_offsets_hz = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / sample_rate))
+    spectrum_power_dbfs = _downsample_bins(power_dbfs, N_SPECTRUM_BINS, np.max)
+    spectrum_freq_offsets_hz = _downsample_bins(freq_offsets_hz, N_SPECTRUM_BINS, np.mean)
+    return peak_dbfs, clip_fraction, occupancy, spectrum_freq_offsets_hz, spectrum_power_dbfs
 
 
 class RFIReferenceMonitor:
@@ -81,6 +101,7 @@ class RFIReferenceMonitor:
                  center_frequency_hz: int = 1420405000, sample_rate: int = 2_400_000,
                  gain_db: float = 25.0, quicklook_every: int = 20, block_bytes: int = 131072,
                  bind_timeout: float = 5.0, connect_timeout: float = 5.0,
+                 spectrum_write_interval: float = 2.0,
                  log=None):
         self.enabled = bool(enabled)
         self.runtime_dir = runtime_dir
@@ -95,6 +116,7 @@ class RFIReferenceMonitor:
         self.block_bytes = int(block_bytes)
         self.bind_timeout = float(bind_timeout)
         self.connect_timeout = float(connect_timeout)
+        self.spectrum_write_interval = float(spectrum_write_interval)
         self._log = log or (lambda message: None)
         self._test_fft_delay_s = float(os.environ.get(_TEST_FFT_DELAY_ENV, "0") or 0.0)
 
@@ -107,6 +129,11 @@ class RFIReferenceMonitor:
         self.clipping_fraction: Optional[float] = None
         self.occupancy_fraction: Optional[float] = None
         self.peak_dbfs: Optional[float] = None
+        # ANTENNA B / RFI_REF spectrum product: bounded arrays reused from
+        # the same FFT above, never a second FFT computed for visualization.
+        self.spectrum_freq_offsets_hz = None
+        self.spectrum_power_dbfs = None
+        self._last_spectrum_write_monotonic: Optional[float] = None
 
         self.proc: Optional[subprocess.Popen] = None
         self._task: Optional[asyncio.Task] = None
@@ -176,6 +203,10 @@ class RFIReferenceMonitor:
         await self._cleanup_process_async()
         if self.status in ("RUNNING", "STARTING", "DEGRADED"):
             self.status = "STOPPED"
+        # Best-effort final flush so the operator can inspect the last real
+        # spectrum from this session, even if the throttle interval hadn't
+        # elapsed yet at the moment of stop.
+        self._maybe_write_spectrum(force=True)
         self._write_status()
         self._executor.shutdown(wait=False)
 
@@ -255,12 +286,15 @@ class RFIReferenceMonitor:
 
                 if self._fft_future is not None and self._fft_future.done():
                     with contextlib.suppress(Exception):
-                        peak, clip, occ = self._fft_future.result()
+                        peak, clip, occ, freq, power = self._fft_future.result()
                         self.peak_dbfs, self.clipping_fraction, self.occupancy_fraction = peak, clip, occ
+                        if len(power):
+                            self.spectrum_freq_offsets_hz, self.spectrum_power_dbfs = freq, power
                         self.processed_blocks += 1
+                        self._maybe_write_spectrum()
 
                 self._fft_future = loop.run_in_executor(
-                    self._executor, _quicklook_fft, chunk, self._test_fft_delay_s
+                    self._executor, _quicklook_fft, chunk, self.sample_rate, self._test_fft_delay_s
                 )
                 self._write_status()
         except asyncio.CancelledError:
@@ -274,8 +308,10 @@ class RFIReferenceMonitor:
         finally:
             if self._fft_future is not None and self._fft_future.done():
                 with contextlib.suppress(Exception):
-                    peak, clip, occ = self._fft_future.result()
+                    peak, clip, occ, freq, power = self._fft_future.result()
                     self.peak_dbfs, self.clipping_fraction, self.occupancy_fraction = peak, clip, occ
+                    if len(power):
+                        self.spectrum_freq_offsets_hz, self.spectrum_power_dbfs = freq, power
                     self.processed_blocks += 1
             if writer is not None:
                 with contextlib.suppress(Exception):
@@ -298,6 +334,40 @@ class RFIReferenceMonitor:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5.0)
+
+    def _maybe_write_spectrum(self, force: bool = False) -> None:
+        """Throttled publication: the FFT itself still runs at the existing
+        ~5% duty (unchanged) - this only limits how often that already-
+        computed result is persisted to disk, independent of and always
+        less frequent than the FFT rate."""
+        if self.spectrum_power_dbfs is None:
+            return
+        now = time.monotonic()
+        if not force and self._last_spectrum_write_monotonic is not None \
+                and (now - self._last_spectrum_write_monotonic) < self.spectrum_write_interval:
+            return
+        self._last_spectrum_write_monotonic = now
+        self._write_spectrum()
+
+    def _write_spectrum(self) -> None:
+        if self.runtime_dir is None or self.spectrum_power_dbfs is None:
+            return
+        try:
+            frequency_hz = [self.center_frequency_hz + float(off) for off in self.spectrum_freq_offsets_hz]
+            power_dbfs = [float(p) for p in self.spectrum_power_dbfs]
+            atomic_write_json(f"{self.runtime_dir}/rfi_ref_spectrum.json", {
+                "schema_version": 1,
+                "session_id": self.session_id,
+                "updated_utc": utcnow(),
+                "center_frequency_hz": self.center_frequency_hz,
+                "sample_rate": self.sample_rate,
+                "gain_db": self.gain_db,
+                "device_serial": self.device_serial,
+                "frequency_hz": frequency_hz,
+                "power_dbfs": power_dbfs,
+            })
+        except Exception:
+            pass
 
     def _write_status(self) -> None:
         if self.runtime_dir is None:

@@ -98,6 +98,50 @@ function renderRfiRef(rfiRef){
   ].join("");
 }
 
+function drawRfiSpectrum(canvas,freqMHz,powerDbfs){
+  const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
+  ctx.clearRect(0,0,w,h);
+  if(!freqMHz.length)return;
+  const pad=6;
+  const minP=Math.min(...powerDbfs),maxP=Math.max(...powerDbfs),spanP=(maxP-minP)||1;
+  const f0=freqMHz[0],f1=freqMHz[freqMHz.length-1],spanF=(f1-f0)||1;
+  const x=v=>pad+(v-f0)/spanF*(w-2*pad),y=v=>h-pad-(v-minP)/spanP*(h-2*pad);
+  ctx.strokeStyle="#65b7d8";ctx.lineWidth=1.3;ctx.beginPath();
+  freqMHz.forEach((f,idx)=>{const px=x(f),py=y(powerDbfs[idx]);idx===0?ctx.moveTo(px,py):ctx.lineTo(px,py)});
+  ctx.stroke();
+}
+
+async function renderRfiSpectrum(rfiRef,sessionId){
+  const state=rfiRef.status||"DISABLED";
+  const placeholder=$("rfi-spectrum-placeholder"),canvas=$("rfi-spectrum-canvas");
+  const freqLabel=rfiRef.center_frequency_hz==null?"—":`${num(rfiRef.center_frequency_hz/1e6,3)} MHz`;
+  const gainLabel=rfiRef.gain_db==null?"—":`${num(rfiRef.gain_db,1)} dB`;
+  $("rfi-spectrum-caption").innerHTML=
+    `<b>ANTENNA B / RFI REF</b> — RTL-SDR V3 — ${freqLabel} — gain ${gainLabel} — `+
+    `updated ${safe(rfiRef.spectrum_updated_utc||rfiRef.last_update_utc)}`;
+  const waiting=()=>{canvas.hidden=true;placeholder.hidden=false;placeholder.textContent="WAITING FOR SPECTRUM…"};
+  if(!rfiRef.spectrum_available){
+    canvas.hidden=true;placeholder.hidden=false;
+    placeholder.textContent=
+      state==="DISABLED"?"DISABLED":
+      state==="FAILED"?`FAILED — ${safe(rfiRef.last_error,"")}`:
+      state==="UNAVAILABLE"?`UNAVAILABLE — ${safe(rfiRef.last_error,"")}`:
+      "WAITING FOR SPECTRUM…";
+    return;
+  }
+  try{
+    const data=await fetchJson("rfi_ref_spectrum.json");
+    // Defense in depth: the watcher already rejects a session mismatch, but
+    // an old spectrum file must never be drawn as if it belongs to this
+    // session even if fetched a moment before the watcher's next tick.
+    if(data.session_id!==sessionId||!Array.isArray(data.frequency_hz)||!data.frequency_hz.length){waiting();return}
+    canvas.hidden=false;placeholder.hidden=true;
+    drawRfiSpectrum(canvas,data.frequency_hz.map(f=>f/1e6),data.power_dbfs);
+  }catch(error){
+    waiting();
+  }
+}
+
 function renderLastSession(lastSession){
   $("last-session").hidden=!lastSession;
   if(!lastSession)return;
@@ -118,7 +162,9 @@ function render(status){
   renderInstrument(status.instrument||{});
   renderSession(status.acquisition||{state:"IDLE"});
   renderQuicklook(status.quicklook||{state:"IDLE"});
-  renderRfiRef(status.rfi_ref||{status:"DISABLED"});
+  const rfiRef=status.rfi_ref||{status:"DISABLED"};
+  renderRfiRef(rfiRef);
+  renderRfiSpectrum(rfiRef,(status.acquisition||{}).session_id||null);
   renderLastSession(status.last_session);
 }
 
@@ -140,5 +186,5 @@ function start(){
   poll();setInterval(poll,CONFIG.pollMs);
   setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z"},1000);
 }
-window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderLastSession,render,CONFIG};
+window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiSpectrum,drawRfiSpectrum,renderLastSession,render,CONFIG};
 start();
