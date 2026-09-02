@@ -502,148 +502,162 @@ class GridGenerator:
             projected_points = plot_data["projected_points"]
 
             fig, ax = plt.subplots(figsize=(12, 10))
-            ax.set_aspect("equal", adjustable="box")
-            ax.set_facecolor("#f7f7f7")
-            ax.set_title(f"Grid Plan - {self.session_name}", fontsize=14, fontweight="bold")
-            ax.set_xlabel("Tangential X")
-            ax.set_ylabel("Tangential Y")
+            try:
+                ax.set_aspect("equal", adjustable="box")
+                ax.set_facecolor("#f7f7f7")
+                ax.set_title(f"Grid Plan - {self.session_name}", fontsize=14, fontweight="bold")
+                ax.set_xlabel("Tangential X")
+                ax.set_ylabel("Tangential Y")
 
-            region_margin = max(float(metadata["width_deg"]), float(metadata["height_deg"])) / 2.0
-            outline_x = [-region_margin, region_margin, region_margin, -region_margin, -region_margin]
-            outline_y = [-region_margin, -region_margin, region_margin, region_margin, -region_margin]
-            ax.plot(outline_x, outline_y, "r--", linewidth=1.5, alpha=0.7, label="Requested region")
+                region_margin = max(float(metadata["width_deg"]), float(metadata["height_deg"])) / 2.0
+                outline_x = [-region_margin, region_margin, region_margin, -region_margin, -region_margin]
+                outline_y = [-region_margin, -region_margin, region_margin, region_margin, -region_margin]
+                ax.plot(outline_x, outline_y, "r--", linewidth=1.5, alpha=0.7, label="Requested region")
 
-            self._draw_equatorial_overlay(
-                ax,
-                plot_data["center_ra_deg"],
-                plot_data["center_dec_deg"],
-                plot_data["span_deg"],
-                show_labels=True,
-                alpha=0.22,
-                zorder=1.0,
-            )
+                self._draw_equatorial_overlay(
+                    ax,
+                    plot_data["center_ra_deg"],
+                    plot_data["center_dec_deg"],
+                    plot_data["span_deg"],
+                    show_labels=True,
+                    alpha=0.22,
+                    zorder=1.0,
+                )
 
-            ax.text(
-                0.02,
-                0.94,
-                "Equatorial grid overlay (RA/DEC)",
-                transform=ax.transAxes,
-                fontsize=8,
-                color="#374151",
-                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.85),
-            )
+                ax.text(
+                    0.02,
+                    0.94,
+                    "Equatorial grid overlay (RA/DEC)",
+                    transform=ax.transAxes,
+                    fontsize=8,
+                    color="#374151",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.85),
+                )
 
-            beam_radius = float(plot_data["beam_fwhm_deg"]) / 2.0
-            beam_ref = Circle((0.0, 0.0), beam_radius, fill=False, edgecolor="#5b5b5b", linewidth=1.1, alpha=0.7, zorder=2)
-            ax.add_patch(beam_ref)
-            ax.text(0.0, beam_radius + 1.0, "Beam FWHM", ha="center", va="bottom", fontsize=8, color="#4b5563")
+                beam_radius = float(plot_data["beam_fwhm_deg"]) / 2.0
+                beam_ref = Circle((0.0, 0.0), beam_radius, fill=False, edgecolor="#5b5b5b", linewidth=1.1, alpha=0.7, zorder=2)
+                ax.add_patch(beam_ref)
+                ax.text(0.0, beam_radius + 1.0, "Beam FWHM", ha="center", va="bottom", fontsize=8, color="#4b5563")
 
-            for point in projected_points:
-                x = point["x_proj"]
-                y = point["y_proj"]
-                ax.scatter([x], [y], s=60, color="#1f77b4", edgecolors="black", linewidth=0.4, zorder=3)
-                ax.text(x, y, str(int(point["point_id"])), fontsize=7, ha="center", va="center", color="black")
+                for point in projected_points:
+                    x = point["x_proj"]
+                    y = point["y_proj"]
+                    ax.scatter([x], [y], s=60, color="#1f77b4", edgecolors="black", linewidth=0.4, zorder=3)
+                    ax.text(x, y, str(int(point["point_id"])), fontsize=7, ha="center", va="center", color="black")
 
-            ordered_points = sorted(projected_points, key=lambda p: int(p["scan_order"]))
-            xs = [p["x_proj"] for p in ordered_points]
-            ys = [p["y_proj"] for p in ordered_points]
-            ax.plot(xs, ys, color="#d62728", linewidth=1.2, alpha=0.8, label="Scan order")
-            if ordered_points:
-                ax.scatter([ordered_points[0]["x_proj"]], [ordered_points[0]["y_proj"]], s=140, color="green", marker="o", label="First")
-                ax.scatter([ordered_points[-1]["x_proj"]], [ordered_points[-1]["y_proj"]], s=140, color="purple", marker="o", label="Last")
+                ordered_points = sorted(projected_points, key=lambda p: int(p["scan_order"]))
+                xs = [p["x_proj"] for p in ordered_points]
+                ys = [p["y_proj"] for p in ordered_points]
+                ax.plot(xs, ys, color="#d62728", linewidth=1.2, alpha=0.8, label="Scan order")
+                if ordered_points:
+                    ax.scatter([ordered_points[0]["x_proj"]], [ordered_points[0]["y_proj"]], s=140, color="green", marker="o", label="First")
+                    ax.scatter([ordered_points[-1]["x_proj"]], [ordered_points[-1]["y_proj"]], s=140, color="purple", marker="o", label="Last")
 
-            ax.scatter([0.0], [0.0], s=180, color="red", marker="*", zorder=5, label="Center")
-            ax.text(
-                0.02,
-                0.98,
-                (
-                    f"RA center: {metadata['center_ra']:.4f} h\n"
-                    f"DEC center: {metadata['center_dec']:.4f}°\n"
-                    f"Width: {metadata['width_deg']:.2f}°\n"
-                    f"Height: {metadata['height_deg']:.2f}°\n"
-                    f"Beam FWHM: {metadata['beam_fwhm_deg']:.2f}°\n"
-                    f"Sampling: {metadata['beam_sampling_fraction']:.6f}\n"
-                    f"Spacing: {metadata['nominal_spacing_deg']:.3f}°\n"
-                    f"Rows/Cols: {metadata['rows']} / {metadata['columns']}\n"
-                    f"Points: {metadata['total_points']}\n"
-                    f"Scan: {metadata['scan_strategy']}"
-                ),
-                transform=ax.transAxes,
-                fontsize=8,
-                va="top",
-                ha="left",
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85),
-            )
+                ax.scatter([0.0], [0.0], s=180, color="red", marker="*", zorder=5, label="Center")
+                ax.text(
+                    0.02,
+                    0.98,
+                    (
+                        f"RA center: {metadata['center_ra']:.4f} h\n"
+                        f"DEC center: {metadata['center_dec']:.4f}°\n"
+                        f"Width: {metadata['width_deg']:.2f}°\n"
+                        f"Height: {metadata['height_deg']:.2f}°\n"
+                        f"Beam FWHM: {metadata['beam_fwhm_deg']:.2f}°\n"
+                        f"Sampling: {metadata['beam_sampling_fraction']:.6f}\n"
+                        f"Spacing: {metadata['nominal_spacing_deg']:.3f}°\n"
+                        f"Rows/Cols: {metadata['rows']} / {metadata['columns']}\n"
+                        f"Points: {metadata['total_points']}\n"
+                        f"Scan: {metadata['scan_strategy']}"
+                    ),
+                    transform=ax.transAxes,
+                    fontsize=8,
+                    va="top",
+                    ha="left",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85),
+                )
 
-            ax.grid(True, alpha=0.15)
-            ax.legend(loc="upper right", fontsize=8)
-            fig.tight_layout()
-            plan_path = self.output_dir / "grid_plan.png"
-            fig.savefig(plan_path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            self.log(f"  Plan plot saved: {plan_path}")
+                ax.grid(True, alpha=0.15)
+                ax.legend(loc="upper right", fontsize=8)
+                fig.tight_layout()
+                plan_path = self.output_dir / "grid_plan.png"
+                fig.savefig(plan_path, dpi=150, bbox_inches="tight")
+                self.log(f"  Plan plot saved: {plan_path}")
+            finally:
+                # Guaranteed close: a matplotlib Figure that fails inside
+                # savefig() (e.g. an oversized tight-bbox canvas) would
+                # otherwise stay registered in pyplot's global figure manager
+                # forever — harmless for a short-lived CLI process, but a
+                # real per-request memory leak in the resident
+                # almita-observe-api.service (confirmed via isolated repro:
+                # open figure count grew 1-for-1 with each failed savefig).
+                plt.close(fig)
 
             fig, ax = plt.subplots(figsize=(12, 10))
-            ax.set_aspect("equal", adjustable="box")
-            ax.set_facecolor("#f7f7f7")
-            ax.set_title("Beam Coverage Count - Planning View", fontsize=14, fontweight="bold")
-            ax.set_xlabel("Tangential X")
-            ax.set_ylabel("Tangential Y")
+            try:
+                ax.set_aspect("equal", adjustable="box")
+                ax.set_facecolor("#f7f7f7")
+                ax.set_title("Beam Coverage Count - Planning View", fontsize=14, fontweight="bold")
+                ax.set_xlabel("Tangential X")
+                ax.set_ylabel("Tangential Y")
 
-            x_min = plot_data["x_min"]
-            x_max = plot_data["x_max"]
-            y_min = plot_data["y_min"]
-            y_max = plot_data["y_max"]
-            ax.set_xlim(x_min, x_max)
-            ax.set_ylim(y_min, y_max)
+                x_min = plot_data["x_min"]
+                x_max = plot_data["x_max"]
+                y_min = plot_data["y_min"]
+                y_max = plot_data["y_max"]
+                ax.set_xlim(x_min, x_max)
+                ax.set_ylim(y_min, y_max)
 
-            nx = 80
-            ny = 80
-            xs = np.linspace(x_min, x_max, nx)
-            ys = np.linspace(y_min, y_max, ny)
-            coverage = np.zeros((ny, nx), dtype=int)
-            for point in projected_points:
-                x = point["x_proj"]
-                y = point["y_proj"]
-                radius_deg = float(metadata["beam_fwhm_deg"]) / 2.0
-                for iy, yy in enumerate(ys):
-                    for ix, xx in enumerate(xs):
-                        if (xx - x) ** 2 + (yy - y) ** 2 <= radius_deg ** 2:
-                            coverage[iy, ix] += 1
+                nx = 80
+                ny = 80
+                xs = np.linspace(x_min, x_max, nx)
+                ys = np.linspace(y_min, y_max, ny)
+                coverage = np.zeros((ny, nx), dtype=int)
+                for point in projected_points:
+                    x = point["x_proj"]
+                    y = point["y_proj"]
+                    radius_deg = float(metadata["beam_fwhm_deg"]) / 2.0
+                    for iy, yy in enumerate(ys):
+                        for ix, xx in enumerate(xs):
+                            if (xx - x) ** 2 + (yy - y) ** 2 <= radius_deg ** 2:
+                                coverage[iy, ix] += 1
 
-            cmap = ListedColormap(["#f7f7f7", "#d0f0c0", "#7bc043", "#2b7a4b"])
-            ax.imshow(
-                coverage.T,
-                extent=[x_min, x_max, y_min, y_max],
-                origin="lower",
-                cmap=cmap,
-                alpha=0.78,
-                aspect="equal",
-                zorder=1,
-            )
-            self._draw_equatorial_overlay(
-                ax,
-                plot_data["center_ra_deg"],
-                plot_data["center_dec_deg"],
-                plot_data["span_deg"],
-                show_labels=True,
-                alpha=0.48,
-                zorder=3.0,
-            )
-            ax.plot(outline_x, outline_y, "k--", linewidth=1.2, alpha=0.7, zorder=6, label="Requested region")
-            ax.scatter([0.0], [0.0], s=140, color="red", marker="*", zorder=6)
-            ax.text(0.02, 0.02, "SCP / center", transform=ax.transAxes, fontsize=8, color="#111827", bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.85), zorder=6)
-            for point in projected_points:
-                ax.scatter([point["x_proj"]], [point["y_proj"]], s=20, color="black", alpha=0.7, zorder=5)
+                cmap = ListedColormap(["#f7f7f7", "#d0f0c0", "#7bc043", "#2b7a4b"])
+                ax.imshow(
+                    coverage.T,
+                    extent=[x_min, x_max, y_min, y_max],
+                    origin="lower",
+                    cmap=cmap,
+                    alpha=0.78,
+                    aspect="equal",
+                    zorder=1,
+                )
+                self._draw_equatorial_overlay(
+                    ax,
+                    plot_data["center_ra_deg"],
+                    plot_data["center_dec_deg"],
+                    plot_data["span_deg"],
+                    show_labels=True,
+                    alpha=0.48,
+                    zorder=3.0,
+                )
+                ax.plot(outline_x, outline_y, "k--", linewidth=1.2, alpha=0.7, zorder=6, label="Requested region")
+                ax.scatter([0.0], [0.0], s=140, color="red", marker="*", zorder=6)
+                ax.text(0.02, 0.02, "SCP / center", transform=ax.transAxes, fontsize=8, color="#111827", bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.85), zorder=6)
+                for point in projected_points:
+                    ax.scatter([point["x_proj"]], [point["y_proj"]], s=20, color="black", alpha=0.7, zorder=5)
 
-            cbar = fig.colorbar(ax.images[0], ax=ax, pad=0.02)
-            cbar.set_label("Beam coverage count")
-            ax.text(0.02, 0.02, "Coverage count is geometric beam overlap, not scientific intensity", transform=ax.transAxes, fontsize=8, bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85))
-            fig.tight_layout()
-            coverage_path = self.output_dir / "grid_coverage.png"
-            fig.savefig(coverage_path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            self.log(f"  Coverage plot saved: {coverage_path}")
+                cbar = fig.colorbar(ax.images[0], ax=ax, pad=0.02)
+                cbar.set_label("Beam coverage count")
+                ax.text(0.02, 0.02, "Coverage count is geometric beam overlap, not scientific intensity", transform=ax.transAxes, fontsize=8, bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85))
+                fig.tight_layout()
+                coverage_path = self.output_dir / "grid_coverage.png"
+                fig.savefig(coverage_path, dpi=150, bbox_inches="tight")
+                self.log(f"  Coverage plot saved: {coverage_path}")
+            finally:
+                # Same guaranteed-close rationale as the plan plot above —
+                # this is the figure that actually triggered the leak in
+                # production (oversized tight-bbox coverage canvas).
+                plt.close(fig)
 
         except ImportError:
             self.log("matplotlib or numpy not installed - skipping plot generation", "WARNING")
