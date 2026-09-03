@@ -161,3 +161,17 @@ def test_fixed_center_resolution_artifacts_and_hash(fixed_center_plan):
     tampered["resolved"] = dict(plan["resolved"])
     tampered["resolved"]["center_ra_hours"] = plan["resolved"]["center_ra_hours"] + 1.0
     assert pl.recompute_config_hash(tampered) != tampered["observation_config_sha256"]
+
+
+def test_fixed_center_plan_preserves_rfi_ref_bias_tee(fixed_center_plan):
+    """rfi_ref (including bias_tee) is copied verbatim from spec into the
+    resolved plan - both in the returned dict and in the JSON persisted to
+    disk (the exact file START later reads). Reuses the module's one
+    shared plan_observation() call (see module docstring: this Pi has ~0
+    free swap and cannot afford a second real grid_generator.py pass)."""
+    data_dir, plan = fixed_center_plan
+    assert plan["rfi_ref"]["bias_tee"] is False  # _valid_spec()'s rfi_ref omits it -> schema default
+
+    session_dir = data_dir / plan["grid_session_dir"].split("/")[-1]
+    on_disk = json.loads((session_dir / "observation_resolved.json").read_text())
+    assert on_disk["rfi_ref"]["bias_tee"] is False

@@ -20,7 +20,7 @@ import observation_plan
 import runtime_state
 
 
-def _fixture_resolved_plan(tmp_path, *, rfi_ref_enabled=False, quicklook_enabled=False,
+def _fixture_resolved_plan(tmp_path, *, rfi_ref_enabled=False, rfi_ref_bias_tee=False, quicklook_enabled=False,
                             planning_timestamp_utc=None, max_start_delay_minutes=60.0):
     grid_dir = tmp_path / "session"
     grid_dir.mkdir()
@@ -35,12 +35,14 @@ def _fixture_resolved_plan(tmp_path, *, rfi_ref_enabled=False, quicklook_enabled
         "requested": {
             "grid": {"min_altitude_deg": 10}, "capture": {"seconds": 1, "settle_seconds": 0.5},
             "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
-            "rfi_ref": {"enabled": rfi_ref_enabled, "serial": "00000002", "gain_db": 25.0},
+            "rfi_ref": {"enabled": rfi_ref_enabled, "serial": "00000002", "gain_db": 25.0,
+                        "bias_tee": rfi_ref_bias_tee},
             "quicklook": {"enabled": quicklook_enabled, "native_grid": True, "interpolated_preview": False,
                           "calibration_profile_path": "cal.json" if quicklook_enabled else None},
         },
         "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
-        "rfi_ref": {"enabled": rfi_ref_enabled, "serial": "00000002", "gain_db": 25.0, "port": 1235},
+        "rfi_ref": {"enabled": rfi_ref_enabled, "serial": "00000002", "gain_db": 25.0, "port": 1235,
+                    "bias_tee": rfi_ref_bias_tee},
         "quicklook": {"enabled": quicklook_enabled, "native_grid": True, "interpolated_preview": False,
                       "calibration_profile_path": "cal.json" if quicklook_enabled else None},
         "grid_session_dir": str(grid_dir),
@@ -91,6 +93,31 @@ def test_capture_args_include_rfi_ref_flags_only_when_enabled(tmp_path):
 def test_capture_args_omit_rfi_ref_flags_when_disabled(tmp_path):
     _, plan = _fixture_resolved_plan(tmp_path, rfi_ref_enabled=False)
     args = orch._capture_args(plan, "/runtime")
+    assert "--rfi-ref-enabled" not in args
+
+
+def test_capture_args_include_bias_t_flag_when_enabled_and_bias_tee_true(tmp_path):
+    """This is exactly what START (run_observation -> _capture_args) sends to
+    capture.py, so it also proves the web PLAN->START path preserves bias_tee:
+    the resolved plan on disk (produced from the web JSON payload) is read
+    verbatim into `plan`, with no reconstruction, before this call."""
+    _, plan = _fixture_resolved_plan(tmp_path, rfi_ref_enabled=True, rfi_ref_bias_tee=True)
+    args = orch._capture_args(plan, "/runtime")
+    assert "--rfi-ref-bias-t" in args
+
+
+def test_capture_args_omit_bias_t_flag_when_bias_tee_false(tmp_path):
+    _, plan = _fixture_resolved_plan(tmp_path, rfi_ref_enabled=True, rfi_ref_bias_tee=False)
+    args = orch._capture_args(plan, "/runtime")
+    assert "--rfi-ref-bias-t" not in args
+
+
+def test_capture_args_omit_bias_t_flag_when_rfi_ref_disabled_even_if_bias_tee_true(tmp_path):
+    """bias_tee=true with the sidecar itself disabled must never leak a -T
+    flag into a command that never gets built (RFI_REF disabled -> N/A)."""
+    _, plan = _fixture_resolved_plan(tmp_path, rfi_ref_enabled=False, rfi_ref_bias_tee=True)
+    args = orch._capture_args(plan, "/runtime")
+    assert "--rfi-ref-bias-t" not in args
     assert "--rfi-ref-enabled" not in args
 
 

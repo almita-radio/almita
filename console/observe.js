@@ -51,6 +51,7 @@
         enabled: document.getElementById("f-rfi-enabled").checked,
         serial: "00000002",
         gain_db: Number(document.getElementById("f-rfi-gain").value),
+        bias_tee: document.getElementById("f-rfi-bias-tee").checked,
       },
       quicklook: {
         enabled: document.getElementById("f-ql-enabled").checked,
@@ -84,6 +85,9 @@
       `Spacing             ${r.spacing_deg.toFixed(3)} deg`,
       `Capture             ${plan.requested.capture.seconds} s`,
       `Settle              ${plan.requested.capture.settle_seconds} s`,
+      "",
+      `RFI_REF             ${plan.rfi_ref.enabled ? "ENABLED" : "DISABLED"}`,
+      `  Bias-T            ${plan.rfi_ref.enabled ? (plan.rfi_ref.bias_tee ? "ON" : "OFF") : "N/A"}`,
       "",
       `Estimated duration  ${fmtHms(plan.duration.estimated_seconds)}`,
       `Conservative        ${fmtHms(plan.duration.conservative_seconds)}`,
@@ -235,9 +239,16 @@
     } catch (err) { /* keep static defaults if the API isn't reachable yet */ }
   }
 
+  function updateRfiBiasTeeAvailability() {
+    const rfiEnabled = document.getElementById("f-rfi-enabled").checked;
+    document.getElementById("f-rfi-bias-tee").disabled = !rfiEnabled;
+  }
+
   document.getElementById("f-placement").addEventListener("change", (e) => {
     document.getElementById("row-center-ra").hidden = e.target.value !== "FIXED_CENTER";
   });
+  document.getElementById("f-rfi-enabled").addEventListener("change", updateRfiBiasTeeAvailability);
+  updateRfiBiasTeeAvailability();
   document.getElementById("observe-form").addEventListener("submit", submitPlan);
   document.getElementById("btn-replan").addEventListener("click", () => {
     document.getElementById("plan-result").hidden = true;
