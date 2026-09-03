@@ -230,6 +230,61 @@ async def test_rfi_ref_enabled_uses_canonical_session_id_and_own_config(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_rfi_ref_bias_tee_reaches_rtl_tcp_command_without_touching_main(monkeypatch, tmp_path):
+    monkeypatch.setattr(capture, "SDRCapture", FakeMainSDR)
+
+    async def rfi_ref_handler(reader, writer):
+        writer.write(b"RTL0" + (5).to_bytes(4, "big") + (29).to_bytes(4, "big"))
+        await writer.drain()
+        try:
+            while True:
+                writer.write(bytes([127, 128] * 65536))
+                await writer.drain()
+                await asyncio.sleep(0.01)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server = await asyncio.start_server(rfi_ref_handler, "127.0.0.1", 0)
+    fake_port = server.sockets[0].getsockname()[1]
+
+    launch_cmds = []
+    launched = {"done": False}
+    proc = FakeRfiProc(pid=51515)
+
+    def fake_popen(cmd, **kwargs):
+        launch_cmds.append(cmd)
+        launched["done"] = True
+        return proc
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (launched["done"] and p == fake_port) else None)
+
+    runtime_dir = tmp_path / "runtime"
+    try:
+        ex = make_executor(tmp_path, runtime_dir=str(runtime_dir),
+                            rfi_ref_enabled=True, rfi_ref_gain_db=25.0, rfi_ref_port=fake_port,
+                            rfi_ref_serial="00000002", rfi_ref_bias_tee=True)
+
+        assert await ex.execute_observation_plan(0, 0)
+
+        assert "-T" in launch_cmds[0]  # RFI_REF's own bias-tee reached the real command
+        assert "00000002" in launch_cmds[0]
+
+        # MAIN completed every point regardless of RFI_REF's bias-tee setting.
+        rows = list(csv.DictReader(ex.csv_path.open()))
+        assert all(row["capture_status"] == "success" for row in rows)
+
+        # Child output was persisted to a real per-session log file, not a
+        # PIPE nobody drains.
+        log_path = ex.csv_path.parent / "rfi_ref" / "rtl_tcp.log"
+        assert log_path.exists()
+        assert "bias_tee=True" in log_path.read_text()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_rfi_ref_foreign_port_does_not_block_main_session(monkeypatch, tmp_path):
     monkeypatch.setattr(capture, "SDRCapture", FakeMainSDR)
     monkeypatch.setattr(rfi_monitor, "listening_pid", lambda host, port: 9999)

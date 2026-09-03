@@ -228,6 +228,8 @@ def _capture_args(plan: Dict[str, Any], runtime_dir: str) -> List[str]:
             "--rfi-ref-gain-db", str(plan["rfi_ref"]["gain_db"]),
             "--rfi-ref-serial", plan["rfi_ref"]["serial"],
         ]
+        if plan["rfi_ref"].get("bias_tee", False):
+            args.append("--rfi-ref-bias-t")
     return args
 
 

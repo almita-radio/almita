@@ -117,7 +117,8 @@ class CaptureExecutor:
                  rfi_ref_enabled: bool = False,
                  rfi_ref_gain_db: float = 25.0,
                  rfi_ref_port: int = 1235,
-                 rfi_ref_serial: str = "00000002"):
+                 rfi_ref_serial: str = "00000002",
+                 rfi_ref_bias_tee: bool = False):
         """
         Initialize capture executor
 
@@ -175,6 +176,12 @@ class CaptureExecutor:
         # monitoring only). MAIN above is the sole authoritative science
         # path; RFI_REF's own gain/frequency/lifecycle never touch it.
         self.rfi_ref_enabled = bool(rfi_ref_enabled)
+        # Persisted next to the session's own mosaic CSV (same directory
+        # capture_timing_<session_id>.csv already uses below) rather than
+        # runtime_dir, which is the live/overwritten-every-session snapshot
+        # location - this log must survive per-session like the rest of the
+        # session's artifacts.
+        rfi_ref_log_path = self.csv_path.parent / "rfi_ref" / "rtl_tcp.log"
         self.rfi_ref = RFIReferenceMonitor(
             enabled=self.rfi_ref_enabled,
             runtime_dir=self.runtime_dir,
@@ -183,6 +190,8 @@ class CaptureExecutor:
             center_frequency_hz=sdr_freq,
             sample_rate=sdr_sample_rate,
             gain_db=rfi_ref_gain_db,
+            bias_tee=rfi_ref_bias_tee,
+            log_path=rfi_ref_log_path,
             log=lambda message: self.log(message, "WARNING", force=True),
         )
 
@@ -2395,6 +2404,9 @@ Useful for re-observations or after fixing equipment issues.
                         help='RFI_REF disposable rtl_tcp port (default: 1235)')
     parser.add_argument('--rfi-ref-serial', default='00000002',
                         help='RFI_REF RTL-SDR device serial (default: 00000002)')
+    parser.add_argument('--rfi-ref-bias-t', action='store_true',
+                        help='Enable bias-tee on the RFI_REF RTL-SDR (V3-only GPIO bias-tee, powers an '
+                             'in-line LNA on antenna B; independent of MAIN\'s bias-tee). Default: disabled')
 
     args = parser.parse_args()
 
@@ -2465,6 +2477,7 @@ Useful for re-observations or after fixing equipment issues.
             rfi_ref_gain_db=args.rfi_ref_gain_db,
             rfi_ref_port=args.rfi_ref_port,
             rfi_ref_serial=args.rfi_ref_serial,
+            rfi_ref_bias_tee=args.rfi_ref_bias_t,
         )
         executor.compact_console = not executor.verbose
 
@@ -2494,6 +2507,7 @@ Useful for re-observations or after fixing equipment issues.
             rfi_ref_gain_db=args.rfi_ref_gain_db,
             rfi_ref_port=args.rfi_ref_port,
             rfi_ref_serial=args.rfi_ref_serial,
+            rfi_ref_bias_tee=args.rfi_ref_bias_t,
         )
         executor.compact_console = not executor.verbose
 

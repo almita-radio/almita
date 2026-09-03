@@ -104,6 +104,27 @@ def test_bias_tee_false_rejected_with_honest_explanation():
         sp.validate_spec_dict(raw)
 
 
+def test_rfi_ref_bias_tee_defaults_false_when_field_omitted():
+    raw = _valid_raw()
+    assert "bias_tee" not in raw["rfi_ref"]  # historical spec, predates this field
+    result = sp.validate_spec_dict(raw)
+    assert result["rfi_ref"]["bias_tee"] is False
+
+
+def test_rfi_ref_bias_tee_true_accepted():
+    raw = _valid_raw()
+    raw["rfi_ref"]["bias_tee"] = True
+    result = sp.validate_spec_dict(raw)
+    assert result["rfi_ref"]["bias_tee"] is True
+
+
+def test_rfi_ref_bias_tee_false_accepted_explicitly():
+    raw = _valid_raw()
+    raw["rfi_ref"]["bias_tee"] = False
+    result = sp.validate_spec_dict(raw)
+    assert result["rfi_ref"]["bias_tee"] is False
+
+
 def test_quicklook_enabled_requires_calibration_profile():
     raw = _valid_raw()
     raw["quicklook"]["calibration_profile_path"] = None

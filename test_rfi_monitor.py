@@ -59,6 +59,32 @@ class _FakeStdout:
         return self._text
 
 
+class _FileRedirectedProc:
+    """Mirrors real subprocess.Popen semantics when stdout/stderr are
+    redirected to a file rather than PIPE: proc.stdout is None (there is no
+    pipe object to read from in-process; the OS writes straight to the
+    file). Distinct from FakeProc, which always exposes a fake PIPE and so
+    can't exercise the log-file tail-read fallback in rfi_monitor.py."""
+
+    def __init__(self, pid=1, alive=False, returncode=1):
+        self.pid = pid
+        self._alive = alive
+        self.returncode = returncode if not alive else None
+        self.stdout = None
+
+    def poll(self):
+        return None if self._alive else self.returncode
+
+    def terminate(self):
+        self._alive = False
+
+    def kill(self):
+        self._alive = False
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
 def rtl0_header(tuner_type=5, gain_count=29):
     return b"RTL0" + tuner_type.to_bytes(4, "big") + gain_count.to_bytes(4, "big")
 
@@ -233,6 +259,176 @@ async def test_rfi_ref_dying_mid_session_marks_failed_without_raising(tmp_path, 
     await m.stop()  # must not raise even though the remote side already died
     server.close()
     await server.wait_closed()
+
+
+# ---------------------------------------------------------------- bias-tee
+
+
+@pytest.mark.asyncio
+async def test_bias_tee_true_adds_dash_t_flag(tmp_path, monkeypatch):
+    launch_cmds = []
+    proc = FakeProc(pid=9001)
+    launched = {"done": False}
+
+    def fake_popen(cmd, **kwargs):
+        launch_cmds.append(cmd)
+        launched["done"] = True
+        return proc
+
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == 1235 and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         bias_tee=True, port=1235, bind_timeout=2.0)
+    await m.start()
+    await m.stop()
+
+    assert "-T" in launch_cmds[0]
+
+
+@pytest.mark.asyncio
+async def test_bias_tee_false_omits_dash_t_flag(tmp_path, monkeypatch):
+    launch_cmds = []
+    proc = FakeProc(pid=9002)
+    launched = {"done": False}
+
+    def fake_popen(cmd, **kwargs):
+        launch_cmds.append(cmd)
+        launched["done"] = True
+        return proc
+
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == 1235 and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         bias_tee=False, port=1235, bind_timeout=2.0)
+    await m.start()
+    await m.stop()
+
+    assert "-T" not in launch_cmds[0]
+
+
+@pytest.mark.asyncio
+async def test_bias_tee_defaults_to_false_when_unspecified(tmp_path, monkeypatch):
+    launch_cmds = []
+    proc = FakeProc(pid=9003)
+    launched = {"done": False}
+
+    def fake_popen(cmd, **kwargs):
+        launch_cmds.append(cmd)
+        launched["done"] = True
+        return proc
+
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == 1235 and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1", port=1235,
+                                         bind_timeout=2.0)
+    assert m.bias_tee is False
+    await m.start()
+    await m.stop()
+
+    assert "-T" not in launch_cmds[0]
+
+
+# ---------------------------------------------------------------- child logging
+
+
+@pytest.mark.asyncio
+async def test_log_path_redirects_child_output_to_real_file_not_pipe(tmp_path, monkeypatch):
+    launch_kwargs = {}
+    proc = FakeProc(pid=9010)
+    launched = {"done": False}
+
+    def fake_popen(cmd, **kwargs):
+        launch_kwargs.update(kwargs)
+        launched["done"] = True
+        return proc
+
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == 1235 and launched["done"]) else None)
+
+    log_path = tmp_path / "rfi_ref" / "rtl_tcp.log"
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         port=1235, bind_timeout=2.0, log_path=log_path)
+    await m.start()
+
+    # Never a bare PIPE nobody drains - either a real file or (only when no
+    # log_path is configured, exercised by every other test in this module)
+    # the original PIPE-and-read-on-demand behavior.
+    assert launch_kwargs["stdout"] is not rfi_monitor.subprocess.PIPE
+    assert launch_kwargs["stderr"] == rfi_monitor.subprocess.STDOUT
+    assert log_path.exists()
+    header = log_path.read_text()
+    assert "launch" in header and "bias_tee=False" in header
+
+    await m.stop()
+    assert m._log_fh is None  # closed, not leaked
+    footer = log_path.read_text()
+    assert "shutdown" in footer
+    assert f"exit_code={proc.returncode}" in footer
+
+
+@pytest.mark.asyncio
+async def test_missing_device_with_log_path_reads_tail_from_log_file_not_pipe(tmp_path, monkeypatch):
+    """When output goes to a real file, proc.stdout is None (unlike the PIPE
+    case) - the error tail must come from the log file on disk instead."""
+    proc = _FileRedirectedProc(alive=False, returncode=1)
+
+    def fake_popen(cmd, stdout=None, **kwargs):
+        if stdout is not None:
+            stdout.write("usb_claim_interface error -6\n")
+            stdout.flush()
+        return proc
+
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid", lambda host, port: None)
+
+    log_path = tmp_path / "rfi_ref" / "rtl_tcp.log"
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         bind_timeout=0.3, log_path=log_path)
+    await m.start()
+
+    assert m.status in ("UNAVAILABLE", "FAILED")
+    assert "usb_claim_interface" in m.last_error
+    assert "usb_claim_interface" in log_path.read_text()
+
+
+# ---------------------------------------------------------------- stop() error-state hygiene
+
+
+@pytest.mark.asyncio
+async def test_stop_preserves_stale_error_as_last_runtime_error_and_clears_last_error(tmp_path, monkeypatch):
+    """Regression test for the real field finding: stop() used to leave
+    last_error holding a stale DEGRADED-period message next to a STOPPED
+    status, reading as if the clean stop itself had failed."""
+    m, server, connected = await _running_monitor(tmp_path, monkeypatch, 900, session_id="s1")
+    try:
+        await m.start()
+        await asyncio.wait_for(connected.wait(), timeout=2.0)
+        # connected only means the fake server sent the header - give the
+        # client side its own turn to read it and reach RUNNING before we
+        # overwrite state, or _run_consumer's own post-connect
+        # `self.last_error = None` can race and clobber the write below.
+        await asyncio.sleep(0.2)
+        assert m.status == "RUNNING"
+        # Simulate the real-world DEGRADED condition directly rather than
+        # waiting 15s of real time for three consecutive read timeouts.
+        m.status = "DEGRADED"
+        m.last_error = "no data from RFI_REF for >=15s"
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+    status = read_json_safe(tmp_path / "rfi_ref_status.json")
+    assert status["status"] == "STOPPED"
+    assert status["last_error"] is None
+    assert status["last_runtime_error"] == "no data from RFI_REF for >=15s"
 
 
 # ---------------------------------------------------------------- backpressure

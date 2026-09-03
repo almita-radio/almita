@@ -35,6 +35,7 @@ import contextlib
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -141,14 +142,15 @@ class RFIReferenceMonitor:
     def __init__(self, *, enabled: bool, runtime_dir, session_id: Optional[str] = None,
                  device_serial: str = "00000002", host: str = "127.0.0.1", port: int = 1235,
                  center_frequency_hz: int = 1420405000, sample_rate: int = 2_400_000,
-                 gain_db: float = 25.0, quicklook_every: int = 20, block_bytes: int = 131072,
+                 gain_db: float = 25.0, bias_tee: bool = False, quicklook_every: int = 20,
+                 block_bytes: int = 131072,
                  bind_timeout: float = 5.0, connect_timeout: float = 5.0,
                  spectrum_write_interval: float = 2.0,
                  waterfall_max_rows: int = N_WATERFALL_MAX_ROWS,
                  history_max_samples: int = N_HISTORY_MAX_SAMPLES,
                  session_waterfall_max_rows: int = N_SESSION_WATERFALL_MAX_ROWS,
                  session_waterfall_interval: float = SESSION_WATERFALL_INTERVAL_S,
-                 log=None):
+                 log_path=None, log=None):
         self.enabled = bool(enabled)
         self.runtime_dir = runtime_dir
         self.session_id = session_id
@@ -158,16 +160,32 @@ class RFIReferenceMonitor:
         self.center_frequency_hz = int(center_frequency_hz)
         self.sample_rate = int(sample_rate)
         self.gain_db = float(gain_db)
+        self.bias_tee = bool(bias_tee)
         self.quicklook_every = max(1, int(quicklook_every))
         self.block_bytes = int(block_bytes)
         self.bind_timeout = float(bind_timeout)
         self.connect_timeout = float(connect_timeout)
         self.spectrum_write_interval = float(spectrum_write_interval)
+        # Child stdout/stderr destination: a real per-session log file when
+        # the caller supplies one (production - see capture.py), else the
+        # original PIPE-and-read-on-demand behavior direct/test instantiation
+        # has always used. Either way the child's output is always consumed
+        # by something - never a PIPE nobody drains (that can fill the OS
+        # pipe buffer and hang the child, which is exactly what happened to
+        # the real RFI_REF session that motivated this: a live TCP socket
+        # with no data for >=15s, no evidence of any USB/kernel event).
+        self.log_path = Path(log_path) if log_path else None
+        self._log_fh = None
         self._log = log or (lambda message: None)
         self._test_fft_delay_s = float(os.environ.get(_TEST_FFT_DELAY_ENV, "0") or 0.0)
 
         self.status = "DISABLED"
         self.last_error: Optional[str] = None
+        # Unlike last_error (cleared to None on a clean stop so the final
+        # status doesn't read as "stopped because of an error that's
+        # actually stale"), this never resets - it's the last real error
+        # this instance ever saw, for post-session forensics.
+        self.last_runtime_error: Optional[str] = None
         self.processed_blocks = 0
         self.skipped_blocks = 0
         self.dropped_blocks = 0
@@ -231,14 +249,32 @@ class RFIReferenceMonitor:
             "-f", str(self.center_frequency_hz), "-s", str(self.sample_rate),
             "-g", str(self.gain_db),  # explicit manual gain => rtl_tcp's AGC/auto-gain is not used
         ]
+        if self.bias_tee:
+            cmd.append("-T")  # rtl_tcp: "enable bias-T on GPIO PIN 0 (works for rtl-sdr.com v3 dongles)"
+
+        if self.log_path is not None:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_fh = open(self.log_path, "a", buffering=1)
+            self._log_fh.write(
+                f"=== RFI_REF rtl_tcp launch utc={utcnow()} bias_tee={self.bias_tee} "
+                f"cmd={' '.join(cmd)} ===\n"
+            )
+            popen_kwargs = dict(stdout=self._log_fh, stderr=subprocess.STDOUT)
+        else:
+            popen_kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
         try:
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self.proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as exc:
             self.status = "UNAVAILABLE"
             self.last_error = f"failed to launch rtl_tcp for RFI_REF: {exc}"
             self._log(f"RFI_REF: {self.last_error}")
+            self._close_log_fh()
             self._write_status()
             return
+        except Exception:
+            self._close_log_fh()
+            raise
 
         ok, reason = await self._wait_for_ownership()
         if not ok:
@@ -263,7 +299,15 @@ class RFIReferenceMonitor:
             self._task = None
         await self._cleanup_process_async()
         if self.status in ("RUNNING", "STARTING", "DEGRADED"):
+            # A clean stop from one of these states is not itself a failure -
+            # whatever last_error was showing (e.g. a stale "no data >=15s"
+            # from a DEGRADED period) would otherwise sit next to
+            # status=STOPPED and read as "the stop failed", when it didn't.
+            # The original message isn't lost, just moved to last_runtime_error.
+            if self.last_error is not None:
+                self.last_runtime_error = self.last_error
             self.status = "STOPPED"
+            self.last_error = None
         # Best-effort final flush so the operator can inspect the last real
         # spectrum from this session, even if the throttle interval hadn't
         # elapsed yet at the moment of stop.
@@ -277,10 +321,7 @@ class RFIReferenceMonitor:
         deadline = time.monotonic() + self.bind_timeout
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
-                tail = ""
-                if self.proc.stdout:
-                    with contextlib.suppress(Exception):
-                        tail = self.proc.stdout.read()
+                tail = self._read_log_tail()
                 return False, f"rtl_tcp exited before binding (rc={self.proc.returncode}): {tail[-500:]}"
             owner = listening_pid(self.host, self.port)
             if owner == self.proc.pid:
@@ -386,15 +427,47 @@ class RFIReferenceMonitor:
 
     def _cleanup_process_sync(self) -> None:
         proc, self.proc = self.proc, None
-        if proc is None or proc.poll() is not None:
+        exit_code = None
+        if proc is not None:
+            exit_code = proc.poll()
+            if exit_code is None:
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5.0)
+                exit_code = proc.returncode
+        self._finalize_log(exit_code)
+
+    def _finalize_log(self, exit_code) -> None:
+        """Writes the shutdown/exit-code bookend line and closes the file -
+        called on every path that ends this instance's rtl_tcp child,
+        whether it was killed by us or had already exited on its own."""
+        if self._log_fh is None:
             return
         with contextlib.suppress(Exception):
-            proc.terminate()
-            try:
-                proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5.0)
+            self._log_fh.write(f"=== RFI_REF rtl_tcp shutdown utc={utcnow()} exit_code={exit_code} ===\n")
+        self._close_log_fh()
+
+    def _close_log_fh(self) -> None:
+        if self._log_fh is not None:
+            with contextlib.suppress(Exception):
+                self._log_fh.close()
+            self._log_fh = None
+
+    def _read_log_tail(self, max_chars: int = 2000) -> str:
+        """Best-effort tail of the child's own output for an error message -
+        from the live PIPE when there's no log file (direct/test
+        instantiation), else from the persisted log file on disk."""
+        if self.proc is not None and self.proc.stdout is not None:
+            with contextlib.suppress(Exception):
+                return self.proc.stdout.read()
+        if self.log_path is not None:
+            with contextlib.suppress(Exception):
+                return self.log_path.read_text()[-max_chars:]
+        return ""
 
     def _maybe_publish(self, force: bool = False) -> None:
         """Throttled publication: the FFT itself still runs at the existing
@@ -533,6 +606,7 @@ class RFIReferenceMonitor:
                 "center_frequency_hz": self.center_frequency_hz,
                 "sample_rate": self.sample_rate,
                 "gain_db": self.gain_db,
+                "bias_tee": self.bias_tee,
                 "fft_duty_fraction": round(self.fft_duty_fraction, 4),
                 "clipping_fraction": self.clipping_fraction,
                 "occupancy_fraction": self.occupancy_fraction,
@@ -542,6 +616,7 @@ class RFIReferenceMonitor:
                 "dropped_blocks": self.dropped_blocks,
                 "last_update_utc": utcnow(),
                 "last_error": self.last_error,
+                "last_runtime_error": self.last_runtime_error,
             })
         except Exception:
             pass

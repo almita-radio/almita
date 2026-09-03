@@ -194,11 +194,19 @@ def _validate_main(raw: dict) -> dict:
 
 def _validate_rfi_ref(raw: dict) -> dict:
     where = "rfi_ref"
-    _require_keys(raw, ("enabled", "serial", "gain_db"), where)
+    _require_keys(raw, ("enabled", "serial", "gain_db", "bias_tee"), where)
     enabled = _bool(raw, "enabled", where, required=False, default=False)
     serial = _str(raw, "serial", where, required=False, default="00000002")
     gain_db = _num(raw, "gain_db", where, required=False, default=25.0)
-    return {"enabled": enabled, "serial": serial, "gain_db": gain_db}
+    # Unlike main.bias_tee (always-on, no CLI path to disable), RFI_REF's
+    # bias-tee is genuinely optional per-field hardware (whether an LNA is
+    # wired into antenna B's chain varies by deployment). Default false:
+    # an older spec/archived resolved-plan with no opinion on this field
+    # must revalidate to the same behavior rtl_tcp has always run with for
+    # RFI_REF (no -T) rather than silently start energizing hardware that
+    # wasn't there when the config was written.
+    bias_tee = _bool(raw, "bias_tee", where, required=False, default=False)
+    return {"enabled": enabled, "serial": serial, "gain_db": gain_db, "bias_tee": bias_tee}
 
 
 def _validate_quicklook(raw: dict) -> dict:
