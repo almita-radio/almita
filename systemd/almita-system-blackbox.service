@@ -1,0 +1,16 @@
+[Unit]
+Description=ALMITA System Black Box - lightweight host heartbeat log (non-scientific)
+After=local-fs.target
+
+[Service]
+Type=simple
+User=stellarmate
+WorkingDirectory=/home/stellarmate/almita
+ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/almita_system_blackbox.py --interval 10
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

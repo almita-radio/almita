@@ -1,7 +1,7 @@
-import contextlib,json,subprocess,threading,urllib.error,urllib.request
+import contextlib,io,json,socket,subprocess,sys,threading,urllib.error,urllib.request
 from pathlib import Path
 from prepare_field_dashboard import prepare
-from serve_dashboard import make_server
+from serve_dashboard import ReadOnlyServer, make_server
 
 @contextlib.contextmanager
 def running(root):
@@ -53,3 +53,65 @@ def test_cli_sigterm_graceful_shutdown(tmp_path):
     assert "FIELD STATIC START" in process.stdout.readline()
     process.terminate();assert process.wait(timeout=5)==0
     assert "FIELD STATIC STOP" in process.stdout.read()
+
+def test_end_headers_before_self_path_set_does_not_raise():
+    # Reproduces the exact ordering that produced
+    # "AttributeError: 'ReadOnlyHandler' object has no attribute 'path'":
+    # http.server's parse_request() calls send_error() -> end_headers()
+    # for a malformed request line before self.path is ever assigned.
+    from serve_dashboard import ReadOnlyHandler
+    handler=object.__new__(ReadOnlyHandler)
+    handler.request_version="HTTP/1.1"
+    handler.wfile=io.BytesIO()
+    assert not hasattr(handler,"path")
+    handler.end_headers()  # must not raise AttributeError
+    assert b"Cache-Control: no-cache\r\n" in handler.wfile.getvalue()
+
+def test_malformed_request_line_gets_complete_error_body_not_cut_off(tmp_path):
+    # A bare one-word request line ("GARBAGE") makes http.server's
+    # parse_request() call send_error() -> end_headers() while
+    # self.request_version is still its "HTTP/0.9" default and self.path
+    # was never assigned - the exact ordering that used to raise
+    # AttributeError out of end_headers before a single byte of the error
+    # body was written, truncating the response and aborting the
+    # connection. With the fix the full error body is delivered.
+    (tmp_path/"index.html").write_text("ok")
+    with running(tmp_path) as base:
+        host,port=base.split("//")[1].split(":")
+        with socket.create_connection((host,int(port)),timeout=5) as s:
+            s.sendall(b"GARBAGE\r\n\r\n")
+            s.settimeout(5)
+            response=b""
+            try:
+                while True:
+                    chunk=s.recv(4096)
+                    if not chunk:break
+                    response+=chunk
+            except socket.timeout:
+                pass
+        assert response.startswith(b"<!DOCTYPE HTML>"),response
+        assert response.rstrip().endswith(b"</html>"),response
+        assert b"400" in response
+
+def test_handle_error_broken_pipe_and_connection_reset_logged_quietly(tmp_path,capsys):
+    server=make_server(tmp_path,port=0)
+    try:
+        for exc_type in (BrokenPipeError,ConnectionResetError):
+            try:raise exc_type("simulated client disconnect")
+            except exc_type:server.handle_error(None,("127.0.0.1",12345))
+    finally:
+        server.server_close()
+    err=capsys.readouterr().err
+    assert "disconnected (BrokenPipeError)" in err
+    assert "disconnected (ConnectionResetError)" in err
+    assert "Traceback" not in err
+
+def test_handle_error_real_exception_still_gets_full_traceback(tmp_path,capsys):
+    server=make_server(tmp_path,port=0)
+    try:
+        try:raise ValueError("a genuine bug, must not be hidden")
+        except ValueError:server.handle_error(None,("127.0.0.1",12345))
+    finally:
+        server.server_close()
+    err=capsys.readouterr().err
+    assert "Traceback" in err and "ValueError" in err
