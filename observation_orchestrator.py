@@ -54,9 +54,18 @@ def _runtime_path(runtime_dir: str) -> Path:
     return Path(runtime_dir) / RUNTIME_FILENAME
 
 
-def _write_runtime(runtime_dir: str, **fields: Any) -> Dict[str, Any]:
+def _write_runtime(runtime_dir: str, *, reset: bool = False, **fields: Any) -> Dict[str, Any]:
+    """Merge fields into the sidecar by default (existing behavior, used to
+    accumulate a single run's own record across its PREFLIGHT/READY/RUNNING/
+    STOP writes). reset=True discards whatever is currently on disk first —
+    used exactly once, for the first write of a new run_observation() call,
+    so a previous run's leftover note/capture_pid/preflight can never leak
+    into the next session's record (confirmed in production: a DEGRADED
+    STOP-timeout note for one session's capture_pid was still present,
+    verbatim, in the sidecar of an unrelated later session that never itself
+    called stop_observation())."""
     path = _runtime_path(runtime_dir)
-    existing = runtime_state.read_json_safe(path) or {}
+    existing = {} if reset else (runtime_state.read_json_safe(path) or {})
     merged = {**existing, **fields, "schema_version": 1, "updated_utc": runtime_state.utcnow()}
     runtime_state.atomic_write_json(path, merged)
     return merged
@@ -258,8 +267,12 @@ def _run_observation_locked(resolved_plan_path: str, *, yes: bool, runtime_dir: 
     plan = _load_resolved_plan(resolved_plan_path)
     _check_stale(plan)
 
-    _write_runtime(runtime_dir, orchestrator_state="PREFLIGHT", resolved_plan_path=str(resolved_plan_path),
-                    observation_name=plan["observation_name"])
+    # reset=True: start this run's sidecar record from a clean slate. Safe
+    # here specifically because _refuse_if_already_active() above already
+    # verified (by live process identity, not just the state label) that
+    # nothing genuinely active is being discarded.
+    _write_runtime(runtime_dir, reset=True, orchestrator_state="PREFLIGHT",
+                    resolved_plan_path=str(resolved_plan_path), observation_name=plan["observation_name"])
 
     report = asyncio.run(observation_preflight.run_execution_preflight(
         plan, host=host, port=port, device_name=device_name, runtime_dir=runtime_dir,
@@ -370,8 +383,17 @@ def _wait_for_session_announcement(runtime_dir: str, *, timeout: float,
 
 
 def get_status(*, runtime_dir: str = DEFAULT_RUNTIME_DIR) -> Dict[str, Any]:
-    """STATUS: read-only merge of orchestrator state + canonical acquisition/instrument truth."""
+    """STATUS: read-only merge of orchestrator state + canonical acquisition/instrument truth.
+
+    Adds a computed capture_process_alive field (never persisted) whenever a
+    capture_pid is on record, so a stale sidecar left behind by a session
+    that ended without an explicit STOP (e.g. after an API restart/reload)
+    is never silently read back as an active process — without inventing a
+    new orchestrator_state value or writing anything to disk.
+    """
     orchestrator = _read_runtime(runtime_dir) or {"orchestrator_state": "PLANNED"}
+    if orchestrator.get("capture_pid") is not None:
+        orchestrator = {**orchestrator, "capture_process_alive": _capture_ownership_matches(orchestrator)}
     current_session = runtime_state.read_json_safe(Path(runtime_dir) / "current_session.json")
     almita_status = runtime_state.read_json_safe(Path(runtime_dir) / "almita_status.json")
     return {

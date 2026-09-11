@@ -581,3 +581,130 @@ def test_run_observation_passes_launch_time_before_popen_to_session_wait(tmp_pat
     assert captured["popen_calls_at_wait_time"] == 1, "capture.py must already be launched by the time we wait"
     assert before_call <= captured["after_utc"] <= after_call, \
         "after_utc must be captured during this run_observation() call, not stale from an earlier one"
+
+
+# --------------------------------------------------------------------------
+# observation_runtime.json sidecar hygiene: regression tests for the
+# production incident where session 20260903_032510 (625/625, COMPLETED)
+# kept showing orchestrator_state=RUNNING with a DEGRADED STOP-timeout note
+# for an unrelated, earlier capture_pid (403691) that had nothing to do
+# with this session. Root cause: _write_runtime() merges onto whatever is
+# already on disk, forever, and nothing ever reset the sidecar at the start
+# of a new run — a leftover note/pid from any earlier session's failed STOP
+# would ride along into every later session indefinitely.
+# --------------------------------------------------------------------------
+
+def test_new_run_does_not_inherit_stale_note(tmp_path, monkeypatch):
+    path, plan = _fixture_resolved_plan(tmp_path)
+    popen_calls, runtime_dir = _patch_common(monkeypatch, tmp_path, preflight_overall="PASS")
+    monkeypatch.setattr(orch, "_wait_for_session_announcement",
+                         lambda *a, **k: {"session_id": "SID-NEW", "session_root": "/x"})
+    orch._write_runtime(runtime_dir, orchestrator_state="DEGRADED", capture_pid=403691,
+                         note="capture.py (pid 403691) did not exit within 120s of SIGINT; "
+                              "orchestrator will not escalate to SIGKILL — operator must intervene manually")
+
+    result = orch.run_observation(path, yes=True, runtime_dir=runtime_dir)
+    assert "note" not in result
+
+
+def test_new_run_does_not_inherit_stale_capture_pid(tmp_path, monkeypatch):
+    path, plan = _fixture_resolved_plan(tmp_path)
+    popen_calls, runtime_dir = _patch_common(monkeypatch, tmp_path, preflight_overall="PASS")
+    monkeypatch.setattr(orch, "_wait_for_session_announcement",
+                         lambda *a, **k: {"session_id": "SID-NEW", "session_root": "/x"})
+    orch._write_runtime(runtime_dir, orchestrator_state="DEGRADED", capture_pid=403691,
+                         capture_start_time=1, capture_cmd_needle="capture.py")
+
+    result = orch.run_observation(path, yes=True, runtime_dir=runtime_dir)
+    assert result["capture_pid"] != 403691
+    assert result["capture_pid"] == 10000 + len(popen_calls)  # the freshly-launched fake pid, nothing else
+
+
+def test_stop_observation_completed_updates_updated_utc(tmp_path, monkeypatch):
+    pid, start_time, needle = _self_identity()
+    runtime_dir = tmp_path / "runtime"
+    written = orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                                   capture_pid=pid, capture_start_time=start_time, capture_cmd_needle=needle)
+    stale_updated_utc = written["updated_utc"]
+    monkeypatch.setattr(os, "kill", lambda p, sig: None)
+    alive_sequence = iter([True, False])
+    monkeypatch.setattr(orch, "_pid_alive", lambda p: next(alive_sequence, False))
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    runtime_state.atomic_write_json(runtime_dir / "current_session.json", {"state": "COMPLETED"})
+
+    result = orch.stop_observation(runtime_dir=str(runtime_dir))
+    assert result["orchestrator_state"] == "COMPLETED"
+    assert result["updated_utc"] != stale_updated_utc
+
+
+def test_stop_success_leaves_coherent_terminal_state_and_status_reports_dead(tmp_path, monkeypatch):
+    pid, start_time, needle = _self_identity()
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                         capture_pid=pid, capture_start_time=start_time, capture_cmd_needle=needle)
+    monkeypatch.setattr(os, "kill", lambda p, sig: None)
+    monkeypatch.setattr(orch, "_pid_alive", lambda p: False)  # already gone by the time STOP checks
+    runtime_state.atomic_write_json(runtime_dir / "current_session.json", {"state": "COMPLETED"})
+
+    result = orch.stop_observation(runtime_dir=str(runtime_dir))
+    assert result["orchestrator_state"] == "COMPLETED"
+
+    # Once the process is truly gone (not just past STOP's own check),
+    # STATUS must never present its pid as still alive.
+    monkeypatch.setattr(orch, "_capture_ownership_matches", lambda runtime: False)
+    status = orch.get_status(runtime_dir=str(runtime_dir))
+    assert status["orchestrator"]["orchestrator_state"] == "COMPLETED"
+    assert status["orchestrator"]["capture_process_alive"] is False
+
+
+def test_stop_timeout_note_does_not_leak_into_next_session(tmp_path, monkeypatch):
+    """Reproduces the exact production sequence: one session's STOP times
+    out (DEGRADED + a note naming its own capture_pid), and a later,
+    unrelated session must never inherit that note."""
+    pid, start_time, needle = _self_identity()
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                         capture_pid=pid, capture_start_time=start_time, capture_cmd_needle=needle)
+    monkeypatch.setattr(os, "kill", lambda p, sig: None)
+    monkeypatch.setattr(orch, "_pid_alive", lambda p: True)  # never exits
+    clock = {"t": 0.0}
+    monkeypatch.setattr(orch.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(orch.time, "sleep",
+                         lambda s: clock.__setitem__("t", clock["t"] + orch.STOP_WAIT_TIMEOUT_SEC))
+
+    timed_out = orch.stop_observation(runtime_dir=str(runtime_dir))
+    assert timed_out["orchestrator_state"] == "DEGRADED"
+    assert "note" in timed_out and str(pid) in timed_out["note"]
+
+    path, plan = _fixture_resolved_plan(tmp_path)
+    popen_calls, runtime_dir2 = _patch_common(monkeypatch, tmp_path, preflight_overall="PASS")
+    monkeypatch.setattr(orch, "_wait_for_session_announcement",
+                         lambda *a, **k: {"session_id": "SID-LATER", "session_root": "/x"})
+    result = orch.run_observation(path, yes=True, runtime_dir=runtime_dir2)
+    assert "note" not in result
+
+
+def test_get_status_never_reports_a_dead_capture_pid_as_alive(tmp_path):
+    """Simulates an API restart/reload reading a stale sidecar left behind
+    by a session that ended without an explicit STOP: orchestrator_state is
+    left exactly as recorded (no invented state value), but
+    capture_process_alive tells the truth — and get_status() never writes
+    anything back to disk to do it."""
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                         capture_pid=999999999, capture_start_time=1, capture_cmd_needle="capture.py")
+    before = runtime_state.read_json_safe(orch._runtime_path(str(runtime_dir)))
+
+    status = orch.get_status(runtime_dir=str(runtime_dir))
+
+    assert status["orchestrator"]["orchestrator_state"] == "RUNNING"  # no invented state value
+    assert status["orchestrator"]["capture_process_alive"] is False
+    after = runtime_state.read_json_safe(orch._runtime_path(str(runtime_dir)))
+    assert after == before  # get_status() never writes to disk
+
+
+def test_get_status_omits_capture_process_alive_when_no_capture_pid_recorded(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="PREFLIGHT")
+    status = orch.get_status(runtime_dir=str(runtime_dir))
+    assert "capture_process_alive" not in status["orchestrator"]
