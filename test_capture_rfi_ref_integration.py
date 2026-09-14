@@ -102,6 +102,8 @@ class FakeRfiProc:
         self._alive = alive
         self.returncode = None if alive else 1
         self.terminated = False
+        self.killed = False
+        self.terminate_is_effective = True  # set False to force the SIGTERM -> SIGKILL escalation
         self.stdout = type("S", (), {"read": lambda self: ""})()
 
     def poll(self):
@@ -109,14 +111,18 @@ class FakeRfiProc:
 
     def terminate(self):
         self.terminated = True
-        self._alive = False
-        self.returncode = 0
+        if self.terminate_is_effective:
+            self._alive = False
+            self.returncode = 0
 
     def kill(self):
+        self.killed = True
         self._alive = False
         self.returncode = -9
 
     def wait(self, timeout=None):
+        if self._alive:
+            raise __import__("subprocess").TimeoutExpired(cmd="rtl_tcp", timeout=timeout)
         return self.returncode
 
 
@@ -302,6 +308,63 @@ async def test_rfi_ref_foreign_port_does_not_block_main_session(monkeypatch, tmp
 
     rows = list(csv.DictReader(ex.csv_path.open()))
     assert all(row["capture_status"] == "success" for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_rfi_ref_forced_kill_does_not_affect_main_completion(monkeypatch, tmp_path):
+    """Reproduces (in fake form) the real field finding: RFI_REF's rtl_tcp
+    catches SIGTERM but never exits, forcing a SIGKILL at end-of-session
+    teardown. MAIN must complete every point regardless, and the forced
+    kill must be visible in rfi_ref_status.json rather than hidden behind
+    a bare STOPPED."""
+    monkeypatch.setattr(capture, "SDRCapture", FakeMainSDR)
+
+    async def rfi_ref_handler(reader, writer):
+        writer.write(b"RTL0" + (5).to_bytes(4, "big") + (29).to_bytes(4, "big"))
+        await writer.drain()
+        try:
+            while True:
+                writer.write(bytes([127, 128] * 65536))
+                await writer.drain()
+                await asyncio.sleep(0.01)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server = await asyncio.start_server(rfi_ref_handler, "127.0.0.1", 0)
+    fake_port = server.sockets[0].getsockname()[1]
+
+    launched = {"done": False}
+    proc = FakeRfiProc(pid=61616)
+    proc.terminate_is_effective = False  # mirrors the real rtl_tcp: catches SIGTERM but never exits
+
+    def fake_popen(cmd, **kwargs):
+        launched["done"] = True
+        return proc
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (launched["done"] and p == fake_port) else None)
+
+    runtime_dir = tmp_path / "runtime"
+    try:
+        ex = make_executor(tmp_path, runtime_dir=str(runtime_dir),
+                            rfi_ref_enabled=True, rfi_ref_gain_db=25.0, rfi_ref_port=fake_port,
+                            rfi_ref_serial="00000002")
+
+        assert await ex.execute_observation_plan(0, 0)  # MAIN completes regardless
+
+        rows = list(csv.DictReader(ex.csv_path.open()))
+        assert all(row["capture_status"] == "success" for row in rows)
+
+        assert proc.terminated
+        assert proc.killed  # SIGTERM was ineffective, so (and only so) we escalated
+
+        status = read_json_safe(runtime_dir / "rfi_ref_status.json")
+        assert status["status"] == "STOPPED"  # RFI_REF did stop - just forcibly
+        assert status["last_runtime_error"] is not None
+        assert "force-killed" in status["last_runtime_error"]
+    finally:
+        server.close()
+        await server.wait_closed()
 
 
 @pytest.mark.asyncio

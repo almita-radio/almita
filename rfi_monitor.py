@@ -297,7 +297,7 @@ class RFIReferenceMonitor:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
             self._task = None
-        await self._cleanup_process_async()
+        forced_kill_note = await self._cleanup_process_async()
         if self.status in ("RUNNING", "STARTING", "DEGRADED"):
             # A clean stop from one of these states is not itself a failure -
             # whatever last_error was showing (e.g. a stale "no data >=15s"
@@ -308,12 +308,23 @@ class RFIReferenceMonitor:
                 self.last_runtime_error = self.last_error
             self.status = "STOPPED"
             self.last_error = None
+        if forced_kill_note:
+            # A forced SIGKILL is a real event, not a clean stop - confirmed
+            # by direct reproduction (2026-09) to be the normal outcome for
+            # this rtl_tcp build/hardware, which never exits on its own after
+            # SIGTERM. It must never disappear behind status=STOPPED; append
+            # rather than overwrite so it survives next to any pre-existing
+            # last_runtime_error moved above instead of replacing it.
+            self.last_runtime_error = (
+                f"{self.last_runtime_error}; {forced_kill_note}"
+                if self.last_runtime_error else forced_kill_note
+            )
         # Best-effort final flush so the operator can inspect the last real
         # spectrum from this session, even if the throttle interval hadn't
         # elapsed yet at the moment of stop.
         self._maybe_publish(force=True)
         self._write_status()
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=True)  # FFT work is bounded (single small FFT); never leave it running past stop()
 
     # -- internal -----------------------------------------------------------
 
@@ -421,13 +432,33 @@ class RFIReferenceMonitor:
                     await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
             self._write_status()
 
-    async def _cleanup_process_async(self) -> None:
+    async def _cleanup_process_async(self) -> Optional[str]:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._cleanup_process_sync)
+        return await loop.run_in_executor(None, self._cleanup_process_sync)
 
-    def _cleanup_process_sync(self) -> None:
+    def _cleanup_process_sync(self) -> Optional[str]:
+        """Terminates (SIGTERM, escalating to SIGKILL after a 5s timeout)
+        the child this instance itself launched. Returns a forensic message
+        when escalation was needed, else None.
+
+        Confirmed by direct reproduction (2026-09, isolated - same rtl_tcp
+        build, same RFI_REF device, no MAIN/mount involved) that this
+        installed rtl_tcp never exits on its own after SIGTERM regardless of
+        whether the client socket was already closed first (it was, in both
+        the real field session and the repro): it prints "Signal caught,
+        exiting!" (rtl_tcp registers the same handler for SIGINT/SIGTERM/
+        SIGQUIT - confirmed via disassembly, hence multiple prints per
+        delivery) but then hangs indefinitely (waited 30s) before ever
+        calling exit(). The SIGKILL/exit_code=-9 seen in
+        data/mosaic/.../rfi_ref/rtl_tcp.log is therefore the deterministic,
+        expected result of the current 5.0s timeout against this
+        third-party binary's real shutdown behavior on this hardware - not a
+        bug in this class's own signal sequencing. The fix here is not to
+        chase a clean exit that never happens, but to never let that forced
+        kill disappear behind a bare STOPPED status (see stop())."""
         proc, self.proc = self.proc, None
         exit_code = None
+        forced_kill_note = None
         if proc is not None:
             exit_code = proc.poll()
             if exit_code is None:
@@ -438,8 +469,13 @@ class RFIReferenceMonitor:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                         proc.wait(timeout=5.0)
+                        forced_kill_note = (
+                            "rtl_tcp did not exit within 5.0s of SIGTERM; "
+                            f"force-killed (SIGKILL), exit_code={proc.returncode}"
+                        )
                 exit_code = proc.returncode
         self._finalize_log(exit_code)
+        return forced_kill_note
 
     def _finalize_log(self, exit_code) -> None:
         """Writes the shutdown/exit-code bookend line and closes the file -

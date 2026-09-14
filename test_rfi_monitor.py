@@ -499,6 +499,187 @@ async def test_cleanup_escalates_to_kill_only_for_its_own_pid(tmp_path, monkeypa
     assert m.proc is None
 
 
+async def _running_monitor_with_proc(tmp_path, monkeypatch, pid, **kwargs):
+    """Like _running_monitor, but also returns the FakeProc so callers can
+    flip terminate_is_effective or instrument terminate()/kill() - needed
+    for the stop()-path cleanup tests below, none of which the existing
+    _running_monitor helper (which hides proc in a closure) can support."""
+    connected = asyncio.Event()
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=pid)
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, port=port,
+                                         bind_timeout=2.0, **kwargs)
+    await m.start()
+    await asyncio.wait_for(connected.wait(), timeout=2.0)
+    await asyncio.sleep(0.2)
+    assert m.status == "RUNNING"
+    return m, server, proc
+
+
+@pytest.mark.asyncio
+async def test_stop_normal_terminates_cleanly_and_leaves_no_runtime_error(tmp_path, monkeypatch):
+    """Child honors SIGTERM (the common case in tests, though not - per the
+    2026-09 direct hardware reproduction - the real installed rtl_tcp):
+    no forced kill, no runtime error, clean STOPPED."""
+    m, server, proc = await _running_monitor_with_proc(tmp_path, monkeypatch, 1001, session_id="s1")
+    try:
+        pass
+    finally:
+        await m.stop()
+        server.close()
+        await server.wait_closed()
+
+    assert proc.terminated
+    assert not proc.killed
+    assert m.status == "STOPPED"
+    assert m.last_runtime_error is None
+    status = read_json_safe(tmp_path / "rfi_ref_status.json")
+    assert status["status"] == "STOPPED"
+    assert status["last_runtime_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_stop_called_twice_is_idempotent_no_duplicate_signals(tmp_path, monkeypatch):
+    m, server, proc = await _running_monitor_with_proc(tmp_path, monkeypatch, 1002, session_id="s1")
+    calls = {"terminate": 0, "kill": 0}
+    orig_terminate, orig_kill = proc.terminate, proc.kill
+    proc.terminate = lambda: (calls.__setitem__("terminate", calls["terminate"] + 1), orig_terminate())
+    proc.kill = lambda: (calls.__setitem__("kill", calls["kill"] + 1), orig_kill())
+
+    await m.stop()
+    first_status = m.status
+    await m.stop()  # second call must be a no-op: no re-signal, no state corruption
+    server.close()
+    await server.wait_closed()
+
+    assert calls["terminate"] == 1
+    assert calls["kill"] == 0
+    assert m.status == first_status == "STOPPED"
+    assert m.proc is None
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_client_connection_before_signaling_child(tmp_path, monkeypatch):
+    """Confirms the order stop() actually uses: OUR OWN client transport is
+    closed (writer.close()+wait_closed() completes) before the child is
+    ever signaled. This is the guarantee the code actually makes and the
+    order the 2026-09 hardware repro exercised (which still needed SIGKILL
+    regardless - see the force-kill tests below). Deliberately does not
+    assert on when the remote peer's asyncio task notices the disconnect -
+    that depends on the peer's own scheduling, not on anything this class
+    controls or promises."""
+    events = []
+
+    connected = asyncio.Event()
+    orig_writer_close = asyncio.StreamWriter.close
+
+    def recording_close(self):
+        events.append("our_writer_close_called")
+        return orig_writer_close(self)
+    monkeypatch.setattr(asyncio.StreamWriter, "close", recording_close)
+
+    async def handler(reader, writer):
+        writer.write(rtl0_header())
+        await writer.drain()
+        connected.set()
+        try:
+            while True:
+                writer.write(_quiet_block())
+                await writer.drain()
+                await asyncio.sleep(0.005)
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+
+    server, port = await _start_fake_rtl_tcp(handler)
+    proc = FakeProc(pid=1003)
+    orig_terminate = proc.terminate
+    proc.terminate = lambda: (events.append("terminate_called"), orig_terminate())
+    launched = {"done": False}
+    monkeypatch.setattr(rfi_monitor.subprocess, "Popen",
+                         lambda *a, **k: (launched.__setitem__("done", True), proc)[1])
+    monkeypatch.setattr(rfi_monitor, "listening_pid",
+                         lambda host, p: proc.pid if (p == port and launched["done"]) else None)
+
+    m = rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, session_id="s1",
+                                         port=port, bind_timeout=2.0)
+    await m.start()
+    await asyncio.wait_for(connected.wait(), timeout=2.0)
+    await asyncio.sleep(0.2)
+    await m.stop()
+    server.close()
+    await server.wait_closed()
+
+    assert "our_writer_close_called" in events
+    assert "terminate_called" in events
+    assert events.index("our_writer_close_called") < events.index("terminate_called")
+
+
+@pytest.mark.asyncio
+async def test_stop_force_kill_records_forced_kill_in_last_runtime_error_and_status_stays_stopped(
+        tmp_path, monkeypatch):
+    """Reproduces (in fake form) the real field finding confirmed by direct
+    hardware repro: rtl_tcp catches SIGTERM but never actually exits, so we
+    escalate to SIGKILL (exit_code=-9). That forced kill must be visible in
+    last_runtime_error, and the final status must still read STOPPED -
+    RFI_REF genuinely did stop, just not on its own."""
+    m, server, proc = await _running_monitor_with_proc(tmp_path, monkeypatch, 1004, session_id="s1")
+    proc.terminate_is_effective = False  # mirrors the real rtl_tcp: catches SIGTERM but never exits
+
+    await m.stop()
+    server.close()
+    await server.wait_closed()
+
+    assert proc.terminated
+    assert proc.killed
+    assert m.status == "STOPPED"  # RFI_REF did stop - just forcibly
+    assert m.last_runtime_error is not None
+    assert "force-killed" in m.last_runtime_error
+    assert "exit_code=-9" in m.last_runtime_error  # negative returncode surfaced correctly, not swallowed
+
+    status = read_json_safe(tmp_path / "rfi_ref_status.json")
+    assert status["status"] == "STOPPED"
+    assert "force-killed" in status["last_runtime_error"]
+
+
+@pytest.mark.asyncio
+async def test_stop_force_kill_appends_to_existing_last_runtime_error_without_losing_either(
+        tmp_path, monkeypatch):
+    """A pre-existing DEGRADED-period error and a forced kill are two
+    different facts; stop() must keep both, never let the later one
+    overwrite the earlier one."""
+    m, server, proc = await _running_monitor_with_proc(tmp_path, monkeypatch, 1005, session_id="s1")
+    proc.terminate_is_effective = False
+    m.status = "DEGRADED"
+    m.last_error = "no data from RFI_REF for >=15s"
+
+    await m.stop()
+    server.close()
+    await server.wait_closed()
+
+    assert m.status == "STOPPED"
+    assert "no data from RFI_REF for >=15s" in m.last_runtime_error
+    assert "force-killed" in m.last_runtime_error
+
+
 # ---------------------------------------------------------------- pure FFT helper
 
 
