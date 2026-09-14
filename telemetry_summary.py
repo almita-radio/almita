@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from temperature_sensors import is_plausible_temperature_c
+
 SDR_SENSOR="28-082471f4e41b";LNA_SENSOR="28-2c5acd1e64ff"
 
 def utcnow():return datetime.now(timezone.utc).isoformat()
@@ -46,12 +48,19 @@ def select_network(items):
     name,value=max(candidates,key=lambda x:x[1]["rx_bytes"]+x[1]["tx_bytes"])
     return {"interface":name,**value}
 def read_w1(sensor,root=Path("/sys/bus/w1/devices")):
+    # This convenience "temperature" file (when the kernel driver exposes
+    # it) has no CRC-8 of its own to check, unlike w1_slave - a plausibility
+    # guard is the only defense either candidate has against a glitched
+    # conversion. See temperature_sensors.py for why this exact range.
     candidates=[root/sensor/"temperature",root/sensor/"w1_slave"]
     for path in candidates:
         try:
             text=path.read_text().strip()
             raw=text if path.name=="temperature" else text.rsplit("t=",1)[1]
-            return {"value_c":int(raw)/1000,"status":"OK","path":str(path)}
+            value=int(raw)/1000
+            if not is_plausible_temperature_c(value):
+                return {"value_c":None,"status":"INVALID","path":str(path)}
+            return {"value_c":value,"status":"OK","path":str(path)}
         except (OSError,ValueError,IndexError):continue
     return {"value_c":None,"status":"NOT_AVAILABLE","path":None}
 def read_temperatures(root=Path("/sys/bus/w1/devices")):
@@ -95,8 +104,8 @@ def collect(workspace=Path("/home/stellarmate/almita"),proc=Path("/proc"),w1=Pat
     processes=find_process(proc=proc)
     try:listening=parse_listening_port((proc/"net/tcp").read_text()) or parse_listening_port((proc/"net/tcp6").read_text(),address="::1")
     except OSError:listening=None;warnings.append("tcp table unavailable")
-    if sdr_temp["status"]!="OK":warnings.append("SDR temperature NOT_AVAILABLE")
-    if lna_temp["status"]!="OK":warnings.append("LNA temperature NOT_AVAILABLE")
+    if sdr_temp["status"]!="OK":warnings.append(f"SDR temperature {sdr_temp['status']}")
+    if lna_temp["status"]!="OK":warnings.append(f"LNA temperature {lna_temp['status']}")
     if not processes:warnings.append("rtl_tcp process not detected")
     if listening is False:warnings.append("rtl_tcp port 127.0.0.1:1234 not listening")
     value={"schema_version":"1.0","status":"DEGRADED" if warnings else "OK","created_utc":utcnow(),

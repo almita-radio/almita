@@ -6,6 +6,36 @@ import math
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+# DS18B20 datasheet-guaranteed operating range (Maxim/Dallas DS18B20
+# datasheet: "Operating Range" -55C to +125C). A reading outside this is not
+# a real environmental temperature no matter where/how the sensor is
+# mounted in the field - the sensor itself cannot produce a truthful value
+# outside its own hardware spec, so this is the widest defensible software
+# plausibility bound (not a project-specific guess), wide enough to never
+# reject any real field reading (self-heating electronics in a sun-exposed
+# enclosure included) while still rejecting the observed glitch (298.9C)
+# with well over 100C of margin. Centralized here - both this module's
+# DS18B20Reader and telemetry_summary.py's independent w1 reader (see
+# FIELD_RUNBOOK.md's "duplicación de lectores DS18B20" known item) import
+# it rather than each hardcoding their own threshold.
+DS18B20_MIN_PLAUSIBLE_C = -55.0
+DS18B20_MAX_PLAUSIBLE_C = 125.0
+
+
+def is_plausible_temperature_c(value) -> bool:
+    """True only for a finite number within the DS18B20's own operating
+    range. Used to reject sensor/transmission glitches (e.g. a corrupted
+    1-Wire scratchpad conversion that still happens to pass its own CRC-8 -
+    CRC validates transmission integrity, not that the underlying
+    conversion was itself thermally sane) before they are ever published
+    as a real reading. Never raises."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and DS18B20_MIN_PLAUSIBLE_C <= value <= DS18B20_MAX_PLAUSIBLE_C
+    )
+
 
 class DS18B20Reader:
     """Read explicitly assigned DS18B20 sensors directly from Linux sysfs."""
@@ -35,6 +65,11 @@ class DS18B20Reader:
             temperature = int(raw) / 1000.0
             if temperature == -127.0:
                 raise ValueError("invalid DS18B20 sentinel -127.0 C")
+            if not is_plausible_temperature_c(temperature):
+                raise ValueError(
+                    f"implausible temperature {temperature}C outside DS18B20 operating range "
+                    f"[{DS18B20_MIN_PLAUSIBLE_C}, {DS18B20_MAX_PLAUSIBLE_C}]C - rejected as a glitch, not published"
+                )
             result.update(temperature_c=temperature, valid=True)
             if temperature == 85.0:
                 self._consecutive_85[role] = self._consecutive_85.get(role, 0) + 1

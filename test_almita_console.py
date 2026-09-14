@@ -465,6 +465,21 @@ def test_24_frontend_shows_mount_device_when_announced_by_capture(tmp_path):
     assert "LX200 OnStep" in html
 
 
+def test_24b_frontend_shows_na_not_zero_for_invalid_temperature(tmp_path):
+    """The frontend already tolerates a null temperature (rejected as a
+    glitch upstream - see temperature_sensors.py/telemetry_summary.py's
+    plausibility guard) as N/A - confirmed unchanged, no frontend edit was
+    needed for that fix."""
+    html = dom(console_root(tmp_path, status=status_fixture(
+        "RUNNING", instrument={"cpu": 10.0, "ram": 20.0, "disk": 30.0, "network_interfaces": {"interface": "eth0"},
+                                "rtl_tcp_process": True, "rtl_tcp_listening": True, "sdr_temperature_c": None,
+                                "lna_temperature_c": None, "mount_state": "NOT_EXPOSED",
+                                "telemetry_stale": False, "error": None})))
+    assert "N/A" in html
+    assert "298.9" not in html
+    assert "0.0 °C" not in html and "0 °C" not in html
+
+
 # ---------------------------------------------------------------- 25-28: RFI_REF sidecar
 
 
