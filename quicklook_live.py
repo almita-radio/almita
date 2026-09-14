@@ -174,15 +174,22 @@ class QuicklookLive:
         best-effort, never fatal: the exact science map (quicklook_map.json)
         must keep working whether or not this preview succeeds. Written to
         distinctly-named files so it can never be confused with or
-        overwrite the NATIVE_GRID product."""
+        overwrite the NATIVE_GRID product.
+
+        PNG written (via temp+rename) before the JSON ever claims
+        available=True - the same order _update_map()/_update_rfi_occupancy_map()
+        use - so a mid-render failure here can never leave a JSON claiming a
+        PNG that was never actually produced (confirmed gap, 2026-09: the
+        previous JSON-then-PNG order let a PNG-write exception get swallowed
+        by the except below after available=True was already on disk)."""
         try:
             document=build_interpolated_preview_document(self._grid_geometry,self.state["points"],
                                                           self.session_id)
-            atomic_json(self.output/"quicklook_map_interpolated.json",document)
             if document.get("available"):
                 temporary=self.output/"quicklook_map_interpolated.png.tmp.png"
                 write_interpolated_preview_png(temporary,document)
                 os.replace(temporary,self.output/"quicklook_map_interpolated.png")
+            atomic_json(self.output/"quicklook_map_interpolated.json",document)
         except Exception:
             pass
 

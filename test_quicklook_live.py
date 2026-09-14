@@ -268,6 +268,37 @@ def test_interpolated_preview_unavailable_with_few_points_native_grid_still_upda
     assert not (out/"quicklook_map_interpolated.png").exists()
 
 
+def test_interpolated_preview_png_failure_never_leaves_json_claiming_available(tmp_path,monkeypatch):
+    """Confirmed gap fixed 2026-09: the previous JSON-then-PNG write order
+    let a PNG-render failure (document built fine, PNG write blew up) leave
+    quicklook_map_interpolated.json on disk with available=True while
+    quicklook_map_interpolated.png was never actually produced - exactly
+    the "JSON exists, PNG 404s" symptom pattern. PNG-before-JSON (the same
+    order _update_map()/_update_rfi_occupancy_map() already use) means this
+    failure must now leave neither file changed from its prior state."""
+    fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,3)
+    for pid in (1,2,3):
+        capture(session/f"p{pid}.h5")
+    manifest(session,[row(str(pid),"SUCCESS",f"p{pid}.h5",ra=str(10.0+pid),dec="-30") for pid in (1,2,3)])
+    out=tmp_path/"out"
+
+    def boom(*a,**k):
+        raise RuntimeError("simulated PNG render failure")
+    monkeypatch.setattr(ql,"write_interpolated_preview_png",boom)
+    status=ql.QuicklookLive(session,PROFILE,out).run(True)
+    assert status["points_processed"]==3
+    native=json.loads((out/"quicklook_map.json").read_text())
+    assert native["map_mode"]=="NATIVE_GRID"  # untouched by the preview failure
+    # The PNG write failed on point 3 (the first point with >=3 real points,
+    # so the first with available=True) - it must never exist.
+    assert not (out/"quicklook_map_interpolated.png").exists()
+    # The JSON may still hold point 2's leftover state (available=False,
+    # since interpolation needs >=3 points) - stale is fine, but it must
+    # never have been overwritten to available=True without the PNG.
+    if (out/"quicklook_map_interpolated.json").exists():
+        assert json.loads((out/"quicklook_map_interpolated.json").read_text())["available"] is False
+
+
 def test_interpolated_preview_failure_never_breaks_native_grid(tmp_path,monkeypatch):
     fake_products(monkeypatch);session=tmp_path/"s";session.mkdir();make_grid(session,1,3)
     for pid in (1,2,3):

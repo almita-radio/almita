@@ -767,6 +767,63 @@ def test_43_watcher_quicklook_rfi_occupancy_map_available_via_existing_gate(tmp_
     assert status["quicklook"]["map_available"] is False  # Antenna A's own map is a distinct file
 
 
+def test_43b_watcher_quicklook_waterfall_available_matches_served_file(tmp_path):
+    """Regression for the confirmed contract bug: the console's WATERFALL
+    thumb serves session_waterfall.png (see console/app.js), so the gate
+    must reflect session_waterfall.json's existence - not
+    latest_waterfall.json's, a different, per-point product that exists on
+    every point regardless of whether the whole-session accumulator
+    (independently best-effort in quicklook_live.py) ever wrote anything."""
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    quicklook_root = tmp_path / "quicklook_out"
+    quicklook_root.mkdir()
+    atomic_write_json(tmp_path / "quicklook_announcement.json",
+                       {"schema_version": 1, "session_id": "s1", "quicklook_root": str(quicklook_root)})
+    atomic_write_json(quicklook_root / "quicklook_live_status.json",
+                       {"status": "OK", "points_processed": 1, "updated_utc": utcnow()})
+    (quicklook_root / "session_waterfall.json").write_text("{}")  # no latest_waterfall.json at all
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["quicklook"]["waterfall_available"] is True
+
+
+def test_43c_watcher_quicklook_waterfall_unavailable_when_only_the_per_point_file_exists(tmp_path):
+    """The exact historical failure mode this fixes: a per-point capture
+    always writes latest_waterfall.json, but if the whole-session
+    accumulator (session_waterfall.json/.png) never successfully wrote for
+    this session, the gate must not claim availability - that would have
+    the console request session_waterfall.png and get a 404 despite the
+    JSON-based gate reading True."""
+    announce_session(tmp_path, session_id="s1", event="SESSION_STARTED", state="RUNNING")
+    quicklook_root = tmp_path / "quicklook_out"
+    quicklook_root.mkdir()
+    atomic_write_json(tmp_path / "quicklook_announcement.json",
+                       {"schema_version": 1, "session_id": "s1", "quicklook_root": str(quicklook_root)})
+    atomic_write_json(quicklook_root / "quicklook_live_status.json",
+                       {"status": "OK", "points_processed": 1, "updated_utc": utcnow()})
+    (quicklook_root / "latest_waterfall.json").write_text("{}")  # per-point file only
+    status = watcher.build_status(utcnow(), 0.0, watcher.WatcherState(), tmp_path,
+                                   lambda: fake_telemetry(), capture_process_detected=True)
+    assert status["quicklook"]["waterfall_available"] is False
+
+
+def test_43d_contract_console_waterfall_thumb_file_matches_watcher_gate_file(tmp_path):
+    """Static contract guard: whatever filename console/app.js's WATERFALL
+    thumb actually requests (minus its .png extension) must be the exact
+    stem almita_console_watcher.py's waterfall_available gate checks for -
+    the naming drift that caused this bug (e92caad updated the served file
+    but not the gate) must fail this test immediately if it recurs for any
+    product, not just be caught by luck in a fixture."""
+    app_js = (Path(__file__).parent / "console" / "app.js").read_text()
+    match = re.search(r'\["waterfall","([a-zA-Z0-9_.]+)\.png"', app_js)
+    assert match, "could not find the WATERFALL thumb's served filename in console/app.js"
+    served_stem = match.group(1)
+    watcher_src = Path(watcher.__file__).read_text()
+    gate_match = re.search(r'"waterfall_available":\s*\(root\s*/\s*"([a-zA-Z0-9_.]+)\.json"\)', watcher_src)
+    assert gate_match, "could not find the waterfall_available gate's checked filename"
+    assert gate_match.group(1) == served_stem
+
+
 def test_44_frontend_rfi_thumbs_show_all_three_when_available(tmp_path):
     public = console_root(tmp_path, status=status_fixture(
         "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,

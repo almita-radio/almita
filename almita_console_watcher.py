@@ -203,7 +203,18 @@ def build_quicklook(now_utc: str, runtime_dir: Path, session_id: Optional[str]) 
         "points_processed": status.get("points_processed"),
         "last_product_utc": status.get("updated_utc"),
         "spectrum_available": (root / "latest_spectrum.json").is_file(),
-        "waterfall_available": (root / "latest_waterfall.json").is_file(),
+        # The console's WATERFALL thumb serves session_waterfall.png (the
+        # whole-session accumulator, written by quicklook_session_waterfall.py
+        # - see console/app.js), not latest_waterfall.png. This gate must
+        # check that same file's JSON sidecar: checking latest_waterfall.json
+        # instead (as it did before this fix) is a stale leftover from
+        # e92caad, which switched the served file for Antenna A but only
+        # added a matching dedicated gate for Antenna B - it could read
+        # available=True from a point's per-capture product that exists on
+        # every point regardless of whether the whole-session accumulator
+        # (independently best-effort, can fail per point) ever actually
+        # wrote session_waterfall.png, serving a 404 for it.
+        "waterfall_available": (root / "session_waterfall.json").is_file(),
         "map_available": (root / "quicklook_map.json").is_file(),
         # ANTENNA B diagnostic overlay on Antenna A's own grid - a distinct
         # product from Antenna A's own map above (quicklook_map.json).

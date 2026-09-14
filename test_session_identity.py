@@ -215,6 +215,11 @@ def test_bug_reproduction_console_waiting_before_fix_active_after():
                            {"status": "OK", "points_processed": 8, "updated_utc": "2026-08-29T21:50:05+00:00"})
         (session_dir / "latest_spectrum.json").write_text("{}")
         (session_dir / "latest_waterfall.json").write_text("{}")
+        # session_waterfall.json is the file the console actually gates its
+        # WATERFALL thumb on (it serves session_waterfall.png, not
+        # latest_waterfall.png) - both exist in a real session, so both are
+        # present here too.
+        (session_dir / "session_waterfall.json").write_text("{}")
         (session_dir / "quicklook_map.json").write_text("{}")
 
         status_after = watcher.build_status("2026-08-29T21:50:06+00:00", 100.0, watcher.WatcherState(),
@@ -278,6 +283,7 @@ def test_simulated_integration_capture_quicklook_watcher_share_one_identity(tmp_
                        {"status": "OK", "points_processed": 2, "updated_utc": "2026-08-29T22:00:05+00:00"})
     (session_dir / "latest_spectrum.json").write_text("{}")
     (session_dir / "latest_waterfall.json").write_text("{}")
+    (session_dir / "session_waterfall.json").write_text("{}")
     (session_dir / "quicklook_map.json").write_text("{}")
     announce_session(runtime_dir, session_id=session_id, event="POINT_COMPLETED", state="RUNNING",
                       points_success=2)
