@@ -426,6 +426,49 @@ def test_21g_frontend_activity_log_shows_lines_with_coloring(tmp_path):
     assert '<span class="log-session">SESSION  elapsed=00:01:02   remaining≈00:05:00</span>' in html
 
 
+def test_21h_frontend_activity_log_appends_hms_to_session_summary_lines(tmp_path):
+    """The session-summary block (GOTO/Motion/Capture/Disk, printed verbatim
+    by capture.py) gets an HH:MM:SS reading appended alongside the original
+    seconds value - generic over the label, not hardcoded per line."""
+    html = dom(console_root(tmp_path, status={
+        **status_fixture("COMPLETED"),
+        "activity_log": {"available": True, "lines": [
+            "GOTO         866.1s",
+            "Motion       753.2s",
+            "Capture      102.3s",
+            "Disk         28.7s",
+        ]},
+    }))
+    assert "GOTO         866.1s   (00:14:26)" in html
+    assert "Motion       753.2s   (00:12:33)" in html
+    assert "Capture      102.3s   (00:01:42)" in html
+    assert "Disk         28.7s   (00:00:29)" in html
+
+
+def test_21i_frontend_activity_log_hms_accumulates_past_24_hours(tmp_path):
+    html = dom(console_root(tmp_path, status={
+        **status_fixture("COMPLETED"),
+        "activity_log": {"available": True, "lines": ["GOTO         98104.0s"]},
+    }))
+    assert "(27:15:04)" in html  # hours accumulate, never wrap at 24
+
+
+def test_21j_frontend_activity_log_zero_and_non_summary_lines_unaffected(tmp_path):
+    html = dom(console_root(tmp_path, status={
+        **status_fixture("RUNNING"),
+        "activity_log": {"available": True, "lines": [
+            "GOTO         0.0s",
+            "MOUNT    GOTO      OK       7.6s   motion=6.5s   wait=1.1s",
+            "POINT 003/010  HA=-1.20h",
+        ]},
+    }))
+    assert "GOTO         0.0s   (00:00:00)" in html
+    # A detail line that merely mentions seconds mid-line must never be
+    # mistaken for the whole-session summary and get an HMS appended.
+    assert "motion=6.5s   wait=1.1s   (" not in html
+    assert "HA=-1.20h   (" not in html
+
+
 def test_21b_frontend_shows_spectrum_thumbnail_when_available(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
     assert 'id="quicklook-thumbs"' in html and "quicklook-thumbs\" hidden" not in html
@@ -850,6 +893,47 @@ def test_44_frontend_rfi_thumbs_show_all_three_when_available(tmp_path):
     assert "RFI SPECTRUM" in html and "RFI WATERFALL" in html and "RFI OCCUPANCY MAP" in html
     assert 'id="rfi-waterfall-canvas"' in html
     assert "WAITING FOR RFI PRODUCTS" not in html
+
+
+def test_44b_frontend_rfi_spectrum_and_waterfall_links_open_image_not_json(tmp_path):
+    """Regression for the confirmed bug: clicking RFI SPECTRUM/RFI WATERFALL
+    used to open the raw JSON directly (console/app.js set the link's href
+    to the .json URL). Neither product has a server-rendered PNG (unlike
+    Antenna A and the occupancy map below) - they are drawn only
+    client-side - so the fix exports the same already-drawn chart, at a
+    larger size, as a PNG data URL via the browser's own Canvas API
+    (canvas.toDataURL), and that image must be the link's destination."""
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,
+                             "session_waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
+    html = dom(public)
+    spectrum_href = re.search(r'id="rfi-spectrum-link"[^>]*href="([^"]*)"', html)
+    waterfall_href = re.search(r'id="rfi-waterfall-link"[^>]*href="([^"]*)"', html)
+    assert spectrum_href, "rfi-spectrum-link has no href"
+    assert waterfall_href, "rfi-waterfall-link has no href"
+    assert spectrum_href.group(1).startswith("data:image/png")
+    assert waterfall_href.group(1).startswith("data:image/png")
+    assert "rfi_ref_spectrum.json" not in spectrum_href.group(1)
+    assert "rfi_ref_session_waterfall.json" not in waterfall_href.group(1)
+    # target="_blank" rel="noopener" (already on both anchors, untouched)
+    # is what makes the click open in a new tab rather than navigating the
+    # live console away - confirm it is still there.
+    assert 'id="rfi-spectrum-link" target="_blank" rel="noopener"' in html
+    assert 'id="rfi-waterfall-link" target="_blank" rel="noopener"' in html
+
+
+def test_44c_frontend_antenna_a_thumb_links_unaffected_by_rfi_fix(tmp_path):
+    """Antenna A's own thumbnails (real server-rendered PNGs) must keep
+    linking straight to their PNG file, exactly as before - untouched by
+    the Antenna B click-target fix."""
+    public = console_root(tmp_path, status=status_fixture("RUNNING", quicklook=_quicklook_running()))
+    html = dom(public)
+    spectrum_href = re.search(r'id="thumb-spectrum-link"[^>]*href="([^"]*)"', html)
+    assert spectrum_href
+    assert "quicklook_products/latest_spectrum.png" in spectrum_href.group(1)
 
 
 def test_45_frontend_rfi_map_thumb_hidden_when_occupancy_map_unavailable(tmp_path):

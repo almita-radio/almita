@@ -21,6 +21,32 @@ function _hhmm(seconds){
   const h=Math.floor(total/3600),m=Math.floor((total%3600)/60);
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
 }
+// Same defensive semantics as _hhmm (invalid -> "--:--:--", negative
+// clamped to 0) plus seconds, and hours accumulate past 24 rather than
+// wrapping (Math.floor(total/3600), never % 24) - a multi-hour session
+// summary (e.g. GOTO total) reads as 27:15:04, not 03:15:04.
+function _hhmmss(seconds){
+  if(seconds==null||!isFinite(seconds))return"--:--:--";
+  const total=Math.max(0,Math.round(seconds));
+  const h=Math.floor(total/3600),m=Math.floor((total%3600)/60),s=total%60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+// The session-summary block in capture.py's own compact console output
+// (orchestrator_capture.log, tailed verbatim into activity_log.lines - see
+// almita_console_watcher.py's build_activity_log) prints accumulated
+// timing categories as plain text, e.g. "GOTO         866.1s". This
+// augments those specific lines with an HH:MM:SS reading alongside the
+// original seconds value (kept verbatim, per spec) - purely a display-side
+// addition, no backend change, generic over any current or future label
+// rather than hardcoded to just these four.
+const _SUMMARY_TIMING_LINE_RE=/^([A-Za-z][A-Za-z ]*?)(\s+)(-?[\d.]+)s$/;
+function _appendHmsToSummaryLine(line){
+  const match=_SUMMARY_TIMING_LINE_RE.exec(line);
+  if(!match)return line;
+  const seconds=parseFloat(match[3]);
+  if(!isFinite(seconds))return line;
+  return `${line}   (${_hhmmss(seconds)})`;
+}
 
 async function fetchJson(name){
   const response=await fetch(`${CONFIG.root}/${name}`,{cache:"no-store"});
@@ -246,6 +272,25 @@ function drawRfiWaterfall(canvas,rows,freqMHz){
   ctx.fillText("old",a.x0-4,a.y1-6);
 }
 
+// RFI SPECTRUM/WATERFALL have no server-rendered PNG at all (unlike
+// Antenna A's own spectrum/waterfall, or Antenna B's own occupancy map
+// below): they are drawn only client-side, on a small thumbnail canvas,
+// from JSON - a deliberate choice (rfi_monitor.py's own docstring: FFT
+// work stays off the asyncio loop and the Pi never runs a second renderer
+// for this). So "click -> open the full-size image" for these two can't
+// point at a PNG that doesn't exist; it re-renders the SAME already-drawn
+// data onto a larger offscreen canvas with the exact same drawing function
+// (no new chart logic, no science/data change) and exports that canvas as
+// a PNG data URL via the browser's own Canvas API - never a second FFT,
+// never a Pi-side image renderer, never the JSON as the click target.
+const RFI_FULL_SIZE_W=1000,RFI_FULL_SIZE_H=450;
+function _fullSizeCanvasImageUrl(drawFn,...drawArgs){
+  const canvas=document.createElement("canvas");
+  canvas.width=RFI_FULL_SIZE_W;canvas.height=RFI_FULL_SIZE_H;
+  drawFn(canvas,...drawArgs);
+  return canvas.toDataURL("image/png");
+}
+
 async function renderRfiProducts(rfiRef,quicklook,sessionId){
   const state=rfiRef.status||"DISABLED";
   const freqLabel=rfiRef.center_frequency_hz==null?"—":`${num(rfiRef.center_frequency_hz/1e6,3)} MHz`;
@@ -275,8 +320,9 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
       // but an old product must never be drawn as if it belongs to this
       // session even if fetched a moment before the watcher's next tick.
       if(data.session_id===sessionId&&Array.isArray(data.frequency_hz)&&data.frequency_hz.length){
-        drawRfiSpectrum(specCanvas,data.frequency_hz.map(f=>f/1e6),data.power_dbfs);
-        $("rfi-spectrum-link").href=`${CONFIG.root}/rfi_ref_spectrum.json`;
+        const freqMHz=data.frequency_hz.map(f=>f/1e6);
+        drawRfiSpectrum(specCanvas,freqMHz,data.power_dbfs);
+        $("rfi-spectrum-link").href=_fullSizeCanvasImageUrl(drawRfiSpectrum,freqMHz,data.power_dbfs);
       }else{
         specCanvas.getContext("2d").clearRect(0,0,specCanvas.width,specCanvas.height);
       }
@@ -293,7 +339,7 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
       const data=await fetchJson("rfi_ref_session_waterfall.json");
       if(data.session_id===sessionId&&Array.isArray(data.rows)&&data.rows.length){
         drawRfiWaterfall(wfCanvas,data.rows,data.frequency_hz);
-        $("rfi-waterfall-link").href=`${CONFIG.root}/rfi_ref_session_waterfall.json`;
+        $("rfi-waterfall-link").href=_fullSizeCanvasImageUrl(drawRfiWaterfall,data.rows,data.frequency_hz);
       }else{
         wfCanvas.getContext("2d").clearRect(0,0,wfCanvas.width,wfCanvas.height);
       }
@@ -332,7 +378,8 @@ function renderActivityLog(activityLog){
   if(!lines.length)return;
   pre.innerHTML=lines.map(line=>{
     const cls=_logLineClass(line);
-    return `<span${cls?` class="${cls}"`:""}>${_escapeHtml(line)}</span>`;
+    const display=_appendHmsToSummaryLine(line);
+    return `<span${cls?` class="${cls}"`:""}>${_escapeHtml(display)}</span>`;
   }).join("\n");
   pre.scrollTop=pre.scrollHeight;
 }
