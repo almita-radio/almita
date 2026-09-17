@@ -5,9 +5,11 @@ import pytest
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
+from astropy.time import Time
+
 from alignment_engine.fitting import FitQuality, FitResult
 from alignment_engine.mount_adapter import SimulatedMountAdapter
-from alignment_engine.sync_flow import apply_sync, prepare_sync, verify_sync
+from alignment_engine.sync_flow import apply_sync, describe_real_indi_sync_operations, prepare_sync, verify_sync
 from alignment import AlignmentEstimate
 
 CENTER = SkyCoord(ra=100 * u.deg, dec=20 * u.deg)
@@ -116,6 +118,51 @@ async def test_verify_sync_flags_worse_residual_without_auto_retrying():
     # verify_sync itself must never call goto/sync again beyond the one
     # documented repeatability check - confirmed by construction (it has
     # no loop/retry branch), not by mocking call counts here.
+
+
+# ------------------------------------------------------- item 7: real SYNC preview
+
+
+def test_describe_real_indi_sync_operations_matches_the_real_driver_sequence():
+    """Mirrors indi_telescope_control.py::INDITelescopeControl.sync()'s own
+    real 3-step wire sequence exactly (ON_COORD_SET->SYNC,
+    EQUATORIAL_EOD_COORD<-real coords, ON_COORD_SET->TRACK) - pure
+    description, no network I/O, so this test needs no server."""
+    ops = describe_real_indi_sync_operations(CENTER, obstime=Time("2026-01-01T00:00:00"))
+    assert len(ops) == 3
+    assert ops[0]["property"] == "ON_COORD_SET"
+    assert ops[0]["elements"] == {"TRACK": "Off", "SLEW": "Off", "SYNC": "On"}
+    assert ops[1]["property"] == "EQUATORIAL_EOD_COORD"
+    assert set(ops[1]["elements"]) == {"RA", "DEC"}
+    assert "CIRS" in ops[1]["coordinate_frame"]
+    assert ops[2]["property"] == "ON_COORD_SET"
+    assert ops[2]["elements"] == {"TRACK": "On", "SLEW": "Off", "SYNC": "Off"}
+    assert all(op["device"] == "LX200 OnStep" for op in ops)
+
+
+def test_describe_real_indi_sync_operations_converts_icrs_to_cirs_not_identity():
+    """The EQUATORIAL_EOD_COORD values must actually be in CIRS(obstime),
+    not just relabeled ICRS numbers - regression guard against silently
+    forgetting the frame conversion this pass's own CIRS/ICRS investigation
+    is about."""
+    ops = describe_real_indi_sync_operations(CENTER, obstime=Time("2026-01-01T00:00:00"))
+    icrs_ra_hours = float(CENTER.ra.hour)
+    eod_ra_hours = ops[1]["elements"]["RA"]
+    # Precession/nutation over a multi-decade-plus baseline from J2000 must
+    # produce a real, non-zero difference - not an identity passthrough.
+    assert abs(eod_ra_hours - icrs_ra_hours) > 1e-4
+
+
+def test_prepare_sync_always_includes_the_real_operations_preview_even_when_ineligible():
+    """An operator should be able to see exactly what a real SYNC would
+    send even for a plan that gets rejected (low confidence / synthetic
+    HI reference) - the preview describes the mechanism, independent of
+    the eligibility decision."""
+    result = _fit_result(confidence=0.1)
+    plan = prepare_sync("SOLAR", result, CENTER, is_observational=True, tracking_mode="SOLAR")
+    assert plan.eligible is False
+    assert plan.real_indi_operations is not None
+    assert len(plan.real_indi_operations) == 3
 
 
 @pytest.mark.asyncio

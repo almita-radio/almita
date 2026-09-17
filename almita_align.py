@@ -183,11 +183,19 @@ def cmd_sync(args) -> int:
     plan = engine.prepare_sync(result, center, is_observational, args.confidence_threshold)
 
     if not args.apply:
-        _print(plan.to_dict(), args.json,
-               ["Alignment completed.", f"Measured offset: dEast={plan.measured_offset_east_deg:+.3f} deg "
-                f"dNorth={plan.measured_offset_north_deg:+.3f} deg", f"Quality: {plan.fit_rating} "
-                f"(confidence={plan.fit_confidence:.3f})", f"Eligible for SYNC: {plan.eligible} ({plan.eligibility_reason})",
-                "Run again with --apply to send SYNC (simulated mount only in this version)."])
+        lines = ["Alignment completed.", f"Measured offset: dEast={plan.measured_offset_east_deg:+.3f} deg "
+                 f"dNorth={plan.measured_offset_north_deg:+.3f} deg", f"Quality: {plan.fit_rating} "
+                 f"(confidence={plan.fit_confidence:.3f})", f"Eligible for SYNC: {plan.eligible} ({plan.eligibility_reason})"]
+        if plan.real_indi_operations:
+            lines.append("")
+            lines.append("What a REAL SYNC would send (preview only - nothing sent, no hardware authorization "
+                          "for real execution exists in this version):")
+            for op in plan.real_indi_operations:
+                elements = ", ".join(f"{k}={v}" for k, v in op["elements"].items())
+                frame = f" [{op['coordinate_frame']}]" if op["coordinate_frame"] else ""
+                lines.append(f"  {op['step']}. {op['device']}.{op['property']}: {elements}{frame} - {op['operation']}")
+        lines.append("Run again with --apply to send SYNC (simulated mount only in this version).")
+        _print(plan.to_dict(), args.json, lines)
         return 0 if plan.eligible else 2
 
     if not plan.eligible:

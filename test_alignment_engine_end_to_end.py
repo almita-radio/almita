@@ -26,6 +26,10 @@ LOCATION = EarthLocation(lat=-33.4489 * u.deg, lon=-70.6693 * u.deg, height=570 
 def _solar_engine(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
+    # Isolate the preflight capture-conflict check from this machine's real
+    # (possibly live) data/runtime/ - tests must never depend on whether a
+    # real capture happens to be running on the host.
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
     config.solar.coarse_span_deg, config.solar.coarse_spacing_deg = 14.0, 3.5
     config.solar.fine_span_deg, config.solar.fine_spacing_deg = 5.0, 1.5
     config.solar.min_altitude_deg = -90.0  # test independent of local time-of-day
@@ -68,6 +72,7 @@ def test_solar_end_to_end_recovers_offset_and_persists_evidence(tmp_path):
 def test_hi_end_to_end_recovers_offset_and_blocks_sync_as_non_observational(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
     config.hi.raster_span_deg, config.hi.raster_spacing_deg = 12.0, 3.0
     config.hi.min_altitude_deg = -90.0
     mount = SimulatedMountAdapter()
@@ -99,6 +104,7 @@ def test_hi_end_to_end_recovers_offset_and_blocks_sync_as_non_observational(tmp_
 def test_preflight_failure_transitions_to_preflight_failed_not_a_crash(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
     config.solar.min_altitude_deg = 89.9  # nearly impossible to satisfy -> forces failure
     mount = SimulatedMountAdapter()
     tracking = SimulatedTrackingBackend(TrackingMode.SIDEREAL)
@@ -113,6 +119,7 @@ def test_preflight_failure_transitions_to_preflight_failed_not_a_crash(tmp_path)
 def test_cancel_is_terminal_and_idempotent(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
     engine = AlignmentEngine("solar", config, LOCATION, SimulatedMountAdapter(),
                               SimulatedTrackingBackend())
     engine.plan()
@@ -125,6 +132,7 @@ def test_cancel_is_terminal_and_idempotent(tmp_path):
 def test_snapshot_is_json_serializable_and_reflects_current_state(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
     engine = AlignmentEngine("solar", config, LOCATION, SimulatedMountAdapter(),
                               SimulatedTrackingBackend())
     engine.plan()

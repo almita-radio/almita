@@ -26,12 +26,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Optional
 
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import CIRS, SkyCoord
+from astropy.time import Time
 import astropy.units as u
 
 from alignment import offset_coordinates
 from .fitting import FitResult
 from .mount_adapter import MountAdapter
+from .tracking import RealTrackingBackend
 
 
 @dataclass
@@ -51,6 +53,7 @@ class SyncPlan:
     compensated_goto_dec_deg: float
     sync_command_ra_hours: float
     sync_command_dec_deg: float
+    real_indi_operations: Optional[list] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -81,12 +84,57 @@ class VerificationResult:
         return asdict(self)
 
 
+def describe_real_indi_sync_operations(reference_icrs: SkyCoord, obstime: Optional[Time] = None) -> list:
+    """Pure, no I/O, no connection - the exact 3-step INDI sequence
+    indi_telescope_control.py::INDITelescopeControl.sync() sends for a real
+    SYNC (see that method, ~line 1085-1113: ON_COORD_SET->SYNC,
+    EQUATORIAL_EOD_COORD<-real coords, ON_COORD_SET->TRACK), built but never
+    executed - this is what `almita_align.py sync` (without --apply, i.e.
+    its dry-run/preview path) shows an operator: device, property,
+    elements, values, coordinate frame, and the operation each step
+    performs. Item 7 of the pre-hardware pass: apply_sync() against a real
+    mount stays refused (see mount_adapter.RealMountAdapter) regardless of
+    what this function returns - this only describes, never sends.
+
+    `reference_icrs` is converted to CIRS(obstime) here (equinox-of-date,
+    matching EQUATORIAL_EOD_COORD's own frame) - the same ICRS->CIRS
+    conversion RealMountAdapter already documents happening "at the moment
+    of the call", made explicit and inspectable here for the preview."""
+    obstime = obstime or Time.now()
+    reference_eod = reference_icrs.transform_to(CIRS(obstime=obstime))
+    device = RealTrackingBackend.DEVICE_NAME
+    return [
+        {
+            "step": 1, "operation": "select SYNC mode (mount will not move)",
+            "device": device, "property": "ON_COORD_SET",
+            "elements": {"TRACK": "Off", "SLEW": "Off", "SYNC": "On"},
+            "coordinate_frame": None,
+        },
+        {
+            "step": 2,
+            "operation": "send real coordinates - mount records this AS its current "
+                         "position; this does not command a slew",
+            "device": device, "property": "EQUATORIAL_EOD_COORD",
+            "elements": {"RA": round(float(reference_eod.ra.hour), 6),
+                         "DEC": round(float(reference_eod.dec.deg), 6)},
+            "coordinate_frame": "CIRS (equinox-of-date / EOD, matching this driver's EQUATORIAL_EOD_COORD)",
+        },
+        {
+            "step": 3, "operation": "restore TRACK mode",
+            "device": device, "property": "ON_COORD_SET",
+            "elements": {"TRACK": "On", "SLEW": "Off", "SYNC": "Off"},
+            "coordinate_frame": None,
+        },
+    ]
+
+
 def prepare_sync(mode: str, fit_result: FitResult, center: SkyCoord, is_observational: bool,
                   # `center` MUST be ICRS (not CIRS/EOD) - see
                   # targets/solar.py's module docstring: SkyOffsetFrame
                   # geometry (used here via offset_coordinates) is wrong
                   # with a CIRS origin. Convert with `.icrs` before calling.
-                  tracking_mode: Optional[str], confidence_threshold: float = 0.65) -> SyncPlan:
+                  tracking_mode: Optional[str], confidence_threshold: float = 0.65,
+                  obstime: Optional[Time] = None) -> SyncPlan:
     """Pure - computes and describes what SYNC would do. Never calls a mount."""
     estimate = fit_result.estimate
     if not is_observational:
@@ -110,6 +158,7 @@ def prepare_sync(mode: str, fit_result: FitResult, center: SkyCoord, is_observat
         tracking_mode=tracking_mode, coordinate_frame="ICRS (converted to mount frame at send time)",
         compensated_goto_ra_hours=float(compensated.ra.hour), compensated_goto_dec_deg=float(compensated.dec.deg),
         sync_command_ra_hours=float(center.ra.hour), sync_command_dec_deg=float(center.dec.deg),
+        real_indi_operations=describe_real_indi_sync_operations(center, obstime),
     )
 
 

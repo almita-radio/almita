@@ -34,6 +34,11 @@ class GlobalConfig:
     sdr_host: str = "localhost"
     sdr_port: int = 1234
     settle_seconds: float = 2.0
+    # None -> observation_orchestrator's own DEFAULT_RUNTIME_DIR
+    # (data/runtime) - overridable so tests never read/depend on this
+    # machine's real, possibly-live runtime state (Fase 4's preflight
+    # capture-conflict check reads this directory).
+    orchestrator_runtime_dir: Optional[str] = None
 
 
 @dataclass

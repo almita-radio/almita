@@ -18,7 +18,7 @@ import numpy as np
 from astropy.coordinates import AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
 
-from . import scan_planner, simulation, sync_flow
+from . import capture_conflict, scan_planner, simulation, sync_flow
 from .config import AlignmentConfig
 from .fitting import FitResult, fit_raster
 from .mount_adapter import MountAdapter
@@ -54,16 +54,61 @@ class AlignmentResult:
     final_fit: FitResult
     tracking_mode: Optional[str]
     warnings: List[str]
+    # ICRS anchor the fit was measured against (Sun's current position for
+    # SOLAR, the chosen HI patch center for HI) - optional only so existing
+    # call sites that reconstruct an AlignmentResult from persisted JSON
+    # (almita_align.py's cmd_sync) without recomputing an ephemeris
+    # position still work; without it, only the tangent-plane/legacy
+    # fields below are available (see Fase 8's schema clarification).
+    reference_center: Optional[SkyCoord] = None
 
     def to_dict(self) -> dict:
+        estimate = self.final_fit.estimate
         payload = {
             "mode": self.mode, "session_id": self.session_id,
             "tracking_mode": self.tracking_mode, "warnings": self.warnings,
             "final_fit": self.final_fit.to_dict(),
-            "offset_ra_deg": self.final_fit.estimate.offset_ra_deg,
-            "offset_dec_deg": self.final_fit.estimate.offset_dec_deg,
+            # Pre-hardware pass, item 8: explicit, unambiguous coordinate
+            # semantics. This offset is a TANGENT-PLANE (SkyOffsetFrame)
+            # east/north displacement of the fitted beam center from
+            # `reference_center` - it is NOT an RA/Dec coordinate
+            # difference (1deg east is not generally +1deg RA; see
+            # ra_dec_delta_deg below, present only when reference_center is
+            # known, for that actual quantity).
+            "tangent_east_deg": estimate.offset_ra_deg,
+            "tangent_north_deg": estimate.offset_dec_deg,
+            # Legacy aliases - KEPT for backward compatibility with earlier
+            # sessions/tooling. Identical values to tangent_east_deg/
+            # tangent_north_deg above; the "_ra_"/"_dec_" in these two
+            # specific names is a naming leftover, not a claim that these
+            # are RA/Dec coordinate deltas. New code should prefer
+            # tangent_east_deg/tangent_north_deg.
+            "offset_ra_deg": estimate.offset_ra_deg,
+            "offset_dec_deg": estimate.offset_dec_deg,
             "applied_sync": False,
         }
+        if self.reference_center is not None:
+            from alignment import offset_coordinates
+            measured = offset_coordinates(self.reference_center, [estimate.offset_ra_deg],
+                                           [estimate.offset_dec_deg])[0]
+            payload["expected_coordinate"] = {
+                "ra_hours": float(self.reference_center.ra.hour),
+                "dec_deg": float(self.reference_center.dec.deg),
+                "frame": "ICRS",
+            }
+            payload["measured_coordinate"] = {
+                "ra_hours": float(measured.ra.hour),
+                "dec_deg": float(measured.dec.deg),
+                "frame": "ICRS",
+            }
+            payload["ra_dec_delta_deg"] = {
+                "delta_ra_deg": float((measured.ra - self.reference_center.ra).wrap_at("180d").deg),
+                "delta_dec_deg": float(measured.dec.deg - self.reference_center.dec.deg),
+                "note": "raw ICRS coordinate-component difference between measured_coordinate "
+                        "and expected_coordinate - NOT the same physical angular distance as "
+                        "tangent_east_deg/tangent_north_deg (delta_ra_deg carries no cos(dec) "
+                        "factor); provided for coordinate-level bookkeeping only.",
+            }
         if self.coarse_fit is not None:
             payload["coarse_fit"] = self.coarse_fit.to_dict()
         if self.fine_fit is not None:
@@ -150,8 +195,9 @@ class AlignmentEngine:
         tracking_ok = self.tracking_backend.get_tracking_mode() is not None
         checks.append(PreflightCheck("tracking_backend_reachable", tracking_ok, "get_tracking_mode() responded"))
 
-        checks.append(PreflightCheck("no_conflicting_capture_session", True,
-                                      "capture-process conflict check not wired in this version"))
+        conflict = capture_conflict.check_no_conflicting_capture(
+            runtime_dir=self.config.global_.orchestrator_runtime_dir)
+        checks.append(PreflightCheck("no_conflicting_capture_session", not conflict.conflict, conflict.detail))
 
         target = AlignmentState.PREFLIGHT_OK if all(c.ok for c in checks) else AlignmentState.PREFLIGHT_FAILED
         self._transition(target, "; ".join(f"{c.name}={c.ok}" for c in checks))
@@ -206,7 +252,8 @@ class AlignmentEngine:
 
         result = AlignmentResult(mode="SOLAR", session_id=self.session.session_id,
                                   coarse_fit=coarse_fit, fine_fit=fine_fit, final_fit=fine_fit,
-                                  tracking_mode=None, warnings=self.warnings)
+                                  tracking_mode=None, warnings=self.warnings,
+                                  reference_center=reference_center)
         self.session.write_fit_result(result.final_fit.to_dict())
         self.session.write_alignment_result(result.to_dict())
         self._transition(AlignmentState.RESULT_READY, "solar simulated fit complete")
@@ -236,7 +283,8 @@ class AlignmentEngine:
 
         result = AlignmentResult(mode="HI", session_id=self.session.session_id,
                                   coarse_fit=None, fine_fit=None, final_fit=fit,
-                                  tracking_mode=None, warnings=self.warnings)
+                                  tracking_mode=None, warnings=self.warnings,
+                                  reference_center=center)
         payload = result.to_dict()
         payload["target_selection"] = selection
         payload["is_observational"] = provider.is_observational

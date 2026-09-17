@@ -22,7 +22,9 @@ def _run(args, cwd=None):
 def _config_file(tmp_path) -> str:
     config_path = tmp_path / "align_config.json"
     config_path.write_text(json.dumps({
-        "global": {"output_root": str(tmp_path / "alignment")},
+        "global": {"output_root": str(tmp_path / "alignment"),
+                   # isolate from this machine's real data/runtime/ state
+                   "orchestrator_runtime_dir": str(tmp_path / "orchestrator_runtime")},
         "solar": {"min_altitude_deg": -90.0, "coarse_span_deg": 14.0, "coarse_spacing_deg": 4.0,
                   "fine_span_deg": 5.0, "fine_spacing_deg": 1.5},
         "hi": {"min_altitude_deg": -90.0, "raster_span_deg": 12.0, "raster_spacing_deg": 3.0},
