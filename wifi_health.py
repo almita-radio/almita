@@ -88,6 +88,15 @@ PERSISTENT_ERROR_POLL_THRESHOLD = 3
 # wifi_events.log with one line per occurrence.
 DEFAULT_REMINDER_INTERVAL_S = 300.0
 
+# Above this many lines in a single incremental poll, treat the result as a
+# replayed backlog rather than real new errors - see the comment at its use
+# site in WifiErrorCounters.poll() for why this is needed at all (a stale/
+# rotated-away --after-cursor doesn't error, it silently replays the whole
+# current boot). A real error burst even during an active incident is on
+# the order of tens of lines per MIN_SUBPROCESS_POLL_INTERVAL_S window;
+# this is set an order of magnitude above that.
+MAX_LINES_PER_POLL = 500
+
 _IW_PATH = shutil.which("iw")
 _NMCLI_PATH = shutil.which("nmcli")
 _JOURNALCTL_PATH = shutil.which("journalctl")
@@ -248,6 +257,7 @@ class WifiErrorCounters:
     last_error_kind: Optional[str] = None
     last_error_message: Optional[str] = None
     last_error_utc: Optional[str] = None
+    cursor_resets: int = 0
     _cursor: Optional[str] = field(default=None, repr=False)
     _last_poll_monotonic: Optional[float] = field(default=None, repr=False)
 
@@ -286,8 +296,29 @@ class WifiErrorCounters:
         if result.returncode != 0:
             return []  # ran, but journalctl itself failed - treated as "checked, nothing"
 
+        lines = (result.stdout or "").splitlines()
+        if len(lines) > MAX_LINES_PER_POLL:
+            # Verified directly against the real journalctl binary: a
+            # `--after-cursor=<cursor>` that no longer resolves (journal
+            # rotated/vacuumed past it) does NOT error - it exits 0 with no
+            # stderr and silently replays the entire current boot's kernel
+            # log from the start instead. A poll this large can only be
+            # that replay (a real burst, even a bad one, is on the order of
+            # tens of lines per MIN_SUBPROCESS_POLL_INTERVAL_S window - see
+            # module docstring). Re-seed the cursor from this output's own
+            # tail so the NEXT poll is incremental again, but do not count
+            # any of the replayed backlog as newly-observed errors: doing
+            # so would retroactively fire FAILED/DEGRADED and flood
+            # wifi_events.log for things that already happened, and may
+            # already be resolved.
+            self.cursor_resets += 1
+            for line in lines:
+                if line.startswith("-- cursor:"):
+                    self._cursor = line.split(":", 1)[1].strip()
+            return []
+
         new_matches: List[Dict[str, str]] = []
-        for line in (result.stdout or "").splitlines():
+        for line in lines:
             if line.startswith("-- cursor:"):
                 self._cursor = line.split(":", 1)[1].strip()
                 continue

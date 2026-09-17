@@ -241,6 +241,74 @@ def test_counters_survive_journalctl_timeout(monkeypatch):
     assert wh.WifiErrorCounters().poll(min_interval=0.0) == []
 
 
+def test_counters_cursor_reset_does_not_count_backlog_as_new_errors(monkeypatch):
+    """Verified against the real journalctl binary: a stale/rotated-away
+    --after-cursor does not error - it silently replays the whole current
+    boot's kernel log from the start (exit 0, no stderr). A poll that
+    returns a huge backlog must not be counted as newly-observed errors."""
+    monkeypatch.setattr(wh, "_JOURNALCTL_PATH", "/usr/bin/journalctl")
+    huge_backlog = _journal_lines(*(["brcmfmac: brcmf_sdio_txfail: sdio error"] * (wh.MAX_LINES_PER_POLL + 50)))
+    huge_backlog += "\n-- cursor: s=fresh\n"
+    monkeypatch.setattr(wh.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout=huge_backlog, stderr=""))
+    counters = wh.WifiErrorCounters()
+    matches = counters.poll(min_interval=0.0)
+    assert matches == []
+    assert counters.total() == 0
+    assert counters.cursor_resets == 1
+
+
+def test_counters_cursor_reset_reseeds_cursor_for_next_poll(monkeypatch):
+    monkeypatch.setattr(wh, "_JOURNALCTL_PATH", "/usr/bin/journalctl")
+    seen_cmds = []
+    huge_backlog = _journal_lines(*(["brcmfmac: brcmf_sdio_txfail: sdio error"] * (wh.MAX_LINES_PER_POLL + 50)))
+    huge_backlog += "\n-- cursor: s=fresh\n"
+
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        seen_cmds.append(cmd)
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return subprocess.CompletedProcess(cmd, 0, stdout=huge_backlog, stderr="")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_journal_lines("brcmfmac: brcmf_sdio_txfail: sdio error") + "\n-- cursor: s=next\n", stderr="")
+
+    monkeypatch.setattr(wh.subprocess, "run", fake_run)
+    counters = wh.WifiErrorCounters()
+    counters.poll(min_interval=0.0)  # the reset/replay poll
+    matches = counters.poll(min_interval=0.0)  # must use the re-seeded cursor, not --since again
+    assert "--after-cursor=s=fresh" in seen_cmds[1]
+    assert len(matches) == 1  # only the genuinely new line counted this time
+    assert counters.total() == 1
+
+
+def test_monitor_survives_cursor_reset_without_flooding_events(monkeypatch, tmp_path):
+    """End-to-end: a cursor-reset poll must not spam wifi_events.log or flip
+    health to FAILED for a backlog that (for all the monitor knows) may
+    already be resolved history."""
+    monkeypatch.setattr(wh, "wlan_present", lambda interface=wh.DEFAULT_INTERFACE, sys_root=Path("/sys/class/net"): True)
+    monkeypatch.setattr(wh, "read_carrier", lambda interface=wh.DEFAULT_INTERFACE, sys_root=Path("/sys/class/net"): 1)
+    monkeypatch.setattr(wh, "read_operstate", lambda interface=wh.DEFAULT_INTERFACE, sys_root=Path("/sys/class/net"): "up")
+    monkeypatch.setattr(wh, "read_default_route_present", lambda path=Path("/proc/net/route"): True)
+    monkeypatch.setattr(wh, "iw_link_info", lambda interface=wh.DEFAULT_INTERFACE, timeout=1.5: {
+        "associated": True, "bssid": "aa:bb", "ssid": "Marciano5", "freq_mhz": 5220,
+        "signal_dbm": -53, "tx_mbps": 433.3, "rx_mbps": 325.0})
+    monkeypatch.setattr(wh, "nmcli_wlan_state", lambda interface=wh.DEFAULT_INTERFACE, timeout=1.5: None)
+    monkeypatch.setattr(wh, "_JOURNALCTL_PATH", "/usr/bin/journalctl")
+    huge_backlog = _journal_lines(*(["brcmfmac: failed backplane access over SDIO, halting operation"] * (wh.MAX_LINES_PER_POLL + 50)))
+    huge_backlog += "\n-- cursor: s=fresh\n"
+    monkeypatch.setattr(wh.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout=huge_backlog, stderr=""))
+
+    events_path = tmp_path / "wifi_events.log"
+    monitor = wh.WifiMonitor(events_log_path=events_path, min_subprocess_poll_interval=0.0)
+    sample = monitor.sample()
+    monitor.close()
+    assert sample["wifi_health"] == wh.WIFI_OK  # not falsely FAILED by the replayed backlog
+    assert sample["sdio_backplane_halt_total"] == 0
+    events = events_path.read_text().splitlines() if events_path.exists() else []
+    assert not any("WIFI_SDIO_BACKPLANE_HALTED" in l for l in events)
+
+
 def test_counters_survive_journalctl_nonzero_exit(monkeypatch):
     monkeypatch.setattr(wh, "_JOURNALCTL_PATH", "/usr/bin/journalctl")
     monkeypatch.setattr(wh.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="denied"))
