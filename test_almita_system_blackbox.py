@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import almita_system_blackbox as bb
+import wifi_health
 
 ROOT = Path(__file__).parent.resolve()
 
@@ -315,6 +316,86 @@ def test_cli_short_real_run_produces_samples_and_clean_shutdown(tmp_path):
     for line in lines:
         assert line.count(" ") > 10  # sanity: many key=value fields present
         assert "port_1234=" in line and "port_8088=" in line and "port_8090=" in line
+
+
+# ---------------------------------------------------------------- Wi-Fi/SDIO integration
+
+
+def test_build_sample_without_wifi_monitor_renders_na_for_wifi_fields(monkeypatch):
+    _stub_all_readers(monkeypatch)
+    _, line, _ = bb.build_sample(prev_cpu_stat=None, sample_index=0, cached_throttled=None, wifi_monitor=None)
+    fields = dict(tok.split("=", 1) for tok in line.split()[1:])
+    for key in ("wlan_present", "wlan_operstate", "wlan_assoc", "wifi_health"):
+        assert fields[key] == "NA"
+
+
+def test_build_sample_with_wifi_monitor_includes_its_fields(monkeypatch):
+    _stub_all_readers(monkeypatch)
+
+    class FakeMonitor:
+        def sample(self, ts):
+            return {
+                "wlan_present": True, "wlan_operstate": "up", "wlan_carrier": 1,
+                "wlan_associated": True, "wlan_signal_dbm": -53,
+                "default_route_present": True, "sdio_txfail_total": 2,
+                "sdio_ctrlframe_fail_total": 1, "sdio_backplane_halt_total": 0,
+                "wifi_health": "DEGRADED",
+            }
+
+    _, line, _ = bb.build_sample(prev_cpu_stat=None, sample_index=0, cached_throttled=None,
+                                  wifi_monitor=FakeMonitor())
+    fields = dict(tok.split("=", 1) for tok in line.split()[1:])
+    assert fields["wlan_present"] == "1"
+    assert fields["wlan_assoc"] == "1"
+    assert fields["sdio_txfail_total"] == "2"
+    assert fields["wifi_health"] == "DEGRADED"
+
+
+def test_build_sample_wifi_monitor_exception_never_takes_down_the_line(monkeypatch):
+    _stub_all_readers(monkeypatch)
+
+    class ExplodingMonitor:
+        def sample(self, ts):
+            raise RuntimeError("boom")
+
+    _, line, _ = bb.build_sample(prev_cpu_stat=None, sample_index=0, cached_throttled=None,
+                                  wifi_monitor=ExplodingMonitor())
+    assert "\n" not in line
+    fields = dict(tok.split("=", 1) for tok in line.split()[1:])
+    assert fields["wifi_health"] == "NA"
+
+
+def test_cli_real_run_logs_wifi_fields(tmp_path):
+    process = subprocess.Popen(
+        [str(ROOT / ".venv" / "bin" / "python"), "almita_system_blackbox.py", "--interval", "1", "--log-dir", str(tmp_path)],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    assert "ALMITA SYSTEM BLACKBOX START" in process.stdout.readline()
+    time.sleep(3.5)
+    process.send_signal(signal.SIGINT)
+    assert process.wait(timeout=5) == 0
+    log_file = tmp_path / "blackbox.log"
+    lines = [l for l in log_file.read_text().splitlines() if l.strip()]
+    assert lines, "expected at least one sample"
+    for line in lines:
+        assert "wifi_health=" in line and "sdio_backplane_halt_total=" in line
+
+
+def test_cli_no_wifi_monitor_flag_disables_it(tmp_path):
+    process = subprocess.Popen(
+        [str(ROOT / ".venv" / "bin" / "python"), "almita_system_blackbox.py", "--interval", "1",
+         "--log-dir", str(tmp_path), "--no-wifi-monitor"],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    assert "ALMITA SYSTEM BLACKBOX START" in process.stdout.readline()
+    time.sleep(2.2)
+    process.send_signal(signal.SIGINT)
+    assert process.wait(timeout=5) == 0
+    log_file = tmp_path / "blackbox.log"
+    lines = [l for l in log_file.read_text().splitlines() if l.strip()]
+    assert lines
+    for line in lines:
+        assert "wifi_health=NA" in line
 
 
 def test_cli_sigterm_also_shuts_down_cleanly(tmp_path):

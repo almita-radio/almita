@@ -14,6 +14,7 @@ import almita_console_watcher as watcher
 import almita_console_server as server_module
 import capture as capture_module
 import quicklook_live as quicklook_module
+import wifi_health
 from runtime_state import announce_session, atomic_write_json, read_json_safe, utcnow
 from serve_dashboard import make_server
 
@@ -521,6 +522,106 @@ def test_24b_frontend_shows_na_not_zero_for_invalid_temperature(tmp_path):
     assert "N/A" in html
     assert "298.9" not in html
     assert "0.0 °C" not in html and "0 °C" not in html
+
+
+# ---------------------------------------------------------------- Wi-Fi/SDIO health (2026-09-17 incident)
+
+
+class _FakeWifiMonitor:
+    def __init__(self, sample):
+        self._sample = sample
+
+    def sample(self, now_utc):
+        return self._sample
+
+
+_WIFI_SAMPLE_OK = {
+    "interface": "wlan0", "wlan_present": True, "wlan_carrier": 1, "wlan_operstate": "up",
+    "wlan_associated": True, "wlan_ssid": "Marciano5", "wlan_bssid": "44:48:b9:49:bb:07",
+    "wlan_freq_mhz": 5220, "wlan_signal_dbm": -53, "wlan_tx_mbps": 433.3, "wlan_rx_mbps": 325.0,
+    "networkmanager_state": "100 (connected)", "default_route_present": True,
+    "sdio_txfail_total": 0, "sdio_ctrlframe_fail_total": 0, "sdio_backplane_halt_total": 0,
+    "sdio_error_total": 0, "wifi_health": "OK",
+    "last_wifi_error_kind": None, "last_wifi_error_message": None, "last_wifi_error_utc": None,
+}
+
+
+def test_watcher_build_wifi_none_monitor_reads_unknown():
+    wifi = watcher.build_wifi(utcnow(), None)
+    assert wifi["state"] == "UNKNOWN"
+
+
+def test_watcher_build_wifi_reflects_monitor_sample():
+    wifi = watcher.build_wifi(utcnow(), _FakeWifiMonitor(_WIFI_SAMPLE_OK))
+    assert wifi["state"] == "OK"
+    assert wifi["ssid"] == "Marciano5"
+    assert wifi["signal_dbm"] == -53
+    assert wifi["sdio_error_count"] == 0
+
+
+def test_watcher_build_wifi_survives_monitor_exception():
+    class ExplodingMonitor:
+        def sample(self, now_utc):
+            raise RuntimeError("boom")
+
+    wifi = watcher.build_wifi(utcnow(), ExplodingMonitor())
+    assert wifi["state"] == "UNKNOWN"
+
+
+def test_watcher_system_state_degraded_when_wifi_degraded(tmp_path):
+    state = watcher.WatcherState()
+    state.wifi_monitor = _FakeWifiMonitor({**_WIFI_SAMPLE_OK, "wifi_health": "DEGRADED", "sdio_txfail_total": 4,
+                                            "sdio_error_total": 4})
+    status = watcher.build_status(utcnow(), 0.0, state, tmp_path, lambda: fake_telemetry(),
+                                   capture_process_detected=False)
+    assert status["wifi"]["state"] == "DEGRADED"
+    assert status["system_state"] == "DEGRADED"  # everything else is nominal - this alone must flip it
+
+
+def test_watcher_system_state_failed_wifi_also_flips_system_state(tmp_path):
+    state = watcher.WatcherState()
+    state.wifi_monitor = _FakeWifiMonitor({**_WIFI_SAMPLE_OK, "wifi_health": "FAILED",
+                                            "last_wifi_error_message": "failed backplane access over SDIO"})
+    status = watcher.build_status(utcnow(), 0.0, state, tmp_path, lambda: fake_telemetry(),
+                                   capture_process_detected=False)
+    assert status["system_state"] == "DEGRADED"
+    assert "backplane" in status["wifi"]["last_error"]
+
+
+def test_watcher_system_state_stays_ready_when_wifi_ok(tmp_path):
+    state = watcher.WatcherState()
+    state.wifi_monitor = _FakeWifiMonitor(_WIFI_SAMPLE_OK)
+    status = watcher.build_status(utcnow(), 0.0, state, tmp_path, lambda: fake_telemetry(),
+                                   capture_process_detected=False)
+    assert status["system_state"] == "READY"
+
+
+def test_24c_frontend_wifi_ok(tmp_path):
+    html = dom(console_root(tmp_path, status={**status_fixture("RUNNING"),
+                                                "wifi": {"state": "OK", "last_error": None, "sdio_error_count": 0}}))
+    assert "<dt>WI-FI</dt><dd>OK</dd>" in html
+
+
+def test_24d_frontend_wifi_degraded_shows_error_count(tmp_path):
+    html = dom(console_root(tmp_path, status={**status_fixture("RUNNING"),
+                                                "wifi": {"state": "DEGRADED", "last_error": "brcmf_sdio_txfail",
+                                                         "sdio_error_count": 12}}))
+    assert "DEGRADED — 12 SDIO errors" in html
+
+
+def test_24e_frontend_wifi_failed_backplane_message(tmp_path):
+    html = dom(console_root(tmp_path, status={**status_fixture("RUNNING"),
+                                                "wifi": {"state": "FAILED",
+                                                         "last_error": "failed backplane access over SDIO",
+                                                         "sdio_error_count": 340}}))
+    assert "FAILED — Broadcom SDIO backplane halted" in html
+
+
+def test_24f_frontend_wifi_absent_from_status_reads_as_unknown_not_broken(tmp_path):
+    """An older almita_status.json without a "wifi" key at all (pre-rollout)
+    must not break the console - render() defaults it to {}."""
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    assert "<dt>WI-FI</dt><dd>UNKNOWN</dd>" in html
 
 
 # ---------------------------------------------------------------- 25-28: RFI_REF sidecar

@@ -30,6 +30,7 @@ from typing import Any, Callable, Optional
 
 from runtime_state import atomic_write_json, read_json_safe, utcnow
 import telemetry_summary
+import wifi_health
 
 ROOT = Path(__file__).resolve().parent
 
@@ -88,6 +89,15 @@ class WatcherState:
     last_telemetry: Optional[dict] = None
     last_telemetry_monotonic: Optional[float] = None
     last_session_archive: Optional[dict] = None
+    # Deliberately not constructed here (and no events_log_path when it is -
+    # almita_system_blackbox.py is the sole writer of
+    # data/runtime/diagnostics/wifi_events.log; two independent
+    # RotatingFileHandler instances rotating the same file would race each
+    # other). Left as None by default so every existing caller/test that
+    # builds a WatcherState without one gets build_wifi()'s zero-subprocess
+    # fallback rather than an unexpected live iw/nmcli/journalctl call;
+    # run()/main() below construct the real one for the actual service.
+    wifi_monitor: Optional["wifi_health.WifiMonitor"] = None
 
 
 def build_instrument(now_monotonic: float, state: WatcherState, collect_fn: Callable[[], dict]) -> dict:
@@ -321,6 +331,52 @@ def build_activity_log(runtime_dir: Path, session_id: Optional[str]) -> dict:
     return {"available": bool(lines), "lines": lines}
 
 
+_WIFI_UNKNOWN = {
+    "state": "UNKNOWN", "interface": None, "present": None, "associated": None,
+    "operstate": None, "ssid": None, "bssid": None, "signal_dbm": None,
+    "frequency_mhz": None, "tx_bitrate_mbps": None, "rx_bitrate_mbps": None,
+    "networkmanager_state": None, "default_route_present": None,
+    "sdio_error_count": None, "sdio_backplane_halt_count": None,
+    "last_error": None, "last_error_utc": None,
+}
+
+
+def build_wifi(now_utc: str, wifi_monitor: Optional["wifi_health.WifiMonitor"]) -> dict:
+    """Live Wi-Fi/SDIO status for the Field Console. Uses the same
+    wifi_health.WifiMonitor implementation almita_system_blackbox.py uses
+    for its heartbeat log line - one shared reader/classifier, not two
+    independent ones (FIELD_RUNBOOK.md's own "duplicación de lectores DS18B20"
+    known item is the cautionary example this deliberately avoids repeating
+    for Wi-Fi). wifi_monitor is
+    None for any caller that hasn't wired one up (e.g. most existing tests):
+    that reads as UNKNOWN rather than silently spawning iw/nmcli/journalctl."""
+    if wifi_monitor is None:
+        return dict(_WIFI_UNKNOWN)
+    try:
+        sample = wifi_monitor.sample(now_utc)
+    except Exception:  # a Wi-Fi read must never cost the whole status tick
+        return dict(_WIFI_UNKNOWN)
+    return {
+        "state": sample["wifi_health"],
+        "interface": sample["interface"],
+        "present": sample["wlan_present"],
+        "associated": sample["wlan_associated"],
+        "operstate": sample["wlan_operstate"],
+        "ssid": sample["wlan_ssid"],
+        "bssid": sample["wlan_bssid"],
+        "signal_dbm": sample["wlan_signal_dbm"],
+        "frequency_mhz": sample["wlan_freq_mhz"],
+        "tx_bitrate_mbps": sample["wlan_tx_mbps"],
+        "rx_bitrate_mbps": sample["wlan_rx_mbps"],
+        "networkmanager_state": sample["networkmanager_state"],
+        "default_route_present": sample["default_route_present"],
+        "sdio_error_count": sample["sdio_error_total"],
+        "sdio_backplane_halt_count": sample["sdio_backplane_halt_total"],
+        "last_error": sample["last_wifi_error_message"],
+        "last_error_utc": sample["last_wifi_error_utc"],
+    }
+
+
 def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtime_dir: Path,
                   collect_fn: Callable[[], dict], capture_process_detected: bool) -> dict:
     current_session = read_json_safe(Path(runtime_dir) / "current_session.json")
@@ -333,6 +389,7 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
     quicklook = build_quicklook(now_utc, runtime_dir, acquisition["session_id"])
     rfi_ref = build_rfi_ref(runtime_dir, acquisition["session_id"], now_utc)
     activity_log = build_activity_log(runtime_dir, acquisition["session_id"])
+    wifi = build_wifi(now_utc, state.wifi_monitor)
 
     if acquisition["state"] in ("COMPLETED", "DEGRADED", "ABORTED") and acquisition["session_id"]:
         archive = {
@@ -354,7 +411,16 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
         last_session = read_json_safe(Path(runtime_dir) / "last_session.json")
 
     system_state = "READY"
-    if instrument.get("telemetry_stale") or acquisition["state"] == "DEGRADED":
+    if (
+        instrument.get("telemetry_stale")
+        or acquisition["state"] == "DEGRADED"
+        or wifi["state"] in ("DEGRADED", "FAILED")
+    ):
+        # A healthy host + a dying Wi-Fi/SDIO chip is exactly the
+        # 2026-09-17 incident's own shape (CPU/RAM/temp all nominal, Wi-Fi
+        # silently failing) - system_state must not read READY through that,
+        # even though the finer OK/DEGRADED/FAILED distinction lives on
+        # wifi.state itself, not folded into this coarser field.
         system_state = "DEGRADED"
 
     return {
@@ -365,6 +431,7 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
         "acquisition": acquisition,
         "quicklook": quicklook,
         "rfi_ref": rfi_ref,
+        "wifi": wifi,
         "activity_log": activity_log,
         "last_session": last_session,
     }
@@ -412,6 +479,7 @@ def run(runtime_dir: Path, interval: float = 2.0, iterations: Optional[int] = No
     state = WatcherState()
     # Seed the last-session archive so a restart never invents an active session.
     state.last_session_archive = read_json_safe(Path(runtime_dir) / "last_session.json")
+    state.wifi_monitor = wifi_health.WifiMonitor()
     count = 0
     while iterations is None or count < iterations:
         tick(runtime_dir, state)

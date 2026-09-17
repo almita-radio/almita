@@ -19,12 +19,22 @@ undervoltage, kernel panic/lockup/RCU-stall, NVMe/PCIe error, or USB
 timeout. This log exists so that if it happens again, the last ~heartbeats
 before the hang are on disk instead of nothing.
 
+A follow-up incident (2026-09-17) showed this file's own blind spot: the
+onboard Broadcom Wi-Fi/SDIO chip spent over two days spamming
+"failed backplane access over SDIO, halting operation" while every metric
+below stayed perfectly nominal - this log never said anything was wrong.
+wifi_health.py (see its own module docstring) closes that gap: a handful
+of extra fields per sample, and a derived wifi_health=OK/DEGRADED/FAILED
+that this file will now surface even when everything else here is green.
+
 Each sample is independently fault-tolerant: any single metric that can't
 be read renders as NA rather than aborting the line, and one bad sample
 never stops the loop (see main()'s per-cycle try/except). Cheap /proc and
-/sys reads only; no external command runs every cycle (vcgencmd is the one
-exception, throttled back to roughly once a minute - see
-SLOW_POLL_EVERY_N_SAMPLES and read_throttled()).
+/sys reads only, with two throttled exceptions: vcgencmd get_throttled
+(once a minute, see SLOW_POLL_EVERY_N_SAMPLES and read_throttled()) and
+the Wi-Fi association/error-counter checks in wifi_health.py, which
+internally throttle themselves to the same cadence independent of this
+file's own poll interval - see wifi_health.MIN_SUBPROCESS_POLL_INTERVAL_S.
 """
 from __future__ import annotations
 
@@ -40,6 +50,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+import wifi_health
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_LOG_DIR = ROOT / "data" / "runtime" / "diagnostics"
@@ -251,12 +263,24 @@ def read_throttled(timeout: float = 2.0) -> Optional[str]:
     return text.split("=", 1)[1] if "=" in text else (text or None)
 
 
+def _fmt_bool(value: Optional[bool]) -> str:
+    if value is None:
+        return NA
+    return "1" if value else "0"
+
+
 def build_sample(
     prev_cpu_stat: Optional[Tuple[int, int]],
     sample_index: int,
     cached_throttled: Optional[str],
+    wifi_monitor: Optional[wifi_health.WifiMonitor] = None,
 ) -> Tuple[Optional[Tuple[int, int]], str, Optional[str]]:
-    """One heartbeat line. Returns (cpu_stat_for_next_call, line, throttled_for_next_call)."""
+    """One heartbeat line. Returns (cpu_stat_for_next_call, line, throttled_for_next_call).
+
+    wifi_monitor is optional and defaults to None so every existing caller/
+    test that builds a sample without it keeps working unchanged (the line
+    just carries NA for every wifi_* field, exactly like any other reader
+    would render on failure)."""
     ts = utcnow_iso()
     uptime = read_uptime_seconds()
     load1, load5, load15, threads_total = read_loadavg()
@@ -273,6 +297,12 @@ def build_sample(
     tcp_total, tcp_listening = read_tcp_sockets()
     rootfs_free = read_rootfs_free_gb()
     throttled = read_throttled() if sample_index % SLOW_POLL_EVERY_N_SAMPLES == 0 else cached_throttled
+    wifi = None
+    if wifi_monitor is not None:
+        try:
+            wifi = wifi_monitor.sample(ts)
+        except Exception:  # a Wi-Fi read must never cost the whole heartbeat line
+            wifi = None
 
     fields = [
         ts,
@@ -296,7 +326,18 @@ def build_sample(
         f"fds_open={_fmt(fds)}",
         f"tcp_sockets={_fmt(tcp_total)}",
         f"rootfs_free_gb={_fmt(rootfs_free, 1)}",
-    ] + [f"port_{p}={'LISTEN' if tcp_listening.get(p) else 'DOWN'}" for p in ALMITA_PORTS]
+    ] + [f"port_{p}={'LISTEN' if tcp_listening.get(p) else 'DOWN'}" for p in ALMITA_PORTS] + [
+        f"wlan_present={_fmt_bool(wifi['wlan_present']) if wifi else NA}",
+        f"wlan_operstate={_fmt(wifi['wlan_operstate']) if wifi else NA}",
+        f"wlan_carrier={_fmt(wifi['wlan_carrier']) if wifi else NA}",
+        f"wlan_assoc={_fmt_bool(wifi['wlan_associated']) if wifi else NA}",
+        f"wlan_signal_dbm={_fmt(wifi['wlan_signal_dbm']) if wifi else NA}",
+        f"default_route={_fmt_bool(wifi['default_route_present']) if wifi else NA}",
+        f"sdio_txfail_total={_fmt(wifi['sdio_txfail_total']) if wifi else NA}",
+        f"sdio_ctrlfail_total={_fmt(wifi['sdio_ctrlframe_fail_total']) if wifi else NA}",
+        f"sdio_backplane_halt_total={_fmt(wifi['sdio_backplane_halt_total']) if wifi else NA}",
+        f"wifi_health={_fmt(wifi['wifi_health']) if wifi else NA}",
+    ]
 
     return curr_cpu_stat, " ".join(fields), throttled
 
@@ -351,9 +392,17 @@ def main() -> int:
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES, help="rotate blackbox.log past this size")
     parser.add_argument("--backup-count", type=int, default=DEFAULT_BACKUP_COUNT, help="rotated files to retain")
+    parser.add_argument("--wifi-interface", default=wifi_health.DEFAULT_INTERFACE)
+    parser.add_argument("--no-wifi-monitor", action="store_true", help="disable Wi-Fi/SDIO monitoring")
     args = parser.parse_args()
 
     logger = build_logger(Path(args.log_dir), args.max_bytes, args.backup_count)
+    wifi_monitor = None
+    if not args.no_wifi_monitor:
+        wifi_monitor = wifi_health.WifiMonitor(
+            interface=args.wifi_interface,
+            events_log_path=Path(args.log_dir) / "wifi_events.log",
+        )
 
     def stop(*_):
         raise KeyboardInterrupt
@@ -369,7 +418,8 @@ def main() -> int:
         while True:
             cycle_started = time.monotonic()
             try:
-                prev_cpu_stat, line, cached_throttled = build_sample(prev_cpu_stat, sample_index, cached_throttled)
+                prev_cpu_stat, line, cached_throttled = build_sample(
+                    prev_cpu_stat, sample_index, cached_throttled, wifi_monitor)
                 logger.info(line)
             except Exception as exc:  # a resident heartbeat must never die on one bad sample
                 print(f"ALMITA SYSTEM BLACKBOX sample error: {exc!r}", file=sys.stderr, flush=True)
@@ -382,6 +432,8 @@ def main() -> int:
     finally:
         for handler in logger.handlers:
             handler.close()
+        if wifi_monitor is not None:
+            wifi_monitor.close()
         print("ALMITA SYSTEM BLACKBOX STOP", flush=True)
     return 0
 

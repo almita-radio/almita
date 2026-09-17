@@ -54,7 +54,21 @@ async function fetchJson(name){
   return response.json();
 }
 
-function renderInstrument(instrument){
+// Collapses wifi's state + most relevant detail into one line, matching
+// the other pairs' plain-text style (e.g. "DEGRADED — 12 SDIO errors",
+// "FAILED — Broadcom SDIO backplane halted") rather than a second panel -
+// this is deliberately the only new field this incident's monitoring adds
+// to the console (see wifi_health.py for the full status this summarizes).
+function _wifiValue(wifi){
+  const state=wifi.state||"UNKNOWN";
+  if(state==="OK")return"OK";
+  if(wifi.last_error&&/backplane/i.test(wifi.last_error))return`${state} — Broadcom SDIO backplane halted`;
+  const count=wifi.sdio_error_count;
+  return count?`${state} — ${num(count,0)} SDIO errors`:state;
+}
+
+function renderInstrument(instrument,wifi){
+  wifi=wifi||{};
   const badge=instrument.telemetry_stale?"DEGRADED":"READY";
   $("instrument-badge").textContent=badge;$("instrument-badge").className=badgeClass(badge);
   $("instrument-kv").innerHTML=[
@@ -67,6 +81,7 @@ function renderInstrument(instrument){
     pair("LNA TEMP",instrument.lna_temperature_c==null?"N/A":`${num(instrument.lna_temperature_c)} °C`),
     pair("MOUNT",instrument.mount_device?instrument.mount_device:safe(instrument.mount_state,"NOT_EXPOSED")),
     pair("TELEMETRY",instrument.telemetry_stale?"STALE":"LIVE"),
+    pair("WI-FI",_wifiValue(wifi)),
   ].join("");
 }
 
@@ -401,7 +416,7 @@ function render(status){
   const systemState=status.system_state||"READY";
   $("system-badge").textContent=systemState;$("system-badge").className=badgeClass(systemState);
   $("updated").textContent=_shortTime(status.updated_utc);
-  renderInstrument(status.instrument||{});
+  renderInstrument(status.instrument||{},status.wifi||{});
   renderSession(status.acquisition||{state:"IDLE"});
   const quicklook=status.quicklook||{state:"IDLE"};
   renderQuicklook(quicklook);
