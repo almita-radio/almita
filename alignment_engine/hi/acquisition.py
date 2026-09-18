@@ -9,6 +9,13 @@ there is I/O or waiting, sync where there is pure computation) - a real
 backend will await the SDR; the simulated one awaits nothing but keeps the
 identical signature so engine.py's calling code never branches on which
 backend it holds.
+
+RealHIAcquisitionBackend (authorized for the first real HI night scan)
+wraps sdr_capture.SDRCapture - the exact class capture.py itself uses -
+never a second, duplicated rtl_tcp client. rtl_tcp's protocol has no
+gain/rate/frequency read-back command, so "actual params used" below
+means "what was requested", recorded honestly as such rather than implying
+an independent hardware confirmation that does not exist.
 """
 from __future__ import annotations
 
@@ -42,20 +49,103 @@ class HIAcquisitionBackend(Protocol):
                                    gain_db: float) -> HISpectrumAcquisition: ...
 
 
-class RealHIAcquisitionBackend:
-    """NOT IMPLEMENTED - designed, not executed, matching the same
-    inspect/prepare/execute-authorization precedent RealTrackingBackend and
-    RealMountAdapter already established. Real HI acquisition is not
-    authorized this pass (Fase 26: no real SDR capture) - this class
-    documents exactly what it will need to wrap (ALMITA's existing MAIN SDR
-    capture path, capture.py's IQ acquisition + FFT, never a second,
-    duplicated SDR client) once that authorization exists."""
+def _compute_spectrum_from_iq_file(h5_path: str, fft_size: int = 8192):
+    """The same FFT pattern sun_detectability_test.py's own real-hardware-
+    tested robust_broadband_metrics() uses (Hann window, chunked-and-
+    averaged |FFT|^2, fftshift) - re-exposed here as (frequency_hz, power)
+    ARRAYS instead of that function's summary statistics, because
+    spectral_pipeline.compute_spectral_metric() needs the full spectrum
+    around the HI line, not a broadband scalar. This is the one narrowly-
+    scoped new piece of code Fase 8 anticipated ("compose it yourself from
+    the IQ step and the FFT step") - the IQ ACQUISITION itself is entirely
+    SDRCapture (sdr_capture.py), never re-implemented."""
+    import h5py
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "RealHIAcquisitionBackend requires a separate, explicit hardware/SDR-capture "
-            "authorization not granted this pass. It must wrap ALMITA's existing capture.py "
-            "SDR path (never a second, duplicated rtl_tcp client) once authorized."
+    with h5py.File(h5_path) as handle:
+        raw = handle["iq_data"][:]
+        sample_rate = float(handle.attrs["sample_rate_hz"])
+        center_frequency = float(handle.attrs["center_frequency_hz"])
+    i = raw[0::2].astype(np.float32)
+    q = raw[1::2].astype(np.float32)
+    iq = (i - np.mean(i)) + 1j * (q - np.mean(q))
+    count = len(iq) // fft_size
+    if count < 8:
+        raise ValueError(f"insufficient IQ samples for a {fft_size}-point FFT (got {len(iq)} samples, "
+                          f"need >= {8 * fft_size})")
+    window = np.hanning(fft_size).astype(np.float32)
+    psd = np.zeros(fft_size, np.float64)
+    chunk_segments = 64
+    for start in range(0, count, chunk_segments):
+        block = iq[start * fft_size:min(count, start + chunk_segments) * fft_size]
+        block = block.reshape(-1, fft_size) * window
+        transformed = np.fft.fftshift(np.fft.fft(block, axis=1), axes=1)
+        psd += np.sum(np.abs(transformed) ** 2, axis=0)
+    psd /= count
+    frequency_hz = center_frequency + np.fft.fftshift(np.fft.fftfreq(fft_size, 1 / sample_rate))
+    return frequency_hz, psd
+
+
+class RealHIAcquisitionBackend:
+    """Wraps sdr_capture.SDRCapture (network/rtl_tcp mode) - the SAME class
+    capture.py itself uses - never a second, duplicated rtl_tcp client.
+    connect()/configure() happen ONCE (lazily, on first
+    acquire_hi_spectrum() call, or explicitly via prepare()); every point
+    reuses the same connection and only issues a new capture(). Raw IQ for
+    EVERY point is written to its own HDF5 file under the session's
+    points/ directory (session.point_path(index)) and never overwritten or
+    replaced by a derived product (Fase's raw-data policy)."""
+
+    def __init__(self, host: str, port: int, session, verbose: bool = False):
+        self.host = host
+        self.port = port
+        self.session = session
+        self.verbose = verbose
+        self._sdr = None
+        self._configured_params = None
+        self._point_index = 0
+
+    async def prepare(self, *, center_frequency_hz: float, sample_rate_hz: float, gain_db) -> dict:
+        """Connect and configure once, ahead of the raster, so per-point
+        capture() calls don't pay reconnect/reconfigure cost - and so a
+        connection failure surfaces at PREFLIGHT time, not mid-raster.
+        Returns the actual params requested (rtl_tcp has no read-back
+        command - see acquisition.py module docstring - so "actual" here
+        means "what we asked for", recorded honestly as such)."""
+        from sdr_capture import SDRCapture
+        self._sdr = SDRCapture("network", self.host, self.port, verbose=self.verbose)
+        await self._sdr.connect()
+        await self._sdr.configure(center_freq=int(center_frequency_hz), sample_rate=int(sample_rate_hz), gain=gain_db)
+        self._configured_params = {"center_frequency_hz": center_frequency_hz,
+                                    "sample_rate_hz": sample_rate_hz, "gain_db": gain_db}
+        return dict(self._configured_params)
+
+    async def close(self) -> None:
+        if self._sdr is not None:
+            await self._sdr.close()
+            self._sdr = None
+
+    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, integration_seconds: float,
+                                   center_frequency_hz: float, sample_rate_hz: float,
+                                   gain_db) -> HISpectrumAcquisition:
+        from datetime import datetime, timezone
+        if self._sdr is None or self._configured_params != {"center_frequency_hz": center_frequency_hz,
+                                                              "sample_rate_hz": sample_rate_hz, "gain_db": gain_db}:
+            await self.prepare(center_frequency_hz=center_frequency_hz, sample_rate_hz=sample_rate_hz, gain_db=gain_db)
+
+        index = self._point_index
+        self._point_index += 1
+        raw_path = str(self.session.point_path(index, suffix="h5"))
+        timestamp_utc = datetime.now(timezone.utc).isoformat()
+        await self._sdr.capture(integration_seconds, raw_path, sample_rate=int(sample_rate_hz),
+                                 metadata={"point_index": index, "ra_deg": float(point_coordinate.icrs.ra.deg),
+                                           "dec_deg": float(point_coordinate.icrs.dec.deg),
+                                           "timestamp_utc": timestamp_utc})
+        frequency_hz, power = _compute_spectrum_from_iq_file(raw_path)
+        return HISpectrumAcquisition(
+            frequency_hz=frequency_hz, power=power, timestamp_utc=timestamp_utc,
+            integration_seconds=integration_seconds, center_frequency_hz=center_frequency_hz,
+            sample_rate_hz=sample_rate_hz, gain_db=gain_db, valid_mask=None,
+            capture_metadata={"simulated": False, "point_index": index, "raw_iq_path": raw_path},
         )
 
 

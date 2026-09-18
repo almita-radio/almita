@@ -19,9 +19,50 @@ from alignment_engine.hi.sync_policy import (
 POINT = SkyCoord(ra=180.0, dec=-40.0, unit="deg")
 
 
-def test_real_backend_refuses_construction():
-    with pytest.raises(NotImplementedError):
-        RealHIAcquisitionBackend()
+def test_real_backend_constructs_without_touching_hardware():
+    """Construction alone must never touch the network - connect()/
+    configure() are separate, explicit, awaited calls (prepare() or the
+    first acquire_hi_spectrum()), never triggered as a side effect of
+    __init__."""
+    backend = RealHIAcquisitionBackend(host="localhost", port=1234, session=None)
+    assert backend._sdr is None
+
+
+def test_real_backend_spectrum_helper_rejects_too_few_samples(tmp_path):
+    import h5py
+    import numpy as np
+
+    from alignment_engine.hi.acquisition import _compute_spectrum_from_iq_file
+
+    path = tmp_path / "tiny.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("iq_data", data=np.zeros(100, dtype=np.uint8))
+        f.attrs["sample_rate_hz"] = 2_400_000.0
+        f.attrs["center_frequency_hz"] = 1_420_405_751.77
+    with pytest.raises(ValueError):
+        _compute_spectrum_from_iq_file(str(path))
+
+
+def test_real_backend_spectrum_helper_produces_frequency_centered_on_center_freq(tmp_path):
+    import h5py
+    import numpy as np
+
+    from alignment_engine.hi.acquisition import _compute_spectrum_from_iq_file
+
+    rng = np.random.default_rng(0)
+    n_samples = 8192 * 16
+    raw = (rng.normal(127, 10, size=2 * n_samples)).clip(0, 255).astype(np.uint8)
+    path = tmp_path / "noise.h5"
+    center_freq = 1_420_405_751.77
+    sample_rate = 2_400_000.0
+    with h5py.File(path, "w") as f:
+        f.create_dataset("iq_data", data=raw)
+        f.attrs["sample_rate_hz"] = sample_rate
+        f.attrs["center_frequency_hz"] = center_freq
+    frequency_hz, power = _compute_spectrum_from_iq_file(str(path))
+    assert len(frequency_hz) == len(power) == 8192
+    assert frequency_hz.min() < center_freq < frequency_hz.max()
+    assert np.all(power >= 0)
 
 
 def test_simulated_backend_produces_a_valid_metric_for_a_real_signal():

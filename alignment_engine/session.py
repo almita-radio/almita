@@ -146,5 +146,26 @@ class AlignmentSession:
     def write_stability_check(self, payload): self._write("stability_check", payload)
     def read_stability_check(self): return self._read("stability_check")
 
+    def write_reference_validation(self, payload): self._write("reference_validation", payload)
+    def read_reference_validation(self): return self._read("reference_validation")
+
+    def write_expected_map(self, payload): self._write("expected_map", payload)
+    def read_expected_map(self): return self._read("expected_map")
+
+    def write_observed_map(self, payload): self._write("observed_map", payload)
+    def read_observed_map(self): return self._read("observed_map")
+
+    def write_model_map(self, payload): self._write("model_map", payload)
+    def read_model_map(self): return self._read("model_map")
+
+    def write_residual_map(self, payload): self._write("residual_map", payload)
+    def read_residual_map(self): return self._read("residual_map")
+
+    def write_quality(self, payload): self._write("quality", payload)
+    def read_quality(self): return self._read("quality")
+
+    def write_bootstrap(self, payload): self._write("bootstrap", payload)
+    def read_bootstrap(self): return self._read("bootstrap")
+
     def point_path(self, index: int, suffix: str = "h5") -> Path:
         return self.dir / POINTS_DIRNAME / f"point_{index:04d}.{suffix}"

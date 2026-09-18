@@ -164,9 +164,9 @@ class FITSMomentMapProvider:
         return out
 
     def choose_target(self, location: EarthLocation, obstime: Time, min_altitude_deg: float,
-                       beam_fwhm_deg: float) -> Tuple[SkyCoord, Dict]:
+                       beam_fwhm_deg: float, stride: int = 3) -> Tuple[SkyCoord, Dict]:
         from alignment_engine.hi.target_selection import select_best_target_from_grid
-        value_fn = self.beam_convolved_value_fn(beam_fwhm_deg)
+        value_fn = self.beam_convolved_value_fn(beam_fwhm_deg, stride=stride)
         return select_best_target_from_grid(self._sample_grid(), value_fn, location, obstime,
                                              min_altitude_deg, beam_fwhm_deg)
 
@@ -179,11 +179,15 @@ class FITSMomentMapProvider:
             return SkyCoord(l=lon, b=lat, unit="deg", frame="galactic").icrs
         return SkyCoord(ra=lon, dec=lat, unit="deg", frame="icrs")
 
-    def template_for(self, center: SkyCoord, beam_fwhm_deg: float):
+    def template_for(self, center: SkyCoord, beam_fwhm_deg: float, stride: int = 3):
         """`center` is accepted for interface compatibility with
         SyntheticHIReferenceProvider (Fase 3: the fitter must not know
         which provider it holds) but is not otherwise needed here - the
         real beam convolution (beam_convolved_value_fn) evaluates
         correctly at ANY query point directly, unlike the coarse
-        probe-pattern approximation this replaced."""
-        return self.beam_convolved_value_fn(beam_fwhm_deg)
+        probe-pattern approximation this replaced. `stride` trades pixel-
+        catalog density for speed - the beam FWHM (~20 deg) is vastly
+        larger than this survey's ~0.083 deg pixel scale, so a coarser
+        stride costs negligible accuracy but matters a lot for a fit that
+        gets re-evaluated many times (bootstrap - see quality_v2.py)."""
+        return self.beam_convolved_value_fn(beam_fwhm_deg, stride=stride)
