@@ -27,7 +27,6 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from alignment import multiscale_pattern, offset_coordinates
 from alignment_engine.hi.reference_trust import ReferenceManifest, ReferenceTrust
 
 
@@ -115,6 +114,41 @@ class FITSMomentMapProvider:
         with fits.open(fits_path) as hdul:
             self._data = np.asarray(hdul[0].data, dtype=float)
             self._wcs = WCS(hdul[0].header)
+        self._pixel_catalog_cache: Dict[int, Tuple[SkyCoord, np.ndarray]] = {}
+
+    def _pixel_catalog(self, stride: int) -> Tuple[SkyCoord, np.ndarray]:
+        """Flattens every `stride`-th finite pixel into a (coords, values)
+        catalog, cached per stride - reused by BOTH choose_target() and
+        template_for() via alignment.gaussian_convolved_template(), the
+        SAME exact-spherical-separation Gaussian convolution the synthetic
+        catalog path already uses (not a second, ad hoc approximation).
+        Subsampling is safe because the beam FWHM (~20 deg) is vastly
+        larger than this survey's ~0.083 deg pixel scale - see the pass
+        report's runtime measurement for the chosen default stride."""
+        if stride not in self._pixel_catalog_cache:
+            ny, nx = self._data.shape
+            ys, xs = np.mgrid[0:ny:stride, 0:nx:stride]
+            finite = np.isfinite(self._data[ys, xs])
+            lon, lat = self._wcs.celestial.pixel_to_world_values(xs[finite], ys[finite])
+            frame = "galactic" if self.manifest.coordinate_system.lower().startswith("gal") else "icrs"
+            coords = (SkyCoord(l=lon, b=lat, unit="deg", frame="galactic").icrs if frame == "galactic"
+                      else SkyCoord(ra=lon, dec=lat, unit="deg", frame="icrs"))
+            self._pixel_catalog_cache[stride] = (coords, self._data[ys, xs][finite])
+        return self._pixel_catalog_cache[stride]
+
+    def beam_convolved_value_fn(self, beam_fwhm_deg: float, stride: int = 3):
+        """A callable(SkyCoord array) -> beam-convolved values, usable
+        both for target SELECTION (Fase 15: must score the beam-convolved
+        sky, not raw pixels) and directly as a fitting template centered
+        implicitly at each query point (no separate `center` needed - this
+        evaluates the true convolution at whatever points are asked for)."""
+        from alignment import gaussian_convolved_template
+        catalog_coords, catalog_values = self._pixel_catalog(stride)
+
+        def _fn(coords: SkyCoord) -> np.ndarray:
+            query = SkyCoord(coords).reshape((-1,))
+            return gaussian_convolved_template(query, catalog_coords, catalog_values, beam_fwhm_deg)
+        return _fn
 
     def _value_at(self, coords: SkyCoord) -> np.ndarray:
         frame = "galactic" if self.manifest.coordinate_system.lower().startswith("gal") else "icrs"
@@ -132,7 +166,8 @@ class FITSMomentMapProvider:
     def choose_target(self, location: EarthLocation, obstime: Time, min_altitude_deg: float,
                        beam_fwhm_deg: float) -> Tuple[SkyCoord, Dict]:
         from alignment_engine.hi.target_selection import select_best_target_from_grid
-        return select_best_target_from_grid(self._sample_grid(), self._value_at, location, obstime,
+        value_fn = self.beam_convolved_value_fn(beam_fwhm_deg)
+        return select_best_target_from_grid(self._sample_grid(), value_fn, location, obstime,
                                              min_altitude_deg, beam_fwhm_deg)
 
     def _sample_grid(self) -> SkyCoord:
@@ -145,19 +180,10 @@ class FITSMomentMapProvider:
         return SkyCoord(ra=lon, dec=lat, unit="deg", frame="icrs")
 
     def template_for(self, center: SkyCoord, beam_fwhm_deg: float):
-        def _template(coords: SkyCoord) -> np.ndarray:
-            probe = multiscale_pattern(center, (beam_fwhm_deg / 2, beam_fwhm_deg / 6), 8)
-            probe_values = self._value_at(probe)
-            finite = np.isfinite(probe_values)
-            if not np.any(finite):
-                return np.full(len(SkyCoord(coords).reshape((-1,))), np.nan)
-            sigma = beam_fwhm_deg / (2 * np.sqrt(2 * np.log(2)))
-            query = SkyCoord(coords).reshape((-1,))
-            out = []
-            for point in query:
-                distance = point.separation(probe[finite]).deg
-                weights = np.exp(-0.5 * (distance / sigma) ** 2)
-                total = np.sum(weights)
-                out.append(float(np.sum(weights * probe_values[finite]) / total) if total > 0 else np.nan)
-            return np.asarray(out)
-        return _template
+        """`center` is accepted for interface compatibility with
+        SyntheticHIReferenceProvider (Fase 3: the fitter must not know
+        which provider it holds) but is not otherwise needed here - the
+        real beam convolution (beam_convolved_value_fn) evaluates
+        correctly at ANY query point directly, unlike the coarse
+        probe-pattern approximation this replaced."""
+        return self.beam_convolved_value_fn(beam_fwhm_deg)

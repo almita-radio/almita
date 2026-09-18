@@ -360,8 +360,26 @@ class AlignmentEngine:
                 self._transition(AlignmentState.TRACKING_CONFIGURED, "tracking set to SIDEREAL")
                 self._transition(AlignmentState.SCANNING, "hi raster")
                 points = scan_planner.build_raster(self.config.hi.raster_span_deg, self.config.hi.raster_spacing_deg)
-                values = simulation.synthetic_hi_metrics(points, center, template, sim)
                 positions = _offset_points_to_positions(center, points)
+                # Item 7 (unified spectral path): the same acquire ->
+                # spectral_pipeline metric route a real HI backend will use
+                # (alignment_engine/hi/acquisition.py) - only the source of
+                # the spectrum (simulated here) differs from a future real run.
+                from alignment import shifted_positions
+                from .hi.acquisition import SimulatedHIAcquisitionBackend, acquire_and_reduce_point
+                shifted = shifted_positions(positions, center, sim.true_offset_east_deg, sim.true_offset_north_deg)
+                clean_expected = np.asarray(template(shifted))
+                noise_scale = sim.noise_fraction * (float(np.std(clean_expected)) or 1.0)
+                acquisition_backend = SimulatedHIAcquisitionBackend(
+                    expected_amplitude_by_index=list(clean_expected), gain_a=sim.gain_a,
+                    baseline_b=sim.baseline_b, noise_std=noise_scale,
+                    missing_channel_fraction=sim.missing_fraction, seed=sim.seed)
+                values = [await acquire_and_reduce_point(
+                              acquisition_backend, position,
+                              center_frequency_hz=self.config.hi.center_frequency_hz,
+                              sample_rate_hz=self.config.hi.sample_rate_hz,
+                              gain_db=self.config.hi.gain_db, integration_seconds=self.config.hi.integration_seconds)
+                          for position in positions]
                 self.session.write_raw_grid({"stage": "hi", "points": [vars(p) for p in points], "values": values})
                 self._transition(AlignmentState.FITTING, "hi fit")
                 fit = fit_raster(positions, values, center, template, self.config.hi.raster_span_deg)
