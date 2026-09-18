@@ -143,17 +143,35 @@ def test_track_state_guard_records_restore_failure_without_raising():
     assert guard.restore_error is not None
 
 
-def test_full_simulated_rehearsal_blocked_without_obstime_override():
+def test_uses_real_current_time_without_obstime_override():
     """Real Sun ephemeris at real Time.now() is used even in simulated mode
-    unless --simulate-obstime is explicitly passed - this must BLOCK
-    (matching the live gate), never silently proceed."""
+    unless --simulate-obstime is explicitly passed - checked directly
+    against the persisted obstime, not by asserting BLOCKED/PASS (which
+    depends on whether it happens to be day or night at the real site when
+    this test runs - asserting a fixed outcome here would be exactly the
+    kind of real-world-time-dependent flakiness this suite must avoid)."""
+    import json
     import tempfile
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from astropy.time import Time
+
     parser = hgs.build_parser()
     args = parser.parse_args(["--backend", "simulated"])
     with tempfile.TemporaryDirectory() as tmp:
         args.session_root = tmp
-        exit_code = asyncio.run(hgs.main(args))
-    assert exit_code == 2  # BLOCKED
+        before = datetime.now(timezone.utc)
+        asyncio.run(hgs.main(args))
+        after = datetime.now(timezone.utc)
+        session_dirs = list(Path(tmp).glob("HW-SOLAR-GOTO-*"))
+        assert len(session_dirs) == 1
+        report = json.loads((session_dirs[0] / "hardware_test_result.json").read_text())
+
+    valid_time_gate = next(g for g in report["gates"] if g["name"] == "valid_time")
+    obstime_str = valid_time_gate["detail"].removeprefix("obstime=")
+    obstime = Time(obstime_str).to_datetime(timezone=timezone.utc)
+    assert before <= obstime <= after
 
 
 def test_full_simulated_rehearsal_with_daytime_obstime_reaches_pass():
