@@ -9,6 +9,7 @@ from alignment_engine.hi.acquisition import (
     SimulatedHIAcquisitionBackend,
     acquire_and_reduce_point,
 )
+from alignment_engine.deployment_state import DeploymentState, check_hardware_movement_allowed, write_deployment_state
 from alignment_engine.hi.sync_policy import (
     AlignmentPhase,
     PastSolution,
@@ -68,27 +69,45 @@ def test_real_backend_spectrum_helper_produces_frequency_centered_on_center_freq
 def test_simulated_backend_produces_a_valid_metric_for_a_real_signal():
     backend = SimulatedHIAcquisitionBackend(expected_amplitude_by_index=[5.0], noise_std=0.02)
     metric = asyncio.run(acquire_and_reduce_point(
-        backend, POINT, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
+        backend, POINT, point_index=0, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
         gain_db=40.2, integration_seconds=5.0))
     assert metric is not None
     assert metric > 0
 
 
-def test_simulated_backend_advances_index_per_call():
+def test_simulated_backend_uses_explicit_index_per_call():
     backend = SimulatedHIAcquisitionBackend(expected_amplitude_by_index=[1.0, 5.0, 1.0], noise_std=0.01)
     metrics = [asyncio.run(acquire_and_reduce_point(
-        backend, POINT, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
-        gain_db=40.2, integration_seconds=5.0)) for _ in range(3)]
+        backend, POINT, point_index=i, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
+        gain_db=40.2, integration_seconds=5.0)) for i in range(3)]
     assert all(m is not None for m in metrics)
     assert metrics[1] > metrics[0]
     assert metrics[1] > metrics[2]
+
+
+def test_explicit_index_does_not_desync_when_a_point_is_skipped():
+    """The bug found while designing replay mode: if the caller skips an
+    index (e.g. altitude/GOTO failure before acquisition), an internal
+    auto-incrementing counter would silently mislabel the next real
+    acquisition. Passing the caller's own index must NOT exhibit this."""
+    backend = SimulatedHIAcquisitionBackend(expected_amplitude_by_index=[1.0, 5.0, 9.0], noise_std=0.001)
+    # Simulate point 1 being skipped entirely (never call index 1) -
+    # index 2's result must still reflect expected_amplitude_by_index[2],
+    # not [1] (which an auto-incrementing counter would have used).
+    metric_0 = asyncio.run(acquire_and_reduce_point(
+        backend, POINT, point_index=0, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
+        gain_db=40.2, integration_seconds=5.0))
+    metric_2 = asyncio.run(acquire_and_reduce_point(
+        backend, POINT, point_index=2, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
+        gain_db=40.2, integration_seconds=5.0))
+    assert metric_2 > metric_0 * 5  # reflects amplitude[2]=9.0, not amplitude[1]=5.0's smaller jump
 
 
 def test_missing_channels_can_make_metric_none_not_a_fabricated_zero():
     backend = SimulatedHIAcquisitionBackend(expected_amplitude_by_index=[1.0], noise_std=0.02,
                                              missing_channel_fraction=0.98)
     metric = asyncio.run(acquire_and_reduce_point(
-        backend, POINT, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
+        backend, POINT, point_index=0, center_frequency_hz=1_420_405_751.77, sample_rate_hz=2_400_000.0,
         gain_db=40.2, integration_seconds=5.0))
     assert metric is None
 
@@ -103,16 +122,45 @@ def test_first_light_phase_always_blocks_sync_even_when_eligible_and_repeatable(
     assert "FIRST_LIGHT_HI" in result.reason
 
 
-def test_established_phase_without_repeatability_evidence_blocks_sync():
-    result = evaluate_phase_gate(AlignmentPhase.ESTABLISHED_HI, "ELIGIBLE", repeatability=None)
+def test_established_phase_without_repeatability_evidence_blocks_sync(tmp_path):
+    field_gate = check_hardware_movement_allowed(
+        "sync", write_deployment_state(DeploymentState.FIELD, operator_action="test", path=str(tmp_path / "d.json")))
+    result = evaluate_phase_gate(AlignmentPhase.ESTABLISHED_HI, "ELIGIBLE", repeatability=None,
+                                  deployment_gate=field_gate)
     assert result.sync_allowed is False
 
 
-def test_established_phase_with_eligible_and_repeatable_allows_sync():
+def test_established_phase_without_deployment_gate_blocks_sync_even_if_otherwise_eligible():
+    """Fase 3/12: a future SYNC requires FIELD deployment in addition to
+    every other policy - omitting the deployment gate must fail closed,
+    exactly like omitting repeatability does."""
     repeatability = check_repeatability(
         PastSolution("s2", "target", 1.0, 1.0, 0.1, 0.1),
         [PastSolution("s1", "target", 1.05, 0.95, 0.1, 0.1)])
-    result = evaluate_phase_gate(AlignmentPhase.ESTABLISHED_HI, "ELIGIBLE", repeatability)
+    result = evaluate_phase_gate(AlignmentPhase.ESTABLISHED_HI, "ELIGIBLE", repeatability, deployment_gate=None)
+    assert result.sync_allowed is False
+    assert "deployment" in result.reason.lower()
+
+
+def test_established_phase_with_non_field_deployment_blocks_sync(tmp_path):
+    non_field_gate = check_hardware_movement_allowed(
+        "sync", write_deployment_state(DeploymentState.INDOOR, operator_action="test", path=str(tmp_path / "d.json")))
+    repeatability = check_repeatability(
+        PastSolution("s2", "target", 1.0, 1.0, 0.1, 0.1),
+        [PastSolution("s1", "target", 1.05, 0.95, 0.1, 0.1)])
+    result = evaluate_phase_gate(AlignmentPhase.ESTABLISHED_HI, "ELIGIBLE", repeatability,
+                                  deployment_gate=non_field_gate)
+    assert result.sync_allowed is False
+
+
+def test_established_phase_with_eligible_repeatable_and_field_deployment_allows_sync(tmp_path):
+    field_gate = check_hardware_movement_allowed(
+        "sync", write_deployment_state(DeploymentState.FIELD, operator_action="test", path=str(tmp_path / "d.json")))
+    repeatability = check_repeatability(
+        PastSolution("s2", "target", 1.0, 1.0, 0.1, 0.1),
+        [PastSolution("s1", "target", 1.05, 0.95, 0.1, 0.1)])
+    result = evaluate_phase_gate(AlignmentPhase.ESTABLISHED_HI, "ELIGIBLE", repeatability,
+                                  deployment_gate=field_gate)
     assert result.sync_allowed is True
 
 

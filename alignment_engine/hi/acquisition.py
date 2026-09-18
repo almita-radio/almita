@@ -44,7 +44,7 @@ class HISpectrumAcquisition:
 
 
 class HIAcquisitionBackend(Protocol):
-    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, integration_seconds: float,
+    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, point_index: int, integration_seconds: float,
                                    center_frequency_hz: float, sample_rate_hz: float,
                                    gain_db: float) -> HISpectrumAcquisition: ...
 
@@ -124,7 +124,7 @@ class RealHIAcquisitionBackend:
             await self._sdr.close()
             self._sdr = None
 
-    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, integration_seconds: float,
+    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, point_index: int, integration_seconds: float,
                                    center_frequency_hz: float, sample_rate_hz: float,
                                    gain_db) -> HISpectrumAcquisition:
         from datetime import datetime, timezone
@@ -132,8 +132,13 @@ class RealHIAcquisitionBackend:
                                                               "sample_rate_hz": sample_rate_hz, "gain_db": gain_db}:
             await self.prepare(center_frequency_hz=center_frequency_hz, sample_rate_hz=sample_rate_hz, gain_db=gain_db)
 
-        index = self._point_index
-        self._point_index += 1
+        # `point_index` is the CALLER's raster index, passed explicitly -
+        # NOT an internal auto-incrementing counter. A counter would desync
+        # from the real raster index the moment any point is skipped
+        # (altitude/GOTO failure) before reaching acquisition, silently
+        # mislabeling every subsequent point's raw IQ file (found while
+        # designing replay mode, which depends on this mapping being exact).
+        index = point_index
         raw_path = str(self.session.point_path(index, suffix="h5"))
         timestamp_utc = datetime.now(timezone.utc).isoformat()
         await self._sdr.capture(integration_seconds, raw_path, sample_rate=int(sample_rate_hz),
@@ -169,14 +174,12 @@ class SimulatedHIAcquisitionBackend:
         self.missing_channel_fraction = missing_channel_fraction
         self.line_fwhm_km_s = line_fwhm_km_s
         self.seed = seed
-        self._call_index = 0
 
-    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, integration_seconds: float,
+    async def acquire_hi_spectrum(self, point_coordinate: SkyCoord, *, point_index: int, integration_seconds: float,
                                    center_frequency_hz: float, sample_rate_hz: float,
                                    gain_db: float) -> HISpectrumAcquisition:
         from datetime import datetime, timezone
-        index = self._call_index
-        self._call_index += 1
+        index = point_index
         expected = self._expected[index] if index < len(self._expected) else 0.0
         amplitude = max(self.gain_a * expected, 0.0)
         sim = SpectralSimConfig(
@@ -199,17 +202,19 @@ class SimulatedHIAcquisitionBackend:
 
 
 async def acquire_and_reduce_point(backend: HIAcquisitionBackend, point_coordinate: SkyCoord, *,
-                                    center_frequency_hz: float, sample_rate_hz: float, gain_db: float,
-                                    integration_seconds: float,
+                                    point_index: int, center_frequency_hz: float, sample_rate_hz: float,
+                                    gain_db: float, integration_seconds: float,
                                     pipeline_config: Optional[SpectralPipelineConfig] = None) -> Optional[float]:
     """The ONE code path from "acquire a spectrum" to "one scalar metric" -
     used by both the simulated engine run and (once authorized) a real
     hardware run. Returns None if the pipeline could not produce a valid
-    metric (never a fabricated 0)."""
+    metric (never a fabricated 0). `point_index` must be the caller's own
+    raster index (see RealHIAcquisitionBackend's docstring on why an
+    internal counter is unsafe)."""
     pipeline_config = pipeline_config or SpectralPipelineConfig()
     acquisition = await backend.acquire_hi_spectrum(
-        point_coordinate, integration_seconds=integration_seconds, center_frequency_hz=center_frequency_hz,
-        sample_rate_hz=sample_rate_hz, gain_db=gain_db)
+        point_coordinate, point_index=point_index, integration_seconds=integration_seconds,
+        center_frequency_hz=center_frequency_hz, sample_rate_hz=sample_rate_hz, gain_db=gain_db)
     rest_freq_hz = 1_420_405_751.77
     velocity_km_s = (rest_freq_hz - acquisition.frequency_hz) / rest_freq_hz * 299792.458
     rfi_mask = ~acquisition.valid_mask if acquisition.valid_mask is not None else None

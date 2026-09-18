@@ -375,11 +375,11 @@ class AlignmentEngine:
                     baseline_b=sim.baseline_b, noise_std=noise_scale,
                     missing_channel_fraction=sim.missing_fraction, seed=sim.seed)
                 values = [await acquire_and_reduce_point(
-                              acquisition_backend, position,
+                              acquisition_backend, position, point_index=idx,
                               center_frequency_hz=self.config.hi.center_frequency_hz,
                               sample_rate_hz=self.config.hi.sample_rate_hz,
                               gain_db=self.config.hi.gain_db, integration_seconds=self.config.hi.integration_seconds)
-                          for position in positions]
+                          for idx, position in enumerate(positions)]
                 self.session.write_raw_grid({"stage": "hi", "points": [vars(p) for p in points], "values": values})
                 self._transition(AlignmentState.FITTING, "hi fit")
                 fit = fit_raster(positions, values, center, template, self.config.hi.raster_span_deg)

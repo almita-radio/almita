@@ -87,21 +87,39 @@ class PhaseGateResult:
 
 
 def evaluate_phase_gate(phase: AlignmentPhase, sync_eligibility_verdict: str,
-                         repeatability: Optional[RepeatabilityResult] = None) -> PhaseGateResult:
+                         repeatability: Optional[RepeatabilityResult] = None,
+                         deployment_gate: Optional["MovementGateResult"] = None) -> PhaseGateResult:
     """The final word on whether SYNC may even be attempted, layered ON
     TOP of (never replacing) hi/quality.py's own ELIGIBLE/NOT_ELIGIBLE
     check and quality_v2's GOOD/MARGINAL/BAD verdict. No parameter here
     can force sync_allowed=True during FIRST_LIGHT_HI - that is the whole
-    point of this function existing."""
+    point of this function existing.
+
+    `deployment_gate` (Fase's deployment interlock, alignment_engine.
+    deployment_state.check_hardware_movement_allowed): a future SYNC is a
+    mount write like any other, so it is gated on FIELD deployment exactly
+    like GOTO/raster movement - there is no separate "SYNC doesn't count
+    as movement" carve-out. Passing None here is the fail-closed default
+    (same as passing repeatability=None): it blocks ESTABLISHED_HI's own
+    sync_allowed=True, it does not silently permit it. This function does
+    not itself perform any hardware operation - callers must independently
+    also check deployment/eligibility/quality before ever reaching this
+    point; this is the architecture, not an executable "sync now" path
+    (none exists yet)."""
     if phase == AlignmentPhase.FIRST_LIGHT_HI:
         return PhaseGateResult(False, "alignment_phase=FIRST_LIGHT_HI: SYNC is unconditionally disabled for the "
                                        "first real HI night scan, regardless of reference trust or fit quality - "
                                        "this phase is observational only ('do we see the predicted pattern', "
                                        "not 'do we trust it enough to correct the mount')")
+    if deployment_gate is None or not deployment_gate.allowed:
+        detail = deployment_gate.reason if deployment_gate is not None else \
+            "no deployment gate result provided - failing closed, never assuming FIELD"
+        return PhaseGateResult(False, f"deployment interlock not satisfied: {detail}")
     if sync_eligibility_verdict != "ELIGIBLE":
         return PhaseGateResult(False, f"sync_eligibility={sync_eligibility_verdict}")
     if repeatability is None:
         return PhaseGateResult(False, "no repeatability evidence provided - see check_repeatability()")
     if not repeatability.satisfied:
         return PhaseGateResult(False, f"repeatability not satisfied: {repeatability.reason}")
-    return PhaseGateResult(True, f"ESTABLISHED_HI, ELIGIBLE, and repeatability satisfied ({repeatability.reason})")
+    return PhaseGateResult(True, f"ESTABLISHED_HI, FIELD-deployed, ELIGIBLE, and repeatability satisfied "
+                                  f"({repeatability.reason})")

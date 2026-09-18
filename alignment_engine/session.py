@@ -167,5 +167,8 @@ class AlignmentSession:
     def write_bootstrap(self, payload): self._write("bootstrap", payload)
     def read_bootstrap(self): return self._read("bootstrap")
 
+    def write_deployment_state(self, payload): self._write("deployment_state", payload)
+    def read_deployment_state(self): return self._read("deployment_state")
+
     def point_path(self, index: int, suffix: str = "h5") -> Path:
         return self.dir / POINTS_DIRNAME / f"point_{index:04d}.{suffix}"
