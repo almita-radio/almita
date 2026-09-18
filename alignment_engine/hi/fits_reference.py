@@ -179,15 +179,31 @@ class FITSMomentMapProvider:
             return SkyCoord(l=lon, b=lat, unit="deg", frame="galactic").icrs
         return SkyCoord(ra=lon, dec=lat, unit="deg", frame="icrs")
 
-    def template_for(self, center: SkyCoord, beam_fwhm_deg: float, stride: int = 3):
-        """`center` is accepted for interface compatibility with
-        SyntheticHIReferenceProvider (Fase 3: the fitter must not know
-        which provider it holds) but is not otherwise needed here - the
-        real beam convolution (beam_convolved_value_fn) evaluates
-        correctly at ANY query point directly, unlike the coarse
-        probe-pattern approximation this replaced. `stride` trades pixel-
-        catalog density for speed - the beam FWHM (~20 deg) is vastly
-        larger than this survey's ~0.083 deg pixel scale, so a coarser
-        stride costs negligible accuracy but matters a lot for a fit that
-        gets re-evaluated many times (bootstrap - see quality_v2.py)."""
-        return self.beam_convolved_value_fn(beam_fwhm_deg, stride=stride)
+    def template_for(self, center: SkyCoord, beam_fwhm_deg: float, stride: int = 3,
+                      extent_deg: float = 15.0, step_deg: float = 0.3, use_grid_cache: bool = True):
+        """Returns a callable(SkyCoord array) -> beam-convolved values,
+        bound to `center` (Fase 3's single-argument fitter convention).
+
+        `use_grid_cache=True` (default) builds the interpolation grid
+        alignment.LocalSphericalTemplate already implements and this
+        package's own synthetic-catalog path already uses for exactly this
+        purpose - ONE exact-convolution pass over a regular
+        (extent_deg, step_deg) tangent-plane grid around `center`, then
+        fast bilinear lookups for every subsequent query. This matters a
+        lot: fit_raster()'s NLS refinement and quality_v2's mandatory
+        bootstrap both call this SAME template object many times (one
+        `template_for()` call, dozens of evaluations) - paying the exact-
+        convolution cost once instead of per-evaluation is what makes a
+        real-data bootstrap tractable at all (found and fixed while
+        rehearsing the first real HI night scan - see that pass's report).
+        `extent_deg` must cover the full raster span the caller intends to
+        use (default 15 deg comfortably covers a 7x7/18deg-span raster);
+        `use_grid_cache=False` falls back to the exact, uncached
+        convolution (e.g. for a one-off single-point query where building
+        a whole grid would be wasted work)."""
+        if not use_grid_cache:
+            return self.beam_convolved_value_fn(beam_fwhm_deg, stride=stride)
+        from alignment import LocalSphericalTemplate
+        catalog_coords, catalog_values = self._pixel_catalog(stride)
+        return LocalSphericalTemplate(center, catalog_coords, catalog_values, beam_fwhm_deg,
+                                       extent_deg=extent_deg, step_deg=step_deg)
