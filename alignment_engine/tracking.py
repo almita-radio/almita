@@ -334,6 +334,34 @@ def parse_switch_vector(raw: Optional[str]) -> Optional[Dict[str, str]]:
             for child in root if child.attrib.get("name")}
 
 
+def parse_vector_state(raw: Optional[str]) -> Optional[str]:
+    """The vector-level `state` attribute ("Idle"/"Ok"/"Busy"/"Alert") of
+    any def/set*Vector - e.g. "is EQUATORIAL_EOD_COORD currently Busy
+    (slewing)?". None if raw is None or not parseable."""
+    if raw is None:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    return root.attrib.get("state")
+
+
+def parse_text_vector(raw: Optional[str]) -> Optional[Dict[str, str]]:
+    """{element_name: text} for a def/setTextVector (e.g. "OnStep Status").
+    None if raw is None or not parseable."""
+    if raw is None:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    return {child.attrib.get("name"): (child.text or "").strip()
+            for child in root if child.attrib.get("name")}
+
+
 def parse_number_vector(raw: Optional[str]) -> Optional[Dict[str, Optional[float]]]:
     """{element_name: float value} for a def/setNumberVector. A malformed
     individual element becomes None rather than raising or silently

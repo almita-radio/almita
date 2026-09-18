@@ -122,5 +122,29 @@ class AlignmentSession:
     def write_write_audit(self, payload): self._write("write_audit", payload)
     def read_write_audit(self): return self._read("write_audit")
 
+    def write_preflight(self, payload): self._write("preflight", payload)
+    def read_preflight(self): return self._read("preflight")
+
+    def write_mount_before(self, payload): self._write("mount_before", payload)
+    def read_mount_before(self): return self._read("mount_before")
+
+    def write_mount_after(self, payload): self._write("mount_after", payload)
+    def read_mount_after(self): return self._read("mount_after")
+
+    def write_solar_target(self, payload): self._write("solar_target", payload)
+    def read_solar_target(self): return self._read("solar_target")
+
+    def write_goto_command(self, payload): self._write("goto_command", payload)
+    def read_goto_command(self): return self._read("goto_command")
+
+    def write_goto_progress(self, payload): self._write("goto_progress", payload)
+    def read_goto_progress(self): return self._read("goto_progress")
+
+    def write_goto_result(self, payload): self._write("goto_result", payload)
+    def read_goto_result(self): return self._read("goto_result")
+
+    def write_stability_check(self, payload): self._write("stability_check", payload)
+    def read_stability_check(self): return self._read("stability_check")
+
     def point_path(self, index: int, suffix: str = "h5") -> Path:
         return self.dir / POINTS_DIRNAME / f"point_{index:04d}.{suffix}"
