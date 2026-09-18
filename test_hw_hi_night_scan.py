@@ -33,6 +33,41 @@ def _base_args(tmp_root, **overrides):
     return parser.parse_args(argv)
 
 
+class _FakeManifest:
+    survey, version = "HI4PI", "v1"
+    class trust:
+        value = "REAL_VALIDATED"
+
+
+def test_build_preflight_summary_contains_all_required_fields():
+    """Fase 14: DEPLOYMENT, MODE, REFERENCE, TARGET, GRID, ESTIMATED
+    DURATION, TRACKING, MOUNT WRITES, SYNC, RAW DATA, FREE DISK - pure
+    function, no hardware involved, so this is tested directly rather than
+    by ever running --backend real (this project's own rule after a past
+    methodology near-miss)."""
+    summary = hns._build_preflight_summary(
+        deployment_state="FIELD", backend="real", manifest=_FakeManifest,
+        target_l_deg=30.0, target_b_deg=0.0, target_ra_hours=12.5, target_dec_deg=-40.0,
+        n_points=25, raster_span_deg=12.0, raster_spacing_deg=3.0, estimated_duration_s=1500.0,
+        session_dir="/tmp/HI-fake-session", free_bytes=5_000_000_000.0)
+    for key in ("deployment", "mode", "reference", "target", "grid", "estimated_duration",
+                "tracking", "mount_writes", "sync", "raw_data", "free_disk_gb"):
+        assert key in summary and summary[key], f"missing or empty summary field: {key}"
+    assert summary["deployment"] == "FIELD"
+    assert "SYNC" not in summary["sync"].upper() or "NEVER" in summary["sync"].upper()
+    assert "NEVER" in summary["sync"]
+    assert summary["raw_data"] == "/tmp/HI-fake-session"
+
+
+def test_build_preflight_summary_never_claims_sync_is_offered():
+    summary = hns._build_preflight_summary(
+        deployment_state="FIELD", backend="real", manifest=_FakeManifest,
+        target_l_deg=0.0, target_b_deg=0.0, target_ra_hours=0.0, target_dec_deg=0.0,
+        n_points=9, raster_span_deg=6.0, raster_spacing_deg=3.0, estimated_duration_s=100.0,
+        session_dir="/tmp/x", free_bytes=1e9)
+    assert "FIRST_LIGHT_HI" in summary["sync"]
+
+
 def test_mode_from_switch_vector():
     assert hns._mode_from_switch_vector(
         {"TRACK_SIDEREAL": "On", "TRACK_SOLAR": "Off", "TRACK_LUNAR": "Off", "TRACK_CUSTOM": "Off"}
@@ -170,6 +205,106 @@ def test_cancellation_preserves_completed_points_and_restores_tracking():
     assert "fit_result" not in [f.name for f in Path(tmp).glob("**/*")] or True  # no fit attempted; see below
     for pr in raw_grid["point_results"][valid_count:]:
         assert pr["valid"] is False
+
+
+def _session_dir(tmp):
+    session_dirs = list(Path(tmp).glob("HI-*"))
+    assert len(session_dirs) == 1, f"expected exactly one session dir, found {session_dirs}"
+    return session_dirs[0]
+
+
+def _assert_evidence_logging_is_complete(session_dir):
+    """Fase 20: session.write_config()/log_event() must actually have run
+    on every path - config.json must exist with real content, and
+    session.log must never be silently empty when there was activity."""
+    config = json.loads((session_dir / "alignment_config.json").read_text())
+    assert config, "alignment_config.json must not be empty - write_config() must have been called"
+    log_path = session_dir / "logs" / "session.log"
+    assert log_path.exists(), "session.log must exist"
+    log_lines = [line for line in log_path.read_text().splitlines() if line.strip()]
+    assert len(log_lines) > 0, "session.log must never be silently empty when there was real activity"
+    return log_lines
+
+
+@requires_reference
+def test_evidence_logging_complete_on_normal_pass_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        args = _base_args(tmp, simulate_obstime="2026-09-18T22:00:00")
+        exit_code = asyncio.run(hns.main(args))
+        session_dir = _session_dir(tmp)
+        log_lines = _assert_evidence_logging_is_complete(session_dir)
+    assert exit_code == 0
+    joined = "\n".join(log_lines)
+    assert "session_start" in joined or "start" in joined.lower()
+    assert any("preflight" in line.lower() or "gate" in line.lower() for line in log_lines)
+
+
+@requires_reference
+def test_evidence_logging_complete_on_blocked_preflight():
+    """A run that never reaches a single raster point (blocked before
+    visibility/preflight passes) must still have written its config and
+    logged the gate that blocked it - a preflight failure is not a reason
+    for the evidence trail to be empty."""
+    with tempfile.TemporaryDirectory() as tmp:
+        args = _base_args(tmp)  # no obstime override - may or may not be visible right now
+        exit_code = asyncio.run(hns.main(args))
+        session_dir = _session_dir(tmp)
+        log_lines = _assert_evidence_logging_is_complete(session_dir)
+        report = json.loads((session_dir / "hardware_test_result.json").read_text())
+    if report.get("result") == "BLOCKED":
+        assert exit_code == 2
+        assert any("blocked" in line.lower() or "gate" in line.lower() for line in log_lines)
+
+
+@requires_reference
+def test_evidence_logging_complete_on_cancellation():
+    with tempfile.TemporaryDirectory() as tmp:
+        args = _base_args(tmp, simulate_obstime="2026-09-18T22:00:00")
+
+        call_count = {"n": 0}
+        original_goto = SimulatedMountAdapter.goto
+
+        async def flaky_goto(self, target, point_index=None):
+            call_count["n"] += 1
+            if call_count["n"] == 5:
+                raise asyncio.CancelledError()
+            return await original_goto(self, target, point_index)
+
+        SimulatedMountAdapter.goto = flaky_goto
+        try:
+            exit_code = asyncio.run(hns.main(args))
+        finally:
+            SimulatedMountAdapter.goto = original_goto
+
+        session_dir = _session_dir(tmp)
+        log_lines = _assert_evidence_logging_is_complete(session_dir)
+    assert exit_code == 5
+    joined = "\n".join(log_lines).lower()
+    assert "cancel" in joined
+
+
+@requires_reference
+def test_evidence_logging_complete_on_partial_scan_insufficient_coverage():
+    with tempfile.TemporaryDirectory() as tmp:
+        args = _base_args(tmp, simulate_obstime="2026-09-18T22:00:00")
+
+        async def always_fail_goto(self, target, point_index=None):
+            return False
+
+        original_goto = SimulatedMountAdapter.goto
+        SimulatedMountAdapter.goto = always_fail_goto
+        try:
+            asyncio.run(hns.main(args))
+        finally:
+            SimulatedMountAdapter.goto = original_goto
+
+        session_dir = _session_dir(tmp)
+        log_lines = _assert_evidence_logging_is_complete(session_dir)
+    # every point's goto failure must show up somewhere in the log, not
+    # just be silently absorbed into an aggregate report
+    goto_fail_mentions = sum(1 for line in log_lines if "goto" in line.lower() and
+                             ("fail" in line.lower() or "skip" in line.lower()))
+    assert goto_fail_mentions > 0
 
 
 @requires_reference

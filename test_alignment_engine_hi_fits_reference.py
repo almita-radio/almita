@@ -144,6 +144,53 @@ def test_template_for_grid_cache_matches_exact_convolution(fixture_fits):
     assert np.allclose(exact_values, cached_values, rtol=0.02)
 
 
+def test_grid_cache_calls_exact_convolution_exactly_once_regardless_of_query_count(fixture_fits):
+    """Fase 19 performance-regression guard: LocalSphericalTemplate's whole
+    point is ONE batched exact-convolution call at grid-build time, then
+    O(1) bilinear lookups per query forever after (this is what took the
+    real-FITS fit from ~16.8s to ~0.31s). This is deliberately a
+    STRUCTURAL/call-counting test, not a wall-clock timing test (timing
+    is flaky in CI and on this Pi under load) - it catches the actual
+    regression class of interest: someone re-introducing a call to the
+    exact convolution inside __call__/template evaluation, which would
+    silently reintroduce the O(n_queries) cost this cache exists to kill,
+    without necessarily changing the numeric result at all."""
+    import alignment
+    from astropy.coordinates import SkyCoord
+
+    manifest = build_manifest_for_file(fixture_fits, survey="TEST", version="v1", source="unit test",
+                                        coordinate_system="Galactic", spectral_axis="none", units="K",
+                                        trust=ReferenceTrust.TEST_FIXTURE)
+    provider = FITSMomentMapProvider(fixture_fits, manifest, require_validated=False)
+    center = SkyCoord(l=30.0, b=0.0, unit="deg", frame="galactic").icrs
+
+    call_count = {"n": 0}
+    real_fn = alignment.gaussian_convolved_template
+
+    def _counting_wrapper(*args, **kwargs):
+        call_count["n"] += 1
+        return real_fn(*args, **kwargs)
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(alignment, "gaussian_convolved_template", _counting_wrapper)
+        cached = provider.template_for(center, beam_fwhm_deg=6.0, use_grid_cache=True, extent_deg=8.0)
+        assert call_count["n"] == 1, \
+            "building the cached template must call the exact convolution exactly once (grid build)"
+
+        # Many separate evaluations, including single-point and batched
+        # queries, and repeated re-evaluation - none of this may trigger
+        # another exact-convolution call.
+        for _ in range(25):
+            query = SkyCoord(l=[30.0, 31.0, 29.0], b=[0.0, 1.0, -1.0], unit="deg", frame="galactic").icrs
+            cached(query)
+        single = SkyCoord(l=30.5, b=0.2, unit="deg", frame="galactic").icrs
+        cached(single)
+
+    assert call_count["n"] == 1, \
+        "template evaluation (__call__) must never call the exact convolution again after grid build - " \
+        "each evaluation must be an O(1) bilinear lookup on the pre-built grid"
+
+
 def test_provider_template_for_returns_finite_values_near_peak(fixture_fits):
     from astropy.coordinates import SkyCoord
     manifest = build_manifest_for_file(fixture_fits, survey="TEST", version="v1", source="unit test",

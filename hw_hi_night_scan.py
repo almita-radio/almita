@@ -98,6 +98,30 @@ def _combine_write_audit(entries: list) -> dict:
             "unexpected_writes": unexpected, "writes": entries}
 
 
+def _build_preflight_summary(*, deployment_state: str, backend: str, manifest, target_l_deg: float,
+                              target_b_deg: float, target_ra_hours: float, target_dec_deg: float, n_points: int,
+                              raster_span_deg: float, raster_spacing_deg: float, estimated_duration_s: float,
+                              session_dir: str, free_bytes: float) -> dict:
+    """Fase 14: pure, hardware-free construction of the human preflight
+    summary - kept separate from main() so it can be unit-tested without
+    ever running the real backend (this codebase's own rule after a
+    methodology near-miss: never exercise --backend real just to test a
+    code path around it)."""
+    return {
+        "deployment": deployment_state,
+        "mode": backend,
+        "reference": f"{manifest.survey}/{manifest.version} trust={manifest.trust.value}",
+        "target": f"l={target_l_deg:.3f} b={target_b_deg:.3f} RA={target_ra_hours:.4f}h DEC={target_dec_deg:.3f}deg",
+        "grid": f"{n_points} points, span={raster_span_deg}deg spacing={raster_spacing_deg}deg",
+        "estimated_duration": f"{estimated_duration_s:.0f}s ({estimated_duration_s / 60:.1f} min)",
+        "tracking": "SIDEREAL (will be confirmed by readback before any GOTO)",
+        "mount_writes": "YES - ON_COORD_SET (SLEW) + EQUATORIAL_EOD_COORD, once per raster point",
+        "sync": "NEVER - alignment_phase=FIRST_LIGHT_HI unconditionally disables SYNC (see sync_policy.py)",
+        "raw_data": str(session_dir),
+        "free_disk_gb": f"{free_bytes / 1e9:.1f}",
+    }
+
+
 def _mode_from_switch_vector(vector):
     if not vector:
         return None
@@ -164,6 +188,20 @@ async def main(args) -> int:
         session.log_event(f"PREFLIGHT {name}={'ok' if passed else 'FAIL'} ({detail})")
 
     # ================================================================ PREFLIGHT 1: SYSTEM
+    if args.backend == "real":
+        from alignment_engine.deployment_state import check_hardware_movement_allowed, read_current_deployment_state
+        deployment_record = read_current_deployment_state(args.deployment_state_path)
+        movement_gate = check_hardware_movement_allowed("real GOTO raster", deployment_record,
+                                                         state_path=args.deployment_state_path)
+        gate("deployment_state_is_field", movement_gate.allowed, movement_gate.reason)
+        session.write_deployment_state({
+            "observed_at_session_start": deployment_record.to_dict() if deployment_record else None,
+            "gate_result": movement_gate.to_dict(),
+            "note": "observed once at session start - if the physical deployment state changes DURING the "
+                    "session, that is not detected or adapted to automatically (Fase 5's explicit requirement); "
+                    "a mid-session state change would only be caught by a subsequent session's own preflight.",
+        })
+
     conflict = capture_conflict.check_no_conflicting_capture(runtime_dir=args.orchestrator_runtime_dir)
     gate("no_capture_conflict", not conflict.conflict, conflict.detail)
 
@@ -316,6 +354,42 @@ async def main(args) -> int:
     session.write_expected_map({"points": [vars(p) for p in points],
                                  "expected_metric": [float(v) if np.isfinite(v) else None for v in expected_values]})
 
+    # ================================================================ HUMAN PREFLIGHT SUMMARY (Fase 14)
+    # Only for --backend real: this is the last point before any live
+    # mount/SDR control object is constructed (see BACKEND CONSTRUCTION
+    # right below), and the earliest point at which deployment, target,
+    # grid and duration are ALL already known. This is IN ADDITION to
+    # --yes (already required above) - it is a defense-in-depth, human-
+    # readable summary an operator reads half-asleep at 2 AM, not a
+    # replacement for --yes.
+    if args.backend == "real":
+        summary = _build_preflight_summary(
+            deployment_state=movement_gate.observed_state, backend=args.backend, manifest=manifest,
+            target_l_deg=float(gal.l.deg), target_b_deg=float(gal.b.deg),
+            target_ra_hours=float(center.ra.hour), target_dec_deg=float(center.dec.deg), n_points=n_points,
+            raster_span_deg=args.raster_span_deg, raster_spacing_deg=args.raster_spacing_deg,
+            estimated_duration_s=estimated_duration_s, session_dir=session.dir, free_bytes=free_bytes)
+        if args.json:
+            report["preflight_summary"] = summary
+        else:
+            print("\n" + "=" * 60)
+            print("HUMAN PREFLIGHT SUMMARY - about to move a real telescope mount")
+            print("=" * 60)
+            for label in ("deployment", "mode", "reference", "target", "grid", "estimated_duration",
+                          "tracking", "mount_writes", "sync", "raw_data", "free_disk_gb"):
+                print(f"  {label.upper():<20} {summary[label]}")
+            print("=" * 60)
+            answer = input("Proceed? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                report["result"] = "ABORTED_OPERATOR_DECLINED"
+                report["preflight_summary"] = summary
+                session.write_hardware_test_result(report)
+                session.write_state({"phase": "done", "result": "ABORTED_OPERATOR_DECLINED"})
+                session.log_event("OPERATOR DECLINED preflight summary confirmation")
+                print(f"\nAborted - operator declined confirmation.\nEvidence: {session.dir}")
+                return 6
+            session.log_event("OPERATOR CONFIRMED preflight summary")
+
     # ================================================================ BACKEND CONSTRUCTION
     if args.backend == "real":
         tracking_backend = RealTrackingBackend(host=host, port=port, device_name=DEVICE_NAME,
@@ -376,7 +450,7 @@ async def main(args) -> int:
 
                 try:
                     metric = await acquire_and_reduce_point(
-                        acquisition_backend, position, center_frequency_hz=args.center_frequency_hz,
+                        acquisition_backend, position, point_index=i, center_frequency_hz=args.center_frequency_hz,
                         sample_rate_hz=args.sample_rate_hz, gain_db=args.gain_db,
                         integration_seconds=args.integration_seconds, pipeline_config=pipeline_config)
                 except Exception as exc:
@@ -522,6 +596,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--backend", choices=["simulated", "real"], default="simulated")
     parser.add_argument("--yes", action="store_true")
+    parser.add_argument("--json", action="store_true",
+                         help="--backend real only: skip the interactive human preflight summary/confirmation "
+                              "(a scripted/JSON caller cannot answer a stdin prompt) and instead embed the same "
+                              "summary structure in the final report as preflight_summary - --yes remains the "
+                              "sole gate in this mode")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=7624)
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -548,6 +627,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "vastly larger than the survey's pixel scale, so this costs negligible accuracy")
     parser.add_argument("--session-root", default="data/alignment")
     parser.add_argument("--orchestrator-runtime-dir", default=None)
+    from alignment_engine.deployment_state import DEFAULT_STATE_PATH
+    parser.add_argument("--deployment-state-path", default=DEFAULT_STATE_PATH,
+                         help="only consulted for --backend real - simulation never checks this")
     parser.add_argument("--simulate-obstime", default=None,
                          help="ISO time override for --backend simulated rehearsals ONLY - "
                               "ignored (never applied) for --backend real")
