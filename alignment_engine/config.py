@@ -34,6 +34,11 @@ class GlobalConfig:
     sdr_host: str = "localhost"
     sdr_port: int = 1234
     settle_seconds: float = 2.0
+    # Item 4 (no infinite awaits): explicit ceiling for every tracking
+    # get/set/verify call (TrackingSession, engine.preflight()). Real I/O
+    # only - SimulatedTrackingBackend never awaits anything real, so this
+    # never fires against it.
+    tracking_timeout_s: float = 10.0
     # None -> observation_orchestrator's own DEFAULT_RUNTIME_DIR
     # (data/runtime) - overridable so tests never read/depend on this
     # machine's real, possibly-live runtime state (Fase 4's preflight

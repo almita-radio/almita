@@ -1,35 +1,50 @@
-"""Tracking-mode abstraction (Fase 1).
+"""Tracking-mode abstraction (Fase 1, now fully async - 3rd pass).
 
-Confirmed by direct repo audit (see the design report): this codebase's
-INDI mount driver (indi_telescope_control.py) only exposes
-TELESCOPE_TRACK_STATE (motor on/off). No TELESCOPE_TRACK_MODE (sidereal/
-solar/lunar rate) property is referenced anywhere in the repo. Whether the
-real OnStep INDI driver actually exposes TELESCOPE_TRACK_MODE with
-TRACK_SIDEREAL/TRACK_SOLAR switches is NOT confirmed - that is general INDI/
-OnStep driver knowledge, not evidence from this repo, and is explicitly not
-assumed here.
+ARCHITECTURE DECISION (this pass, explicitly authorized): the async
+boundary sits exactly where I/O or waiting happens - mount inspection,
+tracking get/set, verification reads - never hidden inside a sync facade
+via a private asyncio.run() or a background event-loop thread. Pure math
+elsewhere in this package (scan_planner, fitting, simulation, targets)
+stays plain sync, unchanged by this pass.
 
-Consequently this module ships two backends only:
-  - SimulatedTrackingBackend: in-memory, always succeeds - safe for tests
-    and for developing everything above this layer.
-  - a documented-but-unimplemented real backend (see RealTrackingBackend
-    below) that raises NotImplementedError with the exact property this
-    module expects to need, so the first person who wires it up to real
-    hardware has a concrete, falsifiable starting point instead of a blank
-    page - and so it can never be constructed by accident and silently do
-    nothing (or something unintended) against a real mount.
+TrackingBackend is therefore an async Protocol. SimulatedTrackingBackend
+and RealTrackingBackend implement the IDENTICAL async contract - no
+sync/async split between them, no duplicated verification logic (both are
+driven through the same TrackingSession.__aenter__/__aexit__ verification
+steps below).
 
-TrackingSession is the safety-critical piece: a context manager that always
-restores the mount's original tracking mode on the way out - success,
-handled failure, or KeyboardInterrupt/any other exception - via a plain
-try/finally. "No quiero una excepcion Python dejando la montura
-accidentalmente en tracking solar" is enforced structurally here, not by
-convention at each call site.
+Real INDI evidence (2026-09-17, live indiserver at localhost:7624, device
+"LX200 OnStep", via read-only getProperties queries only):
+
+    LX200 OnStep.TELESCOPE_TRACK_MODE._PERM=rw
+    LX200 OnStep.TELESCOPE_TRACK_MODE._GROUP=Main Control
+    LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_SIDEREAL=On
+    LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_SOLAR=Off
+    LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_LUNAR=Off
+    LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_CUSTOM=Off
+
+I/O mechanism (Fase 3's own audit requirement): all real INDI communication
+in this module (and in indi_telescope_control.py, which RealMountAdapter
+wraps) uses `asyncio.open_connection` / asyncio streams directly - there is
+no subprocess.run()/Popen anywhere in the INDI I/O path, so there is
+nothing here that blocks the event loop or needs asyncio.to_thread(). This
+was verified by reading both this module's own implementation and
+indi_telescope_control.py's connect()/_send_command()/_reader_loop()
+before writing this docstring, not assumed.
+
+TrackingSession is the safety-critical piece: an ASYNC context manager
+that always restores the mount's original tracking mode on the way out -
+success, handled failure, asyncio.CancelledError, or KeyboardInterrupt
+alike - via try/except/finally that treats BaseException (not just
+Exception) as something cleanup must survive and report, never silently
+swallow. See its own docstring for the exact cancellation semantics and
+their one documented residual risk.
 """
 from __future__ import annotations
 
+import asyncio
 from enum import Enum
-from typing import Optional, Protocol
+from typing import Awaitable, Optional, Protocol
 
 
 class TrackingMode(str, Enum):
@@ -42,23 +57,45 @@ class TrackingMode(str, Enum):
 
 
 class TrackingBackend(Protocol):
-    def get_tracking_mode(self) -> Optional[TrackingMode]: ...
-    def set_tracking_mode(self, mode: TrackingMode) -> bool: ...
+    async def get_tracking_mode(self) -> Optional[TrackingMode]: ...
+    async def set_tracking_mode(self, mode: TrackingMode) -> bool: ...
+
+
+class TrackingOperationTimeout(RuntimeError):
+    """A tracking backend call did not complete within its timeout. Never
+    an infinite await - see TrackingSession's `timeout` parameter."""
+
+
+class TrackingModeMismatchError(RuntimeError):
+    """set_tracking_mode() reported success but a read-back verification
+    (get_tracking_mode()) disagrees - treated as a failure to enter/exit,
+    never silently accepted, because a backend claiming success while the
+    hardware disagrees is exactly the kind of state a Python exception must
+    not paper over."""
+
+
+class TrackingRestoreError(RuntimeError):
+    """Raised when a TrackingSession cannot restore (or cannot VERIFY the
+    restoration of) the original tracking mode on exit. Surfaced, never
+    swallowed - an operator must know the mount may be left in a
+    non-default tracking mode."""
 
 
 class SimulatedTrackingBackend:
-    """In-memory tracking-mode backend. No I/O, always succeeds. This is
-    what CLI --simulate and --dry-run runs use, and what every test in this
-    package uses unless it is specifically testing failure handling."""
+    """In-memory tracking-mode backend. No real I/O, always succeeds
+    "instantly" (still `async def` - see module docstring: identical
+    contract to RealTrackingBackend, no special-casing). This is what CLI
+    --simulate and --dry-run runs use, and what every test in this package
+    uses unless it is specifically testing failure handling."""
 
     def __init__(self, initial: TrackingMode = TrackingMode.SIDEREAL):
         self._mode = initial
         self.commands_sent = []  # for test assertions / event log
 
-    def get_tracking_mode(self) -> Optional[TrackingMode]:
+    async def get_tracking_mode(self) -> Optional[TrackingMode]:
         return self._mode
 
-    def set_tracking_mode(self, mode: TrackingMode) -> bool:
+    async def set_tracking_mode(self, mode: TrackingMode) -> bool:
         self.commands_sent.append(mode)
         self._mode = mode
         return True
@@ -71,58 +108,37 @@ class FailingTrackingBackend:
     def __init__(self, initial: TrackingMode = TrackingMode.SIDEREAL):
         self._mode = initial
 
-    def get_tracking_mode(self) -> Optional[TrackingMode]:
+    async def get_tracking_mode(self) -> Optional[TrackingMode]:
         return self._mode
 
-    def set_tracking_mode(self, mode: TrackingMode) -> bool:
+    async def set_tracking_mode(self, mode: TrackingMode) -> bool:
         return False
 
 
 class RealTrackingBackend:
-    """Pre-hardware pass, item 6: TELESCOPE_TRACK_MODE now CONFIRMED (not
-    assumed) to exist on the real driver.
+    """Real INDI backend for TELESCOPE_TRACK_MODE - now implementing the
+    SAME async TrackingBackend contract SimulatedTrackingBackend does
+    (get_tracking_mode/set_tracking_mode), per this pass's explicit
+    architecture decision (no separate sync facade, no asyncio.run()
+    hidden in here).
 
-    Read-only evidence (2026-09-17, live indiserver at localhost:7624,
-    device "LX200 OnStep", via `indi_getprop` / a plain <getProperties/>
-    query - no property was ever set while gathering this):
-
-        LX200 OnStep.TELESCOPE_TRACK_MODE._PERM=rw
-        LX200 OnStep.TELESCOPE_TRACK_MODE._GROUP=Main Control
-        LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_SIDEREAL=On
-        LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_SOLAR=Off
-        LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_LUNAR=Off
-        LX200 OnStep.TELESCOPE_TRACK_MODE.TRACK_CUSTOM=Off
-
-    This is a real, dated observation of this specific driver/firmware
-    combination, not general INDI/OnStep documentation taken on faith.
-
-    Three-stage separation (Fase 6's own requirement) - inspect, prepare,
-    execute are three different methods, never blurred:
-      inspect()    - read-only. Opens its own short-lived TCP connection,
-                     sends exactly one <getProperties.../>, parses the
-                     reply, closes. Never sends a <newSwitchVector>. Safe
-                     to call against the real mount at any time (this is
-                     exactly what produced the evidence above).
+    Three-stage separation kept exactly as designed in the prior pass -
+    inspect, prepare, execute are three different methods, never blurred:
+      inspect() / get_tracking_mode() - read-only. Opens its own
+                     short-lived TCP connection, sends exactly one
+                     <getProperties.../>, parses the reply, closes. Never
+                     sends a <newSwitchVector>. Safe to call against the
+                     real mount at any time.
       prepare_set_tracking_mode(mode) - pure, no I/O at all. Returns the
-                     exact <newSwitchVector> XML that WOULD be sent - this
-                     is what a future `tracking --dry-run` shows an
-                     operator, same philosophy as sync_flow's prepare/
-                     apply/verify split.
-      execute_set_tracking_mode(xml) - the only method that can write to
-                     the mount. Refuses with RuntimeError unless this
-                     instance was constructed with allow_real_writes=True.
-                     Nothing in this pass ever passes that flag - real
-                     execution needs the NEXT, separate hardware
-                     authorization the design report asked for.
-
-    Wiring this into TrackingSession (which calls get_tracking_mode()/
-    set_tracking_mode() synchronously) is an OPEN DESIGN QUESTION, flagged
-    rather than silently resolved: this class's I/O is `async` (matching
-    indi_telescope_control.py's own asyncio-based client), while
-    TrackingSession/TrackingBackend today are plain sync. A sync-over-async
-    bridge (asyncio.run() per call, or making the engine's scan loop async
-    throughout) is a real architectural decision for whoever does the next,
-    hardware-facing pass - not made here.
+                     exact <newSwitchVector> XML that WOULD be sent - what
+                     `tracking --dry-run` shows an operator.
+      execute_set_tracking_mode(xml) / set_tracking_mode(mode) - the only
+                     path that can write to the mount. Refuses with
+                     RuntimeError unless this instance was constructed
+                     with allow_real_writes=True. Nothing in this
+                     codebase, as of this pass, ever passes that flag -
+                     real execution needs the NEXT, separate hardware
+                     authorization.
     """
     DEVICE_NAME = "LX200 OnStep"
     PROPERTY_NAME = "TELESCOPE_TRACK_MODE"
@@ -135,28 +151,33 @@ class RealTrackingBackend:
     MODE_BY_ELEMENT = {v: k for k, v in ELEMENT_BY_MODE.items()}
 
     def __init__(self, host: str = "localhost", port: int = 7624,
-                 device_name: Optional[str] = None, allow_real_writes: bool = False):
+                 device_name: Optional[str] = None, allow_real_writes: bool = False,
+                 default_timeout: float = 3.0):
         self.host = host
         self.port = port
         self.device_name = device_name or self.DEVICE_NAME
         self.allow_real_writes = allow_real_writes
+        self.default_timeout = default_timeout
 
-    async def inspect(self, timeout: float = 3.0) -> Optional["TrackingMode"]:
+    async def inspect(self, timeout: Optional[float] = None) -> Optional["TrackingMode"]:
         """Read-only. Returns the currently-selected TrackingMode, or None
         if the property could not be read (driver absent, timeout, or an
         element combination this package doesn't recognize)."""
         raw = await _query_property_readonly(self.host, self.port, self.device_name,
-                                              self.PROPERTY_NAME, timeout)
+                                              self.PROPERTY_NAME, timeout or self.default_timeout)
         if raw is None:
             return None
         return _parse_track_mode_xml(raw, self.MODE_BY_ELEMENT)
 
+    async def get_tracking_mode(self, timeout: Optional[float] = None) -> Optional["TrackingMode"]:
+        return await self.inspect(timeout)
+
     def prepare_set_tracking_mode(self, mode: "TrackingMode") -> str:
         """Pure - no I/O, no connection, cannot fail against hardware
         because it never touches any. Exactly what will be sent, and
-        nothing more, so an operator (or `tracking --dry-run`, future
-        work) can review it before anyone authorizes execute_set_
-        tracking_mode() to actually send it."""
+        nothing more, so an operator (or `tracking --dry-run`) can review
+        it before anyone authorizes execute_set_tracking_mode() to
+        actually send it."""
         if mode not in self.ELEMENT_BY_MODE:
             raise ValueError(f"RealTrackingBackend cannot request mode {mode!r} - "
                               f"the real driver only exposes {list(self.ELEMENT_BY_MODE)}")
@@ -168,7 +189,7 @@ class RealTrackingBackend:
         return (f'<newSwitchVector device="{self.device_name}" name="{self.PROPERTY_NAME}">\n'
                 f'{switches}\n</newSwitchVector>')
 
-    async def execute_set_tracking_mode(self, xml: str, timeout: float = 3.0) -> None:
+    async def execute_set_tracking_mode(self, xml: str, timeout: Optional[float] = None) -> None:
         """The only method in this class that can write to the mount.
         Refuses unless allow_real_writes=True was passed to __init__ - and
         nothing in this codebase, as of this pass, ever passes that."""
@@ -178,27 +199,18 @@ class RealTrackingBackend:
                 "allow_real_writes=False. Real tracking-mode writes require a "
                 "separate, explicit hardware authorization beyond this pre-hardware pass."
             )
-        await _send_command_readonly_connection(self.host, self.port, xml, timeout)
+        await _send_command_readonly_connection(self.host, self.port, xml, timeout or self.default_timeout)
 
-    # -- TrackingBackend Protocol: intentionally NOT implemented yet -----
-    # See the class docstring's "OPEN DESIGN QUESTION" - bridging this
-    # class's async I/O into TrackingSession's sync get/set_tracking_mode()
-    # is a real decision for the next, hardware-facing pass, not made here
-    # by quietly wrapping asyncio.run() around every call.
-
-    def get_tracking_mode(self):
-        raise NotImplementedError(
-            "RealTrackingBackend.get_tracking_mode() (sync) is not wired - use "
-            "'await inspect()' from async code. See this class's docstring for why "
-            "a sync facade is a deliberate open design question, not an oversight."
-        )
-
-    def set_tracking_mode(self, mode):
-        raise NotImplementedError(
-            "RealTrackingBackend.set_tracking_mode() (sync) is not wired - use "
-            "prepare_set_tracking_mode()/execute_set_tracking_mode() explicitly from "
-            "async code, and only with allow_real_writes=True under a hardware authorization."
-        )
+    async def set_tracking_mode(self, mode: "TrackingMode", timeout: Optional[float] = None) -> bool:
+        """Same async contract as SimulatedTrackingBackend.set_tracking_mode
+        - returns True on success. Unlike the simulated backend, this
+        raises (rather than returning False) when execution is refused for
+        lack of authorization, because that is a categorically different,
+        more specific condition than "the hardware failed" and deserves a
+        message that says so, not a generic False."""
+        xml = self.prepare_set_tracking_mode(mode)
+        await self.execute_set_tracking_mode(xml, timeout)
+        return True
 
 
 async def _query_property_readonly(host: str, port: int, device_name: str,
@@ -207,26 +219,25 @@ async def _query_property_readonly(host: str, port: int, device_name: str,
     returns the first matching def*Vector/set*Vector XML for
     device/property_name, then always closes the connection. Sends nothing
     else - in particular, never a <newSwitchVector> or <newNumberVector>."""
-    import asyncio as _asyncio
     import xml.etree.ElementTree as ET
 
     try:
-        reader, writer = await _asyncio.wait_for(_asyncio.open_connection(host, port), timeout)
-    except (OSError, _asyncio.TimeoutError):
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    except (OSError, asyncio.TimeoutError):
         return None
     try:
         query = f'<getProperties device="{device_name}" name="{property_name}" version="1.7"/>'
         writer.write((query + "\n").encode())
         await writer.drain()
-        deadline = _asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_event_loop().time() + timeout
         buffer = ""
         while True:
-            remaining = deadline - _asyncio.get_event_loop().time()
+            remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 return None
             try:
-                chunk = await _asyncio.wait_for(reader.read(65536), remaining)
-            except _asyncio.TimeoutError:
+                chunk = await asyncio.wait_for(reader.read(65536), remaining)
+            except asyncio.TimeoutError:
                 return None
             if not chunk:
                 return None
@@ -266,9 +277,7 @@ async def _send_command_readonly_connection(host: str, port: int, xml: str, time
     run unless allow_real_writes=True - kept as a separate function (not
     reusing _query_property_readonly) so the read path can never
     accidentally be handed a write payload."""
-    import asyncio as _asyncio
-
-    reader, writer = await _asyncio.wait_for(_asyncio.open_connection(host, port), timeout)
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
     try:
         writer.write((xml + "\n").encode())
         await writer.drain()
@@ -294,26 +303,86 @@ def _parse_track_mode_xml(raw: str, mode_by_element: dict) -> Optional["Tracking
     return mode_by_element[on_elements[0]]
 
 
-class TrackingRestoreError(RuntimeError):
-    """Raised when a TrackingSession cannot restore the original tracking
-    mode on exit. This is surfaced, never swallowed - an operator must know
-    the mount may be left in a non-default tracking mode."""
+async def _await_with_timeout(coro: Awaitable, timeout: Optional[float], op_name: str):
+    """Item 4: no infinite awaits anywhere in this module. `timeout=None`
+    means "no additional timeout beyond whatever the backend itself
+    enforces" (SimulatedTrackingBackend never awaits real I/O, so it has
+    nothing to time out on)."""
+    if timeout is None:
+        return await coro
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except asyncio.TimeoutError as exc:
+        raise TrackingOperationTimeout(f"{op_name} did not complete within {timeout}s") from exc
 
 
 class TrackingSession:
-    """Context manager: set `mode` on entry, always attempt to restore the
-    original mode on exit (success, exception, or KeyboardInterrupt alike).
+    """Async context manager: set `mode` on entry, always attempt to
+    restore (and VERIFY the restoration of) the original mode on exit -
+    success, handled failure, asyncio.CancelledError, or KeyboardInterrupt
+    alike.
 
     Usage:
-        with TrackingSession(backend, TrackingMode.SOLAR, session) as ts:
-            ... do the scan ...
-        # original mode is restored here, whatever happened inside
+        async with TrackingSession(backend, TrackingMode.SOLAR, session) as ts:
+            ... do the scan (await real I/O here as needed) ...
+        # original mode is restored (and verified) here, whatever happened inside
+
+    ENTER semantics:
+      1. read original mode (get_tracking_mode()), persist tracking_before.
+      2. if requested_mode != original: call set_tracking_mode(requested).
+         (For SimulatedTrackingBackend this changes state immediately; for
+         RealTrackingBackend without allow_real_writes=True, this raises -
+         see RealTrackingBackend.set_tracking_mode - and __aenter__ never
+         completes, so __aexit__ never runs: nothing was changed, nothing
+         needs restoring.)
+      3. verify: get_tracking_mode() again and compare to requested. A
+         mismatch (backend claimed success but read-back disagrees) raises
+         TrackingModeMismatchError - RealTrackingBackend's own contract
+         guarantees this cannot yet happen for real hardware (writes are
+         refused before reaching the wire), but the check exists so the
+         SAME code path is exercised and trusted for both backends.
+      4. persist tracking_during.
+
+    EXIT semantics (always, via try/except covering BaseException):
+      1. attempt set_tracking_mode(original) - shielded from the specific
+         cancellation that is propagating through this __aexit__ call
+         (see the CancelledError note below for what this does and does
+         not protect against).
+      2. verify via get_tracking_mode() again.
+      3. persist tracking_after (restored: bool, error: str|None).
+      4. if restoration could not be confirmed exactly, raise
+         TrackingRestoreError - chained onto the original exception (if
+         any) rather than masking it. Never returns True from __aexit__
+         (never suppresses an exception raised inside the body).
+
+    CANCELLATION NOTE (item 2/3's "asyncio.CancelledError no puede
+    saltarse cleanup", addressed precisely, not just asserted): a
+    CancelledError raised inside the `async with` body reaches __aexit__
+    exactly like any other exception - Python's `async with` guarantees
+    this, it is not something this class has to implement itself. What
+    this class DOES add on top: the restore awaits inside __aexit__ are
+    wrapped in `asyncio.shield()`, so a cancellation that is *already in
+    flight* when __aexit__ starts does not abort an in-progress restore
+    network call. The one residual, honestly-documented risk (not
+    resolved here, not silently claimed to be): if a *second*, new
+    cancellation is delivered to this task while __aexit__'s shielded
+    restore await is still running, that second cancellation still
+    propagates to the caller of __aexit__ (shield protects the inner
+    awaitable from being cancelled *itself*, not this method's own
+    suspension point) - in that case this class still records the
+    resulting error and raises TrackingRestoreError (never a silent bare
+    CancelledError escaping with no record of what happened to tracking
+    mode), but the mount's true state must then be re-confirmed with a
+    fresh inspect() before continuing - this is inherent to cooperative
+    cancellation, not a gap specific to this implementation.
     """
 
-    def __init__(self, backend: TrackingBackend, requested_mode: TrackingMode, session=None):
+    def __init__(self, backend: TrackingBackend, requested_mode: TrackingMode, session=None,
+                 timeout: Optional[float] = 10.0):
         self.backend = backend
         self.requested_mode = requested_mode
         self.session = session
+        self.timeout = timeout
         self.original_mode: Optional[TrackingMode] = None
         self.restored_mode: Optional[TrackingMode] = None
         self.restore_error: Optional[str] = None
@@ -322,27 +391,55 @@ class TrackingSession:
         if self.session is not None:
             self.session.log_event(f"TRACKING {message}")
 
-    def __enter__(self) -> "TrackingSession":
-        self.original_mode = self.backend.get_tracking_mode()
+    async def __aenter__(self) -> "TrackingSession":
+        self.original_mode = await _await_with_timeout(
+            self.backend.get_tracking_mode(), self.timeout, "get_tracking_mode (initial read)")
         if self.session is not None:
             self.session.write_tracking_before({"mode": self.original_mode.value if self.original_mode else None})
-        if not self.backend.set_tracking_mode(self.requested_mode):
+
+        ok = await _await_with_timeout(
+            self.backend.set_tracking_mode(self.requested_mode), self.timeout,
+            f"set_tracking_mode({self.requested_mode.value})")
+        if not ok:
             self._log(f"FAILED to set {self.requested_mode.value}; original mode {self.original_mode} left untouched")
             raise RuntimeError(f"failed to set tracking mode to {self.requested_mode.value}")
+
+        actual = await _await_with_timeout(
+            self.backend.get_tracking_mode(), self.timeout, "get_tracking_mode (verify after set)")
+        if actual != self.requested_mode:
+            self._log(f"MISMATCH after set: requested {self.requested_mode.value}, read back {actual}")
+            raise TrackingModeMismatchError(
+                f"set_tracking_mode({self.requested_mode.value}) reported success but "
+                f"read-back shows {actual}")
+
         self._log(f"SET {self.requested_mode.value} (was {self.original_mode.value if self.original_mode else 'UNKNOWN'})")
         if self.session is not None:
             self.session.write_tracking_during({"mode": self.requested_mode.value})
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
         target = self.original_mode or TrackingMode.SIDEREAL
         try:
-            ok = self.backend.set_tracking_mode(target)
-            self.restored_mode = target if ok else None
-            if not ok:
+            ok = await asyncio.shield(
+                _await_with_timeout(self.backend.set_tracking_mode(target), self.timeout,
+                                     f"set_tracking_mode({target.value}) (restore)"))
+            verified = None
+            if ok:
+                actual = await asyncio.shield(
+                    _await_with_timeout(self.backend.get_tracking_mode(), self.timeout,
+                                         "get_tracking_mode (verify after restore)"))
+                verified = actual == target
+            if ok and verified:
+                self.restored_mode = target
+            elif ok and not verified:
+                self.restore_error = f"set_tracking_mode reported success but read-back shows {actual!r}, not {target.value}"
+            else:
                 self.restore_error = f"backend refused to restore {target.value}"
-        except Exception as restore_exc:  # restoration must never raise past the caller
+        except asyncio.CancelledError as restore_exc:
+            self.restore_error = f"restore cancelled: {restore_exc!r}"
+        except Exception as restore_exc:  # restoration must never raise past the caller unhandled
             self.restore_error = f"{type(restore_exc).__name__}: {restore_exc}"
+
         outcome = "RESTORED" if self.restored_mode else f"RESTORE_FAILED ({self.restore_error})"
         self._log(f"{outcome} target={target.value} triggered_by={exc_type.__name__ if exc_type else 'normal exit'}")
         if self.session is not None:
@@ -355,8 +452,8 @@ class TrackingSession:
         if not self.restored_mode:
             # Surface the failure loudly rather than silently continuing -
             # an operator must be told the mount may be in the wrong mode.
-            # If the body itself already raised, chain onto that instead of
-            # masking it.
+            # If the body itself already raised (or the exit was itself
+            # cancelled), chain onto that instead of masking it.
             restore_failure = TrackingRestoreError(
                 f"failed to restore tracking mode to {target.value}: {self.restore_error}")
             if exc:

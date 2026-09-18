@@ -6,13 +6,34 @@ MEASURE -> FIT -> SHOW RESULT -> (operator decides) -> APPLY SYNC -> VERIFY
 RESULT_READY and persist alignment_result.json; nothing in this module ever
 calls sync_flow.apply_sync on its own initiative. Only an explicit,
 separate call (from the CLI, after an operator says yes) does that.
+
+ASYNC BOUNDARY (3rd pass, explicit architecture decision): async exactly
+where there is I/O or waiting - tracking get/set (TrackingSession), mount
+GOTO/SYNC/position reads, verification. Plain sync everywhere there is
+only computation - plan() (local config write, no backend contact),
+scan_planner/fitting/simulation/targets (unchanged, pure). preflight() is
+async because one of its checks (tracking_backend_reachable) must await
+the same backend contract run_solar_simulated()/run_hi_simulated() use -
+making it sync would require either blocking on that await internally
+(the exact anti-pattern this pass forbids) or dropping the check.
+snapshot() stays SYNC on purpose: it does not query the tracking backend
+live (that would make a lightweight, pollable status call pay for a
+network round-trip on every call) - instead the engine tracks its own
+last-known tracking mode locally, updated only at the two points it
+actually changes (TrackingSession entry/exit).
+
+Only run_solar_simulated/run_hi_simulated/preflight/apply_sync/verify_sync
+are `async def`; the CLI's single asyncio.run() boundary wraps exactly
+those calls (see almita_align.py) and nothing awaits inside this module
+ever creates its own event loop.
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 from astropy.coordinates import AltAz, EarthLocation, SkyCoord
@@ -119,7 +140,7 @@ class AlignmentResult:
 class AlignmentEngine:
     def __init__(self, mode: str, config: AlignmentConfig, location: EarthLocation,
                  mount: MountAdapter, tracking_backend, session: Optional[AlignmentSession] = None,
-                 resume: bool = False):
+                 resume: bool = False, on_event: Optional[Callable[[Dict[str, Any]], None]] = None):
         if mode not in ("solar", "hi"):
             raise ValueError(f"unknown alignment mode: {mode}")
         self.mode = mode
@@ -143,6 +164,26 @@ class AlignmentEngine:
         self.state_machine = AlignmentStateMachine(_utcnow_iso, initial=initial)
         self._start_monotonic: Optional[float] = None
         self.warnings: List[str] = []
+        # Item 8 (progress events): a plain, JSON-friendly sync callback -
+        # no framework. Today the CLI wires one in that formats/prints or
+        # collects a list for --json; a future web layer can wire one that
+        # pushes onto an asyncio.Queue or via
+        # loop.call_soon_threadsafe/run_coroutine_threadsafe to a
+        # websocket, without this class knowing or caring which.
+        self._on_event = on_event
+        # Last-known tracking mode, updated only at the two points it
+        # actually changes (TrackingSession entry/exit) - see module
+        # docstring for why snapshot() does not query the backend live.
+        self._current_tracking_mode = None
+
+    # -- events ---------------------------------------------------------
+
+    def _emit(self, event_type: str, **fields: Any) -> None:
+        if self._on_event is None:
+            return
+        payload = {"type": event_type, "session_id": self.session.session_id,
+                   "mode": self.mode.upper(), "timestamp": _utcnow_iso(), **fields}
+        self._on_event(payload)
 
     # -- snapshot -----------------------------------------------------
 
@@ -155,7 +196,7 @@ class AlignmentEngine:
         return AlignmentSnapshot(
             session_id=self.session.session_id, mode=self.mode.upper(), state=self.state_machine.state.value,
             point_index=point_index, point_total=point_total,
-            tracking_mode=self.tracking_backend.get_tracking_mode().value if self.tracking_backend.get_tracking_mode() else None,
+            tracking_mode=self._current_tracking_mode.value if self._current_tracking_mode else None,
             latest_metric=latest_metric, elapsed_s=elapsed, eta_s=eta, warnings=list(self.warnings),
         )
 
@@ -163,6 +204,7 @@ class AlignmentEngine:
         self.state_machine.transition(target, reason)
         self.session.write_state({"state": target.value, "history": self.state_machine.history_as_dicts()})
         self.session.log_event(f"STATE -> {target.value} ({reason})" if reason else f"STATE -> {target.value}")
+        self._emit("state", state=target.value, reason=reason)
 
     # -- plan / preflight ------------------------------------------------
 
@@ -171,10 +213,18 @@ class AlignmentEngine:
                                     "solar": vars(self.config.solar), "hi": vars(self.config.hi)})
         self._transition(AlignmentState.PLANNED, "config persisted")
 
-    def preflight(self, target_provider, obstime: Optional[Time] = None) -> List[PreflightCheck]:
+    async def preflight(self, target_provider, obstime: Optional[Time] = None,
+                         timeout: Optional[float] = None) -> List[PreflightCheck]:
         """Fase 15: never trust a historical preflight for a new run - this
-        always re-evaluates against `obstime` (default: now)."""
+        always re-evaluates against `obstime` (default: now).
+
+        `async def` because tracking_backend_reachable must await the same
+        get_tracking_mode() contract run_solar_simulated()/
+        run_hi_simulated() use (see module docstring) - a real timeout here
+        (item 4) means "backend unreachable", a real preflight-relevant
+        fact, not an infinite hang."""
         obstime = obstime or Time.now()
+        timeout = timeout if timeout is not None else self.config.global_.tracking_timeout_s
         checks: List[PreflightCheck] = []
 
         checks.append(PreflightCheck("output_path_writable", self.session.dir.exists(), str(self.session.dir)))
@@ -192,8 +242,15 @@ class AlignmentEngine:
         except Exception as exc:
             checks.append(PreflightCheck("target_above_altitude_floor", False, str(exc)))
 
-        tracking_ok = self.tracking_backend.get_tracking_mode() is not None
-        checks.append(PreflightCheck("tracking_backend_reachable", tracking_ok, "get_tracking_mode() responded"))
+        try:
+            mode = await asyncio.wait_for(self.tracking_backend.get_tracking_mode(), timeout)
+            tracking_ok = mode is not None
+            detail = f"get_tracking_mode() -> {mode.value if mode else None}"
+        except asyncio.TimeoutError:
+            tracking_ok, detail = False, f"get_tracking_mode() timed out after {timeout}s"
+        except Exception as exc:
+            tracking_ok, detail = False, f"get_tracking_mode() raised {type(exc).__name__}: {exc}"
+        checks.append(PreflightCheck("tracking_backend_reachable", tracking_ok, detail))
 
         conflict = capture_conflict.check_no_conflicting_capture(
             runtime_dir=self.config.global_.orchestrator_runtime_dir)
@@ -206,49 +263,71 @@ class AlignmentEngine:
 
     # -- solar ------------------------------------------------------------
 
-    def run_solar_simulated(self, sim: simulation.SolarBeamSimConfig) -> AlignmentResult:
+    async def run_solar_simulated(self, sim: simulation.SolarBeamSimConfig) -> AlignmentResult:
         """Full MEASURE->FIT for the Sun using synthetic beam data - no
         hardware, no real capture. Two stages (coarse then fine) per
-        Fase 2. `sim`'s true_offset is what the fine-stage fit must recover."""
+        Fase 2. `sim`'s true_offset is what the fine-stage fit must recover.
+
+        `async def` solely because of `async with TrackingSession(...)` -
+        every line of scan/fit math inside stays plain sync (item 7's own
+        rule: async where there is I/O, sync where there is computation).
+        Cancellation (asyncio.CancelledError or KeyboardInterrupt, e.g. a
+        Ctrl+C reaching the CLI's single asyncio.run()) is caught here to
+        drive the state machine to CANCELLED before re-raising - item 5's
+        "no dejar estados intermedios eternos"."""
         self._start_monotonic = time.monotonic()
         target = SolarTarget(self.location)
         from .tracking import TrackingMode, TrackingSession
-        with TrackingSession(self.tracking_backend, TrackingMode.SOLAR, self.session):
-            self._transition(AlignmentState.TRACKING_CONFIGURED, "tracking set to SOLAR")
-            self._transition(AlignmentState.SCANNING, "coarse stage")
-            reference_time = Time.now()
-            # ICRS, not the CIRS(EOD) current_position() itself returns -
-            # see targets/solar.py's module docstring for why: SkyOffsetFrame
-            # geometry is wrong with a CIRS origin, confirmed independently.
-            reference_center = target.current_position(reference_time).icrs
-            gaussian = _gaussian_template(reference_center, self.config.resolved_beam_fwhm_deg("solar"))
+        try:
+            async with TrackingSession(self.tracking_backend, TrackingMode.SOLAR, self.session,
+                                        timeout=self.config.global_.tracking_timeout_s) as ts:
+                self._current_tracking_mode = TrackingMode.SOLAR
+                self._transition(AlignmentState.TRACKING_CONFIGURED, "tracking set to SOLAR")
+                self._transition(AlignmentState.SCANNING, "coarse stage")
+                reference_time = Time.now()
+                # ICRS, not the CIRS(EOD) current_position() itself returns -
+                # see targets/solar.py's module docstring for why: SkyOffsetFrame
+                # geometry is wrong with a CIRS origin, confirmed independently.
+                reference_center = target.current_position(reference_time).icrs
+                gaussian = _gaussian_template(reference_center, self.config.resolved_beam_fwhm_deg("solar"))
 
-            coarse_points = scan_planner.build_raster(self.config.solar.coarse_span_deg,
-                                                       self.config.solar.coarse_spacing_deg)
-            coarse_values = simulation.synthetic_solar_metrics(coarse_points, reference_center, sim)
-            coarse_positions = SkyCoord([target.resolve_offset(p.east_deg, p.north_deg, Time.now())
-                                          for p in coarse_points])
-            self.session.write_raw_grid({"stage": "coarse",
-                                          "points": [vars(p) for p in coarse_points], "values": coarse_values})
-            self._transition(AlignmentState.FITTING, "coarse fit")
-            coarse_fit = fit_raster(coarse_positions, coarse_values, reference_center, gaussian,
-                                     self.config.solar.coarse_span_deg)
+                coarse_points = scan_planner.build_raster(self.config.solar.coarse_span_deg,
+                                                           self.config.solar.coarse_spacing_deg)
+                coarse_values = simulation.synthetic_solar_metrics(coarse_points, reference_center, sim)
+                coarse_positions = SkyCoord([target.resolve_offset(p.east_deg, p.north_deg, Time.now())
+                                              for p in coarse_points])
+                self.session.write_raw_grid({"stage": "coarse",
+                                              "points": [vars(p) for p in coarse_points], "values": coarse_values})
+                self._transition(AlignmentState.FITTING, "coarse fit")
+                coarse_fit = fit_raster(coarse_positions, coarse_values, reference_center, gaussian,
+                                         self.config.solar.coarse_span_deg)
+                self._emit("fit", stage="coarse", offset_east_deg=coarse_fit.estimate.offset_ra_deg,
+                           offset_north_deg=coarse_fit.estimate.offset_dec_deg, rating=coarse_fit.quality.rating)
 
-            self._transition(AlignmentState.SCANNING, "fine stage")
-            fine_points = scan_planner.build_raster(self.config.solar.fine_span_deg,
-                                                     self.config.solar.fine_spacing_deg)
-            fine_points = [scan_planner.ScanPoint(p.index, p.row, p.col,
-                                                   p.east_deg + coarse_fit.estimate.offset_ra_deg,
-                                                   p.north_deg + coarse_fit.estimate.offset_dec_deg)
-                           for p in fine_points]
-            fine_values = simulation.synthetic_solar_metrics(fine_points, reference_center, sim)
-            fine_positions = SkyCoord([target.resolve_offset(p.east_deg, p.north_deg, Time.now())
-                                        for p in fine_points])
-            self.session.write_raw_grid({"stage": "fine",
-                                          "points": [vars(p) for p in fine_points], "values": fine_values})
-            self._transition(AlignmentState.FITTING, "fine fit")
-            fine_fit = fit_raster(fine_positions, fine_values, reference_center, gaussian,
-                                   self.config.solar.fine_span_deg)
+                self._transition(AlignmentState.SCANNING, "fine stage")
+                fine_points = scan_planner.build_raster(self.config.solar.fine_span_deg,
+                                                         self.config.solar.fine_spacing_deg)
+                fine_points = [scan_planner.ScanPoint(p.index, p.row, p.col,
+                                                       p.east_deg + coarse_fit.estimate.offset_ra_deg,
+                                                       p.north_deg + coarse_fit.estimate.offset_dec_deg)
+                               for p in fine_points]
+                fine_values = simulation.synthetic_solar_metrics(fine_points, reference_center, sim)
+                fine_positions = SkyCoord([target.resolve_offset(p.east_deg, p.north_deg, Time.now())
+                                            for p in fine_points])
+                self.session.write_raw_grid({"stage": "fine",
+                                              "points": [vars(p) for p in fine_points], "values": fine_values})
+                self._transition(AlignmentState.FITTING, "fine fit")
+                fine_fit = fit_raster(fine_positions, fine_values, reference_center, gaussian,
+                                       self.config.solar.fine_span_deg)
+                self._emit("fit", stage="fine", offset_east_deg=fine_fit.estimate.offset_ra_deg,
+                           offset_north_deg=fine_fit.estimate.offset_dec_deg, rating=fine_fit.quality.rating)
+            self._current_tracking_mode = ts.restored_mode
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            self.cancel("solar run cancelled")
+            raise
+        except Exception as exc:
+            self.fail(f"solar run failed: {type(exc).__name__}: {exc}")
+            raise
 
         result = AlignmentResult(mode="SOLAR", session_id=self.session.session_id,
                                   coarse_fit=coarse_fit, fine_fit=fine_fit, final_fit=fine_fit,
@@ -261,8 +340,10 @@ class AlignmentEngine:
 
     # -- HI ----------------------------------------------------------------
 
-    def run_hi_simulated(self, provider: HIReferenceProvider, sim: simulation.HIMapSimConfig,
-                          obstime: Optional[Time] = None) -> AlignmentResult:
+    async def run_hi_simulated(self, provider: HIReferenceProvider, sim: simulation.HIMapSimConfig,
+                                obstime: Optional[Time] = None) -> AlignmentResult:
+        """`async def` for the same reason as run_solar_simulated - only
+        `async with TrackingSession(...)` needs it; the HI math stays sync."""
         self._start_monotonic = time.monotonic()
         obstime = obstime or Time.now()
         beam_fwhm = self.config.resolved_beam_fwhm_deg("hi")
@@ -271,15 +352,27 @@ class AlignmentEngine:
         template = provider.template_for(center, beam_fwhm)
 
         from .tracking import TrackingMode, TrackingSession
-        with TrackingSession(self.tracking_backend, TrackingMode.SIDEREAL, self.session):
-            self._transition(AlignmentState.TRACKING_CONFIGURED, "tracking set to SIDEREAL")
-            self._transition(AlignmentState.SCANNING, "hi raster")
-            points = scan_planner.build_raster(self.config.hi.raster_span_deg, self.config.hi.raster_spacing_deg)
-            values = simulation.synthetic_hi_metrics(points, center, template, sim)
-            positions = _offset_points_to_positions(center, points)
-            self.session.write_raw_grid({"stage": "hi", "points": [vars(p) for p in points], "values": values})
-            self._transition(AlignmentState.FITTING, "hi fit")
-            fit = fit_raster(positions, values, center, template, self.config.hi.raster_span_deg)
+        try:
+            async with TrackingSession(self.tracking_backend, TrackingMode.SIDEREAL, self.session,
+                                        timeout=self.config.global_.tracking_timeout_s) as ts:
+                self._current_tracking_mode = TrackingMode.SIDEREAL
+                self._transition(AlignmentState.TRACKING_CONFIGURED, "tracking set to SIDEREAL")
+                self._transition(AlignmentState.SCANNING, "hi raster")
+                points = scan_planner.build_raster(self.config.hi.raster_span_deg, self.config.hi.raster_spacing_deg)
+                values = simulation.synthetic_hi_metrics(points, center, template, sim)
+                positions = _offset_points_to_positions(center, points)
+                self.session.write_raw_grid({"stage": "hi", "points": [vars(p) for p in points], "values": values})
+                self._transition(AlignmentState.FITTING, "hi fit")
+                fit = fit_raster(positions, values, center, template, self.config.hi.raster_span_deg)
+                self._emit("fit", stage="hi", offset_east_deg=fit.estimate.offset_ra_deg,
+                           offset_north_deg=fit.estimate.offset_dec_deg, rating=fit.quality.rating)
+            self._current_tracking_mode = ts.restored_mode
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            self.cancel("hi run cancelled")
+            raise
+        except Exception as exc:
+            self.fail(f"hi run failed: {type(exc).__name__}: {exc}")
+            raise
 
         result = AlignmentResult(mode="HI", session_id=self.session.session_id,
                                   coarse_fit=None, fine_fit=None, final_fit=fit,
@@ -307,27 +400,42 @@ class AlignmentEngine:
         else:
             self.session.log_event("STATE SYNC_PENDING (re-prepared)")
         plan = sync_flow.prepare_sync(result.mode, result.final_fit, center, is_observational,
-                                       result.tracking_mode, confidence_threshold)
+                                       result.tracking_mode, confidence_threshold,
+                                       session_id=result.session_id)
         self.session.write_sync_plan(plan.to_dict())
         return plan
 
-    async def apply_sync(self, plan, mount: MountAdapter, settle_seconds: float, sleep_fn):
+    async def apply_sync(self, plan, mount: MountAdapter, settle_seconds: float, sleep_fn,
+                          timeout: Optional[float] = None):
         """Thin state-machine-aware wrapper over sync_flow.apply_sync, so
         the state persisted in state.json advances correctly even when this
         runs as a separate CLI process from the one that produced the
-        result (Fase 14: sync SESSION is its own command)."""
+        result (Fase 14: sync SESSION is its own command). Cancellation
+        during a real apply must not leave state stuck in SYNC_APPLYING -
+        item 5."""
         self._transition(AlignmentState.SYNC_APPLYING, "applying sync")
-        sync_result = await sync_flow.apply_sync(plan, mount, settle_seconds, sleep_fn)
+        try:
+            sync_result = await sync_flow.apply_sync(
+                plan, mount, settle_seconds, sleep_fn,
+                timeout=timeout if timeout is not None else self.config.global_.goto_timeout_s)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            self.cancel("sync apply cancelled")
+            raise
         self.session.write_sync_result(sync_result.to_dict())
         if not sync_result.applied:
             self._transition(AlignmentState.FAILED, f"sync not applied: {sync_result.error}")
         return sync_result
 
     async def verify_sync(self, reference: SkyCoord, mount: MountAdapter, settle_seconds: float, sleep_fn,
-                           residual_before_deg: Optional[float] = None):
+                           residual_before_deg: Optional[float] = None, timeout: Optional[float] = None):
         self._transition(AlignmentState.VERIFYING, "verifying sync")
-        verification = await sync_flow.verify_sync(mount, reference, settle_seconds, sleep_fn,
-                                                     residual_before_deg=residual_before_deg)
+        try:
+            verification = await sync_flow.verify_sync(
+                mount, reference, settle_seconds, sleep_fn, residual_before_deg=residual_before_deg,
+                timeout=timeout if timeout is not None else self.config.global_.goto_timeout_s)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            self.cancel("sync verification cancelled")
+            raise
         self.session.write_verification(verification.to_dict())
         if verification.error is None:
             self._transition(AlignmentState.COMPLETED, f"verification residual={verification.residual_deg}")

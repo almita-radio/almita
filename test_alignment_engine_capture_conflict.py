@@ -109,3 +109,69 @@ def _empty_proc(tmp_path):
     empty = tmp_path / "fake_proc"
     empty.mkdir(exist_ok=True)
     return empty
+
+
+# ------------------------------------------------------------------
+# 3rd pass, item 15: confirm the async engine.preflight() refactor did not
+# change capture_conflict.py's behavior at all - it is still called the
+# same (synchronous) way from inside the now-`async def` preflight(), and
+# stale/PID-ownership/fail-closed semantics must be identical.
+
+
+@pytest.mark.asyncio
+async def test_async_preflight_reports_conflict_when_a_capture_is_alive(tmp_path, monkeypatch):
+    import astropy.units as u
+    from astropy.coordinates import EarthLocation
+
+    from alignment_engine.config import AlignmentConfig
+    from alignment_engine.engine import AlignmentEngine
+    from alignment_engine.mount_adapter import SimulatedMountAdapter
+    from alignment_engine.targets.solar import SolarTarget
+    from alignment_engine.tracking import SimulatedTrackingBackend
+
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                         capture_pid=424242, capture_start_time=1,
+                         capture_cmd_needle="capture.py", session_id="SID-LIVE")
+    monkeypatch.setattr(orch, "_capture_ownership_matches", lambda runtime: True)
+
+    config = AlignmentConfig.load()
+    config.global_.output_root = str(tmp_path / "alignment")
+    config.global_.orchestrator_runtime_dir = str(runtime_dir)
+    config.solar.min_altitude_deg = -90.0
+    location = EarthLocation(lat=-33.4489 * u.deg, lon=-70.6693 * u.deg, height=570 * u.m)
+    engine = AlignmentEngine("solar", config, location, SimulatedMountAdapter(), SimulatedTrackingBackend())
+    engine.plan()
+    checks = await engine.preflight(SolarTarget(location))
+    conflict_check = next(c for c in checks if c.name == "no_conflicting_capture_session")
+    assert conflict_check.ok is False
+    assert "SID-LIVE" in conflict_check.detail
+    from alignment_engine.state_machine import AlignmentState
+    assert engine.state_machine.state == AlignmentState.PREFLIGHT_FAILED
+
+
+@pytest.mark.asyncio
+async def test_async_preflight_does_not_false_fail_on_stale_dead_pid(tmp_path):
+    import astropy.units as u
+    from astropy.coordinates import EarthLocation
+
+    from alignment_engine.config import AlignmentConfig
+    from alignment_engine.engine import AlignmentEngine
+    from alignment_engine.mount_adapter import SimulatedMountAdapter
+    from alignment_engine.targets.solar import SolarTarget
+    from alignment_engine.tracking import SimulatedTrackingBackend
+
+    runtime_dir = tmp_path / "runtime"
+    orch._write_runtime(str(runtime_dir), orchestrator_state="RUNNING",
+                         capture_pid=999999999, capture_start_time=1, capture_cmd_needle="capture.py")
+
+    config = AlignmentConfig.load()
+    config.global_.output_root = str(tmp_path / "alignment")
+    config.global_.orchestrator_runtime_dir = str(runtime_dir)
+    config.solar.min_altitude_deg = -90.0
+    location = EarthLocation(lat=-33.4489 * u.deg, lon=-70.6693 * u.deg, height=570 * u.m)
+    engine = AlignmentEngine("solar", config, location, SimulatedMountAdapter(), SimulatedTrackingBackend())
+    engine.plan()
+    checks = await engine.preflight(SolarTarget(location))
+    conflict_check = next(c for c in checks if c.name == "no_conflicting_capture_session")
+    assert conflict_check.ok is True

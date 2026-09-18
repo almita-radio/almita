@@ -10,12 +10,27 @@ alignment_engine, importable and callable the exact same way a future
 mixed with human-readable text) so this CLI is scriptable/automatable
 today, ahead of any real API.
 
-Hardware note: this version only ever constructs SimulatedMountAdapter/
-SimulatedTrackingBackend - there is no --mount real flag. Real GOTO/
-tracking-mode/SYNC against the physical mount is deliberately not wired in
-this version (see the design report this CLI's implementation followed);
-`sync --apply` and `verify` still exercise the full engine logic, but
-against a simulated mount, for development and demonstration.
+Hardware note: `solar/hi plan|preflight|run|sync|verify` only ever
+construct SimulatedMountAdapter/SimulatedTrackingBackend - there is no
+--mount real flag, and real GOTO/tracking-mode-write/SYNC against the
+physical mount is deliberately not wired into any of those commands (see
+the design report this CLI's implementation followed); `sync --apply` and
+`verify` still exercise the full engine logic, but against a simulated
+mount, for development and demonstration. The one exception is `solar/hi
+tracking --dry-run` (3rd pass, item 10), which DOES query the real
+indiserver - but read-only (RealTrackingBackend.get_tracking_mode()) - to
+show CURRENT state; it never calls execute_set_tracking_mode() no matter
+what flags are passed.
+
+ASYNC BOUNDARY (3rd pass, item 6): exactly ONE asyncio.run() call exists
+in this whole file - inside main(), and only for the subcommands whose
+handler is `async def` (preflight/run/sync/verify/tracking - the ones that
+reach into TrackingSession/mount I/O through the engine, or query the real
+backend directly). plan/status/result stay plain `def` and are called
+directly with no event loop at all. No handler here ever calls
+asyncio.run() itself - see engine.py/tracking.py/sync_flow.py's own
+docstrings for why that boundary is enforced there too, and
+test_async_architecture_boundary.py for the permanent regression guard.
 """
 from __future__ import annotations
 
@@ -56,7 +71,25 @@ def _print(payload: dict, as_json: bool, human_lines) -> None:
             print(line)
 
 
-def _engine_for(mode: str, args, resume: bool) -> AlignmentEngine:
+def _event_sink(as_json: bool, collected: list) -> callable:
+    """Item 8 (progress events): the engine emits plain dicts; this is the
+    CLI's formatter for them - a human progress line to stderr (never
+    stdout, so it can't contaminate --json or plain-text stdout), and/or
+    collection into `collected` for inclusion in a --json payload. A
+    future web layer would plug in a different sink (e.g. push onto an
+    asyncio.Queue / websocket) without the engine changing at all."""
+    def _sink(event: dict) -> None:
+        collected.append(event)
+        if not as_json:
+            if event["type"] == "state":
+                print(f"  -> {event['state']} ({event.get('reason', '')})", file=sys.stderr)
+            elif event["type"] == "fit":
+                print(f"  -> fit[{event.get('stage')}] offset=({event.get('offset_east_deg'):+.3f}, "
+                      f"{event.get('offset_north_deg'):+.3f}) rating={event.get('rating')}", file=sys.stderr)
+    return _sink
+
+
+def _engine_for(mode: str, args, resume: bool, events: Optional[list] = None) -> AlignmentEngine:
     config = AlignmentConfig.load(args.config)
     if args.observer_config:
         config.global_.observer_config_path = args.observer_config
@@ -66,8 +99,9 @@ def _engine_for(mode: str, args, resume: bool) -> AlignmentEngine:
     from alignment_engine.session import AlignmentSession
     session_id = getattr(args, "session", None)
     session = AlignmentSession(config.global_.output_root, session_id) if session_id else None
+    on_event = _event_sink(args.json, events) if events is not None else None
     return AlignmentEngine(mode, config, location, SimulatedMountAdapter(), SimulatedTrackingBackend(),
-                            session=session, resume=resume)
+                            session=session, resume=resume, on_event=on_event)
 
 
 def cmd_plan(mode: str, args) -> int:
@@ -79,10 +113,10 @@ def cmd_plan(mode: str, args) -> int:
     return 0
 
 
-def cmd_preflight(mode: str, args) -> int:
+async def cmd_preflight(mode: str, args) -> int:
     engine = _engine_for(mode, args, resume=True)
     provider = SolarTarget(engine.location) if mode == "solar" else SyntheticHIReferenceProvider(args.catalog)
-    checks = engine.preflight(provider)
+    checks = await engine.preflight(provider)
     ok = all(c.ok for c in checks)
     _print({"session_id": engine.session.session_id, "ok": ok,
             "checks": [vars(c) for c in checks]}, args.json,
@@ -91,22 +125,25 @@ def cmd_preflight(mode: str, args) -> int:
     return 0 if ok else 2
 
 
-def cmd_run(mode: str, args) -> int:
+async def cmd_run(mode: str, args) -> int:
     if not args.simulate:
         print("Only --simulate is supported in this version - real hardware acquisition "
               "is not wired pending the second, hardware-facing authorization.", file=sys.stderr)
         return 3
-    engine = _engine_for(mode, args, resume=True)
+    events: list = []
+    engine = _engine_for(mode, args, resume=True, events=events)
     if mode == "solar":
         sim = SolarBeamSimConfig(true_offset_east_deg=args.true_offset_east, true_offset_north_deg=args.true_offset_north,
                                   fwhm_deg=args.fwhm, noise_fraction=args.noise, seed=args.seed)
-        result = engine.run_solar_simulated(sim)
+        result = await engine.run_solar_simulated(sim)
     else:
         provider = SyntheticHIReferenceProvider(args.catalog)
         sim = HIMapSimConfig(true_offset_east_deg=args.true_offset_east, true_offset_north_deg=args.true_offset_north,
                               gain_a=args.gain, baseline_b=args.baseline, noise_fraction=args.noise, seed=args.seed)
-        result = engine.run_hi_simulated(provider, sim)
+        result = await engine.run_hi_simulated(provider, sim)
     payload = result.to_dict()
+    if args.json:
+        payload["events"] = events  # item 8: JSON-friendly, same events the human view printed to stderr
     _print(payload, args.json,
            [f"Alignment run complete: {engine.session.session_id}",
             f"Offset RA/east:  {payload['offset_ra_deg']:+.3f} deg",
@@ -148,7 +185,7 @@ def _resume_engine(mode: str, args) -> AlignmentEngine:
                             session=session, resume=True)
 
 
-def cmd_sync(args) -> int:
+async def cmd_sync(args) -> int:
     from alignment_engine.engine import AlignmentResult
     from alignment_engine.fitting import FitResult
     from alignment_engine.session import AlignmentSession
@@ -210,14 +247,14 @@ def cmd_sync(args) -> int:
             return 0
 
     mount = SimulatedMountAdapter()
-    sync_result = asyncio.run(engine.apply_sync(plan, mount, engine.config.global_.settle_seconds, asyncio.sleep))
+    sync_result = await engine.apply_sync(plan, mount, engine.config.global_.settle_seconds, asyncio.sleep)
     _print(sync_result.to_dict(), args.json,
            [f"SYNC {'APPLIED' if sync_result.applied else 'FAILED'} (simulated mount)",
             f"error: {sync_result.error}" if sync_result.error else "no error"])
     return 0 if sync_result.applied else 2
 
 
-def cmd_verify(args) -> int:
+async def cmd_verify(args) -> int:
     from alignment_engine.session import AlignmentSession
     session = AlignmentSession(Path(args.session_root) if args.session_root else "data/alignment", args.session)
     plan_stored = session.read_sync_plan()
@@ -230,11 +267,68 @@ def cmd_verify(args) -> int:
     mode = "solar" if plan_stored["mode"] == "SOLAR" else "hi"
     engine = _resume_engine(mode, args)
     mount = SimulatedMountAdapter()
-    asyncio.run(mount.connect())
-    verification = asyncio.run(engine.verify_sync(reference, mount, args.settle, asyncio.sleep))
+    await mount.connect()
+    verification = await engine.verify_sync(reference, mount, args.settle, asyncio.sleep)
     _print(verification.to_dict(), args.json,
            [f"Post-sync residual: {verification.residual_deg}", f"error: {verification.error}" if verification.error else "no error"])
     return 0 if verification.residual_deg is not None else 2
+
+
+async def cmd_tracking(mode: str, args) -> int:
+    """Item 10: `solar tracking --dry-run` / `hi tracking --dry-run` -
+    CURRENT (real, read-only inspect()) / REQUEST / WOULD WRITE / VERIFY /
+    RESTORE PLAN. Uses RealTrackingBackend.inspect() for CURRENT (item 9:
+    read-only real hardware queries are authorized) but NEVER calls
+    execute_set_tracking_mode() - this command cannot write to the mount
+    no matter what flags are passed; --dry-run is required to make that
+    explicit rather than implied."""
+    if not args.dry_run:
+        print("Only --dry-run is supported in this version - real tracking-mode writes "
+              "are not authorized. Pass --dry-run to preview.", file=sys.stderr)
+        return 3
+    from alignment_engine.tracking import RealTrackingBackend, TrackingMode
+    config = AlignmentConfig.load(args.config)
+    backend = RealTrackingBackend(host=args.host or config.global_.mount_host,
+                                   port=args.port or config.global_.mount_port,
+                                   device_name=args.device or config.global_.mount_device,
+                                   allow_real_writes=False)
+    requested = TrackingMode.SOLAR if mode == "solar" else TrackingMode.SIDEREAL
+    try:
+        current = await backend.get_tracking_mode(timeout=config.global_.tracking_timeout_s)
+    except Exception as exc:
+        current = None
+        current_error = str(exc)
+    else:
+        current_error = None if current is not None else "property not read within timeout"
+
+    would_write = {element: ("On" if element == backend.ELEMENT_BY_MODE[requested] else "Off")
+                   for element in backend.ELEMENT_BY_MODE.values()}
+    payload = {
+        "device": backend.device_name, "property": backend.PROPERTY_NAME,
+        "current": {"mode": current.value if current else None, "reachable": current is not None,
+                    "error": current_error},
+        "request": {"mode": requested.value},
+        "would_write": would_write,
+        "verify": {"property": backend.PROPERTY_NAME,
+                   "expect": {backend.ELEMENT_BY_MODE[requested]: "On"}},
+        "restore_plan": {"original_mode": current.value if current else None,
+                         "would_restore_on_exit": current.value if current else "UNKNOWN (backend unreachable)"},
+        "executed": False,
+        "note": "DRY-RUN ONLY - no property was written to the mount.",
+    }
+    lines = [
+        "CURRENT:", f"  {backend.PROPERTY_NAME} = {backend.ELEMENT_BY_MODE.get(current, 'UNKNOWN') if current else 'UNREACHABLE'}",
+        "", "REQUEST:", f"  mode = {requested.value}",
+        "", "WOULD WRITE:", f"  device: {backend.device_name}", f"  property: {backend.PROPERTY_NAME}",
+    ] + [f"  {element} = {value}" for element, value in would_write.items()] + [
+        "", "VERIFY:", f"  read {backend.PROPERTY_NAME}",
+        f"  expect {backend.ELEMENT_BY_MODE[requested]} = On",
+        "", "RESTORE PLAN:", f"  original = {current.value if current else 'UNKNOWN'}",
+        f"  would restore {current.value if current else 'UNKNOWN'} on exit",
+        "", "(dry-run only - nothing was written to the mount)",
+    ]
+    _print(payload, args.json, lines)
+    return 0
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -253,14 +347,14 @@ def build_parser() -> argparse.ArgumentParser:
 
         plan_p = mode_sub.add_parser("plan")
         _add_common(plan_p)
-        plan_p.set_defaults(func=lambda args, mode=mode: cmd_plan(mode, args))
+        plan_p.set_defaults(func=lambda args, mode=mode: cmd_plan(mode, args), is_async=False)
 
         preflight_p = mode_sub.add_parser("preflight")
         preflight_p.add_argument("session")
         preflight_p.add_argument("--catalog", default="data/hi_sky_catalog_2000pts.csv")
         preflight_p.add_argument("--min-altitude", type=float, default=None)
         _add_common(preflight_p)
-        preflight_p.set_defaults(func=lambda args, mode=mode: cmd_preflight(mode, args))
+        preflight_p.set_defaults(func=lambda args, mode=mode: cmd_preflight(mode, args), is_async=True)
 
         run_p = mode_sub.add_parser("run")
         run_p.add_argument("session")
@@ -276,19 +370,27 @@ def build_parser() -> argparse.ArgumentParser:
         run_p.add_argument("--catalog", default="data/hi_sky_catalog_2000pts.csv")
         run_p.add_argument("--min-altitude", type=float, default=None)
         _add_common(run_p)
-        run_p.set_defaults(func=lambda args, mode=mode: cmd_run(mode, args))
+        run_p.set_defaults(func=lambda args, mode=mode: cmd_run(mode, args), is_async=True)
+
+        tracking_p = mode_sub.add_parser("tracking")
+        tracking_p.add_argument("--dry-run", action="store_true")
+        tracking_p.add_argument("--host", default=None)
+        tracking_p.add_argument("--port", type=int, default=None)
+        tracking_p.add_argument("--device", default=None)
+        _add_common(tracking_p)
+        tracking_p.set_defaults(func=lambda args, mode=mode: cmd_tracking(mode, args), is_async=True)
 
     status_p = sub.add_parser("status")
     status_p.add_argument("session")
     status_p.add_argument("--session-root", default=None)
     _add_common(status_p)
-    status_p.set_defaults(func=cmd_status)
+    status_p.set_defaults(func=cmd_status, is_async=False)
 
     result_p = sub.add_parser("result")
     result_p.add_argument("session")
     result_p.add_argument("--session-root", default=None)
     _add_common(result_p)
-    result_p.set_defaults(func=cmd_result)
+    result_p.set_defaults(func=cmd_result, is_async=False)
 
     sync_p = sub.add_parser("sync")
     sync_p.add_argument("session")
@@ -298,20 +400,26 @@ def build_parser() -> argparse.ArgumentParser:
     sync_p.add_argument("--confidence-threshold", type=float, default=0.65)
     sync_p.add_argument("--catalog", default="data/hi_sky_catalog_2000pts.csv")
     _add_common(sync_p)
-    sync_p.set_defaults(func=cmd_sync)
+    sync_p.set_defaults(func=cmd_sync, is_async=True)
 
     verify_p = sub.add_parser("verify")
     verify_p.add_argument("session")
     verify_p.add_argument("--session-root", default=None)
     verify_p.add_argument("--settle", type=float, default=0.0)
     _add_common(verify_p)
-    verify_p.set_defaults(func=cmd_verify)
+    verify_p.set_defaults(func=cmd_verify, is_async=True)
 
     return parser
 
 
 def main(argv: Optional[list] = None) -> int:
+    """The ONE asyncio.run() boundary in this entire codebase (item 6) -
+    only for subcommands whose handler is `async def` (is_async=True);
+    plan/status/result run with no event loop at all, since they never
+    touch a tracking backend or a mount."""
     args = build_parser().parse_args(argv)
+    if getattr(args, "is_async", False):
+        return asyncio.run(args.func(args))
     return args.func(args)
 
 

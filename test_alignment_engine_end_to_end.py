@@ -1,6 +1,11 @@
 """Fase 27's own success criteria, run as tests: plan -> preflight ->
 simulated raster -> fit -> recover injected offset -> alignment_result.json
--> sync plan prepared (never applied), for both SOLAR and HI."""
+-> sync plan prepared (never applied), for both SOLAR and HI.
+
+3rd pass: preflight()/run_solar_simulated()/run_hi_simulated() are now
+`async def` (the async tracking contract) - plan()/cancel()/snapshot()
+stay plain sync, unchanged."""
+import asyncio
 import json
 import warnings
 
@@ -38,22 +43,25 @@ def _solar_engine(tmp_path):
     return AlignmentEngine("solar", config, LOCATION, mount, tracking), mount, tracking
 
 
-def test_solar_end_to_end_recovers_offset_and_persists_evidence(tmp_path):
+@pytest.mark.asyncio
+async def test_solar_end_to_end_recovers_offset_and_persists_evidence(tmp_path):
     engine, mount, tracking = _solar_engine(tmp_path)
     engine.plan()
-    checks = engine.preflight(SolarTarget(LOCATION))
+    checks = await engine.preflight(SolarTarget(LOCATION))
     assert all(c.ok for c in checks)
 
     sim = SolarBeamSimConfig(true_offset_east_deg=1.2, true_offset_north_deg=-0.7,
                               fwhm_deg=20.0, noise_fraction=0.02, seed=7)
-    result = engine.run_solar_simulated(sim)
+    result = await engine.run_solar_simulated(sim)
 
     assert result.final_fit.estimate.offset_ra_deg == pytest.approx(1.2, abs=0.7)
     assert result.final_fit.estimate.offset_dec_deg == pytest.approx(-0.7, abs=0.7)
     assert engine.state_machine.state == AlignmentState.RESULT_READY
     # tracking was set to SOLAR during the scan and restored afterwards
     assert TrackingMode.SOLAR in tracking.commands_sent
-    assert tracking.get_tracking_mode() == TrackingMode.SIDEREAL
+    assert await tracking.get_tracking_mode() == TrackingMode.SIDEREAL
+    # engine's own cached tracking mode (snapshot()'s source, item 7) agrees
+    assert engine.snapshot().tracking_mode == "SIDEREAL"
 
     persisted = engine.session.read_alignment_result()
     assert persisted["mode"] == "SOLAR"
@@ -69,7 +77,8 @@ def test_solar_end_to_end_recovers_offset_and_persists_evidence(tmp_path):
     assert mount.synced_to is None
 
 
-def test_hi_end_to_end_recovers_offset_and_blocks_sync_as_non_observational(tmp_path):
+@pytest.mark.asyncio
+async def test_hi_end_to_end_recovers_offset_and_blocks_sync_as_non_observational(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
     config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
@@ -80,16 +89,16 @@ def test_hi_end_to_end_recovers_offset_and_blocks_sync_as_non_observational(tmp_
     engine = AlignmentEngine("hi", config, LOCATION, mount, tracking)
     engine.plan()
     provider = SyntheticHIReferenceProvider()
-    checks = engine.preflight(provider)
+    checks = await engine.preflight(provider)
     assert all(c.ok for c in checks)
 
     sim = HIMapSimConfig(true_offset_east_deg=-0.8, true_offset_north_deg=1.5,
                           gain_a=2.3, baseline_b=5.0, noise_fraction=0.02, seed=11)
-    result = engine.run_hi_simulated(provider, sim)
+    result = await engine.run_hi_simulated(provider, sim)
 
     assert result.final_fit.estimate.offset_ra_deg == pytest.approx(-0.8, abs=0.7)
     assert result.final_fit.estimate.offset_dec_deg == pytest.approx(1.5, abs=0.7)
-    assert TrackingMode.SIDEREAL == tracking.get_tracking_mode()  # never left SIDEREAL for HI
+    assert TrackingMode.SIDEREAL == await tracking.get_tracking_mode()  # never left SIDEREAL for HI
 
     persisted = engine.session.read_alignment_result()
     assert persisted["is_observational"] is False
@@ -101,7 +110,8 @@ def test_hi_end_to_end_recovers_offset_and_blocks_sync_as_non_observational(tmp_
     assert mount.synced_to is None
 
 
-def test_preflight_failure_transitions_to_preflight_failed_not_a_crash(tmp_path):
+@pytest.mark.asyncio
+async def test_preflight_failure_transitions_to_preflight_failed_not_a_crash(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
     config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
@@ -110,10 +120,31 @@ def test_preflight_failure_transitions_to_preflight_failed_not_a_crash(tmp_path)
     tracking = SimulatedTrackingBackend(TrackingMode.SIDEREAL)
     engine = AlignmentEngine("solar", config, LOCATION, mount, tracking)
     engine.plan()
-    checks = engine.preflight(SolarTarget(LOCATION))
+    checks = await engine.preflight(SolarTarget(LOCATION))
     assert not all(c.ok for c in checks)
     assert engine.state_machine.state == AlignmentState.PREFLIGHT_FAILED
     assert engine.state_machine.is_terminal()
+
+
+@pytest.mark.asyncio
+async def test_preflight_tracking_backend_timeout_fails_that_check_not_the_whole_preflight_call():
+    """Item 4: a hung tracking backend must produce a structured failed
+    check (and a real, bounded wait), never an infinite await."""
+    class HangingTrackingBackend:
+        async def get_tracking_mode(self):
+            await asyncio.sleep(999)
+
+        async def set_tracking_mode(self, mode):
+            return True
+
+    config = AlignmentConfig.load()
+    config.global_.tracking_timeout_s = 0.05
+    engine = AlignmentEngine("solar", config, LOCATION, SimulatedMountAdapter(), HangingTrackingBackend())
+    engine.plan()
+    checks = await engine.preflight(SolarTarget(LOCATION), timeout=0.05)
+    tracking_check = next(c for c in checks if c.name == "tracking_backend_reachable")
+    assert tracking_check.ok is False
+    assert "timed out" in tracking_check.detail
 
 
 def test_cancel_is_terminal_and_idempotent(tmp_path):
@@ -143,3 +174,88 @@ def test_snapshot_is_json_serializable_and_reflects_current_state(tmp_path):
     assert decoded["point_index"] == 5
     assert decoded["point_total"] == 20
     assert decoded["latest_metric"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_solar_run_cancellation_transitions_to_cancelled_not_stuck(tmp_path):
+    """Item 5: a cancellation raised mid-scan must not leave the state
+    machine stuck in TRACKING_CONFIGURED/SCANNING forever."""
+    from alignment_engine import scan_planner
+
+    engine, mount, tracking = _solar_engine(tmp_path)
+    engine.plan()
+    await engine.preflight(SolarTarget(LOCATION))
+
+    def _boom(*_a, **_k):
+        raise asyncio.CancelledError()
+
+    import alignment_engine.engine as engine_module
+    original = engine_module.scan_planner.build_raster
+    engine_module.scan_planner.build_raster = _boom
+    try:
+        sim = SolarBeamSimConfig(true_offset_east_deg=0.0, true_offset_north_deg=0.0, fwhm_deg=20.0)
+        with pytest.raises(asyncio.CancelledError):
+            await engine.run_solar_simulated(sim)
+    finally:
+        engine_module.scan_planner.build_raster = original
+
+    assert engine.state_machine.state == AlignmentState.CANCELLED
+    assert engine.state_machine.is_terminal()
+    # tracking was restored even though the body raised
+    assert await tracking.get_tracking_mode() == TrackingMode.SIDEREAL
+    # item 5/16: state persistence - the ON-DISK state.json must agree,
+    # not just the in-memory state machine (a future web/API reader only
+    # ever sees the persisted file).
+    persisted_state = engine.session.read_state()
+    assert persisted_state["state"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_solar_run_generic_exception_transitions_to_failed_not_cancelled(tmp_path):
+    engine, mount, tracking = _solar_engine(tmp_path)
+    engine.plan()
+    await engine.preflight(SolarTarget(LOCATION))
+
+    import alignment_engine.engine as engine_module
+
+    def _boom(*_a, **_k):
+        raise ValueError("synthetic failure")
+
+    original = engine_module.scan_planner.build_raster
+    engine_module.scan_planner.build_raster = _boom
+    try:
+        sim = SolarBeamSimConfig(true_offset_east_deg=0.0, true_offset_north_deg=0.0, fwhm_deg=20.0)
+        with pytest.raises(ValueError):
+            await engine.run_solar_simulated(sim)
+    finally:
+        engine_module.scan_planner.build_raster = original
+
+    assert engine.state_machine.state == AlignmentState.FAILED
+    assert await tracking.get_tracking_mode() == TrackingMode.SIDEREAL
+
+
+@pytest.mark.asyncio
+async def test_progress_events_are_emitted_in_order_and_json_friendly(tmp_path):
+    """Item 8: engine -> progress event -> (here) a plain list-collecting
+    sink, same contract the CLI's formatter uses."""
+    import json as _json
+
+    events = []
+    config = AlignmentConfig.load()
+    config.global_.output_root = str(tmp_path)
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
+    config.solar.min_altitude_deg = -90.0
+    engine = AlignmentEngine("solar", config, LOCATION, SimulatedMountAdapter(),
+                              SimulatedTrackingBackend(), on_event=events.append)
+    engine.plan()
+    await engine.preflight(SolarTarget(LOCATION))
+    sim = SolarBeamSimConfig(true_offset_east_deg=0.5, true_offset_north_deg=-0.3, fwhm_deg=20.0, noise_fraction=0.0)
+    await engine.run_solar_simulated(sim)
+
+    assert _json.dumps(events)  # every event must be JSON-serializable
+    state_sequence = [e["state"] for e in events if e["type"] == "state"]
+    assert state_sequence == [
+        "PLANNED", "PREFLIGHT_OK", "TRACKING_CONFIGURED", "SCANNING", "FITTING", "SCANNING", "FITTING", "RESULT_READY",
+    ]
+    fit_events = [e for e in events if e["type"] == "fit"]
+    assert [e["stage"] for e in fit_events] == ["coarse", "fine"]

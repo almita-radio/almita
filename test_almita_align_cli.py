@@ -143,3 +143,74 @@ def test_result_for_unknown_session_fails_cleanly_not_a_traceback(tmp_path):
     result = _run(["result", "NOT-A-REAL-SESSION", "--session-root", str(tmp_path / "alignment")])
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
+
+
+# ---------------------------------------------------- 3rd pass: async architecture
+
+
+def test_run_json_output_stays_parseable_with_the_new_events_array(tmp_path):
+    """Item 8: progress events must not contaminate --json's stdout (they
+    go to stderr in human mode, and are folded into the JSON payload
+    itself in --json mode) - --json must still be pure, parseable JSON."""
+    config = _config_file(tmp_path)
+    session_id = _plan(tmp_path, "solar")
+    _run(["solar", "preflight", session_id, "--config", config, "--json"])
+    result = _run(["solar", "run", session_id, "--simulate", "--true-offset-east", "0.3",
+                   "--true-offset-north", "0.1", "--noise", "0.01", "--seed", "3", "--config", config, "--json"])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)  # must not raise
+    assert "events" in payload
+    assert len(payload["events"]) > 0
+    assert all("type" in e for e in payload["events"])
+
+
+def test_run_human_output_prints_progress_events_to_stderr_not_stdout(tmp_path):
+    config = _config_file(tmp_path)
+    session_id = _plan(tmp_path, "solar")
+    _run(["solar", "preflight", session_id, "--config", config, "--json"])
+    result = _run(["solar", "run", session_id, "--simulate", "--true-offset-east", "0.3",
+                   "--true-offset-north", "0.1", "--noise", "0.01", "--seed", "3", "--config", config])
+    assert result.returncode == 0, result.stderr
+    assert "-> SCANNING" in result.stderr
+    assert "-> SCANNING" not in result.stdout
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(result.stdout)  # still pure human text, not JSON
+
+
+def test_sync_dry_run_is_self_contained_per_item_11(tmp_path):
+    config = _config_file(tmp_path)
+    session_id = _plan(tmp_path, "solar")
+    _run(["solar", "preflight", session_id, "--config", config, "--json"])
+    _run(["solar", "run", session_id, "--simulate", "--true-offset-east", "1.2",
+          "--true-offset-north", "-0.7", "--noise", "0.0", "--seed", "7", "--config", config, "--json"])
+    result = _run(["sync", session_id, "--session-root", str(tmp_path / "alignment"), "--config", config, "--json"])
+    assert result.returncode == 0, result.stderr
+    plan = json.loads(result.stdout)
+    assert plan["source_session_id"] == session_id
+    assert plan["tangent_offset_east_deg"] == pytest.approx(1.2, abs=0.1)
+    assert plan["expected_coordinate"]["frame"] == "ICRS"
+    assert plan["measured_coordinate"]["frame"] == "ICRS"
+    assert plan["verification_plan"]["outside_offset_deg"] == 2.0
+    assert len(plan["real_indi_operations"]) == 3
+
+
+def test_tracking_dry_run_never_writes_and_reports_a_restore_plan(tmp_path):
+    """Item 10 - skips cleanly if no indiserver is reachable in this test
+    environment (this repo's own established pattern for live-hardware
+    checks, see test_alignment_engine_tracking.py)."""
+    config = _config_file(tmp_path)
+    result = _run(["solar", "tracking", "--dry-run", "--config", config, "--json"])
+    if result.returncode != 0:
+        pytest.skip(f"no reachable indiserver in this environment: {result.stderr}")
+    payload = json.loads(result.stdout)
+    assert payload["executed"] is False
+    assert payload["request"]["mode"] == "SOLAR"
+    assert payload["would_write"]["TRACK_SOLAR"] == "On"
+    assert "restore_plan" in payload
+
+
+def test_tracking_without_dry_run_refuses_not_a_traceback():
+    result = _run(["solar", "tracking"])
+    assert result.returncode == 3
+    assert "Traceback" not in result.stderr
+    assert "dry-run" in result.stderr.lower()

@@ -5,6 +5,7 @@ expected/measured coordinates - never conflate them under an ambiguous
 """
 import warnings
 
+import pytest
 import astropy.units as u
 from astropy.coordinates import EarthLocation
 
@@ -21,7 +22,7 @@ from alignment_engine.tracking import SimulatedTrackingBackend, TrackingMode
 LOCATION = EarthLocation(lat=-33.4489 * u.deg, lon=-70.6693 * u.deg, height=570 * u.m)
 
 
-def _solar_result(tmp_path):
+async def _solar_result(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
     config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
@@ -31,21 +32,23 @@ def _solar_result(tmp_path):
     engine = AlignmentEngine("solar", config, LOCATION, SimulatedMountAdapter(),
                               SimulatedTrackingBackend(TrackingMode.SIDEREAL))
     engine.plan()
-    engine.preflight(SolarTarget(LOCATION))
+    await engine.preflight(SolarTarget(LOCATION))
     sim = SolarBeamSimConfig(true_offset_east_deg=1.2, true_offset_north_deg=-0.7,
                               fwhm_deg=20.0, noise_fraction=0.0, seed=7)
-    return engine.run_solar_simulated(sim)
+    return await engine.run_solar_simulated(sim)
 
 
-def test_tangent_offset_and_legacy_aliases_agree(tmp_path):
-    result = _solar_result(tmp_path)
+@pytest.mark.asyncio
+async def test_tangent_offset_and_legacy_aliases_agree(tmp_path):
+    result = await _solar_result(tmp_path)
     payload = result.to_dict()
     assert payload["tangent_east_deg"] == payload["offset_ra_deg"]
     assert payload["tangent_north_deg"] == payload["offset_dec_deg"]
 
 
-def test_expected_and_measured_coordinates_are_present_and_icrs(tmp_path):
-    result = _solar_result(tmp_path)
+@pytest.mark.asyncio
+async def test_expected_and_measured_coordinates_are_present_and_icrs(tmp_path):
+    result = await _solar_result(tmp_path)
     payload = result.to_dict()
     for key in ("expected_coordinate", "measured_coordinate"):
         assert payload[key]["frame"] == "ICRS"
@@ -56,12 +59,13 @@ def test_expected_and_measured_coordinates_are_present_and_icrs(tmp_path):
     assert payload["measured_coordinate"] != payload["expected_coordinate"]
 
 
-def test_ra_dec_delta_is_not_silently_equal_to_the_tangent_offset(tmp_path):
+@pytest.mark.asyncio
+async def test_ra_dec_delta_is_not_silently_equal_to_the_tangent_offset(tmp_path):
     """The whole point of Fase 8: at a non-zero declination, a raw RA
     coordinate difference (in degrees) is NOT the same number as the
     tangent-plane east offset - this test fails if a future refactor
     collapses the two back into one ambiguous quantity."""
-    result = _solar_result(tmp_path)
+    result = await _solar_result(tmp_path)
     payload = result.to_dict()
     delta = payload["ra_dec_delta_deg"]
     assert "note" in delta  # documents the caveat, not just raw numbers
@@ -73,7 +77,8 @@ def test_ra_dec_delta_is_not_silently_equal_to_the_tangent_offset(tmp_path):
         assert delta["delta_ra_deg"] != payload["tangent_east_deg"]
 
 
-def test_hi_result_also_carries_the_normalized_schema(tmp_path):
+@pytest.mark.asyncio
+async def test_hi_result_also_carries_the_normalized_schema(tmp_path):
     config = AlignmentConfig.load()
     config.global_.output_root = str(tmp_path)
     config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
@@ -83,10 +88,10 @@ def test_hi_result_also_carries_the_normalized_schema(tmp_path):
                               SimulatedTrackingBackend(TrackingMode.SIDEREAL))
     engine.plan()
     provider = SyntheticHIReferenceProvider()
-    engine.preflight(provider)
+    await engine.preflight(provider)
     sim = HIMapSimConfig(true_offset_east_deg=-0.8, true_offset_north_deg=1.5,
                           gain_a=2.3, baseline_b=5.0, noise_fraction=0.02, seed=11)
-    result = engine.run_hi_simulated(provider, sim)
+    result = await engine.run_hi_simulated(provider, sim)
     payload = result.to_dict()
     assert "tangent_east_deg" in payload
     assert "expected_coordinate" in payload

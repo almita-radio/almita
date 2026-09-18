@@ -153,6 +153,24 @@ def test_describe_real_indi_sync_operations_converts_icrs_to_cirs_not_identity()
     assert abs(eod_ra_hours - icrs_ra_hours) > 1e-4
 
 
+def test_prepare_sync_plan_is_self_contained_item_11():
+    """The dry-run SYNC plan must carry everything an operator needs
+    without cross-referencing alignment_result.json separately: source
+    session id, tangent offsets, expected/measured coordinates (Fase 8's
+    schema, reused here), and a verification plan description."""
+    result = _fit_result(confidence=0.9)
+    plan = prepare_sync("SOLAR", result, CENTER, is_observational=True, tracking_mode="SOLAR",
+                         confidence_threshold=0.65, session_id="SOLAR-TEST-123")
+    assert plan.source_session_id == "SOLAR-TEST-123"
+    assert plan.tangent_offset_east_deg == result.estimate.offset_ra_deg
+    assert plan.tangent_offset_north_deg == result.estimate.offset_dec_deg
+    assert plan.expected_coordinate["frame"] == "ICRS"
+    assert plan.measured_coordinate["frame"] == "ICRS"
+    assert plan.expected_coordinate != plan.measured_coordinate
+    assert plan.verification_plan["outside_offset_deg"] == 2.0
+    assert len(plan.verification_plan["steps"]) == 3
+
+
 def test_prepare_sync_always_includes_the_real_operations_preview_even_when_ineligible():
     """An operator should be able to see exactly what a real SYNC would
     send even for a plan that gets rejected (low confidence / synthetic
