@@ -405,6 +405,57 @@ def cmd_hi_reference_validate(args) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_deployment_show(args) -> int:
+    from alignment_engine.deployment_state import read_current_deployment_state
+    record = read_current_deployment_state(args.state_path)
+    if record is None:
+        payload = {"state": None, "detail": "no deployment state recorded (missing or corrupt file) - "
+                                             "hardware movement is BLOCKED until an operator confirms FIELD"}
+        _print(payload, args.json, ["DEPLOYMENT: UNKNOWN (no record)", payload["detail"]])
+        return 0
+    payload = record.to_dict()
+    lines = [f"DEPLOYMENT: {record.state.value}", f"set: {record.timestamp_utc} by '{record.operator_action}'",
+             f"hostname: {record.hostname}"]
+    if record.reason:
+        lines.append(f"reason: {record.reason}")
+    _print(payload, args.json, lines)
+    return 0
+
+
+def cmd_deployment_set(state_name: str, args) -> int:
+    from alignment_engine.deployment_state import DeploymentState, write_deployment_state
+    if not args.confirm:
+        print(f"Refusing to set deployment state to {state_name} without --confirm "
+              f"(explicit operator intent required).", file=sys.stderr)
+        return 3
+    record = write_deployment_state(DeploymentState(state_name), operator_action=f"set-{state_name.lower()}",
+                                     reason=args.reason, path=args.state_path)
+    lines = [f"DEPLOYMENT SET: {record.state.value}", f"timestamp: {record.timestamp_utc}",
+             f"hostname: {record.hostname}"]
+    _print(record.to_dict(), args.json, lines)
+    return 0
+
+
+def cmd_hi_replay(args) -> int:
+    """Fase 6: re-analyze an existing HI session's raw evidence - never
+    opens a mount or SDR connection, never overwrites the source session."""
+    from alignment_engine.hi.replay import replay_session
+    try:
+        result = replay_session(args.session_dir, bootstrap_iterations=args.bootstrap_iterations,
+                                 stride=args.pixel_catalog_stride, label=args.label)
+    except FileNotFoundError as exc:
+        _print({"error": str(exc)}, args.json, [f"Replay failed: {exc}"])
+        return 1
+    lines = [f"Analysis: {result.analysis_dir}", f"valid points: {result.valid_count}/{result.total_count}"]
+    if result.fit:
+        lines.append(f"East={result.fit['estimate']['offset_ra_deg']:+.3f} "
+                      f"North={result.fit['estimate']['offset_dec_deg']:+.3f}")
+    if result.quality:
+        lines.append(f"Quality V2: {result.quality['verdict']}")
+    _print(result.to_dict(), args.json, lines)
+    return 0
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, help="alignment JSON config override")
     parser.add_argument("--observer-config", default=None)
@@ -430,6 +481,14 @@ def build_parser() -> argparse.ArgumentParser:
             ref_validate_p.add_argument("manifest_path")
             _add_common(ref_validate_p)
             ref_validate_p.set_defaults(func=cmd_hi_reference_validate, is_async=False)
+
+            replay_p = mode_sub.add_parser("replay")
+            replay_p.add_argument("session_dir")
+            replay_p.add_argument("--bootstrap-iterations", type=int, default=20)
+            replay_p.add_argument("--pixel-catalog-stride", type=int, default=None)
+            replay_p.add_argument("--label", default=None)
+            _add_common(replay_p)
+            replay_p.set_defaults(func=cmd_hi_replay, is_async=False)
 
         plan_p = mode_sub.add_parser("plan")
         _add_common(plan_p)
@@ -477,6 +536,23 @@ def build_parser() -> argparse.ArgumentParser:
             goto_preflight_p.add_argument("--timeout", type=float, default=5.0)
             _add_common(goto_preflight_p)
             goto_preflight_p.set_defaults(func=cmd_solar_goto_preflight, is_async=True)
+
+    from alignment_engine.deployment_state import DEFAULT_STATE_PATH
+    deployment_p = sub.add_parser("deployment")
+    deployment_sub = deployment_p.add_subparsers(dest="deployment_command", required=True)
+
+    deploy_show_p = deployment_sub.add_parser("show")
+    deploy_show_p.add_argument("--state-path", default=DEFAULT_STATE_PATH)
+    _add_common(deploy_show_p)
+    deploy_show_p.set_defaults(func=cmd_deployment_show, is_async=False)
+
+    for state_name in ("field", "indoor", "bench", "unknown"):
+        set_p = deployment_sub.add_parser(f"set-{state_name}")
+        set_p.add_argument("--confirm", action="store_true", help="required - explicit operator intent")
+        set_p.add_argument("--reason", default=None)
+        set_p.add_argument("--state-path", default=DEFAULT_STATE_PATH)
+        _add_common(set_p)
+        set_p.set_defaults(func=lambda args, s=state_name.upper(): cmd_deployment_set(s, args), is_async=False)
 
     status_p = sub.add_parser("status")
     status_p.add_argument("session")
