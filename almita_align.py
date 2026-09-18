@@ -331,6 +331,47 @@ async def cmd_tracking(mode: str, args) -> int:
     return 0
 
 
+async def cmd_solar_goto_preflight(args) -> int:
+    """Item 12: the safety gate a future real solar GOTO test must pass -
+    implemented and testable now, but this command itself never GOTOs,
+    SYNCs, or writes anything; it only reads GEOGRAPHIC_COORD (and, if
+    present, 'Slew elevation Limit') read-only and reports PASS/BLOCKED.
+    No override flag exists here or anywhere in solar_preflight.py."""
+    from alignment_engine.solar_preflight import (
+        DEFAULT_MAX_ALTITUDE_DEG, DEFAULT_MIN_SOLAR_ALTITUDE_DEG, check_solar_preflight,
+    )
+    from alignment_engine.tracking import parse_number_vector, read_property_readonly
+
+    config = AlignmentConfig.load(args.config)
+    host = args.host or config.global_.mount_host
+    port = args.port or config.global_.mount_port
+    device = args.device or config.global_.mount_device
+
+    geo_raw = await read_property_readonly(host, port, device, "GEOGRAPHIC_COORD", args.timeout)
+    geo = parse_number_vector(geo_raw)
+    if not geo or geo.get("LAT") is None or geo.get("LONG") is None:
+        payload = {"verdict": "BLOCKED", "reason": "mount not reachable / GEOGRAPHIC_COORD unreadable - "
+                                                     "refusing to guess site location"}
+        _print(payload, args.json, [f"SOLAR HARDWARE TEST: {payload['verdict']}", f"Reason: {payload['reason']}"])
+        return 2
+
+    limit_raw = await read_property_readonly(host, port, device, "Slew elevation Limit", args.timeout)
+    limit = parse_number_vector(limit_raw)
+    max_altitude_deg = (limit.get("maxAlt") if limit and limit.get("maxAlt") is not None
+                         else DEFAULT_MAX_ALTITUDE_DEG)
+    min_altitude_deg = args.min_altitude if args.min_altitude is not None else DEFAULT_MIN_SOLAR_ALTITUDE_DEG
+
+    location = EarthLocation(lat=geo["LAT"] * u.deg, lon=geo["LONG"] * u.deg,
+                              height=(geo.get("ELEV") or 0.0) * u.m)
+    provider = SolarTarget(location)
+    result = check_solar_preflight(provider, Time.now(), args.window_seconds,
+                                    min_altitude_deg=min_altitude_deg, max_altitude_deg=max_altitude_deg)
+    payload = result.to_dict()
+    lines = [f"SOLAR HARDWARE TEST: {result.verdict}", f"Reason: {result.reason}"]
+    _print(payload, args.json, lines)
+    return 0 if result.verdict == "PASS" else 1
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, help="alignment JSON config override")
     parser.add_argument("--observer-config", default=None)
@@ -379,6 +420,18 @@ def build_parser() -> argparse.ArgumentParser:
         tracking_p.add_argument("--device", default=None)
         _add_common(tracking_p)
         tracking_p.set_defaults(func=lambda args, mode=mode: cmd_tracking(mode, args), is_async=True)
+
+        if mode == "solar":
+            goto_preflight_p = mode_sub.add_parser("goto-preflight")
+            goto_preflight_p.add_argument("--window-seconds", type=float, default=1800.0,
+                                           help="how long the intended test/scan is expected to take")
+            goto_preflight_p.add_argument("--min-altitude", type=float, default=None)
+            goto_preflight_p.add_argument("--host", default=None)
+            goto_preflight_p.add_argument("--port", type=int, default=None)
+            goto_preflight_p.add_argument("--device", default=None)
+            goto_preflight_p.add_argument("--timeout", type=float, default=5.0)
+            _add_common(goto_preflight_p)
+            goto_preflight_p.set_defaults(func=cmd_solar_goto_preflight, is_async=True)
 
     status_p = sub.add_parser("status")
     status_p.add_argument("session")

@@ -52,3 +52,11 @@ class SolarTarget:
     def altitude_deg(self, obstime: Time) -> float:
         position = self.current_position(obstime)
         return float(position.transform_to(AltAz(obstime=obstime, location=self.location)).alt.deg)
+
+    def azimuth_deg(self, obstime: Time) -> float:
+        """Additive, not used by altitude_deg() above (kept untouched to
+        avoid any regression risk to its existing callers/tests) - needed
+        by solar_preflight.py's GOTO gate, which cares about az as well as
+        alt for its before/after-window sampling."""
+        position = self.current_position(obstime)
+        return float(position.transform_to(AltAz(obstime=obstime, location=self.location)).az.deg) % 360.0

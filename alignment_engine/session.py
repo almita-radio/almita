@@ -107,5 +107,20 @@ class AlignmentSession:
     def write_state(self, payload): self._write("state", payload)
     def read_state(self): return self._read("state")
 
+    def write_hardware_test_result(self, payload): self._write("hardware_test_result", payload)
+    def read_hardware_test_result(self): return self._read("hardware_test_result")
+
+    def write_precheck(self, payload): self._write("precheck", payload)
+    def read_precheck(self): return self._read("precheck")
+
+    def write_postcheck(self, payload): self._write("postcheck", payload)
+    def read_postcheck(self): return self._read("postcheck")
+
+    def write_motion_check(self, payload): self._write("motion_check", payload)
+    def read_motion_check(self): return self._read("motion_check")
+
+    def write_write_audit(self, payload): self._write("write_audit", payload)
+    def read_write_audit(self): return self._read("write_audit")
+
     def point_path(self, index: int, suffix: str = "h5") -> Path:
         return self.dir / POINTS_DIRNAME / f"point_{index:04d}.{suffix}"

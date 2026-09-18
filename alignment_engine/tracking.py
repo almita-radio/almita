@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Awaitable, Optional, Protocol
+from typing import Awaitable, Dict, Optional, Protocol
 
 
 class TrackingMode(str, Enum):
@@ -301,6 +301,61 @@ def _parse_track_mode_xml(raw: str, mode_by_element: dict) -> Optional["Tracking
     if len(on_elements) != 1:
         return None  # ambiguous/alert vector - never guess
     return mode_by_element[on_elements[0]]
+
+
+# ---- generic read-only property access (hardware precheck/postcheck) -----
+# RealTrackingBackend itself only ever owns TELESCOPE_TRACK_MODE (see its
+# class docstring) - it has no business reading/writing TELESCOPE_TRACK_STATE,
+# EQUATORIAL_EOD_COORD or ON_COORD_SET. These two functions expose the same
+# read-only query mechanism generically, for a caller (a hardware test
+# harness, never this package's own science logic) that needs to snapshot
+# other properties for before/after comparison without ever writing to them.
+
+
+async def read_property_readonly(host: str, port: int, device_name: str, property_name: str,
+                                  timeout: float = 3.0) -> Optional[str]:
+    """Public wrapper over the same single-getProperties, never-writes
+    query every read in this module already uses. Returns the raw XML
+    vector, or None if it could not be read within `timeout`."""
+    return await _query_property_readonly(host, port, device_name, property_name, timeout)
+
+
+def parse_switch_vector(raw: Optional[str]) -> Optional[Dict[str, str]]:
+    """{element_name: 'On'|'Off'} for a def/setSwitchVector. None if raw is
+    None or not parseable - never guesses a value for an unreadable vector."""
+    if raw is None:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    return {child.attrib.get("name"): (child.text or "").strip()
+            for child in root if child.attrib.get("name")}
+
+
+def parse_number_vector(raw: Optional[str]) -> Optional[Dict[str, Optional[float]]]:
+    """{element_name: float value} for a def/setNumberVector. A malformed
+    individual element becomes None rather than raising or silently
+    dropping the key, so a caller can tell "present but unparseable" apart
+    from "absent"."""
+    if raw is None:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    result: Dict[str, Optional[float]] = {}
+    for child in root:
+        name = child.attrib.get("name")
+        if name is None:
+            continue
+        try:
+            result[name] = float((child.text or "").strip())
+        except ValueError:
+            result[name] = None
+    return result
 
 
 async def _await_with_timeout(coro: Awaitable, timeout: Optional[float], op_name: str):
