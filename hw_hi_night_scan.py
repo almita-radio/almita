@@ -153,12 +153,15 @@ async def main(args) -> int:
     session = AlignmentSession(args.session_root, session_id)
     print(f"Session: {session.dir}")
     session.write_state({"phase": "running", "pid": os.getpid(), "started_utc": report["started_utc"]})
+    session.write_config(vars(args))
+    session.log_event(f"SESSION START backend={args.backend} pid={os.getpid()}")
 
     gates: List[tuple] = []
 
     def gate(name: str, passed: bool, detail: str):
         gates.append((name, passed, detail))
         print(f"[PREFLIGHT] {name}: {'ok' if passed else 'FAIL'} ({detail})")
+        session.log_event(f"PREFLIGHT {name}={'ok' if passed else 'FAIL'} ({detail})")
 
     # ================================================================ PREFLIGHT 1: SYSTEM
     conflict = capture_conflict.check_no_conflicting_capture(runtime_dir=args.orchestrator_runtime_dir)
@@ -264,6 +267,8 @@ async def main(args) -> int:
     session.write_target({"galactic_l_deg": float(gal.l.deg), "galactic_b_deg": float(gal.b.deg),
                            "icrs_ra_hours": float(center.ra.hour), "icrs_dec_deg": float(center.dec.deg),
                            "selection": selection, "obstime_utc": obstime_now.utc.isot})
+    session.log_event(f"TARGET l={gal.l.deg:.3f} b={gal.b.deg:.3f} RA={center.ra.hour:.4f}h "
+                       f"DEC={center.dec.deg:.3f} score={selection.get('score', 0):.2f}")
 
     # ================================================================ PREFLIGHT 2: ASTRONOMICAL
     points = build_raster(args.raster_span_deg, args.raster_spacing_deg)
@@ -345,22 +350,26 @@ async def main(args) -> int:
                                                    sample_rate_hz=args.sample_rate_hz, gain_db=args.gain_db)
 
             for i, (point, position) in enumerate(zip(points, positions)):
+                session.log_event(f"POINT {i} BEGIN east={point.east_deg} north={point.north_deg}")
                 altaz_now = position.transform_to(AltAz(obstime=obstime_provider(), location=location))
                 alt_now = float(altaz_now.alt.deg)
                 if not (args.min_altitude <= alt_now <= args.max_altitude):
                     point_results.append({"index": i, "valid": False, "metric": None,
                                            "reason": f"altitude {alt_now:.1f} deg outside limits at execution time"})
                     print(f"[POINT {i}] SKIPPED - altitude {alt_now:.1f} deg outside limits")
+                    session.log_event(f"POINT {i} SKIPPED altitude={alt_now:.1f}")
                     continue
 
                 t_point_start = time.monotonic()
                 write_entries.append({"property": "ON_COORD_SET", "elements": {"TRACK": "Off", "SLEW": "On", "SYNC": "Off"}})
                 write_entries.append({"property": "EQUATORIAL_EOD_COORD",
                                        "elements": {"RA": str(float(position.ra.hour)), "DEC": str(float(position.dec.deg))}})
+                session.log_event(f"POINT {i} GOTO RA={position.ra.hour:.6f}h DEC={position.dec.deg:.4f}")
                 goto_ok = await mount_adapter.goto(position, point_index=i)
                 if not goto_ok:
                     point_results.append({"index": i, "valid": False, "metric": None, "reason": "GOTO failed/timed out"})
                     print(f"[POINT {i}] GOTO FAILED")
+                    session.log_event(f"POINT {i} GOTO FAILED")
                     continue
 
                 await asyncio.sleep(args.settle_seconds)
@@ -375,6 +384,7 @@ async def main(args) -> int:
                     point_results.append({"index": i, "valid": False, "metric": None,
                                            "reason": f"acquisition/processing failed: {type(exc).__name__}: {exc}"})
                     print(f"[POINT {i}] ACQUISITION FAILED: {exc}")
+                    session.log_event(f"POINT {i} ACQUISITION FAILED {type(exc).__name__}: {exc}")
                     continue
 
                 point_dt = time.monotonic() - t_point_start
@@ -384,16 +394,20 @@ async def main(args) -> int:
                                        "duration_s": point_dt, "timestamp_utc": _utcnow_iso(),
                                        "ra_hours": float(position.ra.hour), "dec_deg": float(position.dec.deg)})
                 print(f"[POINT {i}/{n_points-1}] valid={valid} metric={metric} ({point_dt:.1f}s)")
+                session.log_event(f"POINT {i} END valid={valid} metric={metric} duration_s={point_dt:.1f}")
         ts_restored_mode = ts.restored_mode
     except asyncio.CancelledError as exc:
         cancelled = True
         step_error = f"CancelledError: {exc!r}"
+        session.log_event(f"SCAN CANCELLED {exc!r}")
     except KeyboardInterrupt as exc:
         cancelled = True
         step_error = f"KeyboardInterrupt: {exc!r}"
+        session.log_event(f"SCAN INTERRUPTED {exc!r}")
     except Exception as exc:
         step_error = f"{type(exc).__name__}: {exc}"
         print(f"[ERROR] {step_error}", file=sys.stderr)
+        session.log_event(f"SCAN FAILED {step_error}")
         ts_restored_mode = None
     else:
         pass
@@ -482,6 +496,8 @@ async def main(args) -> int:
     })
     session.write_hardware_test_result(report)
     session.write_state({"phase": "done", "result": observation_verdict})
+    session.log_event(f"SESSION END observation={observation_verdict} hi_pattern={hi_pattern_detected} "
+                       f"pointing={pointing_solution} sync=BLOCKED_BY_FIRST_LIGHT_HI")
 
     print("\n" + "=" * 60)
     print(f"OBSERVATION: {observation_verdict}")

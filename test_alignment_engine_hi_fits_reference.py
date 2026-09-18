@@ -123,6 +123,27 @@ def test_provider_choose_target_finds_the_injected_gaussian_peak(fixture_fits):
     assert info["accepted"] is True
 
 
+def test_template_for_grid_cache_matches_exact_convolution(fixture_fits):
+    """template_for()'s default cached (LocalSphericalTemplate-backed)
+    path must agree with the exact, uncached convolution to well within
+    the tolerance this package's fits use - the grid is a performance
+    optimization, not an approximation that should change results."""
+    from astropy.coordinates import SkyCoord
+
+    manifest = build_manifest_for_file(fixture_fits, survey="TEST", version="v1", source="unit test",
+                                        coordinate_system="Galactic", spectral_axis="none", units="K",
+                                        trust=ReferenceTrust.TEST_FIXTURE)
+    provider = FITSMomentMapProvider(fixture_fits, manifest, require_validated=False)
+    center = SkyCoord(l=30.0, b=0.0, unit="deg", frame="galactic").icrs
+    exact = provider.template_for(center, beam_fwhm_deg=6.0, use_grid_cache=False)
+    cached = provider.template_for(center, beam_fwhm_deg=6.0, use_grid_cache=True, extent_deg=8.0)
+
+    query = SkyCoord(l=[30.0, 31.0, 29.0], b=[0.0, 1.0, -1.0], unit="deg", frame="galactic").icrs
+    exact_values = exact(query)
+    cached_values = cached(query)
+    assert np.allclose(exact_values, cached_values, rtol=0.02)
+
+
 def test_provider_template_for_returns_finite_values_near_peak(fixture_fits):
     from astropy.coordinates import SkyCoord
     manifest = build_manifest_for_file(fixture_fits, survey="TEST", version="v1", source="unit test",
