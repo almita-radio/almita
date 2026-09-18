@@ -210,7 +210,9 @@ async def cmd_sync(args) -> int:
     mode = "solar" if stored["mode"] == "SOLAR" else "hi"
     engine = _resume_engine(mode, args)
     if mode == "solar":
-        center = SolarTarget(engine.location).current_position(Time.now()).icrs
+        # apparent_icrs_direction(), not a raw `.icrs` on current_position()
+        # (see targets/solar.py's module docstring, BUG 2: finite Sun distance).
+        center = SolarTarget(engine.location).apparent_icrs_direction(Time.now())
     else:
         provider = SyntheticHIReferenceProvider(args.catalog)
         center, _ = provider.choose_target(engine.location, Time.now(), engine.config.hi.min_altitude_deg,

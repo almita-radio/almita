@@ -109,17 +109,15 @@ def test_converting_origin_to_icrs_first_also_eliminates_the_bias():
 def test_solar_target_resolve_offset_uses_the_safe_icrs_path():
     """Regression guard on the actual production code path
     (alignment_engine/targets/solar.py): SolarTarget.resolve_offset must
-    never regress to building a SkyOffsetFrame directly from the raw CIRS
-    current_position() - it must convert to ICRS first, exactly as its
-    own docstring documents.
+    never regress to building a SkyOffsetFrame directly from a raw `.icrs`
+    on the real-distance current_position() (BUG 2) or from an origin
+    missing its obstime (BUG 1) - it must go through
+    apparent_icrs_direction(), exactly as its own docstring documents.
 
-    NOTE (found 2026-09-18, see the two tests below): this test's own
-    "safe_reference" shares the SAME `.icrs` call as resolve_offset()
-    itself, so it only proves resolve_offset() is *self-consistent* with
-    offset_coordinates() - not that either is anywhere near the Sun's real
-    position. It is kept (self-consistency is still a real property worth
-    guarding), but must not be read as proof resolve_offset() is correct -
-    see test_resolve_offset_center_is_wildly_wrong_due_to_finite_distance_icrs_bug."""
+    UPDATED 2026-09-18: this test's "safe_reference" now independently
+    reconstructs the fix (apparent_icrs_direction() applied by hand) rather
+    than calling resolve_offset()'s own helper, so it cannot silently pass
+    by sharing a bug with the code under test the way its pre-fix version did."""
     import astropy.units as u
     from astropy.coordinates import EarthLocation
 
@@ -128,9 +126,7 @@ def test_solar_target_resolve_offset_uses_the_safe_icrs_path():
     obstime = Time.now()
     raw_cirs_center = target.current_position(obstime)
     resolved = target.resolve_offset(5.0, 0.0, obstime)
-    icrs_center = raw_cirs_center.icrs
-    # Must match the known-safe path to within floating point, not the
-    # ~0.15deg CIRS-without-obstime bias this test file demonstrates above.
+    icrs_center = _apparent_direction_icrs(raw_cirs_center)  # independent of apparent_icrs_direction()
     safe_reference = offset_coordinates(icrs_center, [5.0], [0.0])[0]
     assert resolved.separation(safe_reference).deg < 1e-6
 
@@ -197,19 +193,15 @@ def test_icrs_ra_dec_of_a_real_distance_sun_coordinate_is_wildly_wrong_once_dist
     assert cirs_center.separation(correct_apparent_direction).deg < 0.5
 
 
-def test_resolve_offset_center_is_wildly_wrong_due_to_finite_distance_icrs_bug():
-    """Regression guard that WOULD have caught the bug above:
+def test_resolve_offset_center_now_matches_the_true_apparent_sun_position():
+    """FIXED (2026-09-18, same day the bug above was found):
     SolarTarget.resolve_offset(0, 0, obstime) - a ZERO offset, i.e. "the
     Sun itself" - must land within a tiny tolerance of the Sun's true
-    apparent position. It currently does NOT: resolve_offset() computes its
-    center via `self.current_position(obstime).icrs`, the exact buggy call
-    demonstrated above, so its zero-offset point is presently tens of
-    degrees away from the real Sun. This does not affect
-    hw_solar_goto_selftest.py (which never calls resolve_offset() - it
-    builds its GOTO target directly from current_position(), staying in
-    CIRS with no ICRS round-trip), but it DOES affect any future solar
-    raster/offset test that uses resolve_offset(), and must be fixed
-    before one is authorized."""
+    apparent position. resolve_offset() now computes its center via
+    apparent_icrs_direction() (which discards the Sun's real distance
+    before the ICRS rotation), not a raw `.icrs` on current_position()'s
+    real-distance result. Before the fix this assertion failed by tens of
+    degrees - see git history for the exact prior version of this test."""
     import astropy.units as u
     from astropy.coordinates import EarthLocation
 
@@ -220,5 +212,21 @@ def test_resolve_offset_center_is_wildly_wrong_due_to_finite_distance_icrs_bug()
     true_apparent_center = target.current_position(obstime)  # CIRS, real distance - the actual Sun
     zero_offset_result = target.resolve_offset(0.0, 0.0, obstime)
 
-    # Documents the bug's current, real magnitude - not a made-up ceiling.
-    assert true_apparent_center.separation(zero_offset_result).deg > 30.0
+    # Aberration/frame-bias order of magnitude only (arcminutes), not the
+    # ~78deg the pre-fix version of this code produced.
+    assert true_apparent_center.separation(zero_offset_result).deg < 0.5
+
+
+def test_apparent_icrs_direction_matches_the_manually_stripped_reference():
+    """apparent_icrs_direction() is now the single canonical implementation
+    of the fix - this pins it against the same manual construction the
+    tests above use, so the two can never silently diverge."""
+    from astropy.coordinates import EarthLocation
+
+    obstime = Time.now()
+    location = EarthLocation(lat=-33.4489 * u.deg, lon=-70.6693 * u.deg, height=570 * u.m)
+    target = SolarTarget(location)
+    cirs_center = target.current_position(obstime)
+    manual = _apparent_direction_icrs(cirs_center)
+    production = target.apparent_icrs_direction(obstime)
+    assert manual.separation(production).deg < 1e-9

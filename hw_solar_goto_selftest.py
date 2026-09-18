@@ -50,7 +50,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import astropy.units as u
-from astropy.coordinates import EarthLocation, SkyCoord
+from astropy.coordinates import EarthLocation
 from astropy.time import Time
 
 from alignment_engine import capture_conflict
@@ -368,29 +368,13 @@ async def main(args) -> int:
         return 3
 
     # ================================================================ SOLAR TARGET
-    #
-    # CRITICAL, NEWLY-CONFIRMED FINDING (not present in the earlier
-    # "~0.15 deg, corrected" report): calling `.icrs` DIRECTLY on a Sun
-    # coordinate that carries its real ~1 AU distance (as
-    # SolarTarget.current_position()/sun_eod() returns) is NOT a small
-    # rotation - astropy correctly performs a full 3D barycentric
-    # conversion, and because the Sun's true distance from the solar-
-    # system barycenter is comparable to the scale of that shift, the
-    # result is a wildly wrong direction (measured 2026-09-18: ~78 deg off,
-    # not the ~20 arcsec the rest of this codebase assumes). This is
-    # exactly what alignment_engine/targets/solar.py's resolve_offset()
-    # does (`self.current_position(obstime).icrs`) - see
-    # test_alignment_engine_cirs_icrs_regression.py's new regression test
-    # for the full reproduction. It affects any FUTURE solar raster/offset
-    # GOTO through resolve_offset(), NOT this test: the actual command
-    # below is built from `sun_eod_to_send` directly (CIRS, never touching
-    # `.icrs`), and this SOLAR TARGET section only needs a *label* for the
-    # log/evidence, computed correctly here by stripping the distance
-    # before the frame rotation (a legitimate, distance-independent
-    # re-expression of the same apparent direction, not a body position).
-    sun_apparent = target.current_position(obstime)
-    sun_icrs = SkyCoord(ra=sun_apparent.ra, dec=sun_apparent.dec,
-                         frame=sun_apparent.frame.replicate_without_data()).icrs
+    # This test's actual GOTO command is built from current_position()
+    # directly (CIRS, no ICRS round-trip - offset=(0,0) needs no
+    # tangent-plane geometry). This section only needs a *label* for the
+    # log/evidence, obtained via SolarTarget.apparent_icrs_direction() -
+    # never a raw `.icrs` on current_position()'s real-distance result
+    # (see targets/solar.py's module docstring, BUG 2).
+    sun_icrs = target.apparent_icrs_direction(obstime)
     solar_target_record = {
         "obstime_utc": obstime.utc.isot,
         "sun_ra_icrs_hours": float(sun_icrs.ra.hour), "sun_dec_icrs_deg": float(sun_icrs.dec.deg),

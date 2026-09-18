@@ -69,7 +69,9 @@ async def test_solar_end_to_end_recovers_offset_and_persists_evidence(tmp_path):
     assert (engine.session.dir / "raw_grid.json").exists()
     assert (engine.session.dir / "fit_result.json").exists()
 
-    center = SolarTarget(LOCATION).current_position(Time.now()).icrs
+    # apparent_icrs_direction(), not a raw `.icrs` on current_position()
+    # (see targets/solar.py's module docstring, BUG 2: finite Sun distance).
+    center = SolarTarget(LOCATION).apparent_icrs_direction(Time.now())
     plan = engine.prepare_sync(result, center, is_observational=True, confidence_threshold=0.5)
     assert plan.eligible is True
     assert engine.session.read_sync_plan() is not None

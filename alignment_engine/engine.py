@@ -286,9 +286,10 @@ class AlignmentEngine:
                 self._transition(AlignmentState.SCANNING, "coarse stage")
                 reference_time = Time.now()
                 # ICRS, not the CIRS(EOD) current_position() itself returns -
-                # see targets/solar.py's module docstring for why: SkyOffsetFrame
-                # geometry is wrong with a CIRS origin, confirmed independently.
-                reference_center = target.current_position(reference_time).icrs
+                # see targets/solar.py's module docstring for why a raw
+                # `.icrs` on current_position() is unsafe (BUG 2: finite Sun
+                # distance) - apparent_icrs_direction() is the fix.
+                reference_center = target.apparent_icrs_direction(reference_time)
                 gaussian = _gaussian_template(reference_center, self.config.resolved_beam_fwhm_deg("solar"))
 
                 coarse_points = scan_planner.build_raster(self.config.solar.coarse_span_deg,
