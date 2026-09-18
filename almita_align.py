@@ -374,6 +374,37 @@ async def cmd_solar_goto_preflight(args) -> int:
     return 0 if result.verdict == "PASS" else 1
 
 
+def cmd_hi_reference_inspect(args) -> int:
+    """Fase 44-45: read-only structural inspection of a local FITS HI
+    reference file - dimensions, WCS, units, NaN fraction. Never declares
+    anything REAL_VALIDATED (opening successfully is not sufficient - see
+    cmd_hi_reference_validate)."""
+    from alignment_engine.hi.fits_reference import inspect_fits_moment_map
+    try:
+        info = inspect_fits_moment_map(args.fits_path)
+    except Exception as exc:
+        _print({"error": f"{type(exc).__name__}: {exc}"}, args.json,
+               [f"Failed to open {args.fits_path}: {exc}"])
+        return 1
+    lines = [f"shape: {info['shape']}", f"ctype: {info['ctype']}", f"bunit: {info['bunit']}",
+             f"wcs_is_celestial: {info['wcs_is_celestial']}", f"nan_fraction: {info['nan_fraction']}",
+             f"finite_range: [{info['finite_min']}, {info['finite_max']}]"]
+    _print(info, args.json, lines)
+    return 0
+
+
+def cmd_hi_reference_validate(args) -> int:
+    """Fase 45: the actual REAL_VALIDATED gate - checksum + structural +
+    plausibility checks, never just "did it open"."""
+    from alignment_engine.hi.fits_reference import validate_reference
+    from alignment_engine.hi.reference_trust import ReferenceManifest
+    manifest = ReferenceManifest.read(args.manifest_path)
+    result = validate_reference(args.fits_path, manifest)
+    lines = [f"VALID: {result.ok}", f"Reason: {result.reason}"]
+    _print(result.to_dict(), args.json, lines)
+    return 0 if result.ok else 1
+
+
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, help="alignment JSON config override")
     parser.add_argument("--observer-config", default=None)
@@ -387,6 +418,18 @@ def build_parser() -> argparse.ArgumentParser:
     for mode in ("solar", "hi"):
         mode_parser = sub.add_parser(mode)
         mode_sub = mode_parser.add_subparsers(dest="mode_command", required=True)
+
+        if mode == "hi":
+            ref_inspect_p = mode_sub.add_parser("reference-inspect")
+            ref_inspect_p.add_argument("fits_path")
+            _add_common(ref_inspect_p)
+            ref_inspect_p.set_defaults(func=cmd_hi_reference_inspect, is_async=False)
+
+            ref_validate_p = mode_sub.add_parser("reference-validate")
+            ref_validate_p.add_argument("fits_path")
+            ref_validate_p.add_argument("manifest_path")
+            _add_common(ref_validate_p)
+            ref_validate_p.set_defaults(func=cmd_hi_reference_validate, is_async=False)
 
         plan_p = mode_sub.add_parser("plan")
         _add_common(plan_p)
