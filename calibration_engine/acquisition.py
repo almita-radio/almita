@@ -2,9 +2,11 @@
 split as alignment_engine/hi/acquisition.py, never duplicating SDRCapture
 or the simulator: RealCalibrationAcquisitionBackend wraps sdr_capture.SDRCapture
 exactly as RealHIAcquisitionBackend does; SimulatedCalibrationAcquisitionBackend
-wraps calibration_engine.simulation. NOT exercised with a real backend in
-this pass (Fase 50: hardware policy) - present so the architecture exists
-and is unit-testable, never invoked against real hardware here.
+wraps calibration_engine.simulation. RealCalibrationAcquisitionBackend never
+calls SDRCapture.configure() - see its own docstring for the audit finding
+behind that (configure() writes to rtl_tcp even when values already
+match), which is what makes a real capture through this class genuinely
+read-only at the protocol level.
 """
 from __future__ import annotations
 
@@ -35,7 +37,24 @@ class CalibrationAcquisitionBackend(Protocol):
 class RealCalibrationAcquisitionBackend:
     """Wraps sdr_capture.SDRCapture - never reimplements the rtl_tcp
     protocol. Constructing this does NOT connect (Fase 50/consistency with
-    RealHIAcquisitionBackend's own contract) - connect() is explicit."""
+    RealHIAcquisitionBackend's own contract) - connect() is explicit.
+
+    DELIBERATELY NEVER CALLS SDRCapture.configure() (audit finding for the
+    first real operational-calibration test: SDRCapture.configure()'s
+    network path sends real rtl_tcp protocol writes - center frequency,
+    sample rate, gain-mode, gain - even when the requested values already
+    match what is running, because a freshly constructed SDRCapture starts
+    with current_frequency/current_gain=None and always treats that as an
+    "initial" config that must be sent. capture() itself (verified by
+    reading sdr_capture.py's _capture_network/_ensure_consumer_started)
+    never sends anything - it only recv()s. Observing the ALREADY-RUNNING
+    stream via connect()+capture() alone is therefore genuinely read-only
+    at the protocol level, honoring "no service reconfiguration" exactly.
+    center_frequency_hz/sample_rate_hz/gain_db passed in are recorded as
+    CONFIGURED/EXPECTED metadata describing what the caller BELIEVES is
+    already running (ideally cross-checked against
+    hardware_inspection.inspect_rtl_tcp_service_command_line() first) -
+    never transmitted to the device."""
     host: str
     port: int
     _sdr: Any = None
@@ -49,8 +68,6 @@ class RealCalibrationAcquisitionBackend:
                        sample_rate_hz: float, gain_db: Optional[float], metadata: Dict[str, Any]) -> str:
         if self._sdr is None:
             raise RuntimeError("connect() must be called before capture()")
-        await self._sdr.configure(int(center_frequency_hz), int(sample_rate_hz),
-                                   gain=("auto" if gain_db is None else gain_db))
         await self._sdr.capture(duration_seconds, output_path, int(sample_rate_hz), metadata)
         return output_path
 
