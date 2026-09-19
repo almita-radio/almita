@@ -65,3 +65,20 @@ def blocking_reason(checks: list[Check]) -> Optional[str]:
     if not failed:
         return None
     return "; ".join(f"{c.name}: {c.detail}" for c in failed)
+
+
+# Real measured output size (this pass's 100-point ALMITA-OBSERVE-20260914
+# performance run, fft_size=8192): ~405 KB/point. This constant is derived
+# analytically (5 float64/int64 arrays + a velocity array, all of length
+# fft_size, plus a small JSON metadata overhead) and cross-checked against
+# that real number rather than only guessed - see docs/REDUCE_PIPELINE.md's
+# performance section for the measurement itself.
+BYTES_PER_BIN = 8 * 6  # frequency_hz, relative_intensity, uncertainty, mask, n_contributing, velocity_lsrk_m_s
+JSON_OVERHEAD_BYTES_PER_POINT = 2_000
+
+
+def estimate_output_bytes(config: ReduceConfig, n_points: int) -> int:
+    """A rough (not exact) estimate of a run's total output size, so
+    `plan` can warn before filling a small SD card - not a promise of
+    exact bytes."""
+    return n_points * (config.fft_size * BYTES_PER_BIN + JSON_OVERHEAD_BYTES_PER_POINT)

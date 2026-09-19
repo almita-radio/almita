@@ -245,3 +245,49 @@ campaign fresh, and re-runs the full pipeline into a **new** session -
 the REDUCE tree. `reduce_engine/compare.py::compare_sessions` is a
 regression-oriented comparator only (same source? same config? same
 point count? per-point RMS difference) - no astrophysical comparison.
+
+## Performance (measured, second pass)
+
+Real numbers, not estimates - `data/mosaic/ALMITA-OBSERVE-20260914-22:05:06`
+(100 real points, `fft_size=8192`, V1 default config, real compatible
+calibration profile applied):
+
+| metric | value |
+|---|---|
+| wall time | 81.4 s total |
+| seconds/point (steady state) | 0.81 s |
+| peak RSS | 333 MB |
+| output size | 40.5 MB (100 points) -> ~405 KB/point |
+
+A separate 9-point real campaign (`ALMITA-WEB-SMALL-RUN-01`) measured
+~8s/point uncalibrated - the discrepancy is real and understood: a large,
+mostly-fixed one-time cost (numpy/astropy import, IERS table load) is
+amortized over far fewer points in a small campaign. Neither number is
+"the" per-point cost; both are reported because both are real.
+
+Top-3 measured bottlenecks, largest first (uncalibrated path,
+`fft_size=8192`, ~2929 FFT segments per capture):
+1. **SPECTRAL ESTIMATE** (`robust_psd_from_iq`'s per-segment FFT + Hann
+   window over ~2929 segments/capture).
+2. **MASK**, specifically `detect_fixed_spurs`'s per-segment convolution
+   - this is why a compatible calibration profile (which reuses
+   ensemble-evidence DC/spur masks instead of re-measuring them per
+   capture) roughly **halves** total runtime (75s vs 195s for the same
+   9-point campaign in the first pass's own measurement).
+3. **VELOCITY** (astropy frame-shift construction) - sub-second per
+   point after the IERS offline fix; was the dominant, multi-minute cost
+   before that fix was found and applied.
+
+None of these were rewritten in this pass - per the "no optimizar
+todavía, sólo medir" instruction, this section reports the real
+bottlenecks, it does not resolve them. `estimate_output_bytes()`
+(`reduce_engine/validation.py`, surfaced by `almita_reduce.py plan`)
+cross-checks within 2.4% of this real 100-point measurement.
+
+Memory: peak RSS 333 MB for a 100-point campaign is consistent with
+per-capture (not per-campaign) IQ residency - `reduce_point` processes
+one capture, writes its output, and returns before the next point is
+read; nothing in `reduce_campaign`'s loop retains a previous point's raw
+IQ or FFT segments. No explicit chunked/streaming I/O was added in this
+pass because the real measurement did not show campaign-size-scaling
+memory growth to justify it.

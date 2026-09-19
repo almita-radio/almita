@@ -55,18 +55,22 @@ def cmd_inspect(args) -> int:
 def cmd_plan(args) -> int:
     from reduce_engine.config import ReduceConfig
     from reduce_engine.ingest import discover_campaign
-    from reduce_engine.validation import run_preflight
+    from reduce_engine.validation import estimate_output_bytes, run_preflight
 
     manifest = discover_campaign(args.campaign_dir)
     config = ReduceConfig(velocity_frame=args.velocity_frame, calibration_profile_path=args.calibration_profile)
     checks = run_preflight(manifest, config, output_root=args.output_root,
                            calibration_profile_path=args.calibration_profile)
+    estimated_bytes = estimate_output_bytes(config, len(manifest.accepted_points()))
     payload = {
         "campaign_id": manifest.campaign_id, "config": config.to_dict(), "config_hash": config.config_hash(),
         "checks": [c.to_dict() for c in checks], "blocked": any(not c.ok for c in checks),
+        "estimated_output_bytes": estimated_bytes, "estimated_output_mb": round(estimated_bytes / 1e6, 1),
     }
     _print(payload, args.json, [
         f"campaign: {payload['campaign_id']}  config_hash: {payload['config_hash'][:12]}",
+        f"estimated output size: ~{payload['estimated_output_mb']} MB "
+        f"({len(manifest.accepted_points())} accepted points)",
         *[f"[{'PASS' if c.ok else 'BLOCKED'}] {c.name}: {c.detail}" for c in checks],
     ])
     return 1 if payload["blocked"] else 0
@@ -90,13 +94,29 @@ def cmd_run(args) -> int:
     report = reduce_campaign(manifest, config, output_root=args.output_root,
                              calibration_profile_path=args.calibration_profile)
     payload = report.__dict__
+    q = report.quality_counts
     _print(payload, args.json, [
-        f"REDUCE {report.status}: {report.session_id}",
-        f"  completed={report.points_completed} blocked={report.points_blocked} failed={report.points_failed}",
-        f"  quality: {report.quality_counts}",
-        f"  runtime: {report.runtime_seconds:.2f}s  output: {report.output_dir}",
+        f"REDUCE {report.status}",
+        f"Campaign:        {report.campaign_id}",
+        f"Points:          {report.points_discovered}",
+        f"Accepted:        {report.points_accepted}",
+        f"Rejected:        {report.points_rejected}",
+        f"Calibration:     {report.calibration_level_counts}",
+        f"Velocity:        {report.velocity_frame_counts}",
+        f"Median usable:   {_fmt_pct(report.median_usable_fraction)}",
+        f"Median base RMS: {_fmt_pct(report.median_baseline_rms_fraction)}",
+        f"GOOD:            {q.get('GOOD', 0)}",
+        f"WARNING:         {q.get('WARNING', 0)}",
+        f"BAD:             {q.get('BAD', 0)}",
+        f"UNKNOWN:         {q.get('UNKNOWN', 0)}",
+        f"Runtime:         {report.runtime_seconds:.2f}s",
+        f"Output:          {report.output_dir}",
     ])
     return 0 if report.status in ("COMPLETED", "PARTIAL") else 1
+
+
+def _fmt_pct(value) -> str:
+    return "—" if value is None else f"{value:.3f}"
 
 
 def cmd_replay(args) -> int:
@@ -112,6 +132,22 @@ def cmd_compare(args) -> int:
     result = compare_sessions(args.session_dir_a, args.session_dir_b)
     _print(result, args.json, [f"{k}: {v}" for k, v in result.items() if k != "per_point_rms_difference"])
     return 0
+
+
+def cmd_validate(args) -> int:
+    from reduce_engine.science_contract import validate_science_input
+    from reduce_engine.storage import validate_session
+    integrity = validate_session(args.session_dir)
+    contract = validate_science_input(args.session_dir)
+    payload = {"output_integrity": integrity, "science_contract": contract.to_dict()}
+    ok = integrity["ok"] and contract.ok
+    _print(payload, args.json, [
+        f"output_integrity: {'OK' if integrity['ok'] else 'PROBLEMS'}",
+        *[f"  - {p}" for p in integrity["problems"]],
+        f"science_contract: {'OK' if contract.ok else 'PROBLEMS'} ({contract.points_checked} points checked)",
+        *[f"  - {p}" for p in contract.problems],
+    ])
+    return 0 if ok else 1
 
 
 def cmd_status(args) -> int:
@@ -160,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("session_dir_b")
     _add_common(p)
     p.set_defaults(func=cmd_compare)
+
+    p = sub.add_parser("validate", help="output integrity + SCIENCE-contract check for a finished session")
+    p.add_argument("session_dir")
+    _add_common(p)
+    p.set_defaults(func=cmd_validate)
 
     p = sub.add_parser("status", help="pipeline/schema version, no campaign required")
     _add_common(p)

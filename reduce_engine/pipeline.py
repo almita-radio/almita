@@ -22,7 +22,7 @@ from reduce_engine import rfi_ref as rfi_ref_mod
 from reduce_engine import spectral as spectral_mod, uncertainty as uncertainty_mod, velocity as velocity_mod
 from reduce_engine.config import ReduceConfig
 from reduce_engine.ingest import CampaignManifest, PointRecord, metadata_field, read_capture
-from reduce_engine.models import CaptureRef, MasterSpectrum
+from reduce_engine.models import CaptureRef, MaskFlag, MasterSpectrum
 from reduce_engine.provenance import build_run_provenance, close_run_provenance
 from reduce_engine.storage import ReduceSession
 
@@ -110,14 +110,16 @@ def reduce_point(point: PointRecord, manifest: CampaignManifest, config: ReduceC
                 resampled.values, resampled.uncertainties, resampled.masks, method=config.averaging_method,
                 sigma_clip_threshold=config.sigma_clip_threshold)
 
-        integration_time = float(attrs.get("duration_seconds", attrs.get("capture_time_seconds", 0.0)) or 0.0)
+        integration_time_raw = attrs.get("duration_seconds", attrs.get("capture_time_seconds"))
+        integration_time_known = integration_time_raw is not None
+        integration_time = float(integration_time_raw) if integration_time_known else 0.0
         with _stage("quality"):
             quality_report = quality_mod.assess_quality(
                 mask=stacked.mask, n_contributing=stacked.n_contributing, clipping_fraction=estimate.clipping_fraction,
                 calibration_level=calibration_outcome.calibration_level,
                 calibration_compatibility_status=calibration_outcome.compatibility_status,
                 baseline_fit_quality_rms_fraction=baseline_result.fit_quality_rms_fraction,
-                velocity_frame=velocity_result.frame)
+                velocity_frame=velocity_result.frame, integration_time_known=integration_time_known)
             quality_report.metrics.update({
                 "rfi_ref_available": rfi_ref_outcome.available, "rfi_ref_used": rfi_ref_outcome.used,
                 "rfi_ref_time_delta_seconds": rfi_ref_outcome.time_delta_seconds,
@@ -172,6 +174,10 @@ class CampaignReduceReport:
     points_blocked: int
     points_failed: int
     quality_counts: dict[str, int]
+    calibration_level_counts: dict[str, int]
+    velocity_frame_counts: dict[str, int]
+    median_usable_fraction: Optional[float]
+    median_baseline_rms_fraction: Optional[float]
     runtime_seconds: float
     output_dir: str
 
@@ -196,6 +202,12 @@ def reduce_campaign(manifest: CampaignManifest, config: ReduceConfig, *, output_
     input_hashes = []
     completed = blocked = failed = 0
     quality_counts: dict[str, int] = {}
+    calibration_level_counts: dict[str, int] = {}
+    velocity_frame_counts: dict[str, int] = {}
+    usable_fractions: list[float] = []
+    baseline_rms_fractions: list[float] = []
+    mask_reason_bin_counts: dict[str, int] = {}
+    total_bins = 0
     point_summaries = []
     for point in manifest.points:
         outcome = reduce_point(point, manifest, config, calibration_profile, calibration_profile_path)
@@ -204,9 +216,25 @@ def reduce_campaign(manifest: CampaignManifest, config: ReduceConfig, *, output_
         if outcome.status == PointStatus.COMPLETED and outcome.master_spectrum is not None:
             completed += 1
             session.write_point(outcome.master_spectrum)
-            quality_counts[outcome.master_spectrum.quality.state] = \
-                quality_counts.get(outcome.master_spectrum.quality.state, 0) + 1
-            input_hashes.append(outcome.master_spectrum.capture_refs[0].sha256)
+            spectrum = outcome.master_spectrum
+            quality_counts[spectrum.quality.state] = quality_counts.get(spectrum.quality.state, 0) + 1
+            calibration_level_counts[spectrum.calibration_level] = \
+                calibration_level_counts.get(spectrum.calibration_level, 0) + 1
+            velocity_frame_counts[spectrum.velocity_frame] = \
+                velocity_frame_counts.get(spectrum.velocity_frame, 0) + 1
+            if "usable_fraction" in spectrum.quality.metrics:
+                usable_fractions.append(spectrum.quality.metrics["usable_fraction"])
+            rms = spectrum.quality.metrics.get("baseline_fit_quality_rms_fraction")
+            if rms is not None and rms == rms:  # not NaN
+                baseline_rms_fractions.append(rms)
+            input_hashes.append(spectrum.capture_refs[0].sha256)
+            total_bins += spectrum.mask.shape[0]
+            for reason_name in MaskFlag.__members__:
+                if reason_name == "GOOD":
+                    continue
+                flag_value = MaskFlag[reason_name].value
+                count = int(np.sum((spectrum.mask.astype(np.int64) & flag_value) != 0))
+                mask_reason_bin_counts[reason_name] = mask_reason_bin_counts.get(reason_name, 0) + count
         elif outcome.status == PointStatus.BLOCKED:
             blocked += 1
         else:
@@ -233,9 +261,26 @@ def reduce_campaign(manifest: CampaignManifest, config: ReduceConfig, *, output_
         "points_rejected": len(manifest.points) - len(manifest.accepted_points()),
         "points_completed": completed, "points_blocked": blocked, "points_failed": failed,
         "quality_counts": quality_counts, "runtime_seconds": runtime_seconds,
+        "calibration_level_counts": calibration_level_counts, "velocity_frame_counts": velocity_frame_counts,
+        "median_usable_fraction": float(np.median(usable_fractions)) if usable_fractions else None,
+        "median_baseline_rms_fraction": float(np.median(baseline_rms_fractions)) if baseline_rms_fractions else None,
         "points": point_summaries, "source_campaign_root": str(manifest.root),
     }
     session.write_manifest(manifest_dict)
+
+    # QC PRODUCTS (data-level only in V1 - no images, no new plotting
+    # dependency added for this; see docs/REDUCE_V1_FREEZE.md known
+    # limitations): mask occupancy, quality/calibration/velocity summaries.
+    mask_occupancy_fraction = {name: count / total_bins for name, count in mask_reason_bin_counts.items()} \
+        if total_bins else {}
+    session.write_qc("mask_occupancy", {"bin_counts": mask_reason_bin_counts, "total_bins": total_bins,
+                                        "occupancy_fraction": mask_occupancy_fraction})
+    session.write_qc("quality_summary", {"quality_counts": quality_counts,
+                                         "median_usable_fraction": manifest_dict["median_usable_fraction"],
+                                         "median_baseline_rms_fraction": manifest_dict["median_baseline_rms_fraction"]})
+    session.write_qc("calibration_summary", {"calibration_level_counts": calibration_level_counts})
+    session.write_qc("velocity_summary", {"velocity_frame_counts": velocity_frame_counts})
+
     session.log_event("REDUCE_CAMPAIGN_END", status=status, runtime_seconds=runtime_seconds)
 
     return CampaignReduceReport(
@@ -243,4 +288,7 @@ def reduce_campaign(manifest: CampaignManifest, config: ReduceConfig, *, output_
         points_discovered=len(manifest.points), points_accepted=len(manifest.accepted_points()),
         points_rejected=len(manifest.points) - len(manifest.accepted_points()), points_completed=completed,
         points_blocked=blocked, points_failed=failed, quality_counts=quality_counts,
+        calibration_level_counts=calibration_level_counts, velocity_frame_counts=velocity_frame_counts,
+        median_usable_fraction=manifest_dict["median_usable_fraction"],
+        median_baseline_rms_fraction=manifest_dict["median_baseline_rms_fraction"],
         runtime_seconds=runtime_seconds, output_dir=str(session.dir))

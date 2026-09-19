@@ -142,6 +142,11 @@ class MasterSpectrum:
     calibration_profile_hash: Optional[str]
     capture_refs: list[CaptureRef]
     reduce_schema_version: str = REDUCE_SCHEMA_VERSION
+    # Set by ReduceSession.write_point() once the point is actually persisted
+    # into a session - reduce_point() itself doesn't know its session yet.
+    # Section 42 (self-description): without this, a master_spectrum.json
+    # opened by itself can't be traced back to which REDUCE session produced it.
+    reduce_session_id: Optional[str] = None
 
     def __post_init__(self):
         n = self.frequency_hz.shape[0]
@@ -159,6 +164,7 @@ class MasterSpectrum:
         never duplicated into JSON."""
         return {
             "reduce_schema_version": self.reduce_schema_version,
+            "reduce_session_id": self.reduce_session_id,
             "campaign_id": self.campaign_id, "point_index": self.point_index,
             "ra_hours": self.ra_hours, "dec_degrees": self.dec_degrees,
             "timestamp_start_utc": self.timestamp_start_utc, "timestamp_end_utc": self.timestamp_end_utc,

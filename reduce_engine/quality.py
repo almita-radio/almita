@@ -20,6 +20,7 @@ def _rfi_occupancy(mask: np.ndarray) -> float:
 def assess_quality(*, mask: np.ndarray, n_contributing: np.ndarray, clipping_fraction: float,
                    calibration_level: str, calibration_compatibility_status: str,
                    baseline_fit_quality_rms_fraction: float, velocity_frame: str,
+                   integration_time_known: bool = True,
                    usable_fraction_threshold: float = 0.5,
                    baseline_rms_bad_threshold: float = 0.5) -> QualityReport:
     reasons: list[str] = []
@@ -58,6 +59,12 @@ def assess_quality(*, mask: np.ndarray, n_contributing: np.ndarray, clipping_fra
     if rfi_occupancy > 0.3:
         warning = True
         reasons.append(f"RFI occupancy {rfi_occupancy:.3f} is high")
+    if not integration_time_known:
+        warning = True
+        reasons.append("integration time metadata unavailable - reported as 0.0, not measured")
+    if np.isnan(baseline_fit_quality_rms_fraction):
+        warning = True
+        reasons.append("baseline fit RMS is unknown (fit could not be evaluated) - not the same as a good fit")
 
     if bad:
         state = QualityState.BAD
