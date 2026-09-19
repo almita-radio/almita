@@ -173,6 +173,15 @@ class JobRegistry:
             thread = self._threads.get(job_id)
         return bool(thread and thread.is_alive())
 
+    def any_alive(self, prefix: Optional[str] = None) -> bool:
+        """Fase A3: a small, non-duplicating addition - lets a status
+        endpoint report "is a workflow of MINE currently running" (e.g.
+        prefix="CAL-" for calibration jobs) without adding a second state
+        store; this registry already knows every job's own thread."""
+        with self._lock:
+            items = list(self._threads.items())
+        return any(thread.is_alive() for job_id, thread in items if prefix is None or job_id.startswith(prefix))
+
 
 JOBS = JobRegistry()
 

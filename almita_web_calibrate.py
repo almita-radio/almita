@@ -77,6 +77,12 @@ def get_status() -> Dict[str, Any]:
     return envelope({
         "calibration_level": CURRENT_LEVEL.value, "absolute_calibration": ABSOLUTE_CALIBRATION_AVAILABLE,
         "deployment_state": deployment.state.value if deployment else "UNKNOWN",
+        # Fase A3: CALIBRATION WORKFLOW is a concept independent of
+        # resource/observation state - whether THIS app has a simulation
+        # job in flight right now, not whether MAIN is claimed by anything
+        # else. Survives a page reload (unlike a client-only flag) since
+        # JOBS is server-side.
+        "calibration_workflow_active": JOBS.any_alive(prefix="CAL-"),
         "resource": resource.to_dict(), "receiver": receiver,
         "gain_table": {"candidate_table_size": len(CANDIDATE_GAIN_TABLE_DB), "provenance": GAIN_TABLE_PROVENANCE,
                         "device_reported_gain_count": handshake.gain_count if handshake.reachable else None,

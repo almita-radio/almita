@@ -180,7 +180,11 @@ function renderRfiRef(rfiRef){
 // Axis styling shared by drawRfiSpectrum/drawRfiWaterfall, matched to
 // Antenna A's matplotlib-rendered PNGs (light background, thin frame,
 // small tick labels) so both antennas read the same way at a glance.
+// Two margin sets: the small THUMBNAIL (320x140, no title/axis-label text -
+// there is no room) and the enlarged DETAILED view (title + "Frequency
+// (MHz)"-style axis labels, same as Antenna A's matplotlib PNGs carry).
 const AXIS_MARGIN={l:36,r:8,t:6,b:16};
+const AXIS_MARGIN_DETAILED={l:70,r:20,t:44,b:48};
 const AXIS_BG="#f7f7f7",AXIS_LINE="#94a3b8",AXIS_GRID="#d9dee3",AXIS_TEXT="#374151";
 
 function _niceStep(span,targetCount){
@@ -197,31 +201,45 @@ function _axisTicks(min,max,targetCount){
   for(let v=start;v<=max+step*1e-6;v+=step)ticks.push(Math.abs(v)<step*1e-9?0:v);
   return ticks;
 }
-function _plotArea(w,h){
-  return{x0:AXIS_MARGIN.l,x1:w-AXIS_MARGIN.r,y0:AXIS_MARGIN.t,y1:h-AXIS_MARGIN.b};
+function _plotArea(w,h,detailed){
+  const m=detailed?AXIS_MARGIN_DETAILED:AXIS_MARGIN;
+  return{x0:m.l,x1:w-m.r,y0:m.t,y1:h-m.b};
 }
-function _drawFrameAndBg(ctx,w,h){
+function _drawFrameAndBg(ctx,w,h,detailed){
   ctx.clearRect(0,0,w,h);
   ctx.fillStyle=AXIS_BG;ctx.fillRect(0,0,w,h);
-  const a=_plotArea(w,h);
+  const a=_plotArea(w,h,detailed);
   ctx.strokeStyle=AXIS_LINE;ctx.lineWidth=1;
   ctx.strokeRect(a.x0+.5,a.y0+.5,a.x1-a.x0,a.y1-a.y0);
   return a;
 }
-function _drawYAxis(ctx,a,yMin,yMax,fmt){
-  ctx.font="9px ui-monospace,monospace";ctx.fillStyle=AXIS_TEXT;
-  ctx.textAlign="right";ctx.textBaseline="middle";
-  for(const v of _axisTicks(yMin,yMax,4)){
+// title/xLabel/yLabel are only drawn when detailed=true (the enlarged
+// view) - matching Antenna A's matplotlib title/xlabel/ylabel, which the
+// tiny 320x140 thumbnail has no room for and never carried either.
+function _drawTitleAndLabels(ctx,w,h,a,detailed,title,xLabel,yLabel){
+  if(!detailed)return;
+  ctx.fillStyle=AXIS_TEXT;ctx.textAlign="center";ctx.textBaseline="alphabetic";
+  if(title){ctx.font="700 18px ui-monospace,monospace";ctx.fillText(title,w/2,28)}
+  if(xLabel){ctx.font="13px ui-monospace,monospace";ctx.fillText(xLabel,(a.x0+a.x1)/2,h-10)}
+  if(yLabel){
+    ctx.save();ctx.translate(16,(a.y0+a.y1)/2);ctx.rotate(-Math.PI/2);
+    ctx.font="13px ui-monospace,monospace";ctx.fillText(yLabel,0,0);ctx.restore();
+  }
+}
+function _drawYAxis(ctx,a,yMin,yMax,fmt,detailed){
+  ctx.font=detailed?"11px ui-monospace,monospace":"9px ui-monospace,monospace";
+  ctx.fillStyle=AXIS_TEXT;ctx.textAlign="right";ctx.textBaseline="middle";
+  for(const v of _axisTicks(yMin,yMax,detailed?6:4)){
     const py=a.y1-(v-yMin)/(yMax-yMin)*(a.y1-a.y0);
     if(py<a.y0-1||py>a.y1+1)continue;
     ctx.strokeStyle=AXIS_GRID;ctx.beginPath();ctx.moveTo(a.x0,py);ctx.lineTo(a.x1,py);ctx.stroke();
     ctx.fillText(fmt(v),a.x0-4,py);
   }
 }
-function _drawXAxis(ctx,a,xMin,xMax,fmt){
-  ctx.font="9px ui-monospace,monospace";ctx.fillStyle=AXIS_TEXT;
-  ctx.textAlign="center";ctx.textBaseline="top";
-  for(const v of _axisTicks(xMin,xMax,4)){
+function _drawXAxis(ctx,a,xMin,xMax,fmt,detailed){
+  ctx.font=detailed?"11px ui-monospace,monospace":"9px ui-monospace,monospace";
+  ctx.fillStyle=AXIS_TEXT;ctx.textAlign="center";ctx.textBaseline="top";
+  for(const v of _axisTicks(xMin,xMax,detailed?6:4)){
     const px=a.x0+(v-xMin)/(xMax-xMin)*(a.x1-a.x0);
     if(px<a.x0-1||px>a.x1+1)continue;
     ctx.strokeStyle=AXIS_GRID;ctx.beginPath();ctx.moveTo(px,a.y0);ctx.lineTo(px,a.y1);ctx.stroke();
@@ -237,28 +255,43 @@ function _drawXAxis(ctx,a,xMin,xMax,fmt){
 // stands out by contrast instead of being lost in it.
 const SPECTRUM_Y_EXPAND=5.0;
 
-function drawRfiSpectrum(canvas,freqMHz,powerDbfs){
+function drawRfiSpectrum(canvas,freqMHz,powerDbfs,options){
+  const detailed=!!(options&&options.detailed);
   const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
-  const a=_drawFrameAndBg(ctx,w,h);
+  const a=_drawFrameAndBg(ctx,w,h,detailed);
+  _drawTitleAndLabels(ctx,w,h,a,detailed,options&&options.title,"Frequency (MHz)","Power (dBFS)");
   if(!freqMHz.length)return;
   const minP=Math.min(...powerDbfs),maxP=Math.max(...powerDbfs);
   const midP=(minP+maxP)/2,halfSpan=Math.max((maxP-minP)/2,0.5)*SPECTRUM_Y_EXPAND;
   const yMin=midP-halfSpan,yMax=midP+halfSpan;
   const f0=freqMHz[0],f1=freqMHz[freqMHz.length-1];
-  _drawYAxis(ctx,a,yMin,yMax,v=>v.toFixed(0));
-  _drawXAxis(ctx,a,f0,f1,v=>v.toFixed(1));
+  _drawYAxis(ctx,a,yMin,yMax,v=>v.toFixed(0),detailed);
+  _drawXAxis(ctx,a,f0,f1,v=>v.toFixed(1),detailed);
   const x=v=>a.x0+(v-f0)/(f1-f0||1)*(a.x1-a.x0),y=v=>a.y1-(v-yMin)/(yMax-yMin)*(a.y1-a.y0);
-  ctx.strokeStyle="#2563a8";ctx.lineWidth=1.1;ctx.beginPath();
+  ctx.strokeStyle="#2563a8";ctx.lineWidth=detailed?1.6:1.1;ctx.beginPath();
   freqMHz.forEach((f,idx)=>{const px=x(f),py=y(powerDbfs[idx]);idx===0?ctx.moveTo(px,py):ctx.lineTo(px,py)});
   ctx.stroke();
 }
 
-// Simple blue (low) -> yellow (mid) -> red (high) heatmap, no external
-// colormap dependency. Rows are chronological oldest-first (top) to
-// newest-last (bottom), matching "time flows downward".
-function drawRfiWaterfall(canvas,rows,freqMHz){
+// Viridis approximation (5-anchor linear interpolation - matplotlib's own
+// default colormap, which Antenna A's quicklook_waterfall.py uses via
+// cmap="viridis") - no external colormap library, just the same
+// low->high color story so both antennas' waterfalls read the same way.
+const VIRIDIS_ANCHORS=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+function _viridis(t){
+  t=Math.max(0,Math.min(1,t));
+  const n=VIRIDIS_ANCHORS.length-1,pos=t*n,i=Math.min(n-1,Math.floor(pos)),frac=pos-i;
+  const a=VIRIDIS_ANCHORS[i],b=VIRIDIS_ANCHORS[i+1];
+  return[Math.round(a[0]+(b[0]-a[0])*frac),Math.round(a[1]+(b[1]-a[1])*frac),Math.round(a[2]+(b[2]-a[2])*frac)];
+}
+
+// Rows are chronological oldest-first (top) to newest-last (bottom),
+// matching "time flows downward" - same convention regardless of size.
+function drawRfiWaterfall(canvas,rows,freqMHz,options){
+  const detailed=!!(options&&options.detailed);
   const ctx=canvas.getContext("2d"),w=canvas.width,h=canvas.height;
-  const a=_drawFrameAndBg(ctx,w,h);
+  const a=_drawFrameAndBg(ctx,w,h,detailed);
+  _drawTitleAndLabels(ctx,w,h,a,detailed,options&&options.title,"Frequency (MHz)","Scan order (old → new)");
   if(!rows.length||!freqMHz.length)return;
   let minP=Infinity,maxP=-Infinity;
   for(const row of rows)for(const p of row.power_dbfs){if(p<minP)minP=p;if(p>maxP)maxP=p}
@@ -271,17 +304,16 @@ function drawRfiWaterfall(canvas,rows,freqMHz){
     const power=rows[Math.min(nRows-1,Math.floor(y/ph*nRows))].power_dbfs;
     for(let x=0;x<pw;x++){
       const t=Math.max(0,Math.min(1,(power[Math.min(nBins-1,Math.floor(x/pw*nBins))]-minP)/spanP));
+      const [r,g,b]=_viridis(t);
       const i=(y*pw+x)*4;
-      image.data[i]=Math.round(255*Math.min(1,t*2));
-      image.data[i+1]=Math.round(255*Math.min(1,Math.max(0,1-Math.abs(t-.5)*2)));
-      image.data[i+2]=Math.round(255*Math.min(1,(1-t)*2));
-      image.data[i+3]=255;
+      image.data[i]=r;image.data[i+1]=g;image.data[i+2]=b;image.data[i+3]=255;
     }
   }
   ctx.putImageData(image,a.x0,a.y0);
   ctx.strokeStyle=AXIS_LINE;ctx.lineWidth=1;ctx.strokeRect(a.x0+.5,a.y0+.5,pw,ph);
-  _drawXAxis(ctx,a,f0,f1,v=>v.toFixed(1));
-  ctx.font="9px ui-monospace,monospace";ctx.fillStyle=AXIS_TEXT;
+  _drawXAxis(ctx,a,f0,f1,v=>v.toFixed(1),detailed);
+  ctx.font=detailed?"11px ui-monospace,monospace":"9px ui-monospace,monospace";
+  ctx.fillStyle=AXIS_TEXT;
   ctx.textAlign="right";ctx.textBaseline="middle";
   ctx.fillText("new",a.x0-4,a.y0+6);
   ctx.fillText("old",a.x0-4,a.y1-6);
@@ -298,11 +330,25 @@ function drawRfiWaterfall(canvas,rows,freqMHz){
 // (no new chart logic, no science/data change) and exports that canvas as
 // a PNG data URL via the browser's own Canvas API - never a second FFT,
 // never a Pi-side image renderer, never the JSON as the click target.
-const RFI_FULL_SIZE_W=1000,RFI_FULL_SIZE_H=450;
-function _fullSizeCanvasImageUrl(drawFn,...drawArgs){
+//
+// Dimensions measured from Antenna A's own REAL, currently-linked
+// products (not guessed, and re-checked against what renderThumbs()
+// above actually links to, not just any script with a similar name):
+// thumb-spectrum-link -> latest_spectrum.png, a copy of
+// spectrum/quicklook_spectrum.json's own PNG (quicklook_spectrum.py,
+// figsize=(12,6) @ dpi=150 -> 1800x900); thumb-waterfall-link ->
+// session_waterfall.png (quicklook_session_waterfall.py, figsize=(12,6)
+// @ dpi=150 -> 1800x900, NOT the older/unlinked quicklook_waterfall.py's
+// figsize=(12,7) product, which is not what the UI actually shows).
+// Antenna B's enlarged view uses those exact sizes so both antennas' full
+// -size views are the same size class, not a mismatched guess (a former
+// 1000x450 constant shared by both products is gone).
+const RFI_SPECTRUM_FULL_W=1800,RFI_SPECTRUM_FULL_H=900;
+const RFI_WATERFALL_FULL_W=1800,RFI_WATERFALL_FULL_H=900;
+function _fullSizeCanvasImageUrl(drawFn,fullW,fullH,options,...drawArgs){
   const canvas=document.createElement("canvas");
-  canvas.width=RFI_FULL_SIZE_W;canvas.height=RFI_FULL_SIZE_H;
-  drawFn(canvas,...drawArgs);
+  canvas.width=fullW;canvas.height=fullH;
+  drawFn(canvas,...drawArgs,options);
   return canvas.toDataURL("image/png");
 }
 
@@ -337,7 +383,9 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
       if(data.session_id===sessionId&&Array.isArray(data.frequency_hz)&&data.frequency_hz.length){
         const freqMHz=data.frequency_hz.map(f=>f/1e6);
         drawRfiSpectrum(specCanvas,freqMHz,data.power_dbfs);
-        $("rfi-spectrum-link").href=_fullSizeCanvasImageUrl(drawRfiSpectrum,freqMHz,data.power_dbfs);
+        $("rfi-spectrum-link").href=_fullSizeCanvasImageUrl(
+          drawRfiSpectrum,RFI_SPECTRUM_FULL_W,RFI_SPECTRUM_FULL_H,
+          {detailed:true,title:"ALMITA — RFI REF — Spectrum"},freqMHz,data.power_dbfs);
       }else{
         specCanvas.getContext("2d").clearRect(0,0,specCanvas.width,specCanvas.height);
       }
@@ -353,8 +401,20 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
     try{
       const data=await fetchJson("rfi_ref_session_waterfall.json");
       if(data.session_id===sessionId&&Array.isArray(data.rows)&&data.rows.length){
-        drawRfiWaterfall(wfCanvas,data.rows,data.frequency_hz);
-        $("rfi-waterfall-link").href=_fullSizeCanvasImageUrl(drawRfiWaterfall,data.rows,data.frequency_hz);
+        // Found during this pass's own visual QA: data.frequency_hz is
+        // raw Hz (the JSON's own field name says so) but was being passed
+        // straight into a parameter named freqMHz and labeled "Frequency
+        // (MHz)" - the small 320x140 thumbnail never had room to show the
+        // resulting wrong tick values legibly, but the enlarged detailed
+        // view (which finally draws the axis label text) made the
+        // mismatch obvious. drawRfiSpectrum already did this conversion
+        // correctly a few lines above; this brings the waterfall in line
+        // with it - a display-only fix, no data/science change.
+        const freqMHz=data.frequency_hz.map(f=>f/1e6);
+        drawRfiWaterfall(wfCanvas,data.rows,freqMHz);
+        $("rfi-waterfall-link").href=_fullSizeCanvasImageUrl(
+          drawRfiWaterfall,RFI_WATERFALL_FULL_W,RFI_WATERFALL_FULL_H,
+          {detailed:true,title:"ALMITA — RFI REF — Waterfall"},data.rows,freqMHz);
       }else{
         wfCanvas.getContext("2d").clearRect(0,0,wfCanvas.width,wfCanvas.height);
       }

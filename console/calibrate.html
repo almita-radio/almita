@@ -24,8 +24,15 @@
     </section>
 
     <section class="panel compact">
-      <header><h2>RESOURCE</h2><button id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
-      <div class="obs-summary" id="resource-summary">Loading…</div>
+      <header><h2>STATUS</h2><button id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
+      <dl class="kv">
+        <div><dt>ACTIVE SCIENCE OBSERVATION</dt><dd id="st-active-observation">—</dd></div>
+        <div><dt>MAIN SDR RESOURCE</dt><dd id="st-main-resource">—</dd></div>
+        <div><dt>CALIBRATION WORKFLOW</dt><dd id="st-calibration-workflow">IDLE</dd></div>
+        <div><dt>REAL CALIBRATION</dt><dd id="st-real-calibration">—</dd></div>
+        <div><dt>SIMULATION</dt><dd id="st-simulation">AVAILABLE</dd></div>
+      </dl>
+      <div id="real-calibration-reason" class="obs-check-row status-block" hidden></div>
     </section>
 
     <section id="run-panel" class="panel">
@@ -38,9 +45,8 @@
       </div>
       <div class="obs-actions">
         <button id="btn-run-sim">RUN SIMULATION</button>
-        <button id="btn-run-real" disabled title="blocked - see resource status">RUN REAL</button>
+        <button id="btn-run-real" disabled title="blocked - see STATUS panel above">RUN REAL</button>
       </div>
-      <div id="run-blocked-reason" class="obs-check-row status-block" hidden></div>
     </section>
 
     <section id="overview-panel" class="panel" hidden>

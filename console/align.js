@@ -34,6 +34,7 @@
       const status = await getJSON("/api/align/status");
       const d = status.data || {};
       document.getElementById("st-deployment").textContent = d.deployment_state || "—";
+      document.getElementById("st-active-observation").textContent = (d.resource || {}).orchestrator_state || "UNKNOWN";
       document.getElementById("st-resource").textContent = (d.resource || {}).status || "—";
       document.getElementById("st-hi-phase").textContent = (d.hi || {}).phase || "—";
       document.getElementById("st-hi-sync").textContent = ((d.hi || {}).sync || {}).sync_allowed ? "ALLOWED" : "BLOCKED";

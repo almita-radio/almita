@@ -1037,6 +1037,115 @@ def test_44c_frontend_antenna_a_thumb_links_unaffected_by_rfi_fix(tmp_path):
     assert "quicklook_products/latest_spectrum.png" in spectrum_href.group(1)
 
 
+def test_44d_frontend_rfi_enlarged_views_match_antenna_a_measured_dimensions(tmp_path):
+    """Fase B5: dimensions must be MEASURED from Antenna A's own real
+    products, not guessed. quicklook_spectrum.py and
+    quicklook_session_waterfall.py (the actual file renderThumbs() links
+    to - not the older, unlinked quicklook_waterfall.py) both save
+    figsize=(12,6) at dpi=150 -> 1800x900. Antenna B's enlarged views must
+    be exactly that, for both products."""
+    import base64
+    import struct
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,
+                             "session_waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
+    html = dom(public)
+    for link_id in ("rfi-spectrum-link", "rfi-waterfall-link"):
+        href = re.search(rf'id="{link_id}"[^>]*href="(data:image/png;base64,[^"]+)"', html)
+        assert href, f"{link_id} has no PNG data URL"
+        png_bytes = base64.b64decode(href.group(1).split(",", 1)[1])
+        width, height = struct.unpack(">II", png_bytes[16:24])
+        assert (width, height) == (1800, 900), f"{link_id}: got {width}x{height}, expected 1800x900"
+
+
+def test_44e_frontend_rfi_enlarged_views_are_titled_and_labeled(tmp_path):
+    """Fase B6/B4: the enlarged view must say which receiver produced it
+    (title) and carry real axis labels - the small 320x140 thumbnail has
+    no room for either and never had them; the enlarged view must."""
+    import base64
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,
+                             "session_waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
+    html = dom(public)
+    spectrum_href = re.search(r'id="rfi-spectrum-link"[^>]*href="([^"]+)"', html).group(1)
+    waterfall_href = re.search(r'id="rfi-waterfall-link"[^>]*href="([^"]+)"', html).group(1)
+    # A PNG data URL can't be grepped for text directly - but the SOURCE
+    # that produced it can: confirm the exact title strings this pass
+    # introduced are present in console/app.js's own draw-call sites,
+    # which is what actually ends up burned into the pixels.
+    app_js = (CONSOLE / "app.js").read_text()
+    assert "ALMITA — RFI REF — Spectrum" in app_js
+    assert "ALMITA — RFI REF — Waterfall" in app_js
+    assert '"Frequency (MHz)"' in app_js
+    assert spectrum_href.startswith("data:image/png") and waterfall_href.startswith("data:image/png")
+
+
+def test_44f_frontend_rfi_waterfall_frequency_axis_uses_mhz_not_raw_hz(tmp_path):
+    """Regression for a real bug found via this pass's own visual QA:
+    drawRfiWaterfall's caller passed data.frequency_hz (raw Hz, per the
+    JSON's own field name) straight through unconverted, while the axis
+    was labeled "Frequency (MHz)" - the tiny 320x140 thumbnail never had
+    room to show the resulting wrong tick values legibly, but decoding the
+    actual enlarged PNG bytes makes the mismatch checkable exactly:
+    rfi_ref_session_waterfall.json's frequency_hz values here span
+    1420400000-1420409000 Hz (1420.400-1420.409 MHz); if the fix
+    regresses, the axis would render "1420400000" instead of "1420.4"."""
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "session_waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
+    dom(public)  # renders without throwing - the real assertion is in app.js's own source below
+    app_js = (CONSOLE / "app.js").read_text()
+    # The call site must divide by 1e6 before handing frequency_hz to
+    # drawRfiWaterfall, exactly like the spectrum call site already did.
+    waterfall_call_region = app_js[app_js.index('fetchJson("rfi_ref_session_waterfall.json")'):]
+    waterfall_call_region = waterfall_call_region[:waterfall_call_region.index("}else{")]
+    assert "data.frequency_hz.map(f=>f/1e6)" in waterfall_call_region
+    assert "drawRfiWaterfall(wfCanvas,data.rows,freqMHz)" in waterfall_call_region
+
+
+def test_44g_frontend_rfi_waterfall_uses_viridis_like_antenna_a(tmp_path):
+    """Fase B4: color scale consistency - Antenna A's own
+    quicklook_session_waterfall.py uses matplotlib's cmap="viridis";
+    Antenna B's hand-drawn heatmap must use the same color story (a small
+    anchor-based approximation, no external colormap library) rather than
+    a visually unrelated palette."""
+    app_js = (CONSOLE / "app.js").read_text()
+    assert "VIRIDIS_ANCHORS" in app_js
+    assert "_viridis(" in app_js
+    assert "drawRfiWaterfall" in app_js
+
+
+def test_44h_frontend_rfi_click_never_triggers_a_new_request(tmp_path):
+    """Fase B14: the enlarged view must reuse already-fetched JSON, drawn
+    onto an offscreen canvas - no additional network request (i.e. no new
+    acquisition/processing trigger) results from "clicking" (in this
+    headless DOM-dump test, from the href simply existing after the page's
+    own normal load sequence, with no extra requests beyond what a normal
+    page load already made)."""
+    public = console_root(tmp_path, status=status_fixture(
+        "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True,
+                             "session_waterfall_available": True},
+        quicklook=_quicklook_running()))
+    atomic_write_json(public / "runtime" / "rfi_ref_spectrum.json", _rfi_ref_spectrum("s1"))
+    atomic_write_json(public / "runtime" / "rfi_ref_session_waterfall.json", _rfi_ref_waterfall("s1"))
+    # _fullSizeCanvasImageUrl must never itself call fetch/fetchJson - the
+    # enlarged image is built entirely from data already fetched once for
+    # the thumbnail. A structural source check, since a DOM dump cannot
+    # observe "no further network calls" once rendering has already
+    # settled.
+    app_js = (CONSOLE / "app.js").read_text()
+    full_size_fn = app_js[app_js.index("function _fullSizeCanvasImageUrl"):]
+    full_size_fn = full_size_fn[:full_size_fn.index("\n}")]
+    assert "fetch" not in full_size_fn
+
+
 def test_45_frontend_rfi_map_thumb_hidden_when_occupancy_map_unavailable(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture(
         "RUNNING", rfi_ref={**_rfi_ref_running(), "spectrum_available": True},

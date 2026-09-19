@@ -168,6 +168,40 @@ def test_calibrate_status_shows_operational_relative_and_verification_tiers():
         assert "gain_table" in body["data"]
 
 
+def test_calibrate_status_separates_observation_resource_and_workflow_state():
+    """Fase A: ACTIVE SCIENCE OBSERVATION, MAIN SDR RESOURCE, and
+    CALIBRATION WORKFLOW must be three independent fields - never a single
+    ambiguous "Observation: RUNNING" that could read as CALIBRATE itself
+    running an observation."""
+    with running_server() as base:
+        status, body = _get(f"{base}/api/calibrate/status")
+        assert status == 200
+        d = body["data"]
+        assert "resource" in d and "orchestrator_state" in d["resource"]
+        assert "status" in d["resource"]  # MAIN SDR resource, independent field
+        assert "calibration_workflow_active" in d
+        assert d["calibration_workflow_active"] is False  # no run started yet in this test
+
+
+def test_calibrate_status_workflow_active_is_false_once_a_run_completes():
+    """Not asserting the mid-flight True state here: the simulated backend
+    has no artificial per-capture delay, so a small job can finish before
+    this test process's own next statement runs (a real, inherent race,
+    not a bug) - the schema/False-when-idle behavior is covered above and
+    in this test's own "after completion" check, which is deterministic."""
+    with running_server() as base:
+        status, body = _post(f"{base}/api/calibrate/run",
+                              {"scenario": "HEALTHY", "n_captures": 3, "capture_seconds": 0.3})
+        assert not body["blocked"]
+        session_id = body["data"]["session_id"]
+        try:
+            _wait_for_session(base, "calibrate", session_id)
+            status, status_body = _get(f"{base}/api/calibrate/status")
+            assert status_body["data"]["calibration_workflow_active"] is False
+        finally:
+            shutil.rmtree(Path("data/calibration") / session_id, ignore_errors=True)
+
+
 def test_calibrate_run_simulation_end_to_end_and_quality_present():
     with running_server() as base:
         status, body = _post(f"{base}/api/calibrate/run",

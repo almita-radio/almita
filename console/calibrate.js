@@ -63,18 +63,29 @@
         ? `${fa.label}\nservice center frequency: ${fa.service_center_frequency_hz} Hz\nnominal HI rest: ${fa.nominal_hi_rest_hz} Hz\ndifference: ${fa.difference_hz} Hz (configuration difference - NOT a measured frequency error)`
         : "";
 
+      // Fase A: four DELIBERATELY SEPARATE concepts, never merged into one
+      // ambiguous line - "Observation: RUNNING" reads as if CALIBRATE
+      // itself were running an observation, which it never is.
       const resource = d.resource || {};
-      document.getElementById("resource-summary").textContent = `${resource.status}: ${resource.detail}`;
+      document.getElementById("st-active-observation").textContent = resource.orchestrator_state || "UNKNOWN";
+      document.getElementById("st-main-resource").textContent = resource.status || "UNKNOWN";
+
+      const workflowEl = document.getElementById("st-calibration-workflow");
+      const workflowActive = d.calibration_workflow_active || pollTimer !== null;
+      workflowEl.textContent = workflowActive ? "SIMULATION RUNNING" : "IDLE";
+
       const busy = resource.status !== "FREE";
       document.getElementById("btn-run-real").disabled = true; // real capture from web not wired this iteration
-      const reasonEl = document.getElementById("run-blocked-reason");
+      const realCalEl = document.getElementById("st-real-calibration");
+      const reasonEl = document.getElementById("real-calibration-reason");
+      realCalEl.textContent = "BLOCKED";
+      reasonEl.hidden = false;
       if (busy) {
-        reasonEl.hidden = false;
-        reasonEl.textContent = `REAL CALIBRATION: BLOCKED — ${resource.detail}`;
+        reasonEl.textContent = `Reason: MAIN SDR currently in use by active science observation (${resource.detail})`;
       } else {
-        reasonEl.hidden = false;
-        reasonEl.textContent = "REAL CALIBRATION: BLOCKED — not wired to hardware from the web in this iteration; use calibration_operational_realtest.py";
+        reasonEl.textContent = "Reason: not wired to hardware from the web in this iteration; use calibration_operational_realtest.py";
       }
+      document.getElementById("st-simulation").textContent = "AVAILABLE";
 
       renderGainTable(d.gain_table);
       renderSessionList(d.sessions || []);
@@ -131,6 +142,7 @@
       if (res.blocked) { showError(res.reason || "RUN blocked"); document.getElementById("btn-run-sim").disabled = false; return; }
       currentSessionId = res.data.session_id;
       document.getElementById("overview-panel").hidden = false;
+      document.getElementById("st-calibration-workflow").textContent = "SIMULATION RUNNING";
       pollSession();
     } catch (err) { showError(`RUN failed: ${err}`); document.getElementById("btn-run-sim").disabled = false; }
   }
@@ -146,7 +158,8 @@
           clearInterval(pollTimer); pollTimer = null;
           document.getElementById("btn-run-sim").disabled = false;
           document.getElementById("btn-profile-build").disabled = !res.data.result;
-          refreshStatus();
+          await refreshStatus();
+          document.getElementById("st-calibration-workflow").textContent = "COMPLETED";
         }
       } catch (err) { /* transient */ }
     };
