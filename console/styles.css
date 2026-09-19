@@ -80,3 +80,25 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .obs-check-row.status-warning{color:var(--warn)}
 .obs-check-row.status-block{color:var(--error)}
 .obs-actions{display:flex;gap:10px;padding:11px}
+
+/* ALIGN + CALIBRATE (console/align.html, console/calibrate.html) —
+   additive only, shares OBSERVE's tokens/classes above. */
+.mode-btn{background:var(--panel);color:var(--muted);border:1px solid var(--line);padding:9px 16px;font:700 12px/1 monospace;letter-spacing:.08em;cursor:pointer}
+.mode-btn.active{background:var(--accent);color:#06121a;border-color:var(--accent)}
+.sync-section{padding:0 11px 11px;border-top:1px solid var(--line);margin-top:8px}
+.sync-section h3{font-size:11px;letter-spacing:.1em;color:var(--muted);margin:11px 0 6px}
+.scenario-btn{background:var(--panel);color:var(--muted);border:1px solid var(--line);padding:7px 12px;font:700 11px/1 monospace;letter-spacing:.06em;cursor:pointer}
+.scenario-btn.active{background:var(--accent);color:#06121a;border-color:var(--accent)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:11px}
+.card{background:#0d1317;border:1px solid var(--line);padding:10px}
+.card dt{font-size:10px;letter-spacing:.08em;color:var(--muted);margin:0 0 4px}
+.card dd{margin:0;font:700 15px/1.2 ui-monospace,monospace}
+.verify-tag{font-size:9px;letter-spacing:.05em;color:var(--muted);margin-left:6px;padding:1px 5px;border:1px solid var(--line);border-radius:2px}
+.verify-device{color:var(--ok);border-color:var(--ok)}
+.verify-service{color:var(--warn);border-color:var(--warn)}
+.verify-expected{color:var(--muted)}
+.badge.badge-sim{background:#5c4d1e;color:#e6b85c;padding:2px 8px;font:700 10px/1.4 monospace;letter-spacing:.08em}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal-overlay[hidden]{display:none}
+.modal{background:var(--panel);border:1px solid var(--line);padding:16px;min-width:320px;max-width:520px}
+.modal h3{margin:0 0 10px;font-size:13px;letter-spacing:.1em}

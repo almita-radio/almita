@@ -28,23 +28,42 @@ import observation_orchestrator
 import observation_plan
 import observation_spec
 
+import almita_web_align
+import almita_web_calibrate
+
 MAX_BODY_BYTES = 1_000_000
 ASSET_ROOT = Path("data/mosaic").resolve()
 ALLOWED_ASSET_SUFFIXES = {".png", ".json", ".csv"}
 _ASSET_PATH_RE = re.compile(r"^/api/observe/plan-assets/(?P<rel>.+)$")
 
-# Static OBSERVE-page files, served read-only from console/ (the existing
+# Session/analysis directory roots the ALIGN/CALIBRATE artifact-serving
+# route is allowed to read from - never anything outside these (Fase 57:
+# no arbitrary filesystem path).
+ALIGN_SESSION_ROOT = Path("data/alignment").resolve()
+CALIBRATE_SESSION_ROOT = Path("data/calibration").resolve()
+
+# Static app pages, served read-only from console/ (the existing
 # monitoring console's own static server never sees these — see the module
 # docstring on why this lives on its own port instead of extending
-# almita_console_server.py's read-only, no-POST contract).
+# almita_console_server.py's read-only, no-POST contract). OBSERVE's own
+# three entries are unchanged (Fase 50) - ALIGN/CALIBRATE are additive.
 CONSOLE_SOURCE = Path(__file__).resolve().parent / "console"
 STATIC_FILES = {
     "/": "index_redirect",
     "/observe.html": "observe.html",
     "/observe.js": "observe.js",
     "/styles.css": "styles.css",
+    "/align.html": "align.html",
+    "/align.js": "align.js",
+    "/calibrate.html": "calibrate.html",
+    "/calibrate.js": "calibrate.js",
 }
 _STATIC_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript", ".css": "text/css"}
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")  # Fase 57: no path traversal via a session id
+_ALIGN_SESSION_RE = re.compile(r"^/api/align/session/(?P<id>[^/]+)$")
+_CALIBRATE_SESSION_RE = re.compile(r"^/api/calibrate/session/(?P<id>[^/]+)$")
+_ALIGN_MODE_ACTION_RE = re.compile(r"^/api/align/(?P<action>plan|preflight|run)/(?P<mode>solar|hi)$")
+_ALIGN_SYNC_RE = re.compile(r"^/api/align/sync/(?P<step>prepare|apply)/(?P<mode>solar|hi)$")
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
@@ -100,6 +119,16 @@ class ObserveHandler(BaseHTTPRequestHandler):
             if self.path == "/api/observe/status":
                 status = observation_orchestrator.get_status()
                 return _json_response(self, 200, status)
+            if self.path == "/api/align/status":
+                return _json_response(self, 200, almita_web_align.get_status())
+            if self.path == "/api/calibrate/status":
+                return _json_response(self, 200, almita_web_calibrate.get_status())
+            align_session = _ALIGN_SESSION_RE.match(self.path)
+            if align_session:
+                return self._align_session(align_session.group("id"))
+            calibrate_session = _CALIBRATE_SESSION_RE.match(self.path)
+            if calibrate_session:
+                return self._calibrate_session(calibrate_session.group("id"))
             if self.path in STATIC_FILES:
                 return self._serve_static(self.path)
             asset_match = _ASSET_PATH_RE.match(self.path)
@@ -108,6 +137,16 @@ class ObserveHandler(BaseHTTPRequestHandler):
             self.send_error(404, "not found")
         except Exception as exc:  # noqa: BLE001 - never crash the server on a bad request
             _json_response(self, 500, {"error": f"{type(exc).__name__}: {exc}"})
+
+    def _align_session(self, session_id: str) -> None:
+        if not _SESSION_ID_RE.match(session_id):
+            return _json_response(self, 400, {"error": "invalid session id"})
+        return _json_response(self, 200, almita_web_align.get_session(session_id))
+
+    def _calibrate_session(self, session_id: str) -> None:
+        if not _SESSION_ID_RE.match(session_id):
+            return _json_response(self, 400, {"error": "invalid session id"})
+        return _json_response(self, 200, almita_web_calibrate.get_session(session_id))
 
     def _serve_static(self, path: str) -> None:
         if path == "/":
@@ -136,6 +175,33 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return self._handle_start()
             if self.path == "/api/observe/stop":
                 return self._handle_stop()
+
+            align_action = _ALIGN_MODE_ACTION_RE.match(self.path)
+            if align_action:
+                return self._handle_align_action(align_action.group("action"), align_action.group("mode"))
+            align_sync = _ALIGN_SYNC_RE.match(self.path)
+            if align_sync:
+                body = _read_json_body(self)
+                fn = almita_web_align.sync_prepare if align_sync.group("step") == "prepare" else almita_web_align.sync_apply
+                return _json_response(self, 200, fn(align_sync.group("mode"), body))
+            if self.path == "/api/align/replay":
+                return _json_response(self, 200, almita_web_align.replay(_read_json_body(self)))
+            if self.path == "/api/align/compare":
+                return _json_response(self, 200, almita_web_align.compare(_read_json_body(self)))
+
+            if self.path == "/api/calibrate/plan":
+                return _json_response(self, 200, almita_web_calibrate.plan(_read_json_body(self)))
+            if self.path == "/api/calibrate/preflight":
+                return _json_response(self, 200, almita_web_calibrate.preflight(_read_json_body(self)))
+            if self.path == "/api/calibrate/run":
+                return _json_response(self, 200, almita_web_calibrate.run_simulation(_read_json_body(self)))
+            if self.path == "/api/calibrate/replay":
+                return _json_response(self, 200, almita_web_calibrate.replay(_read_json_body(self)))
+            if self.path == "/api/calibrate/compare":
+                return _json_response(self, 200, almita_web_calibrate.compare(_read_json_body(self)))
+            if self.path == "/api/calibrate/profile/build":
+                return _json_response(self, 200, almita_web_calibrate.profile_build(_read_json_body(self)))
+
             self.send_error(404, "not found")
         except (ValueError, json.JSONDecodeError) as exc:
             _json_response(self, 400, {"error": str(exc)})
@@ -159,6 +225,21 @@ class ObserveHandler(BaseHTTPRequestHandler):
         spec = observation_spec.validate_spec_dict(body)
         plan = observation_plan.plan_observation(spec)
         _json_response(self, 200, plan)
+
+    def _handle_align_action(self, action: str, mode: str) -> None:
+        body = _read_json_body(self)
+        if action == "plan":
+            return _json_response(self, 200, almita_web_align.plan(mode, body))
+        if action == "run":
+            return _json_response(self, 200, almita_web_align.run_simulation(mode, body))
+        # "preflight" is the only async one - each HTTP request already
+        # runs in its own thread (ThreadingHTTPServer), so asyncio.run()
+        # here starts a fresh event loop local to this thread and never
+        # conflicts with another request's loop (this server has no
+        # already-running event loop of its own to nest inside).
+        import asyncio
+        result = asyncio.run(almita_web_align.preflight(mode, body))
+        return _json_response(self, 200, result)
 
     def _handle_start(self) -> None:
         body = _read_json_body(self)

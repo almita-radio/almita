@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Calibrate</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header class="topbar">
+    <div><h1>ALMITA CALIBRATE</h1><span class="readonly">OPERATIONAL CALIBRATION</span></div>
+    <nav class="obs-nav">
+      <a class="obs-nav-link" href="/observe.html">OBSERVE</a>
+      <a class="obs-nav-link" href="/align.html">ALIGN</a>
+      <a class="obs-nav-link active" href="/calibrate.html">CALIBRATE</a>
+    </nav>
+  </header>
+
+  <main id="app">
+    <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.08em">
+      LEVEL: OPERATIONAL_RELATIVE &nbsp;·&nbsp; ABSOLUTE RF CALIBRATION: UNAVAILABLE — no Kelvin, no dBm, no noise figure is measured here.
+    </div>
+
+    <section class="panel compact">
+      <header><h2>RECEIVER — MAIN (RTL-SDR V4 / R828D)</h2></header>
+      <div class="cards" id="receiver-cards"></div>
+      <div id="frequency-audit" class="obs-summary"></div>
+    </section>
+
+    <section class="panel compact">
+      <header><h2>RESOURCE</h2><button id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
+      <div class="obs-summary" id="resource-summary">Loading…</div>
+    </section>
+
+    <section id="run-panel" class="panel">
+      <header><h2>SIMULATION</h2></header>
+      <div class="obs-actions">
+        <button class="scenario-btn active" data-scenario="HEALTHY">HEALTHY</button>
+        <button class="scenario-btn" data-scenario="CLIPPED">CLIPPED</button>
+        <button class="scenario-btn" data-scenario="THERMAL_DRIFT">THERMAL_DRIFT</button>
+        <button class="scenario-btn" data-scenario="RFI_CONTAMINATED">RFI_CONTAMINATED</button>
+      </div>
+      <div class="obs-actions">
+        <button id="btn-run-sim">RUN SIMULATION</button>
+        <button id="btn-run-real" disabled title="blocked - see resource status">RUN REAL</button>
+      </div>
+      <div id="run-blocked-reason" class="obs-check-row status-block" hidden></div>
+    </section>
+
+    <section id="overview-panel" class="panel" hidden>
+      <header><h2>CALIBRATION OVERVIEW</h2><span id="run-badge" class="badge">—</span><span id="sim-badge" class="badge badge-sim">SIMULATION</span></header>
+      <div class="cards" id="overview-cards"></div>
+    </section>
+
+    <section id="bandpass-panel" class="panel" hidden>
+      <header><h2>BANDPASS</h2></header>
+      <canvas id="bandpass-canvas" width="900" height="220" style="width:100%;background:#0d1317"></canvas>
+      <div id="bandpass-notes" class="obs-summary"></div>
+    </section>
+
+    <section id="stability-panel" class="panel" hidden>
+      <header><h2>STABILITY</h2></header>
+      <pre id="stability-summary" class="obs-summary"></pre>
+    </section>
+
+    <section id="thermal-panel" class="panel" hidden>
+      <header><h2>THERMAL</h2></header>
+      <pre id="thermal-summary" class="obs-summary"></pre>
+      <div class="obs-check-row">THERMAL COMPENSATION: DISABLED</div>
+    </section>
+
+    <section id="gain-panel" class="panel compact">
+      <header><h2>GAIN</h2></header>
+      <div id="gain-summary" class="obs-summary">Loading…</div>
+    </section>
+
+    <section class="panel compact">
+      <header><h2>REPLAY</h2></header>
+      <div class="obs-row"><label>SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/calibration/CAL-..."></div>
+      <div class="obs-actions"><button id="btn-replay">REPLAY SESSION</button></div>
+      <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
+      <pre id="replay-summary" class="obs-summary"></pre>
+    </section>
+
+    <section class="panel compact">
+      <header><h2>COMPARE SESSIONS</h2></header>
+      <div class="obs-row"><label>SESSION A</label><input type="text" id="compare-a"></div>
+      <div class="obs-row"><label>SESSION B</label><input type="text" id="compare-b"></div>
+      <div class="obs-actions"><button id="btn-compare">COMPARE</button></div>
+      <pre id="compare-summary" class="obs-summary"></pre>
+    </section>
+
+    <section class="panel compact">
+      <header><h2>PROFILE (DRAFT)</h2></header>
+      <div class="obs-actions"><button id="btn-profile-build" disabled>BUILD DRAFT FROM LAST RUN</button></div>
+      <div id="profile-list" class="obs-checks"></div>
+      <pre id="profile-summary" class="obs-summary"></pre>
+    </section>
+
+    <section class="panel compact">
+      <header><h2>SESSIONS</h2></header>
+      <div id="session-list" class="obs-checks"></div>
+    </section>
+
+    <div id="error-banner" class="banner connection" hidden></div>
+  </main>
+  <script src="calibrate.js"></script>
+</body></html>

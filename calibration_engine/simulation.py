@@ -120,3 +120,22 @@ def thermal_drift_config(seed: int = 0, drift_fraction: float = 0.6) -> Instrume
 
 def flat_noisy_config(seed: int = 0) -> InstrumentSimulationConfig:
     return InstrumentSimulationConfig(seed=seed, gain_linear=15.0)
+
+
+def rfi_contaminated_config(seed: int = 0) -> InstrumentSimulationConfig:
+    """Multiple strong, narrow spikes across the band - the fourth named
+    scenario the CALIBRATE web UI offers (healthy/clipped/thermal-drift/
+    RFI), kept here rather than invented client-side."""
+    return InstrumentSimulationConfig(seed=seed, gain_linear=15.0,
+                                       rfi_spike_relative_freqs=[0.15, 0.4, 0.65, 0.85], rfi_spike_db=18.0)
+
+
+# Fase 16: the exact four named scenarios the CALIBRATE web UI offers -
+# kept in one place so the UI can never drift from what the engine
+# actually supports.
+NAMED_SCENARIOS = {
+    "HEALTHY": healthy_config,
+    "CLIPPED": severe_clipping_config,
+    "THERMAL_DRIFT": thermal_drift_config,
+    "RFI_CONTAMINATED": rfi_contaminated_config,
+}

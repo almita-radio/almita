@@ -131,7 +131,7 @@ def cmd_run(args) -> int:
     from calibration_engine.receiver_config import build_receiver_config_snapshot
     from calibration_engine.sample_statistics import compute_sample_statistics
     from calibration_engine.session import CalibrationSession, new_session_id
-    from calibration_engine.simulation import InstrumentSimulationConfig
+    from calibration_engine.simulation import InstrumentSimulationConfig, NAMED_SCENARIOS
     from calibration_engine.stability import StabilitySample, analyze_stability
     from calibration_engine.state_machine import CalibrationState, CalibrationStateMachine
     from alignment_engine.deployment_state import DEFAULT_STATE_PATH, read_current_deployment_state
@@ -153,8 +153,15 @@ def cmd_run(args) -> int:
     machine.transition(CalibrationState.PREFLIGHT, "config recorded")
     machine.transition(CalibrationState.READY, "no blocking preflight condition")
 
-    backend = SimulatedCalibrationAcquisitionBackend(
-        simulation_config_factory=lambda i: InstrumentSimulationConfig(seed=i, gain_linear=args.gain_db / 2.0))
+    scenario = getattr(args, "scenario", None)
+    if scenario:
+        if scenario not in NAMED_SCENARIOS:
+            raise ValueError(f"unknown scenario {scenario!r} - must be one of {sorted(NAMED_SCENARIOS)}")
+        scenario_factory = NAMED_SCENARIOS[scenario]
+        config_factory = lambda i: scenario_factory(seed=i)  # noqa: E731
+    else:
+        config_factory = lambda i: InstrumentSimulationConfig(seed=i, gain_linear=args.gain_db / 2.0)  # noqa: E731
+    backend = SimulatedCalibrationAcquisitionBackend(simulation_config_factory=config_factory)
 
     async def _acquire_all():
         results = []
@@ -328,6 +335,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--bias-t-state", default="ON")
     run_p.add_argument("--n-captures", type=int, default=5)
     run_p.add_argument("--capture-seconds", type=float, default=2.0)
+    run_p.add_argument("--scenario", choices=["HEALTHY", "CLIPPED", "THERMAL_DRIFT", "RFI_CONTAMINATED"], default=None,
+                        help="--backend simulated only: named instrument-behavior preset (Fase 16); "
+                             "omit for the plain gain-only simulation")
     _add_common(run_p)
     run_p.set_defaults(func=cmd_run)
 
