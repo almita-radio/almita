@@ -6,6 +6,8 @@
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
+**21 cm hydrogen line radio astronomy · neutral hydrogen (HI) · 1420 MHz · RTL-SDR · Raspberry Pi 5 · Chile**
+
 ALMITA is an amateur 21 cm neutral hydrogen radio telescope built in **Chile** by **Felipe Fridman G.**  
 Contact: **ffridman@gmail.com**
 
