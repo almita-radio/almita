@@ -1,0 +1,917 @@
+schema: science_forensics_experiment
+schema_version: '1.0'
+experiment_id: SCIENCE-FORENSICS-EXP-HI148-01
+generated_by: almita_science_forensics_experiment.py design
+design_epoch_utc: '2026-09-21T14:45:00+00:00'
+purpose: 'Break the time/sky confounding of the +148-153 km/s LSRK feature: measure the same sky at many times (Experiment A) and different sky
+  at nearly the same time (Experiment B, reference position A bracketing every B/C capture).'
+philosophy: The next improvement is not a smarter regression. It is a smarter observation.
+executed_by_this_plan: false
+hardware_authorization: 'none: plan only; execution is a manual operator action in the field'
+instrument_config_identical_to_feature_campaign:
+  source: data/mosaic/ALMITA-WEB-SMALL-RUN-01-20260902-16:16:16/observation_resolved.json
+  source_sha256: 214b193376f4e405d51a42ccb7513600a2a678bba5d37cfc62b060afdb807f8a
+  campaign: ALMITA-WEB-SMALL-RUN-01
+  capture_seconds: 10.0
+  settle_seconds: 2.0
+  sdr_center_frequency_hz: 1420405752
+  sdr_sample_rate_hz: 2400000
+  sdr_gain_db: 40.2
+  main_bias_tee: true
+  input_topology: antenna (orchestrator always passes --input-topology antenna)
+  rfi_ref:
+    enabled: true
+    serial: '00000002'
+    gain_db: 25.0
+    bias_tee: false
+  min_altitude_deg: 10.0
+  fft_size: 8192
+  software_versions:
+    python: 3.11.2
+    astropy: 8.0.1
+    numpy: 2.4.6
+    h5py: 3.16.0
+    yaml: 6.0.3
+  calibration_profile: data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.json
+positions:
+  A:
+    ra_deg: 177.45
+    dec_deg: -33.449
+    ra_hours: 11.83
+  B:
+    ra_deg: 177.45
+    dec_deg: -28.948999999999998
+    ra_hours: 11.83
+  C:
+    ra_deg: 182.24884804170014
+    dec_deg: -35.699
+    ra_hours: 12.149923202780009
+position_rationale:
+  A: 'centre of the feature-campaign grid (RA 11.83 h, Dec -33.449): the reference sky where the feature was seen'
+  selection_rule: 'B and C are chosen (deterministically, from 24 candidate directions x 2 distances around A) to MAXIMISE the smallest pairwise
+    LSRK-shift difference among A, B, C, subject to: every pair >= 4.5 deg apart, every move <= 7 deg (inside the timing evidence)'
+  angular_separation_deg:
+    AB: 4.5
+    AC: 4.55
+    BC: 7.87
+  move_size_axis_deg:
+    AB: 4.5
+    AC: 3.9
+    BC: 6.75
+  lsrk_shift_difference_m_s:
+    B-A: 1460.3922578782658
+    C-A: -1352.899609434282
+    C-B: -2813.2918673125478
+  lsrk_shift_difference_channels:
+    B-A: 23.617827330855242
+    C-A: -21.879429447279254
+    C-B: -45.4972567781345
+  ha_side: 'all positions and all times on ONE side of the meridian (capture.py re-blocks by hour-angle sign; a crossing = 64-85 s slews): check
+    with `windows`'
+  beam_note: pairs are > 3 beam widths apart if the (provisional, operator-provided) beam is <= 1.5 deg FWHM
+predicted_lsrk_shift:
+  epoch_utc: '2026-09-21T14:45:00+00:00'
+  shift_m_s:
+    A: -12090.874852259642
+    B: -10630.482594381376
+    C: -13443.774461693924
+  pairwise:
+    B-A:
+      delta_lsrk_shift_m_s: 1460.3922578782658
+      delta_lsrk_shift_channels: 23.617827330855242
+      sky_stationary_predicts_delta_topocentric_frequency_hz: 6919.285350836496
+      receiver_fixed_predicts_delta_topocentric_frequency_hz: 0.0
+    C-A:
+      delta_lsrk_shift_m_s: -1352.899609434282
+      delta_lsrk_shift_channels: -21.879429447279254
+      sky_stationary_predicts_delta_topocentric_frequency_hz: -6409.989095882594
+      receiver_fixed_predicts_delta_topocentric_frequency_hz: 0.0
+    C-B:
+      delta_lsrk_shift_m_s: -2813.2918673125478
+      delta_lsrk_shift_channels: -45.4972567781345
+      sky_stationary_predicts_delta_topocentric_frequency_hz: -13329.27444671909
+      receiver_fixed_predicts_delta_topocentric_frequency_hz: 0.0
+  fixed_sky_expected_drift:
+    A:
+      lsrk_shift_change_m_s_per_hour: -62.49851746146305
+      sky_stationary_predicts_topocentric_drift_hz_per_hour: -296.11570041351706
+    B:
+      lsrk_shift_change_m_s_per_hour: -65.54855103716909
+      sky_stationary_predicts_topocentric_drift_hz_per_hour: -310.56664845579394
+    C:
+      lsrk_shift_change_m_s_per_hour: -58.312323030655534
+      sky_stationary_predicts_topocentric_drift_hz_per_hour: -276.28166360280267
+  source: alignment_engine.hi.velocity.frame_shift_km_s (the helper REDUCE uses; 0.0 m/s difference on the 9 real points)
+experiments:
+  A:
+    name: A-REPEAT (fixed sky, repeated time)
+    sequence:
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    - A
+    n_captures: 60
+    csv:
+      path: examples/science_forensics_experiment/A/mosaic.csv
+      sha256: b52830b9fe4c009105e606d2760a88892e0dc078e388a20f42fab0b9185cf27b
+      n_rows: 60
+    duration_min:
+      median: 28.773000000000025
+      p75: 29.565000000000015
+      p90: 30.12583333333332
+    diagnostics:
+      n_captures: 60
+      counts:
+        A: 60
+      duration_min: 27.77483333333336
+      median_cadence_s: 27.700000000000045
+      pair_time_tolerance_s: 41.55000000000007
+      corr_time_ra: null
+      corr_time_dec: null
+      corr_time_point_index: 0.9999650518998947
+      max_abs_corr_time_sky: null
+      vif:
+        time_h: 1.0000000000000002
+        ra_off_deg: null
+        dec_off_deg: null
+      standardized_condition_number: null
+      design_rank: 2
+      confounded_time_sky: false
+      position_time_balance_fraction_of_span: 0.0
+      mean_time_min_by_position:
+        A: 14.914058333333342
+      bracketed_fraction_of_non_reference_captures: null
+      joint_model_standard_errors: {}
+      shift_regression:
+        corr_time_lsrk_shift: null
+        note: 'no shift variation (one sky position): sky vs receiver-fixed not testable'
+    answers: 'does the candidate drift in time at a FIXED sky position? (sky-null expectation: -296 Hz/h; measured earlier -323525 Hz/h)'
+  B:
+    name: B-ALTERNATE (rapid alternating sky, A bracketing)
+    sequence:
+    - A
+    - C
+    - A
+    - B
+    - A
+    - B
+    - A
+    - C
+    - A
+    - B
+    - A
+    - C
+    - A
+    - C
+    - A
+    - B
+    - A
+    - B
+    - A
+    - C
+    - A
+    - C
+    - A
+    - B
+    - A
+    - B
+    - A
+    - C
+    - A
+    - C
+    - A
+    - B
+    - A
+    - C
+    - A
+    - B
+    - A
+    - B
+    - A
+    - C
+    - A
+    - B
+    - A
+    - C
+    - A
+    - C
+    - A
+    - B
+    - A
+    - C
+    - A
+    - B
+    - A
+    - B
+    - A
+    - C
+    - A
+    - B
+    - A
+    - C
+    - A
+    - C
+    - A
+    - B
+    - A
+    n_captures: 65
+    csv:
+      path: examples/science_forensics_experiment/B/mosaic.csv
+      sha256: fd0c2446adc0e71e9da1efbf3e1e8929b2c40d97f9e1a4adc92828f0b7db4779
+      n_rows: 65
+    duration_min:
+      median: 36.313333333333354
+      p75: 38.044999999999966
+      p90: 39.99483333333331
+    diagnostics:
+      n_captures: 65
+      counts:
+        A: 33
+        B: 16
+        C: 16
+      duration_min: 35.27866666666669
+      median_cadence_s: 32.60500000000002
+      pair_time_tolerance_s: 48.90750000000003
+      corr_time_ra: 0.00018191564123530698
+      corr_time_dec: 0.00046251261435821425
+      corr_time_point_index: 0.9999825364331857
+      max_abs_corr_time_sky: 0.00046251261435821425
+      vif:
+        time_h: 1.0000006313758039
+        ra_off_deg: 1.7646860513668763
+        dec_off_deg: 1.7646863704656248
+      standardized_condition_number: 2.2028785154301396
+      design_rank: 4
+      confounded_time_sky: false
+      position_time_balance_fraction_of_span: 0.0003401489096337857
+      mean_time_min_by_position:
+        A: 18.63727272727273
+        B: 18.656666666666673
+        C: 18.647916666666674
+      bracketed_fraction_of_non_reference_captures: 0.96875
+      joint_model_standard_errors:
+        sigma_30.5_hz:
+          time_coefficient_se_hz_per_hour: 22.23408583013542
+          ra_coefficient_se_hz_per_deg: 2.89526785286512
+          dec_coefficient_se_hz_per_deg: 2.0647550369054137
+        sigma_2446_hz:
+          time_coefficient_se_hz_per_hour: 1783.1007849347948
+          ra_coefficient_se_hz_per_deg: 232.19098911829784
+          dec_coefficient_se_hz_per_deg: 165.5865842711686
+      shift_regression:
+        corr_time_lsrk_shift: -0.010411635899474714
+        vif_time_shift: 1.000108413914406
+        lsrk_shift_range_m_s: 2843.6570171703515
+        gamma_se_per_unit_sigma_hz: 2.6535020672209322e-05
+        time_se_per_unit_sigma_hz_per_hour: 0.7290257055803583
+        sky_vs_receiver_separation_in_sigma_at_30hz: 1235.6080536330626
+    answers: at (almost) the same time, does the candidate move between sky positions by the stationary-sky prediction, by zero, or by something
+      else?
+  AB:
+    name: A then B in one continuous session (recommended)
+    sequence_note: '20 x A, then the Experiment B sequence, then 20 x A (A before and after: time-balanced, and the A series spans the whole session)'
+    n_captures: 105
+    csv:
+      path: examples/science_forensics_experiment/AB/mosaic.csv
+      sha256: dee68511501cf7475b8382b6d19ab31c57ef1a0bf727b7504077f9332913855f
+      n_rows: 105
+    duration_min:
+      median: 54.77999999999996
+      p75: 57.03166666666662
+      p90: 59.34149999999995
+    diagnostics:
+      n_captures: 105
+      counts:
+        A: 73
+        B: 16
+        C: 16
+      duration_min: 53.781833333333296
+      median_cadence_s: 32.07999999999993
+      pair_time_tolerance_s: 48.11999999999989
+      corr_time_ra: -0.00040374266271164046
+      corr_time_dec: 2.5211784008019997e-05
+      corr_time_point_index: 0.9997710577327131
+      max_abs_corr_time_sky: 0.00040374266271164046
+      vif:
+        time_h: 1.000000224687897
+        ra_off_deg: 1.4775280544615643
+        dec_off_deg: 1.4775278145516344
+      standardized_condition_number: 1.906570166440929
+      design_rank: 4
+      confounded_time_sky: false
+      position_time_balance_fraction_of_span: 0.00028311029082666054
+      mean_time_min_by_position:
+        A: 27.90123287671233
+        B: 27.890000000000008
+        C: 27.88125000000001
+      bracketed_fraction_of_non_reference_captures: 1.0
+      joint_model_standard_errors:
+        sigma_30.5_hz:
+          time_coefficient_se_hz_per_hour: 11.168758116615791
+          ra_coefficient_se_hz_per_deg: 2.5043931221664533
+          dec_coefficient_se_hz_per_deg: 1.8709445697462217
+        sigma_2446_hz:
+          time_coefficient_se_hz_per_hour: 895.6977820735156
+          ra_coefficient_se_hz_per_deg: 200.84411727275884
+          dec_coefficient_se_hz_per_deg: 150.043620249156
+      shift_regression:
+        corr_time_lsrk_shift: -0.02129846476964507
+        vif_time_shift: 1.00045383047021
+        lsrk_shift_range_m_s: 2842.5434420826823
+        gamma_se_per_unit_sigma_hz: 2.6541820789896582e-05
+        time_se_per_unit_sigma_hz_per_hour: 0.3662718339503416
+        sky_vs_receiver_separation_in_sigma_at_30hz: 1235.2914860453848
+capture_length_and_repetitions:
+  capture_seconds: 10.0
+  why_unchanged: instrument configuration is kept identical to the feature campaign
+  measured_snr_formal:
+    median: 17.8
+    min: 14.9
+    max: 22.2
+    source: feature_summary.json of the 9-point real campaign
+  measured_centroid_sigma_hz:
+    median_hz: 30.4
+    max_hz: 37.7
+    source: feature_summary/feature_track of the 9-point real campaign (formal, per capture)
+  measured_drift_hz_per_hour: -323525.47
+  min_captures_at_one_position_for_5_sigma:
+    sigma_30.5_hz:
+      drift_3.2e5_hz_per_hour: 3
+      sky_null_vs_zero_317_hz_per_hour: 38
+    sigma_50_hz:
+      drift_3.2e5_hz_per_hour: 3
+      sky_null_vs_zero_317_hz_per_hour: 53
+    sigma_100_hz:
+      drift_3.2e5_hz_per_hour: 3
+      sky_null_vs_zero_317_hz_per_hour: 84
+  chosen:
+    A: 60
+    B: 65
+  reading: 3-4 captures already prove a 3.2e5 Hz/h drift; ~38-84 captures are needed to tell the stationary-sky drift (-317 Hz/h) from zero at
+    one position, which is why A has 60 captures and why B (position offsets of 5-11 kHz) is the decisive test.
+timing:
+  model:
+    n_intervals: 4541
+    n_campaigns: 34
+    source: data/mosaic/*/capture_timing_*.csv and mosaic.csv (metadata only; no IQ read)
+  quantiles:
+    A:
+      median: 28.773000000000025
+      p75: 29.565000000000015
+      p90: 30.12583333333332
+    B:
+      median: 36.313333333333354
+      p75: 38.044999999999966
+      p90: 39.99483333333331
+    AB:
+      median: 54.77999999999996
+      p75: 57.03166666666662
+      p90: 59.34149999999995
+  slew_note: 'per-point non-capture overhead is 18-25 s nearly independent of move size (<=7.5 deg): alternating sky costs ~+4 s per capture versus
+    repeating; hour-angle-crossing slews cost 64-85 s and are excluded by design'
+null_hypotheses:
+  H0_time:
+    statement: the candidate does not drift with time beyond the stationary-sky prediction
+    rejected_when: '|excess drift|/SE >= 5 and total excess >= 2 channels over the span, OR stationary chi2/dof >= 4 with range >= 2 channels'
+    effect_size: excess drift (Hz/h) and total channels over the span, with SE
+  H0_sky:
+    statement: position offsets equal the parameter-free stationary-sky prediction (f0/c) x d(LSRK shift)
+    consistent_when: chi2/dof < 4 over the bracketed B/C offsets
+    effect_size: measured minus predicted offset (Hz) with SE
+  H0_frequency:
+    statement: position offsets are zero (receiver / topocentric-frequency fixed)
+    consistent_when: chi2/dof < 4 against zero
+    effect_size: offset (Hz) with SE
+  global_shift: 'whole-spectrum cross-correlation shift (candidate and known spurs excluded) vs candidate motion: slope ~1 with R2>=0.8 -> the
+    candidate moves with everything (TIME_GLOBAL); flat global with moving candidate -> TIME_CANDIDATE_ONLY'
+decision_labels:
+- SKY_FIXED
+- SKY_GRADIENT
+- RECEIVER_FIXED
+- TIME_GLOBAL
+- TIME_CANDIDATE_ONLY
+- MIXED_TIME_AND_SPATIAL
+- STATIONARY_UNDISCRIMINATED
+- UNRESOLVED
+analysis:
+  tool: python3 almita_science_forensics_experiment.py analyze
+  matched_pair_tolerance_s: 48.9
+  tolerance_rule: 1.5 x median real cadence
+  tracking_search_half_width_channels: 75
+  fit_half_width_channels: 30
+  controls: control lines from the median spectrum, tracked in every capture; known spurs/DC from REDUCE masks; candidate excluded from the global
+    shift
+  diagnostic_only:
+  - difference spectra
+  - shift-and-difference
+  reduce_modified: false
+logging_requirements:
+  rfi_ref: capture.py --rfi-ref-enabled exactly as in the feature campaign; note the serial 00000002, gain 25 dB; confirm rfi_ref files exist
+    for the session
+  temperature: keep the SDR and LNA DS18B20 sensors (28-082471f4e41b, 28-2c5acd1e64ff) logging; record the ambient temperature at start and end
+    by hand
+  clock: record the Pi clock source and offset (chronyc tracking / timedatectl) at start and end; all timestamps are timezone-aware UTC; the OnStep
+    clock drift finding is documented and not corrected here
+  sdr_stream_start: write down the time the SDR network stream is first opened relative to the first capture (warm-up transient is NOT assumed)
+  pointing: for each repeated visit note the mount-reported RA/Dec after GOTO (capture log) to quantify pointing repeatability
+  reduce: 'REDUCE V1 is not patched: per-capture rfi_ref association, temperature and gain remain in RAW metadata'
+expected_signatures:
+  note: 'recompute for the real start with: almita_science_forensics_experiment.py windows / design --epoch'
+old_campaign_reference:
+  campaign: ALMITA-WEB-SMALL-RUN-01
+  n_captures: 9
+  duration_min: 4.334629261493683
+  corr_time_ra: 0.10423056782642996
+  corr_time_dec: 0.9482165803638627
+  vif:
+    time_h: 11.108481430709354
+    ra_off_deg: 1.1206826674493693
+    dec_off_deg: 10.987798763259981
+  standardized_condition_number: 6.512322670985375
+  shift_regression:
+    corr_time_lsrk_shift: 0.7251089688078993
+    vif_time_shift: 2.1087393220853476
+    lsrk_shift_range_m_s: 1077.4752693245064
+    gamma_se_per_unit_sigma_hz: 0.0003228173764217576
+    time_se_per_unit_sigma_hz_per_hour: 20.721836932607783
+    sky_vs_receiver_separation_in_sigma_at_30hz: 101.56480920985464
+  joint_model_standard_errors:
+    sigma_30.5_hz:
+      time_coefficient_se_hz_per_hour: 1450.5876964625943
+      ra_coefficient_se_hz_per_deg: 8.785034192123348
+      dec_coefficient_se_hz_per_deg: 27.518586786323905
+    sigma_2446_hz:
+      time_coefficient_se_hz_per_hour: 116332.37723106575
+      ra_coefficient_se_hz_per_deg: 704.5309388174987
+      dec_coefficient_se_hz_per_deg: 2206.900435388468
+  source: REDUCE Level 1 real times/coordinates
+synthetic_power_test:
+  n_seeds: 12
+  generated_by: almita_science_forensics_experiment.py simulate
+  designs:
+    expAB_combined__full:
+      analysis: full
+      scenarios:
+        candidate_only_drift:
+          truth: TIME_CANDIDATE_ONLY
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_CANDIDATE_ONLY: 12
+        receiver_fixed:
+          truth: RECEIVER_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            RECEIVER_FIXED: 12
+        sky_fixed:
+          truth: SKY_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_FIXED: 12
+        spatial_gradient:
+          truth: SKY_GRADIENT
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_GRADIENT: 12
+        spatial_gradient_ra:
+          truth: SKY_GRADIENT
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_GRADIENT: 12
+        time_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_GLOBAL: 12
+        time_plus_spatial:
+          truth: MIXED_TIME_AND_SPATIAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            MIXED_TIME_AND_SPATIAL: 12
+        whole_spectrum_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_GLOBAL: 12
+    expA_fixed_sky__full:
+      analysis: full
+      scenarios:
+        candidate_only_drift:
+          truth: TIME_CANDIDATE_ONLY
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_CANDIDATE_ONLY: 12
+        receiver_fixed:
+          truth: RECEIVER_FIXED
+          correct: 0
+          abstain: 12
+          wrong: 0
+          n: 12
+          decisions:
+            STATIONARY_UNDISCRIMINATED: 12
+        sky_fixed:
+          truth: SKY_FIXED
+          correct: 0
+          abstain: 12
+          wrong: 0
+          n: 12
+          decisions:
+            STATIONARY_UNDISCRIMINATED: 12
+        time_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_GLOBAL: 12
+        whole_spectrum_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_GLOBAL: 12
+    expB_random_bracketed__full:
+      analysis: full
+      scenarios:
+        candidate_only_drift:
+          truth: TIME_CANDIDATE_ONLY
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_CANDIDATE_ONLY: 12
+        receiver_fixed:
+          truth: RECEIVER_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            RECEIVER_FIXED: 12
+        sky_fixed:
+          truth: SKY_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_FIXED: 12
+        spatial_gradient:
+          truth: SKY_GRADIENT
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_GRADIENT: 12
+        spatial_gradient_ra:
+          truth: SKY_GRADIENT
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_GRADIENT: 12
+        time_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_GLOBAL: 12
+        time_plus_spatial:
+          truth: MIXED_TIME_AND_SPATIAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            MIXED_TIME_AND_SPATIAL: 12
+        whole_spectrum_drift:
+          truth: TIME_GLOBAL
+          correct: 9
+          abstain: 0
+          wrong: 3
+          n: 12
+          decisions:
+            MIXED_TIME_AND_SPATIAL: 3
+            TIME_GLOBAL: 9
+    expB_random_bracketed__regression:
+      analysis: regression
+      scenarios:
+        candidate_only_drift:
+          truth: TIME_CANDIDATE_ONLY
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_DRIFT: 12
+        receiver_fixed:
+          truth: RECEIVER_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            RECEIVER_FIXED: 12
+        sky_fixed:
+          truth: SKY_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_FIXED: 12
+        spatial_gradient:
+          truth: SKY_GRADIENT
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_GRADIENT: 12
+        spatial_gradient_ra:
+          truth: SKY_GRADIENT
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_GRADIENT: 12
+        time_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_DRIFT: 12
+        time_plus_spatial:
+          truth: MIXED_TIME_AND_SPATIAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            MIXED_TIME_AND_SPATIAL: 12
+        whole_spectrum_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_DRIFT: 12
+    old_raster_9pt__regression:
+      analysis: regression
+      scenarios:
+        candidate_only_drift:
+          truth: TIME_CANDIDATE_ONLY
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_DRIFT: 12
+        receiver_fixed:
+          truth: RECEIVER_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            RECEIVER_FIXED: 12
+        sky_fixed:
+          truth: SKY_FIXED
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            SKY_FIXED: 12
+        spatial_gradient:
+          truth: SKY_GRADIENT
+          correct: 0
+          abstain: 0
+          wrong: 12
+          n: 12
+          decisions:
+            SKY_FIXED: 12
+        spatial_gradient_ra:
+          truth: SKY_GRADIENT
+          correct: 0
+          abstain: 12
+          wrong: 0
+          n: 12
+          decisions:
+            UNRESOLVED: 12
+        time_drift:
+          truth: TIME_GLOBAL
+          correct: 12
+          abstain: 0
+          wrong: 0
+          n: 12
+          decisions:
+            TIME_DRIFT: 12
+        time_plus_spatial:
+          truth: MIXED_TIME_AND_SPATIAL
+          correct: 2
+          abstain: 0
+          wrong: 10
+          n: 12
+          decisions:
+            MIXED_TIME_AND_SPATIAL: 2
+            TIME_DRIFT: 10
+        whole_spectrum_drift:
+          truth: TIME_GLOBAL
+          correct: 0
+          abstain: 0
+          wrong: 12
+          n: 12
+          decisions:
+            SKY_FIXED: 12
+negative_background_followup:
+  why: integrated SCIENCE maps are strongly negative (REDUCE baseline offset); the fixed-position series doubles as the test
+  checks:
+  - per-capture median level of the calibrated spectrum vs time (Experiment A, fixed sky)
+  - per-capture median level vs position (Experiment B)
+  - baseline_fit_quality_rms_fraction (Level 1 quality.metrics) vs the negative offset per capture
+  - the same control windows as the negative-map audit, before and after the candidate window
+  interpretation: level stationary at a position and equal across positions -> negativity is a fixed REDUCE baseline offset; level drifting with
+    time -> instrument gain/temperature; level tied to position -> sky/ground pickup
+readiness:
+  verdict: READY FOR FIELD (plan and analysis); execution is a manual field action
+  software:
+  - plan, CSVs and analysis validated on synthetic and replayed real data
+  - capture.py --csv accepts explicit ordered lists with repeated coordinates (code audit; CSV validated against its own preflight rules)
+  - REDUCE/SCIENCE identity (point_number/data_filename, capture sha256) keeps repeated coordinates distinct - verified by test
+  operator_prerequisites:
+  - 'mount/antenna deployed outdoors (indoors: no real GOTO); no software authorization changes that'
+  - manual `capture.py --csv ...` (OBSERVE spec/orchestrator cannot express an explicit sequence)
+  - start inside a `windows` result so that A, B and C stay on one hour-angle side above min altitude for the whole run
+  - run capture.py --preflight-only on the emitted CSV before the first real run
+  known_limits:
+  - 'the feature may be absent on the new day: that is a result, not a failure (runbook section 9)'
+  - bracket interpolation is exact for linear drift; curvature over a 65 s bracket adds error (quantified in the power test)
+  - 'OBSERVE orchestrator not modified (minimal future change: accept an explicit `sequence:` list in the spec)'
+capture_command_template:
+  A:
+  - python3
+  - capture.py
+  - --csv
+  - examples/science_forensics_experiment/A/mosaic.csv
+  - --settle
+  - '2.0'
+  - --capture
+  - '10.0'
+  - --sdr-freq
+  - '1420405752'
+  - --sdr-rate
+  - '2400000'
+  - --sdr-gain
+  - '40.2'
+  - --input-topology
+  - antenna
+  - --min-altitude
+  - '10.0'
+  - --rfi-ref-enabled
+  - --rfi-ref-gain-db
+  - '25.0'
+  - --rfi-ref-serial
+  - '00000002'
+  B:
+  - python3
+  - capture.py
+  - --csv
+  - examples/science_forensics_experiment/B/mosaic.csv
+  - --settle
+  - '2.0'
+  - --capture
+  - '10.0'
+  - --sdr-freq
+  - '1420405752'
+  - --sdr-rate
+  - '2400000'
+  - --sdr-gain
+  - '40.2'
+  - --input-topology
+  - antenna
+  - --min-altitude
+  - '10.0'
+  - --rfi-ref-enabled
+  - --rfi-ref-gain-db
+  - '25.0'
+  - --rfi-ref-serial
+  - '00000002'
+  AB:
+  - python3
+  - capture.py
+  - --csv
+  - examples/science_forensics_experiment/AB/mosaic.csv
+  - --settle
+  - '2.0'
+  - --capture
+  - '10.0'
+  - --sdr-freq
+  - '1420405752'
+  - --sdr-rate
+  - '2400000'
+  - --sdr-gain
+  - '40.2'
+  - --input-topology
+  - antenna
+  - --min-altitude
+  - '10.0'
+  - --rfi-ref-enabled
+  - --rfi-ref-gain-db
+  - '25.0'
+  - --rfi-ref-serial
+  - '00000002'

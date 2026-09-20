@@ -1,0 +1,78 @@
+{
+ "description": "Non-capture seconds per point (goto + tracking + settle + flush + disk/persist + guards = point_total_sec - capture_sec) versus move size (max of |dRA*cos(dec)|, |dDec|), from the capture_timing_*.csv + mosaic.csv metadata of real campaigns. Capture seconds are planned separately.",
+ "source": "data/mosaic/*/capture_timing_*.csv and mosaic.csv (metadata only; no IQ read)",
+ "n_intervals": 4541,
+ "n_campaigns": 34,
+ "table": [
+  {
+   "axis_deg_min": 0,
+   "axis_deg_max": 0.3,
+   "n": 311,
+   "median_s": 17.7,
+   "p75_s": 18.48,
+   "p90_s": 19.02,
+   "max_s": 21.4
+  },
+  {
+   "axis_deg_min": 0.3,
+   "axis_deg_max": 1.2,
+   "n": 1411,
+   "median_s": 20.03,
+   "p75_s": 22.81,
+   "p90_s": 24.69,
+   "max_s": 47.3
+  },
+  {
+   "axis_deg_min": 1.2,
+   "axis_deg_max": 2.5,
+   "n": 2541,
+   "median_s": 18.8,
+   "p75_s": 20.87,
+   "p90_s": 22.84,
+   "max_s": 174.2
+  },
+  {
+   "axis_deg_min": 2.5,
+   "axis_deg_max": 4.5,
+   "n": 98,
+   "median_s": 23.13,
+   "p75_s": 24.83,
+   "p90_s": 26.64,
+   "max_s": 48.9
+  },
+  {
+   "axis_deg_min": 4.5,
+   "axis_deg_max": 7.5,
+   "n": 169,
+   "median_s": 22.08,
+   "p75_s": 23.58,
+   "p90_s": 25.37,
+   "max_s": 90.1
+  },
+  {
+   "axis_deg_min": 7.5,
+   "axis_deg_max": 15.0,
+   "n": 5,
+   "median_s": 31.85,
+   "p75_s": 31.91,
+   "p90_s": 63.85,
+   "max_s": 85.1
+  },
+  {
+   "axis_deg_min": 15.0,
+   "axis_deg_max": 60.0,
+   "n": 6,
+   "median_s": 31.99,
+   "p75_s": 63.17,
+   "p90_s": 77.48,
+   "max_s": 82.1
+  }
+ ],
+ "ha_crossing": "mount_slew_model.json (frozen almita-slew-4.0): an HA-sign-crossing move has central prediction 64.2 s and safe 85.5 s vs 13.1+0.322*axis s in the normal regime: the design must keep every position on ONE side of the meridian; capture.py also re-blocks points by HA sign, which would reorder an interleaved schedule.",
+ "repeat_same_coordinate": "no zero-distance samples exist in the evidence; the 0-0.3 deg bin (median 17.7 s) is used for a repeated coordinate",
+ "nine_point_campaign_reference": {
+  "campaign": "ALMITA-WEB-SMALL-RUN-01-20260902-16:16:16",
+  "capture_seconds_planned": 10,
+  "point_total_seconds_1p5deg_moves": "28.6-35.7"
+ }
+}

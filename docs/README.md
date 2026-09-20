@@ -9,6 +9,7 @@
 | SCIENCE V1 (frozen) | [SCOPE](SCIENCE_SCOPE.md), [MODEL](SCIENCE_MODEL.md), [PIPELINE](SCIENCE_PIPELINE.md), [ACCEPTANCE](SCIENCE_ACCEPTANCE.md), [FREEZE](SCIENCE_V1_FREEZE.md), [RUNBOOK](SCIENCE_FIRST_RUNBOOK.md) |
 | Web console | [WEB_ALIGNMENT_CALIBRATION](WEB_ALIGNMENT_CALIBRATION.md) |
 | SCIENCE feature forensics (additive diagnostics) | [SCOPE](SCIENCE_FORENSICS_SCOPE.md), [MODEL](SCIENCE_FORENSICS_MODEL.md), [RUNBOOK](SCIENCE_FORENSICS_RUNBOOK.md) |
+| SCIENCE forensics experiment design (field plan that breaks time/sky confounding) | [EXPERIMENT RUNBOOK](SCIENCE_FORENSICS_EXPERIMENT_RUNBOOK.md), plan `examples/science_forensics_experiment.yaml` |
 
 ## Project overview
 [ALMITA_OVERVIEW](ALMITA_OVERVIEW.md) - the long-form project guide (hardware, observation workflow, grid generator, alignment,

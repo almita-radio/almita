@@ -1,0 +1,150 @@
+{
+ "baseline_metrics": {
+  "baseline_fit_quality_rms_fraction": [
+   0.053684419716603614,
+   0.0530247609061223,
+   0.052881849129050564,
+   0.05191302413533217,
+   0.05216642931172881,
+   0.05256819090149512,
+   0.05160513466032698,
+   0.05192494794064365,
+   0.05126432025551345
+  ],
+  "corr_baseline_rms_vs_candidate_channel": 0.8906020852653219,
+  "corr_baseline_rms_vs_median_level": -0.811105122116006,
+  "corr_baseline_rms_vs_time": -0.8874107700686946,
+  "corr_median_level_vs_candidate_channel": -0.8658468600622277,
+  "corr_median_level_vs_time": 0.7957638690120485,
+  "n": 9,
+  "per_capture_median_relative_intensity": [
+   -0.009381444250461142,
+   -0.011064684332542244,
+   -0.01016173555948548,
+   -0.006660442776389565,
+   -0.005882965291557416,
+   -0.007361381954518232,
+   -0.006397969347885264,
+   -0.006339930962620298,
+   -0.006201494140423454
+  ]
+ },
+ "campaign_id": "ALMITA-WEB-SMALL-RUN-01",
+ "candidate": {
+  "channels": [
+   1380.006221362776,
+   1371.0983899292112,
+   1353.1877403273747,
+   1342.7380512580817,
+   1315.9898310849023,
+   1321.4255879167101,
+   1311.514397026454,
+   1313.4521419717175,
+   1300.2308141449662
+  ],
+  "n_detected": 9,
+  "slope_channels_per_hour": -1104.9048273367077,
+  "slope_se": 119.53501316357735,
+  "start_channel": 1379.8153805366042,
+  "total_channels_over_span": -79.82254659565531
+ },
+ "control_features": {
+  "lines": [],
+  "n_found": 0,
+  "note": "no narrow persistent line stands out in the median spectrum at z >= 8 outside the candidate"
+ },
+ "f0_hz": 1420405751.77,
+ "global_shift": {
+  "candidate_cumulative_channels": [
+   0.0,
+   -8.907831433564752,
+   -26.81848103540119,
+   -37.26817010469426,
+   -64.0163902778736,
+   -58.580633446065804,
+   -68.491824336322,
+   -66.5540793910584,
+   -79.77540721780974
+  ],
+  "candidate_total_channels": -79.77540721780974,
+  "caveat": "the correlated structure is whatever Level 1 spectra share (calibration/baseline pattern, persistent lines); if it is attached to the digitised frequency axis it cannot reveal an RF-frequency scale drift - independent sky/RFI control lines are needed",
+  "chained_consecutive_captures": true,
+  "correlation_candidate_vs_sky_expectation": -0.700351063390541,
+  "correlation_global_vs_candidate": null,
+  "correlation_global_vs_sky_expectation": null,
+  "cumulative_channels_by_point": [
+   0.0,
+   0.0024467089828032634,
+   -0.0015424710135772354,
+   -0.0014566356514264175,
+   -0.01161653314053253,
+   -0.009535055905204063,
+   -0.013073008622117313,
+   -0.013472576549509209,
+   -0.016394383982100167
+  ],
+  "global_shift_significant": false,
+  "n_steps": 8,
+  "range_channels": 0.01884109296490343,
+  "reading": "the whole-spectrum structure does NOT move (range within 5 x its uncertainty) while the candidate moved -79.8 channels: candidate-specific motion relative to that structure",
+  "reliable_steps": 8,
+  "se_final_channels": 0.07524135345285068,
+  "sky_stationary_expectation_cumulative_channels": [
+   0.0,
+   -3.6375664760219912,
+   -7.05721898857385,
+   -1.964227315117137,
+   1.4376497211914758,
+   5.057011706774217,
+   10.367979431160707,
+   6.7312583965912,
+   3.312539907749674
+  ],
+  "sky_stationary_expectation_total_channels": 3.312539907749674,
+  "total_channels": -0.016394383982100167
+ },
+ "known_spurs": {
+  "mask_composition": {
+   "DC": {
+    "channels_flagged_in_all_captures": 0,
+    "mean_fraction_of_channels": 0.0
+   },
+   "EDGE": {
+    "channels_flagged_in_all_captures": 0,
+    "mean_fraction_of_channels": 0.0
+   },
+   "KNOWN_SPUR": {
+    "channels_flagged_in_all_captures": 0,
+    "mean_fraction_of_channels": 0.0
+   },
+   "RFI": {
+    "channels_flagged_in_all_captures": 0,
+    "mean_fraction_of_channels": 0.0
+   }
+  },
+  "n_persistently_masked_channels": 343,
+  "note": "REDUCE masks known spurs/DC at FIXED channel positions in every capture (receiver-fixed by construction); they are excluded from the global shift and cannot be tracked as lines",
+  "persistently_masked_channel_ranges": [
+   [
+    0,
+    162
+   ],
+   [
+    1892,
+    1897
+   ],
+   [
+    4091,
+    4101
+   ],
+   [
+    8029,
+    8191
+   ]
+  ]
+ },
+ "median_cadence_s": 32.84646713733673,
+ "n_points": 9,
+ "reduce_session_dir": "data/reduced/ALMITA-WEB-SMALL-RUN-01/REDUCE-20260919-225900-910411",
+ "span_minutes": 4.334629261493683
+}
