@@ -104,6 +104,10 @@ def run_simulation(mode: str, body: Dict[str, Any]) -> Dict[str, Any]:
         seed=int(body.get("seed", 1)),
     )
 
+    if JOBS.is_alive(session_id):
+        # double click / second tab: never start a second thread on the same session (backend is the authority, not the button state)
+        return envelope(blocked=True, reason=f"a run for session {session_id} is already in progress")
+
     def _job() -> None:
         import asyncio
         try:

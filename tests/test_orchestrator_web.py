@@ -127,13 +127,17 @@ def test_start_requires_confirm_true():
 
 def test_start_never_shell_executes_bogus_path(monkeypatch):
     # A path containing shell metacharacters must be treated as a literal
-    # (failing) filename by json.loads(Path(...).read_text()) — never
-    # interpolated into a shell command.
+    # (invalid) path — never interpolated into a shell command, never read:
+    # web polish tightened this from a 500 (FileNotFoundError) to a 400 at the
+    # HTTP boundary because only data/mosaic/<campaign>/observation_resolved.json is accepted.
+    called = []
+    monkeypatch.setattr(observation_orchestrator, "run_observation", lambda *a, **k: called.append(a) or {})
     with running_server() as base:
         status, body = _post(f"{base}/api/observe/start",
                               {"resolved_plan_path": "; rm -rf / #", "confirm": True})
-        assert status == 500
-        assert "FileNotFoundError" in body["error"] or "No such file" in body["error"]
+        assert status == 400
+        assert "resolved_plan_path" in body["error"]
+    assert not called
 
 
 def test_start_delegates_to_orchestrator_run_observation(monkeypatch):
@@ -145,12 +149,13 @@ def test_start_delegates_to_orchestrator_run_observation(monkeypatch):
         return {"orchestrator_state": "RUNNING"}
 
     monkeypatch.setattr(observation_orchestrator, "run_observation", fake_run)
+    plan_path = str(server_mod.ASSET_ROOT / "X-20260101-00:00:00" / "observation_resolved.json")
     with running_server() as base:
         status, body = _post(f"{base}/api/observe/start",
-                              {"resolved_plan_path": "/x/observation_resolved.json", "confirm": True})
+                              {"resolved_plan_path": plan_path, "confirm": True})
         assert status == 200
         assert body["orchestrator_state"] == "RUNNING"
-    assert captured["path"] == "/x/observation_resolved.json"
+    assert captured["path"] == plan_path
     assert captured["yes"] is True  # browser's confirm click IS the operator GO
 
 

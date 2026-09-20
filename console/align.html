@@ -1,16 +1,9 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Align</title><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Align</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
 <body>
-  <header class="topbar">
-    <div><h1>ALMITA ALIGN</h1><span class="readonly">ALIGNMENT ASSISTANT</span></div>
-    <nav class="obs-nav">
-      <a class="obs-nav-link" href="/observe.html">OBSERVE</a>
-      <a class="obs-nav-link active" href="/align.html">ALIGN</a>
-      <a class="obs-nav-link" href="/calibrate.html">CALIBRATE</a>
-    </nav>
-  </header>
+  <header id="almita-header"><h1>ALMITA ALIGN</h1></header>
 
   <main id="app">
     <section class="panel compact">
@@ -28,8 +21,8 @@
     <section class="panel compact">
       <header><h2>MODE</h2></header>
       <div class="obs-actions">
-        <button id="mode-solar" class="mode-btn active">SOLAR / DAY</button>
-        <button id="mode-hi" class="mode-btn">HI / NIGHT</button>
+        <button type="button" id="mode-solar" class="mode-btn active">SOLAR / DAY</button>
+        <button type="button" id="mode-hi" class="mode-btn">HI / NIGHT</button>
       </div>
     </section>
 
@@ -37,11 +30,14 @@
       <header><h2 id="mode-title">SOLAR ALIGNMENT</h2><span id="mode-badge" class="badge">—</span></header>
       <div id="mode-body" class="obs-summary">Loading…</div>
       <div class="obs-actions">
-        <button id="btn-plan">PLAN</button>
-        <button id="btn-preflight" disabled>PREFLIGHT</button>
-        <button id="btn-run-sim" disabled>RUN SIMULATION</button>
-        <button id="btn-run-real" disabled title="blocked by policy">RUN REAL</button>
+        <button type="button" id="btn-plan">PLAN</button>
+        <button type="button" id="btn-preflight" disabled>PREFLIGHT</button>
+        <button type="button" id="btn-run-sim" disabled>RUN SIMULATION</button>
+        <button type="button" id="btn-run-real" type="button" disabled title="blocked by policy">RUN REAL</button>
       </div>
+      <div class="reason" data-for="btn-preflight" role="status"></div>
+      <div class="reason" data-for="btn-run-sim" role="status"></div>
+      <div class="reason" data-for="btn-run-real" role="status"></div>
       <div id="preflight-checks" class="obs-checks"></div>
     </section>
 
@@ -53,25 +49,25 @@
         <h3>SYNC</h3>
         <div id="sync-status" class="obs-check-row status-block">SYNC BLOCKED</div>
         <div class="obs-actions">
-          <button id="btn-sync-prepare" disabled>PREPARE SYNC</button>
-          <button id="btn-sync-apply" disabled>APPLY SYNC</button>
+          <button type="button" id="btn-sync-prepare" disabled>PREPARE SYNC</button>
+          <button type="button" id="btn-sync-apply" disabled>APPLY SYNC</button>
         </div>
       </div>
     </section>
 
     <section id="hi-replay-panel" class="panel" hidden>
       <header><h2>HI REPLAY</h2></header>
-      <div class="obs-row"><label>SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/alignment/HI-..."></div>
-      <div class="obs-actions"><button id="btn-replay">REPLAY SESSION</button></div>
+      <div class="obs-row"><label for="replay-session-dir">SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/alignment/HI-..."></div>
+      <div class="obs-actions"><button type="button" id="btn-replay">REPLAY SESSION</button></div>
       <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
       <pre id="replay-summary" class="obs-summary"></pre>
     </section>
 
     <section id="hi-compare-panel" class="panel" hidden>
       <header><h2>COMPARE ALIGNMENTS</h2></header>
-      <div class="obs-row"><label>ANALYSIS DIR A</label><input type="text" id="compare-a"></div>
-      <div class="obs-row"><label>ANALYSIS DIR B</label><input type="text" id="compare-b"></div>
-      <div class="obs-actions"><button id="btn-compare">COMPARE</button></div>
+      <div class="obs-row"><label for="compare-a">ANALYSIS DIR A</label><input type="text" id="compare-a"></div>
+      <div class="obs-row"><label for="compare-b">ANALYSIS DIR B</label><input type="text" id="compare-b"></div>
+      <div class="obs-actions"><button type="button" id="btn-compare">COMPARE</button></div>
       <pre id="compare-summary" class="obs-summary"></pre>
     </section>
 
@@ -88,11 +84,13 @@
       <h3 id="modal-title">CONFIRM</h3>
       <dl class="kv" id="modal-body"></dl>
       <div class="obs-actions">
-        <button id="modal-cancel">CANCEL</button>
-        <button id="modal-confirm">CONFIRM</button>
+        <button type="button" id="modal-cancel">CANCEL</button>
+        <button type="button" id="modal-confirm">CONFIRM</button>
       </div>
     </div>
   </div>
 
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
   <script src="align.js"></script>
 </body></html>

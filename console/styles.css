@@ -102,3 +102,49 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .modal-overlay[hidden]{display:none}
 .modal{background:var(--panel);border:1px solid var(--line);padding:16px;min-width:320px;max-width:520px}
 .modal h3{margin:0 0 10px;font-size:13px;letter-spacing:.1em}
+
+/* ---- Web polish (additive): shared chrome, state colours, focus, responsive. ---- */
+[hidden]{display:none!important}                       /* .obs-row{display:grid} used to override the hidden attribute */
+.muted{color:var(--muted);font-weight:400}
+.topbar{flex-wrap:wrap;gap:8px 16px}
+.topbar h1{white-space:nowrap}
+.hdr-status{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.chip{display:inline-flex;gap:6px;align-items:baseline;border:1px solid var(--line);padding:2px 8px;font:11px/1.4 ui-monospace,monospace}
+.chip-label{color:var(--muted);letter-spacing:.06em;font-size:10px}
+.chip-value{font-weight:700}
+.site-footer{max-width:1400px;margin:18px auto 24px;padding:10px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;letter-spacing:.04em}
+.site-footer a{color:var(--accent)}
+.reason{padding:0 11px 8px;color:var(--warn);font-size:11px;min-height:0}
+.reason:empty{display:none}
+.banner.info{background:#10222b;color:var(--accent);border-color:#24506a}
+.run-kind{padding:8px 11px;font:700 12px/1.4 ui-monospace,monospace;letter-spacing:.04em}
+.progress-wrap{display:flex;align-items:center;gap:10px;padding:0 11px 8px}
+.progress-wrap progress{flex:1;min-width:120px;height:14px;accent-color:var(--accent)}
+.danger-action{background:var(--warn)!important;color:#1d1405!important}
+.danger-action:disabled{background:var(--line)!important;color:var(--muted)!important}
+button:disabled,.mode-btn:disabled,.scenario-btn:disabled{cursor:not-allowed;opacity:.6}
+button[aria-busy="true"]{cursor:progress}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.table-wrap{overflow-x:auto;padding:0 11px 11px}
+.status-table{border-collapse:collapse;width:100%;font:12px/1.5 ui-monospace,monospace}
+.status-table th{text-align:left;font-size:10px;letter-spacing:.08em;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line)}
+.status-table td{padding:6px 8px;border-bottom:1px solid #1b262d;vertical-align:top}
+.obs-summary{overflow-x:auto}
+.status-up,.status-alive,.status-connected,.status-success,.status-completed,.status-available{color:var(--ok)}
+.status-connecting,.status-busy,.status-partial,.status-stopping,.status-preflight,.status-planned,.status-not_ready,.status-warning{color:var(--warn)}
+.status-down,.status-disconnected,.status-blocked,.status-block{color:var(--error)}
+.status-not_exposed,.status-optional{color:var(--muted)}
+.chip-value.status-not_ready{color:var(--error)}
+@media(max-width:700px){
+  .obs-row{grid-template-columns:1fr;gap:4px}
+  .obs-images{flex-wrap:wrap}.obs-images img{width:100%;max-width:340px}
+  .obs-nav{flex-wrap:wrap;margin-left:0;gap:6px 12px}
+  .kv{grid-template-columns:1fr}
+  .thumbs{flex-wrap:wrap}.thumbs a{flex:1 1 140px}
+  .obs-actions{flex-wrap:wrap}
+  main{padding:8px}
+}
+.obs-actions .mode-btn,.obs-actions .scenario-btn{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
+.obs-actions .mode-btn.active,.obs-actions .scenario-btn.active{background:var(--accent);color:#06121a;border-color:var(--accent)}
+.card dd{overflow-wrap:anywhere}
+@media(max-width:900px){.topbar .obs-nav{margin-left:0}}

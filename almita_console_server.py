@@ -13,11 +13,14 @@ startup is purely informational (read from local interface configuration).
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
+import json
 import shutil
 import signal
 import socket
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from serve_dashboard import make_server
@@ -48,6 +51,8 @@ def prepare_console_web(source_dir: Path, runtime_dir: Path, public_root: Path) 
     public_root.mkdir(parents=True, exist_ok=True)
     for name in ("styles.css", "app.js", "spectral_stack_3d.js"):
         shutil.copyfile(source_dir / name, public_root / name)
+    if (source_dir / "common.js").is_file():          # shared web helpers (optional: a source dir without it still prepares)
+        shutil.copyfile(source_dir / "common.js", public_root / "common.js")
     html = (source_dir / "index.html").read_text()
     html = html.replace('href="styles.css"', f'href="styles.css?v={_asset_version(source_dir / "styles.css")}"')
     html = html.replace('src="app.js"', f'src="app.js?v={_asset_version(source_dir / "app.js")}"')
@@ -55,6 +60,8 @@ def prepare_console_web(source_dir: Path, runtime_dir: Path, public_root: Path) 
         'src="spectral_stack_3d.js"',
         f'src="spectral_stack_3d.js?v={_asset_version(source_dir / "spectral_stack_3d.js")}"',
     )
+    if (source_dir / "common.js").is_file():
+        html = html.replace('src="common.js"', f'src="common.js?v={_asset_version(source_dir / "common.js")}"')
     (public_root / "index.html").write_text(html)
     # Vendored third-party (SPECTRAL STACK 3D's three.js) - large and never
     # edited by us, so symlinked whole rather than copied like the small
@@ -75,6 +82,20 @@ def prepare_console_web(source_dir: Path, runtime_dir: Path, public_root: Path) 
             raise FileExistsError(f"{link} exists and is not the expected runtime symlink")
     link.symlink_to(runtime_dir, target_is_directory=True)
     return public_root
+
+
+def write_version_json(public_root: Path) -> Path:
+    """version.json for the footer: git short SHA + start time + hostname. No secrets, no paths."""
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT), capture_output=True, text=True, timeout=3).stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        sha = "unknown"
+    info = {"project": "ALMITA", "author": "Felipe Fridman", "project_url": "https://github.com/almita-radio/almita", "component": "field_console",
+            "git_short_sha": sha, "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "hostname": socket.gethostname(),
+            "transport": "HTTP (LAN, no TLS, no authentication)"}
+    path = Path(public_root) / "version.json"
+    path.write_text(json.dumps(info, indent=2))
+    return path
 
 
 def list_local_ipv4() -> list[str]:
@@ -106,7 +127,13 @@ def main() -> int:
     args = parser.parse_args()
 
     public_root = prepare_console_web(Path(args.console_source), Path(args.runtime_dir), Path(args.public_root))
-    server = make_server(public_root, bind=args.bind, port=args.port)
+    write_version_json(public_root)
+    try:
+        server = make_server(public_root, bind=args.bind, port=args.port)
+    except OSError as exc:
+        reason = "port already in use (another instance or service holds it; nothing was killed)" if exc.errno == errno.EADDRINUSE else str(exc)
+        print(f"ALMITA CONSOLE ERROR cannot bind {args.bind}:{args.port}: {reason}", flush=True)
+        return 2
 
     def stop(*_):
         raise KeyboardInterrupt

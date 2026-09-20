@@ -1,18 +1,20 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Field Console</title><link rel="stylesheet" href="styles.css"></head>
-<body>
+  <title>ALMITA Field Console</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+<body data-version-url="/version.json">
   <header class="topbar">
     <div><h1>ALMITA FIELD CONSOLE</h1><span class="readonly">READ ONLY</span></div>
     <nav class="obs-nav">
       <a class="obs-nav-link" id="nav-observe" href="#">OBSERVE</a>
+      <a class="obs-nav-link" id="nav-status" href="#">STATUS</a>
       <a class="obs-nav-link active" href="#">MONITOR</a>
       <a class="obs-nav-link" href="#last-session">LAST SESSION</a>
     </nav>
     <dl><div><dt>SYSTEM</dt><dd id="system-badge" class="badge">—</dd></div>
       <div><dt>UTC</dt><dd id="clock">—</dd></div>
-      <div><dt>UPDATED</dt><dd id="updated">—</dd></div></dl>
+      <div><dt>UPDATED (UTC)</dt><dd id="updated">—</dd></div>
+      <div><dt>LINK</dt><dd id="link-state" class="badge">—</dd></div></dl>
   </header>
   <div id="connection" class="banner connection" hidden>DATA CONNECTION DEGRADED — showing last valid status</div>
   <div id="loading" class="loading">CONNECTING TO CONSOLE WATCHER…</div>
@@ -70,14 +72,18 @@
       <h2>LAST KNOWN SESSION</h2><div id="last-session-kv" class="kv"></div>
     </section>
   </main>
+  <footer id="almita-footer"></footer>
   <script src="vendor/three/three.min.js"></script>
   <script src="vendor/three/OrbitControls.js"></script>
   <script src="spectral_stack_3d.js"></script>
+  <script src="common.js"></script>
   <script src="app.js"></script>
   <script>
     // Points OBSERVE at the orchestrator's own API/UI server (a separate
     // process/port from this read-only console) — never touches app.js.
     document.getElementById("nav-observe").href =
       location.protocol + "//" + location.hostname + ":8090/observe.html";
+    document.getElementById("nav-status").href =
+      location.protocol + "//" + location.hostname + ":8090/status.html";
   </script>
 </body></html>

@@ -4,7 +4,9 @@ const CONFIG={root:PARAMETERS.get("root")||window.ALMITA_RUNTIME_ROOT||"/runtime
 const $=id=>document.getElementById(id);
 const safe=(v,fallback="—")=>v===null||v===undefined||v===""?fallback:v;
 const num=(v,d=1)=>typeof v==="number"?v.toLocaleString(undefined,{maximumFractionDigits:d}):safe(v);
-const pair=(label,value)=>`<dt>${label}</dt><dd>${safe(value)}</dd>`;
+// Backend/watcher strings (errors, session names, paths) are inserted as TEXT: escape before they reach innerHTML.
+const esc=v=>String(v===null||v===undefined?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pair=(label,value)=>`<dt>${label}</dt><dd>${esc(safe(value))}</dd>`;
 const badgeClass=v=>`badge status-${String(v).toLowerCase()}`;
 let lastValid=null;
 
@@ -48,10 +50,19 @@ function _appendHmsToSummaryLine(line){
   return `${line}   (${_hhmmss(seconds)})`;
 }
 
+// Every fetch is bounded: a stalled watcher/server must show as DISCONNECTED, not as an eternal spinner.
+const FETCH_TIMEOUT_MS=8000;
 async function fetchJson(name){
-  const response=await fetch(`${CONFIG.root}/${name}`,{cache:"no-store"});
-  if(!response.ok)throw new Error(`${name}: HTTP ${response.status}`);
-  return response.json();
+  const ctl=typeof AbortController==="function"?new AbortController():null;
+  const timer=ctl?setTimeout(()=>ctl.abort(),FETCH_TIMEOUT_MS):null;
+  try{
+    const response=await fetch(`${CONFIG.root}/${name}`,{cache:"no-store",signal:ctl?ctl.signal:undefined});
+    if(!response.ok)throw new Error(`${name}: HTTP ${response.status}`);
+    return await response.json();
+  }catch(error){
+    if(error&&error.name==="AbortError")throw new Error(`${name}: no response within ${FETCH_TIMEOUT_MS/1000} s`);
+    throw error;
+  }finally{if(timer)clearTimeout(timer)}
 }
 
 // Collapses wifi's state + most relevant detail into one line, matching
@@ -357,8 +368,8 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
   const freqLabel=rfiRef.center_frequency_hz==null?"—":`${num(rfiRef.center_frequency_hz/1e6,3)} MHz`;
   const gainLabel=rfiRef.gain_db==null?"—":`${num(rfiRef.gain_db,1)} dB`;
   $("rfi-caption").innerHTML=
-    `<b>ANTENNA B / RFI REF</b> — RTL-SDR V3 — ${freqLabel} — gain ${gainLabel} — `+
-    `updated ${safe(rfiRef.spectrum_updated_utc||rfiRef.waterfall_updated_utc||rfiRef.last_update_utc)}`;
+    `<b>ANTENNA B / RFI REF</b> — RTL-SDR V3 — ${esc(freqLabel)} — gain ${esc(gainLabel)} — `+
+    `updated ${esc(safe(rfiRef.spectrum_updated_utc||rfiRef.waterfall_updated_utc||rfiRef.last_update_utc))}`;
 
   const thumbs=$("rfi-thumbs"),placeholder=$("rfi-products-placeholder");
   const specCanvas=$("rfi-spectrum-canvas"),wfCanvas=$("rfi-waterfall-canvas"),mapImg=$("rfi-map-thumb");
@@ -471,8 +482,24 @@ function renderLastSession(lastSession){
   ].join("");
 }
 
+// LIVE / STALE / DISCONNECTED of THIS page's data link: LIVE = the last poll worked AND the status file is fresh;
+// STALE = polls work but the watcher stopped updating the file; DISCONNECTED = polls fail.
+const LINK={failures:0,lastOkAt:0,statusUpdatedMs:NaN,connectedOnce:false};
+function linkState(now=Date.now()){
+  if(LINK.failures>=2)return"DISCONNECTED";
+  if(!LINK.connectedOnce)return"CONNECTING";
+  const age=Number.isFinite(LINK.statusUpdatedMs)?now-LINK.statusUpdatedMs:Infinity;
+  return age>3*CONFIG.pollMs+4000?"STALE":"LIVE";
+}
+function renderLink(){
+  const el=$("link-state");if(!el)return;
+  const state=linkState();
+  el.textContent=state;el.className=badgeClass(state);
+}
+
 function render(status){
   lastValid=status;$("loading").hidden=true;$("app").hidden=false;$("connection").hidden=true;
+  LINK.statusUpdatedMs=Date.parse(status.updated_utc);renderLink();
   const systemState=status.system_state||"READY";
   $("system-badge").textContent=systemState;$("system-badge").className=badgeClass(systemState);
   $("updated").textContent=_shortTime(status.updated_utc);
@@ -488,12 +515,16 @@ function render(status){
   renderLastSession(status.last_session);
 }
 
+let _pollInFlight=false;
 async function poll(){
-  try{render(await fetchJson("almita_status.json"))}
+  if(_pollInFlight)return;                     // never two overlapping polls (slow backend)
+  _pollInFlight=true;
+  try{render(await fetchJson("almita_status.json"));LINK.failures=0;LINK.lastOkAt=Date.now();LINK.connectedOnce=true;renderLink()}
   catch(error){
+    LINK.failures+=1;renderLink();
     $("connection").hidden=false;$("connection").textContent=`DATA CONNECTION DEGRADED — ${error.message}`;
     if(!lastValid)$("loading").textContent="DATA CONNECTION DEGRADED — waiting for console watcher";
-  }
+  }finally{_pollInFlight=false}
 }
 
 function syncJson(name){
@@ -503,9 +534,13 @@ function syncJson(name){
 
 function start(){
   if(PARAMETERS.get("snapshot")==="1"){const status=syncJson("almita_status.json");if(status)render(status);return}
-  poll();setInterval(poll,CONFIG.pollMs);
-  setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z"},1000);
+  poll();
+  // One poll timer; no polling while the tab is hidden (it resumes immediately on return).
+  setInterval(()=>{if(!document.hidden)poll()},CONFIG.pollMs);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
+  setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z";renderLink()},1000);
+  if(window.AlmitaUI&&AlmitaUI.mountFooter)AlmitaUI.mountFooter();
 }
 window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,
-  drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG};
+  drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG,linkState,LINK};
 start();

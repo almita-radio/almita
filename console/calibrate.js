@@ -3,38 +3,47 @@
 // the backend - this file only presents, orchestrates, and polls.
 (function () {
   "use strict";
-  const apiRoot = `${location.protocol}//${location.hostname}:${location.port || 8090}`;
+  const U = window.AlmitaUI;
+  U.mountHealthStrip(U.mountHeader("CALIBRATE", "CALIBRATION"));
+  U.mountFooter();
   let scenario = "HEALTHY";
   let currentSessionId = null;
-  let pollTimer = null;
+  let sessionPoller = null;
+  let pollError = false;
 
-  function showError(message) {
-    const banner = document.getElementById("error-banner");
-    banner.textContent = message;
-    banner.hidden = !message;
-  }
+  function showError(message) { U.showError(document.getElementById("error-banner"), message); }
   async function getJSON(path) {
-    const res = await fetch(`${apiRoot}${path}`, { cache: "no-store" });
-    return res.json();
+    const r = await U.api(path);
+    if (!r.ok) throw new Error(U.errorText(r.error));
+    return r.data;
   }
-  async function postJSON(path, body) {
-    const res = await fetch(`${apiRoot}${path}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
-    });
-    return res.json();
+  async function postJSON(path, body, timeoutMs) {
+    const r = await U.api(path, { method: "POST", body: body || {}, timeoutMs: timeoutMs || 30000 });
+    if (!r.ok) throw new Error(U.errorText(r.error));
+    return r.data;
   }
-  function badgeClass(text) { return "badge status-" + String(text || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "-"); }
+  const msg = (err) => (err && err.message) || String(err);
+  function badgeClass(text) { return "badge " + U.stateClass(text); }
   function verifyTag(v) {
-    if (!v) return "";
+    if (!v) return null;
     const cls = v === "VERIFIED_BY_DEVICE_READBACK" ? "verify-device"
               : v === "VERIFIED_BY_SERVICE_COMMAND_LINE" ? "verify-service" : "verify-expected";
-    return `<span class="verify-tag ${cls}">${v.replace(/_/g, " ")}</span>`;
+    const span = document.createElement("span");
+    span.className = "verify-tag " + cls;
+    span.textContent = String(v).replace(/_/g, " ");
+    return span;
   }
 
-  function card(label, value, tag) {
+  // Values come from the backend (device read-back, service command line): they are inserted as TEXT, never as markup.
+  function card(label, value, tagEl) {
     const el = document.createElement("div");
     el.className = "card";
-    el.innerHTML = `<dt>${label}</dt><dd>${value}${tag ? " " + tag : ""}</dd>`;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.appendChild(document.createTextNode(String(value)));
+    if (tagEl) { dd.appendChild(document.createTextNode(" ")); dd.appendChild(tagEl); }
+    el.append(dt, dd);
     return el;
   }
 
@@ -43,16 +52,16 @@
       const status = await getJSON("/api/calibrate/status");
       const d = status.data || {};
       const cards = document.getElementById("receiver-cards");
-      cards.innerHTML = "";
+      cards.textContent = "";
       const r = d.receiver || {};
       const field = (obj) => obj && typeof obj === "object" ? obj : { value: obj, verification: null };
       cards.appendChild(card("SERIAL", r.serial || "—"));
       const cf = field(r.center_frequency_hz);
-      cards.appendChild(card("CENTER FREQ", cf.value ? `${(cf.value / 1e6).toFixed(6)} MHz` : "—", verifyTag(cf.verification)));
+      cards.appendChild(card("CENTER FREQ", U.mhz(cf.value), verifyTag(cf.verification)));
       const sr = field(r.sample_rate_hz);
-      cards.appendChild(card("SAMPLE RATE", sr.value ? `${(sr.value / 1e6).toFixed(2)} MS/s` : "—", verifyTag(sr.verification)));
+      cards.appendChild(card("SAMPLE RATE", U.msps(sr.value), verifyTag(sr.verification)));
       const gain = field(r.gain_db);
-      cards.appendChild(card("GAIN", gain.value != null ? `${gain.value} dB` : "—", verifyTag(gain.verification)));
+      cards.appendChild(card("GAIN", U.finite(gain.value) ? `${gain.value} dB` : "—", verifyTag(gain.verification)));
       const biast = field(r.bias_t_state);
       cards.appendChild(card("BIAS-T", biast.value || "—", verifyTag(biast.verification)));
       const tuner = field(r.tuner_type);
@@ -60,7 +69,7 @@
 
       const fa = d.frequency_audit;
       document.getElementById("frequency-audit").textContent = fa
-        ? `${fa.label}\nservice center frequency: ${fa.service_center_frequency_hz} Hz\nnominal HI rest: ${fa.nominal_hi_rest_hz} Hz\ndifference: ${fa.difference_hz} Hz (configuration difference - NOT a measured frequency error)`
+        ? `${fa.label}\nservice center frequency: ${U.mhz(fa.service_center_frequency_hz)} (${fa.service_center_frequency_hz} Hz)\nnominal HI rest: ${U.mhz(fa.nominal_hi_rest_hz)} (${fa.nominal_hi_rest_hz} Hz)\ndifference: ${fa.difference_hz} Hz (configuration difference - NOT a measured frequency error)`
         : "";
 
       // Fase A: four DELIBERATELY SEPARATE concepts, never merged into one
@@ -71,11 +80,11 @@
       document.getElementById("st-main-resource").textContent = resource.status || "UNKNOWN";
 
       const workflowEl = document.getElementById("st-calibration-workflow");
-      const workflowActive = d.calibration_workflow_active || pollTimer !== null;
+      const workflowActive = d.calibration_workflow_active || sessionPoller !== null;
       workflowEl.textContent = workflowActive ? "SIMULATION RUNNING" : "IDLE";
 
       const busy = resource.status !== "FREE";
-      document.getElementById("btn-run-real").disabled = true; // real capture from web not wired this iteration
+      U.setEnabled(document.getElementById("btn-run-real"), false, "blocked by policy: real capture is not wired to hardware from the web");
       const realCalEl = document.getElementById("st-real-calibration");
       const reasonEl = document.getElementById("real-calibration-reason");
       realCalEl.textContent = "BLOCKED";
@@ -90,8 +99,9 @@
       renderGainTable(d.gain_table);
       renderSessionList(d.sessions || []);
       renderProfileList(d.profiles || []);
-      showError("");
-    } catch (err) { showError(`Status request failed: ${err}`); }
+      if (pollError) { showError(""); pollError = false; }
+      return true;
+    } catch (err) { showError(`Status request failed: ${msg(err)}`); pollError = true; return false; }
   }
 
   function renderGainTable(gt) {
@@ -106,8 +116,8 @@
 
   function renderSessionList(sessions) {
     const el = document.getElementById("session-list");
-    el.innerHTML = "";
-    if (!sessions.length) { el.innerHTML = '<div class="obs-check-row">NO CALIBRATION SESSION YET</div>'; return; }
+    el.textContent = "";
+    if (!sessions.length) { const row = document.createElement("div"); row.className = "obs-check-row"; row.textContent = "NO CALIBRATION SESSION YET"; el.appendChild(row); return; }
     for (const s of sessions) {
       const row = document.createElement("div");
       row.className = "obs-check-row";
@@ -117,8 +127,8 @@
   }
   function renderProfileList(profiles) {
     const el = document.getElementById("profile-list");
-    el.innerHTML = "";
-    if (!profiles.length) { el.innerHTML = '<div class="obs-check-row">NO PROFILE</div>'; return; }
+    el.textContent = "";
+    if (!profiles.length) { const row = document.createElement("div"); row.className = "obs-check-row"; row.textContent = "NO PROFILE"; el.appendChild(row); return; }
     for (const p of profiles) {
       const row = document.createElement("div");
       row.className = "obs-check-row";
@@ -128,43 +138,50 @@
   }
 
   document.querySelectorAll(".scenario-btn").forEach((btn) => {
+    btn.setAttribute("aria-pressed", String(btn.classList.contains("active")));
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".scenario-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".scenario-btn").forEach((b) => { b.classList.remove("active"); b.setAttribute("aria-pressed", "false"); });
       btn.classList.add("active");
+      btn.setAttribute("aria-pressed", "true");
       scenario = btn.dataset.scenario;
     });
   });
 
   async function doRunSimulation() {
-    document.getElementById("btn-run-sim").disabled = true;
     try {
-      const res = await postJSON("/api/calibrate/run", { scenario, n_captures: 5, capture_seconds: 1.0 });
-      if (res.blocked) { showError(res.reason || "RUN blocked"); document.getElementById("btn-run-sim").disabled = false; return; }
+      const res = await postJSON("/api/calibrate/run", { scenario, n_captures: 5, capture_seconds: 1.0 }, 30000);
+      if (res.blocked) { showError(res.reason || "RUN blocked"); return; }
+      showError("");
       currentSessionId = res.data.session_id;
       document.getElementById("overview-panel").hidden = false;
       document.getElementById("st-calibration-workflow").textContent = "SIMULATION RUNNING";
       pollSession();
-    } catch (err) { showError(`RUN failed: ${err}`); document.getElementById("btn-run-sim").disabled = false; }
+    } catch (err) { showError(`RUN failed: ${msg(err)}`); }
   }
 
   function pollSession() {
-    if (pollTimer) clearInterval(pollTimer);
-    const tick = async () => {
-      try {
-        const res = await getJSON(`/api/calibrate/session/${encodeURIComponent(currentSessionId)}`);
-        if (res.blocked) return;
-        renderResult(res.data);
-        if (!res.data.job_running) {
-          clearInterval(pollTimer); pollTimer = null;
-          document.getElementById("btn-run-sim").disabled = false;
-          document.getElementById("btn-profile-build").disabled = !res.data.result;
-          await refreshStatus();
-          document.getElementById("st-calibration-workflow").textContent = "COMPLETED";
-        }
-      } catch (err) { /* transient */ }
-    };
-    tick();
-    pollTimer = setInterval(tick, 2000);
+    if (sessionPoller) sessionPoller.stop();
+    const sid = currentSessionId;
+    const runBtn = document.getElementById("btn-run-sim");
+    U.setEnabled(runBtn, false, "a calibration simulation is running");
+    sessionPoller = U.poller(async () => {
+      const r = await U.api(`/api/calibrate/session/${encodeURIComponent(sid)}`, { timeoutMs: 10000 });
+      if (!r.ok) { showError(r.error); pollError = true; return false; }
+      const res = r.data;
+      if (res.blocked) return true;                    // session not visible yet: keep waiting
+      if (pollError) { showError(""); pollError = false; }
+      renderResult(res.data);
+      if (!res.data.job_running) {
+        if (sessionPoller) sessionPoller.stop();
+        sessionPoller = null;
+        U.setEnabled(runBtn, true, "");
+        U.setEnabled(document.getElementById("btn-profile-build"), !!res.data.result, "the run has no result to build a profile from");
+        await refreshStatus();
+        document.getElementById("st-calibration-workflow").textContent = "COMPLETED";
+      }
+      return true;
+    }, { intervalMs: 2000, hiddenIntervalMs: 15000 });
+    sessionPoller.start();
   }
 
   function renderResult(data) {
@@ -174,25 +191,32 @@
     badge.textContent = state.phase || "RUNNING";
     badge.className = badgeClass(badge.textContent);
     if (!result) return;
-
+    const captures = Array.isArray(result.per_capture) ? result.per_capture : [];
     const cardsEl = document.getElementById("overview-cards");
-    cardsEl.innerHTML = "";
-    const worstClip = result.per_capture.reduce((worst, c) => {
+    cardsEl.textContent = "";
+    if (!captures.length) {                               // empty data: say so instead of crashing on captures[0]
+      cardsEl.appendChild(card("RESULT", "No captures in this result yet"));
+      return;
+    }
+    const worstClip = captures.reduce((worst, c) => {
       const order = ["OK", "WARNING", "CLIPPED", "UNKNOWN"];
-      return order.indexOf(c.clipping.status) > order.indexOf(worst) ? c.clipping.status : worst;
+      return order.indexOf((c.clipping || {}).status) > order.indexOf(worst) ? c.clipping.status : worst;
     }, "OK");
-    const minBand = Math.min(...result.per_capture.map((c) => c.usable_band_fraction));
+    const bands = captures.map((c) => c.usable_band_fraction).filter(U.finite);
+    const minBand = bands.length ? Math.min(...bands) : NaN;
+    const first = captures[0];
     cardsEl.appendChild(card("CLIPPING", worstClip));
-    cardsEl.appendChild(card("HEADROOM", `${result.per_capture[0].clipping.percentile_margin_codes?.toFixed(0) ?? "—"} codes`));
-    cardsEl.appendChild(card("USABLE BAND", `${(minBand * 100).toFixed(1)}%`));
-    cardsEl.appendChild(card("STABILITY", result.stability ? `${(result.stability.power_rms_fraction * 100).toFixed(3)}%` : "n/a"));
+    cardsEl.appendChild(card("HEADROOM", `${U.fixed((first.clipping || {}).percentile_margin_codes, 0)} codes`));
+    cardsEl.appendChild(card("USABLE BAND", U.finite(minBand) ? `${(minBand * 100).toFixed(1)}%` : "—"));
+    cardsEl.appendChild(card("STABILITY", result.stability && U.finite(result.stability.power_rms_fraction) ? `${(result.stability.power_rms_fraction * 100).toFixed(3)}%` : "n/a"));
     cardsEl.appendChild(card("QUALITY", result.quality ? result.quality.verdict : "—"));
 
     document.getElementById("stability-panel").hidden = !result.stability;
     if (result.stability) {
+      const exp = (v) => (U.finite(v) ? v.toExponential(3) : "—");
       document.getElementById("stability-summary").textContent =
-        `power_rms_fraction: ${result.stability.power_rms_fraction.toExponential(3)}\n` +
-        `drift_slope_per_hour: ${result.stability.drift_slope_per_hour.toExponential(3)}\n` +
+        `power_rms_fraction: ${exp(result.stability.power_rms_fraction)}\n` +
+        `drift_slope_per_hour: ${exp(result.stability.drift_slope_per_hour)} (per hour)\n` +
         `WARM-UP DETECTED: ${result.stability.warmup_detected}\n` +
         `WARM-UP RECOMMENDATION: ${result.stability.warmup_detected ? result.stability.warmup_reason : "NOT ESTABLISHED"}`;
     }
@@ -203,9 +227,9 @@
       ? JSON.stringify(temps, null, 2) : "No temperature sensors configured/available for this session.";
 
     document.getElementById("bandpass-panel").hidden = false;
-    drawBandpass(result.per_capture[0]);
+    drawBandpass(first);
     document.getElementById("bandpass-notes").textContent =
-      `usable_band_fraction: ${(minBand * 100).toFixed(1)}%  dc_half_width_hz: ${result.per_capture[0].dc_half_width_hz?.toFixed(0) ?? "—"}\n` +
+      `usable_band_fraction: ${U.finite(minBand) ? (minBand * 100).toFixed(1) + "%" : "—"}  dc_half_width_hz: ${U.fixed(first.dc_half_width_hz, 0, "Hz")}\n` +
       "RECOMMENDED MASK: DRAFT ONLY (not computed for a single simulated run - needs multiple captures under the same config)";
   }
 
@@ -217,7 +241,13 @@
     const canvas = document.getElementById("bandpass-canvas");
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const hist = pointCapture.sample_statistics.histogram;
+    const hist = ((pointCapture.sample_statistics || {}).histogram || []).map((v) => (U.finite(v) ? v : 0));
+    ctx.fillStyle = "#91a2ad";
+    ctx.font = "10px monospace";
+    if (!hist.length || !hist.some((v) => v > 0)) {      // empty / all-zero / NaN histogram: an explicit empty state, not a blank or broken chart
+      ctx.fillText("No histogram data yet", 6, 12);
+      return;
+    }
     const max = Math.max(...hist, 1);
     ctx.fillStyle = "#65b7d8";
     const barWidth = canvas.width / hist.length;
@@ -226,42 +256,64 @@
       ctx.fillRect(i * barWidth, canvas.height - h, Math.max(1, barWidth - 0.5), h);
     });
     ctx.fillStyle = "#91a2ad";
-    ctx.font = "10px monospace";
     ctx.fillText("ADC code histogram (raw sample statistics) — not the RF bandpass shape", 6, 12);
   }
 
   async function doReplay() {
     const sessionDir = document.getElementById("replay-session-dir").value.trim();
-    if (!sessionDir) return;
+    if (!sessionDir) { showError("REPLAY: enter a session directory (data/calibration/CAL-...)"); return; }
     try {
-      const res = await postJSON("/api/calibrate/replay", { session_dir: sessionDir });
-      document.getElementById("replay-summary").textContent = JSON.stringify(res.data || res, null, 2).slice(0, 4000);
-    } catch (err) { showError(`REPLAY failed: ${err}`); }
+      const res = await postJSON("/api/calibrate/replay", { session_dir: sessionDir }, 60000);
+      document.getElementById("replay-summary").textContent = res.blocked ? `BLOCKED: ${res.reason}` : JSON.stringify(res.data || res, null, 2).slice(0, 4000);
+      showError("");
+    } catch (err) { showError(`REPLAY failed: ${msg(err)}`); }
   }
   async function doCompare() {
     const a = document.getElementById("compare-a").value.trim();
     const b = document.getElementById("compare-b").value.trim();
-    if (!a || !b) return;
+    if (!a || !b) { showError("COMPARE: enter both session ids"); return; }
     try {
-      const res = await postJSON("/api/calibrate/compare", { session_a: a, session_b: b });
-      document.getElementById("compare-summary").textContent = JSON.stringify(res.data || res, null, 2);
-    } catch (err) { showError(`COMPARE failed: ${err}`); }
+      const res = await postJSON("/api/calibrate/compare", { session_a: a, session_b: b }, 60000);
+      document.getElementById("compare-summary").textContent = res.blocked ? `BLOCKED: ${res.reason}` : JSON.stringify(res.data || res, null, 2);
+      showError("");
+    } catch (err) { showError(`COMPARE failed: ${msg(err)}`); }
   }
   async function doProfileBuild() {
-    if (!currentSessionId) return;
+    if (!currentSessionId) { showError("PROFILE BUILD: run a calibration first"); return; }
     try {
-      const res = await postJSON("/api/calibrate/profile/build", { session_id: currentSessionId });
-      document.getElementById("profile-summary").textContent = JSON.stringify(res.data || res, null, 2);
+      const res = await postJSON("/api/calibrate/profile/build", { session_id: currentSessionId }, 60000);
+      document.getElementById("profile-summary").textContent = res.blocked ? `BLOCKED: ${res.reason}` : JSON.stringify(res.data || res, null, 2);
+      showError("");
       refreshStatus();
-    } catch (err) { showError(`PROFILE BUILD failed: ${err}`); }
+    } catch (err) { showError(`PROFILE BUILD failed: ${msg(err)}`); }
   }
 
-  document.getElementById("btn-run-sim").addEventListener("click", doRunSimulation);
-  document.getElementById("btn-refresh-status").addEventListener("click", refreshStatus);
-  document.getElementById("btn-replay").addEventListener("click", doReplay);
-  document.getElementById("btn-compare").addEventListener("click", doCompare);
-  document.getElementById("btn-profile-build").addEventListener("click", doProfileBuild);
+  // Page reload during a run: adopt a calibration job that is still running on the server instead of assuming IDLE.
+  async function recover() {
+    try {
+      const status = await getJSON("/api/calibrate/status");
+      const d = status.data || {};
+      const newest = (d.sessions || [])[0];
+      if (d.calibration_workflow_active && newest) {
+        currentSessionId = newest.session_id;
+        document.getElementById("overview-panel").hidden = false;
+        pollSession();
+      }
+    } catch (err) { /* best effort; the normal status poll reports connection problems */ }
+  }
 
-  refreshStatus();
-  setInterval(refreshStatus, 5000);
+  const runBtn = document.getElementById("btn-run-sim");
+  runBtn.addEventListener("click", U.guard(runBtn, doRunSimulation, "STARTING…"));
+  const refreshBtn = document.getElementById("btn-refresh-status");
+  refreshBtn.addEventListener("click", U.guard(refreshBtn, refreshStatus, "REFRESHING…"));
+  for (const [id, fn, busy] of [["btn-replay", doReplay, "REPLAYING…"], ["btn-compare", doCompare, "COMPARING…"], ["btn-profile-build", doProfileBuild, "BUILDING…"]]) {
+    const b = document.getElementById(id);
+    b.addEventListener("click", U.guard(b, fn, busy));
+  }
+  U.setEnabled(document.getElementById("btn-profile-build"), false, "run a calibration first");
+  U.setEnabled(document.getElementById("btn-run-real"), false, "blocked by policy: real capture is not wired to hardware from the web");
+
+  U.poller(refreshStatus, { intervalMs: 15000 }).start();   // refreshStatus polls the backend, which reads MAIN state: slow, and never while the tab is hidden
+  recover();
+  window.addEventListener("pagehide", () => { if (sessionPoller) sessionPoller.stop(); });
 })();

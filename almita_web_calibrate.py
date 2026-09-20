@@ -43,7 +43,13 @@ def get_status() -> Dict[str, Any]:
 
     deployment = read_current_deployment_state(DEFAULT_STATE_PATH)
     resource = get_sdr_resource_status()
-    handshake = probe_rtl_tcp_handshake("localhost", 1234, timeout=1.5)
+    # This status route is polled by the page. The handshake connects to the MAIN rtl_tcp (single-client): never do that while an
+    # observation/quicklook owns it - report it as not probed instead (the page shows the CONFIGURED/EXPECTED tier).
+    if resource.status.value in ("CLAIMED_BY_OBSERVATION", "CLAIMED_BY_QUICKLOOK"):
+        from calibration_engine.hardware_inspection import RtlTcpHandshakeInfo
+        handshake = RtlTcpHandshakeInfo(False, None, None, None, "NOT_PROBED", "not probed: MAIN SDR is in use by an observation")
+    else:
+        handshake = probe_rtl_tcp_handshake("localhost", 1234, timeout=1.5)
     cmdline = inspect_rtl_tcp_service_command_line(1234)
 
     receiver: Dict[str, Any] = {"receiver_id": "MAIN", "serial": KNOWN_RECEIVERS["MAIN"].serial,
@@ -122,6 +128,9 @@ def run_simulation(body: Dict[str, Any]) -> Dict[str, Any]:
     import threading
     from calibration_engine.session import CalibrationSession
 
+    if JOBS.any_alive(prefix="CAL-") or _RUN_LAUNCH_LOCK.locked():
+        # double click / second tab: one calibration run at a time (backend is the authority, not the button state)
+        return envelope(blocked=True, reason="a calibration run is already starting or in progress")
     scenario = body.get("scenario")
     args = SimpleNamespace(
         backend="simulated", receiver=body.get("receiver", "MAIN"), session_root=SESSION_ROOT,

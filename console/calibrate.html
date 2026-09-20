@@ -1,16 +1,9 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Calibrate</title><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Calibrate</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
 <body>
-  <header class="topbar">
-    <div><h1>ALMITA CALIBRATE</h1><span class="readonly">OPERATIONAL CALIBRATION</span></div>
-    <nav class="obs-nav">
-      <a class="obs-nav-link" href="/observe.html">OBSERVE</a>
-      <a class="obs-nav-link" href="/align.html">ALIGN</a>
-      <a class="obs-nav-link active" href="/calibrate.html">CALIBRATE</a>
-    </nav>
-  </header>
+  <header id="almita-header"><h1>ALMITA CALIBRATE</h1></header>
 
   <main id="app">
     <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.08em">
@@ -24,7 +17,7 @@
     </section>
 
     <section class="panel compact">
-      <header><h2>STATUS</h2><button id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
+      <header><h2>STATUS</h2><button type="button" id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
       <dl class="kv">
         <div><dt>ACTIVE SCIENCE OBSERVATION</dt><dd id="st-active-observation">—</dd></div>
         <div><dt>MAIN SDR RESOURCE</dt><dd id="st-main-resource">—</dd></div>
@@ -38,15 +31,17 @@
     <section id="run-panel" class="panel">
       <header><h2>SIMULATION</h2></header>
       <div class="obs-actions">
-        <button class="scenario-btn active" data-scenario="HEALTHY">HEALTHY</button>
-        <button class="scenario-btn" data-scenario="CLIPPED">CLIPPED</button>
-        <button class="scenario-btn" data-scenario="THERMAL_DRIFT">THERMAL_DRIFT</button>
-        <button class="scenario-btn" data-scenario="RFI_CONTAMINATED">RFI_CONTAMINATED</button>
+        <button type="button" class="scenario-btn active" data-scenario="HEALTHY">HEALTHY</button>
+        <button type="button" class="scenario-btn" data-scenario="CLIPPED">CLIPPED</button>
+        <button type="button" class="scenario-btn" data-scenario="THERMAL_DRIFT">THERMAL_DRIFT</button>
+        <button type="button" class="scenario-btn" data-scenario="RFI_CONTAMINATED">RFI_CONTAMINATED</button>
       </div>
       <div class="obs-actions">
-        <button id="btn-run-sim">RUN SIMULATION</button>
-        <button id="btn-run-real" disabled title="blocked - see STATUS panel above">RUN REAL</button>
+        <button type="button" id="btn-run-sim">RUN SIMULATION</button>
+        <button type="button" id="btn-run-real" disabled title="blocked - see STATUS panel above">RUN REAL</button>
       </div>
+      <div class="reason" data-for="btn-run-sim" role="status"></div>
+      <div class="reason" data-for="btn-run-real" role="status"></div>
     </section>
 
     <section id="overview-panel" class="panel" hidden>
@@ -78,23 +73,24 @@
 
     <section class="panel compact">
       <header><h2>REPLAY</h2></header>
-      <div class="obs-row"><label>SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/calibration/CAL-..."></div>
-      <div class="obs-actions"><button id="btn-replay">REPLAY SESSION</button></div>
+      <div class="obs-row"><label for="replay-session-dir">SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/calibration/CAL-..."></div>
+      <div class="obs-actions"><button type="button" id="btn-replay">REPLAY SESSION</button></div>
       <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
       <pre id="replay-summary" class="obs-summary"></pre>
     </section>
 
     <section class="panel compact">
       <header><h2>COMPARE SESSIONS</h2></header>
-      <div class="obs-row"><label>SESSION A</label><input type="text" id="compare-a"></div>
-      <div class="obs-row"><label>SESSION B</label><input type="text" id="compare-b"></div>
-      <div class="obs-actions"><button id="btn-compare">COMPARE</button></div>
+      <div class="obs-row"><label for="compare-a">SESSION A</label><input type="text" id="compare-a"></div>
+      <div class="obs-row"><label for="compare-b">SESSION B</label><input type="text" id="compare-b"></div>
+      <div class="obs-actions"><button type="button" id="btn-compare">COMPARE</button></div>
       <pre id="compare-summary" class="obs-summary"></pre>
     </section>
 
     <section class="panel compact">
       <header><h2>PROFILE (DRAFT)</h2></header>
-      <div class="obs-actions"><button id="btn-profile-build" disabled>BUILD DRAFT FROM LAST RUN</button></div>
+      <div class="obs-actions"><button type="button" id="btn-profile-build" disabled>BUILD DRAFT FROM LAST RUN</button></div>
+      <div class="reason" data-for="btn-profile-build" role="status"></div>
       <div id="profile-list" class="obs-checks"></div>
       <pre id="profile-summary" class="obs-summary"></pre>
     </section>
@@ -106,5 +102,7 @@
 
     <div id="error-banner" class="banner connection" hidden></div>
   </main>
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
   <script src="calibrate.js"></script>
 </body></html>

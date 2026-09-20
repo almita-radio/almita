@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Status</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header id="almita-header"><h1>ALMITA STATUS</h1></header>
+  <div id="error-banner" class="banner connection" hidden></div>
+  <main id="app">
+    <section class="panel" aria-labelledby="h-op">
+      <header><h2 id="h-op">OPERATIONAL READINESS</h2><span id="op-badge" class="badge">—</span></header>
+      <div id="op-reasons" class="obs-summary">Loading…</div>
+      <div class="obs-actions"><button id="btn-refresh" type="button">REFRESH NOW</button><span id="updated" class="muted">—</span></div>
+    </section>
+    <section class="panel" aria-labelledby="h-svc">
+      <header><h2 id="h-svc">SERVICES <span class="muted">(are the processes up?)</span></h2></header>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>SERVICE</th><th>STATE</th><th>DETAIL</th></tr></thead><tbody id="tbl-services"></tbody></table></div>
+    </section>
+    <section class="panel" aria-labelledby="h-dep">
+      <header><h2 id="h-dep">DEPENDENCIES <span class="muted">(what the instrument needs; read-only, nothing is connected to)</span></h2></header>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>DEPENDENCY</th><th>STATE</th><th>DETAIL</th></tr></thead><tbody id="tbl-deps"></tbody></table></div>
+    </section>
+    <section class="panel" aria-labelledby="h-wf">
+      <header><h2 id="h-wf">WORKFLOWS</h2></header>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>WORKFLOW</th><th>STATE</th><th>DETAIL</th></tr></thead><tbody id="tbl-workflows"></tbody></table></div>
+    </section>
+    <section class="panel compact" aria-labelledby="h-ver">
+      <h2 id="h-ver">BUILD</h2>
+      <dl class="kv" id="version-kv"></dl>
+    </section>
+  </main>
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
+  <script src="status.js"></script>
+</body></html>
