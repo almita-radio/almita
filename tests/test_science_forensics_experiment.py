@@ -321,7 +321,9 @@ def test_committed_plan_is_consistent_with_its_csvs():
         import hashlib
         assert hashlib.sha256(path.read_bytes()).hexdigest() == f["sha256"]
         assert plan["experiments"][name]["n_captures"] == f["n_rows"]
-    assert plan["readiness"]["verdict"].startswith(("READY FOR FIELD", "BLOCKED"))
+    # READY FOR FIELD is reserved for after a real, passing capture.py --preflight-only (see the field runbook)
+    assert plan["readiness"]["verdict"].startswith(("READY FOR LIVE PREFLIGHT", "BLOCKED"))
+    assert "READY FOR FIELD" not in plan["readiness"]["verdict"]
     assert set(plan["null_hypotheses"]) >= {"H0_time", "H0_sky", "H0_frequency"}
 
 

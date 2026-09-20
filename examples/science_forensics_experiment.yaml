@@ -828,7 +828,7 @@ negative_background_followup:
   interpretation: level stationary at a position and equal across positions -> negativity is a fixed REDUCE baseline offset; level drifting with
     time -> instrument gain/temperature; level tied to position -> sky/ground pickup
 readiness:
-  verdict: READY FOR FIELD (plan and analysis); execution is a manual field action
+  verdict: READY FOR LIVE PREFLIGHT (plan and analysis); execution is a manual field action
   software:
   - plan, CSVs and analysis validated on synthetic and replayed real data
   - capture.py --csv accepts explicit ordered lists with repeated coordinates (code audit; CSV validated against its own preflight rules)
