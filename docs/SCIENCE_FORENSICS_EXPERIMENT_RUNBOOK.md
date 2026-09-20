@@ -143,7 +143,7 @@ Median / p75 / p90 from the real timing of 4541 intervals in 34 campaigns: A 28.
 
 ## 13. Field readiness
 
-**READY FOR FIELD (plan and analysis).** Software: plan, CSVs, capture-compatibility (validated against `capture.py`'s own preflight rules), REDUCE/SCIENCE identity of
+**READY FOR LIVE PREFLIGHT (plan and analysis).** (Earlier wording said "READY FOR FIELD"; that status is now reserved for after a real, passing `capture.py --preflight-only`. Exact operator commands: `docs/SCIENCE_FORENSICS_FIELD_RUNBOOK.md`.) Software: plan, CSVs, capture-compatibility (validated against `capture.py`'s own preflight rules), REDUCE/SCIENCE identity of
 repeated coordinates (tested), analysis (synthetic and replayed real data). Operator prerequisites: mount and antenna deployed outdoors (indoors no real
 GOTO), manual `capture.py --csv`, start inside a `windows` result, `--preflight-only` first. Known limits: bracket interpolation is exact for linear drift
 and leaves curvature error for strongly non-linear wander (see the power test), the feature may be absent, OBSERVE is not modified.

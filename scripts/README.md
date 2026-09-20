@@ -9,6 +9,7 @@ root; run everything from the **repository root** (for example `python scripts/v
 | `calibration/` | `calibration_inventory.py` |
 | `hardware/` | `check_indi.py` |
 | `mount/` | `mount_slew_training.py` |
+| `science_forensics_field.py` | operator wrapper for the SCIENCE forensics field experiment: `status`, `precheck`, `preflight`, `run`, `postcheck`, `analyze` (calls the existing `capture.py`; see `docs/SCIENCE_FORENSICS_FIELD_RUNBOOK.md`) |
 | `validation/` | `science_acceptance_measure.py` (SCIENCE acceptance measurements) |
 | `legacy/` | first-era installation helpers (`setup_rpi.sh`, `inicio_rapido.sh`, `debug_install.sh`, Windows notes, Visual Studio project); they reference scripts that no longer exist |
 
