@@ -1,16 +1,19 @@
 <p align="center">
-  <img src="almita-logo.png" alt="ALMITA logo" width="100%">
+  <img src="almita-logo.png" alt="ALMITA 21 cm hydrogen line radio telescope" width="100%">
 </p>
 
 # ALMITA
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
-ALMITA is an amateur **21 cm neutral hydrogen radio telescope** built in **Chile** by **Felipe Fridman G.**
+ALMITA is an open-source amateur radio astronomy project: a **21 cm neutral hydrogen (HI) radio telescope** built in **Chile**
+by **Felipe Fridman G.** It observes the **1420 MHz hydrogen line** with a Raspberry Pi 5 and RTL-SDR receivers.
 Contact: **ffridman@gmail.com**
 
-It combines a Raspberry Pi 5, RTL-SDR receivers, INDI/OnStep mount control, automated sky planning, HDF5 acquisition and a
-lightweight local web console. It is **offline-first**: internet access is not required to observe.
+It combines INDI/OnStep mount control, automated sky planning, HDF5 acquisition and a lightweight local web console. It is
+**offline-first**: internet access is not required to observe.
+
+Project site: <https://almita-radio.github.io/almita/>
 
 ALMITA is mostly vibe-coded, extensively field-tested, occasionally threatened with a hammer, and still held together in
 suspiciously many places by **plastic cable ties**. This is considered temporary. It has also been considered temporary for

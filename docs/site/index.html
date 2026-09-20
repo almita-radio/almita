@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ALMITA — 21 cm Hydrogen Line Radio Telescope</title>
+  <meta name="description" content="Open-source amateur 21 cm hydrogen-line radio telescope built in Chile with a Raspberry Pi 5 and RTL-SDR: automated observing, reduction and beam-aware maps.">
+  <meta name="author" content="Felipe Fridman G.">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="https://almita-radio.github.io/almita/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ALMITA">
+  <meta property="og:title" content="ALMITA — 21 cm Hydrogen Line Radio Telescope">
+  <meta property="og:description" content="An amateur neutral-hydrogen radio telescope built in Chile with a Raspberry Pi 5 and RTL-SDR receivers. Relative, instrumental HI measurements; open source.">
+  <meta property="og:url" content="https://almita-radio.github.io/almita/">
+  <meta property="og:image" content="https://almita-radio.github.io/almita/og-image.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ALMITA 21 cm hydrogen line radio telescope logo">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ALMITA — 21 cm Hydrogen Line Radio Telescope">
+  <meta name="twitter:description" content="Amateur HI radio astronomy from Chile with a Raspberry Pi 5 and RTL-SDR.">
+  <meta name="twitter:image" content="https://almita-radio.github.io/almita/og-image.jpg">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "ALMITA",
+    "alternateName": "Antenna Listening Mostly to Interference, Tentatively Astronomy",
+    "description": "Open-source software and instrumentation workflow for an amateur 21 cm neutral hydrogen radio telescope built in Chile with a Raspberry Pi 5 and RTL-SDR receivers.",
+    "url": "https://almita-radio.github.io/almita/",
+    "codeRepository": "https://github.com/almita-radio/almita",
+    "programmingLanguage": "Python",
+    "image": "https://almita-radio.github.io/almita/og-image.jpg",
+    "author": {
+      "@type": "Person",
+      "name": "Felipe Fridman G."
+    },
+    "keywords": "21 cm hydrogen line, neutral hydrogen, HI radio astronomy, radio telescope, amateur radio astronomy, RTL-SDR, Raspberry Pi 5, 1420 MHz, Chile"
+  }
+  </script>
+
+  <style>
+    :root { --bg:#f4f7fc; --panel:#ffffff; --fg:#0e1a3d; --muted:#4a5878; --accent:#0b5fa5; --line:#d5deee; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--fg); line-height:1.6; }
+    main { max-width:960px; margin:0 auto; padding:24px 20px 56px; }
+    img.banner { width:100%; height:auto; display:block; border-radius:12px; border:1px solid var(--line); }
+    h1 { font-size:clamp(1.7rem,5vw,2.6rem); line-height:1.2; margin:1.1rem 0 .2rem; }
+    h2 { margin:2.2rem 0 .6rem; font-size:1.35rem; border-bottom:1px solid var(--line); padding-bottom:.3rem; }
+    .tagline { font-size:1.1rem; color:var(--muted); margin:0 0 1rem; }
+    .lead { font-size:1.1rem; }
+    a { color:var(--accent); }
+    a:focus-visible { outline:3px solid #f0a500; outline-offset:2px; }
+    .cta a { display:inline-block; margin:.3rem .6rem .3rem 0; padding:.55rem .9rem; border:1px solid var(--accent); border-radius:8px; text-decoration:none; font-weight:700; background:var(--panel); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+    pre.flow { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; overflow:auto; font-size:.95rem; }
+    .note { color:var(--muted); }
+    footer { margin-top:2.5rem; padding-top:1rem; border-top:1px solid var(--line); color:var(--muted); font-size:.95rem; }
+  </style>
+</head>
+<body>
+<main>
+  <img class="banner" src="almita-banner.jpg" width="1200" height="400" alt="ALMITA 21 cm hydrogen line radio telescope">
+
+  <h1>ALMITA — 21 cm Hydrogen Line Radio Telescope</h1>
+  <p class="tagline"><strong>Antenna Listening Mostly to Interference, Tentatively Astronomy</strong></p>
+
+  <p class="lead">
+    ALMITA is an open-source, amateur <strong>21 cm neutral hydrogen (HI) radio telescope</strong> built in
+    <strong>Chile</strong>. It listens to the <strong>1420 MHz hydrogen line</strong> with a
+    <strong>Raspberry Pi 5</strong>, <strong>RTL-SDR</strong> receivers and an INDI/OnStep equatorial mount,
+    and turns raw radio data into traceable spectra, velocity cubes and maps. It is an experimental
+    amateur radio astronomy project that works fully offline in the field.
+  </p>
+
+  <p class="cta">
+    <a href="https://github.com/almita-radio/almita">Source code on GitHub</a>
+    <a href="https://github.com/almita-radio/almita#readme">Project README</a>
+    <a href="https://github.com/almita-radio/almita/blob/main/docs/ALMITA_OVERVIEW.md">Project overview</a>
+  </p>
+
+  <h2>From antenna to maps: OBSERVE → REDUCE → SCIENCE</h2>
+  <pre class="flow">OBSERVE  →  REDUCE (V1, frozen)  →  SCIENCE (V1, frozen)
+   ↑ ALIGN · CALIBRATE · RFI_REF supporting systems</pre>
+  <div class="grid">
+    <div class="card"><strong>Automated observing</strong><br>Plans sky mosaics, steps the equatorial mount and records raw I/Q with pointing and environment metadata in HDF5.</div>
+    <div class="card"><strong>Deterministic reduction</strong><br>REDUCE V1 produces reproducible Level 1 spectra with masks, LSRK velocity, uncertainty and quality information.</div>
+    <div class="card"><strong>Beam-aware science products</strong><br>SCIENCE V1 grids the spectra into an LSRK velocity cube and relative integrated maps, with uncertainty and coverage maps.</div>
+    <div class="card"><strong>Relative calibration</strong><br>Receiver gain is characterised first, then kept fixed during a session, so observations can be compared.</div>
+    <div class="card"><strong>RFI monitoring</strong><br>An independent second SDR chain watches the local radio-frequency environment without touching the main capture.</div>
+    <div class="card"><strong>Offline operation</strong><br>Everything runs locally on a Raspberry Pi; no internet connection is needed to observe.</div>
+  </div>
+
+  <h2>Hardware</h2>
+  <p>
+    Raspberry Pi 5, an RTL-SDR Blog V4 as the science receiver and a second RTL-SDR for RFI monitoring, a Nooelec
+    Hydrogen LNA, a 1420 MHz feed on a modified grid reflector of about 90 × 60 cm, an equatorial mount with an OnStep
+    controller and INDI, and temperature sensors. The hardware is accessible, experimental and repairable.
+  </p>
+
+  <h2>Scientific honesty</h2>
+  <p>
+    Current HI measurements are <strong>relative and instrumental</strong>: ALMITA does not claim an absolute calibration.
+    The antenna beam used for mapping is an <strong>operator-configured, provisional model</strong> until a proper beam
+    characterisation is done, and no astrophysical interpretation is automated. Results are those of an experimental
+    amateur instrument, not of a professional observatory.
+  </p>
+
+  <h2>Why ALMITA exists</h2>
+  <p>
+    The project explores how far accessible hardware can be pushed toward careful, auditable amateur radio astronomy:
+    raw data are preserved, uncertainties are explicit and claims are conservative.
+  </p>
+  <p class="note">
+    Some parts are carefully engineered. Some parts are carefully attached with plastic cable ties.
+    Both approaches have survived surprisingly well so far.
+  </p>
+
+  <footer>
+    ALMITA is a personal, independent amateur project by Felipe Fridman G. · Chile ·
+    <a href="https://github.com/almita-radio/almita">github.com/almita-radio/almita</a>
+  </footer>
+</main>
+</body>
+</html>
