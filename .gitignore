@@ -35,6 +35,7 @@ wheels/
 # Logs y debugging
 *.log
 *.xml
+!docs/site/sitemap.xml
 debug_cache.xml
 indi_full_capture.xml
 telescope_properties_full.xml

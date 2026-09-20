@@ -26,6 +26,10 @@ end-to-end summary, an old GitHub README). They describe files by the paths they
 (`analyze_spectra.py`, `plot_sky_map.py`, ...) now live under [`scripts/`](../scripts/README.md), and the installation helpers they
 mention are in `scripts/legacy/`. Some diagrams they reference were never committed.
 
+## Public project page
+[`site/`](site/) is the source of the public GitHub Pages landing page (static HTML, `robots.txt`, `sitemap.xml`). It is the only
+directory the Pages workflow publishes; everything else under `docs/` is not deployed.
+
 ## Note on test names
 Several documents (notably the REDUCE and SCIENCE acceptance/freeze documents) refer to test files by bare name, for example
 `test_reduce_models.py`. Those files are in [`tests/`](../tests/); the documents are kept unedited as evidence.
