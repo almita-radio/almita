@@ -4,10 +4,10 @@ HDF5 layout/compression, beam-cutoff sensitivity. Each mode prints one JSON line
 re-typed. Modes that allocate a large cube run in their own process (peak RSS = ru_maxrss of that process) and
 are always preceded by the preflight estimate. Synthetic Level 1 or a real REDUCE session only - never RAW.
 
-  science_acceptance_measure.py mem NX NY NV          build+persist a synthetic cube, report estimate vs peak RSS
-  science_acceptance_measure.py precision SCIENCE_SESSION_DIR
-  science_acceptance_measure.py io SCIENCE_SESSION_DIR [--scratch DIR]
-  science_acceptance_measure.py cutoff REDUCE_SESSION_DIR BEAM_FWHM_DEG [--scratch DIR]
+  scripts/validation/science_acceptance_measure.py mem NX NY NV          build+persist a synthetic cube, report estimate vs peak RSS
+  scripts/validation/science_acceptance_measure.py precision SCIENCE_SESSION_DIR
+  scripts/validation/science_acceptance_measure.py io SCIENCE_SESSION_DIR [--scratch DIR]
+  scripts/validation/science_acceptance_measure.py cutoff REDUCE_SESSION_DIR BEAM_FWHM_DEG [--scratch DIR]
 """
 import argparse
 import json
@@ -19,7 +19,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root (this script lives in scripts/validation/)
 
 
 def peak_rss_mb() -> float:

@@ -100,11 +100,11 @@ print(arrays["frequency_hz"].shape, arrays["relative_intensity"].shape)
 ## Validating REDUCE itself
 
 ```
-python3 -m pytest test_reduce_models.py test_reduce_spectral_and_masks.py \
-    test_reduce_baseline_and_velocity.py test_reduce_averaging.py \
-    test_reduce_calibration_and_quality.py test_reduce_ingest_and_resample.py \
-    test_reduce_rfi_ref_and_uncertainty.py test_reduce_golden_synthetic.py \
-    test_reduce_adversarial.py test_reduce_real_historical.py -q
+python3 -m pytest tests/test_reduce_models.py tests/test_reduce_spectral_and_masks.py \
+    tests/test_reduce_baseline_and_velocity.py tests/test_reduce_averaging.py \
+    tests/test_reduce_calibration_and_quality.py tests/test_reduce_ingest_and_resample.py \
+    tests/test_reduce_rfi_ref_and_uncertainty.py tests/test_reduce_golden_synthetic.py \
+    tests/test_reduce_adversarial.py tests/test_reduce_real_historical.py -q
 ```
 
 `test_reduce_real_historical.py` requires the real fixture campaign

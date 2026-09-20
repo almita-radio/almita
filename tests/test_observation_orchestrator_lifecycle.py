@@ -20,7 +20,7 @@ import pytest
 
 import observation_orchestrator as orch
 
-UNIT_FILE = Path(__file__).parent / "systemd" / "almita-observe-api.service"
+UNIT_FILE = Path(__file__).parent.parent / "systemd" / "almita-observe-api.service"
 
 
 def _systemd_user_available() -> bool:
@@ -70,7 +70,7 @@ def test_detached_child_dies_under_default_killmode_but_survives_killmode_proces
     harness = tmp_path / "harness.py"
     harness.write_text(f"""
 import sys, os, time
-sys.path.insert(0, {str(Path(__file__).parent)!r})
+sys.path.insert(0, {str(Path(__file__).parent.parent)!r})
 import observation_orchestrator as orch
 with open({str(tmp_path / "dummy.log")!r}, "wb") as log:
     proc = orch._popen_detached(["sleep", "60"], log)

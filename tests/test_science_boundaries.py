@@ -28,7 +28,7 @@ from science_engine.simulation import (SyntheticPointSpec, build_synthetic_scien
 from science_engine.storage import ScienceSession, arrays_sha256, validate_science_session
 from science_engine.validation import SciencePreflightBlocked
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 REAL_SESSION = ROOT / "data/reduced/ALMITA-WEB-SMALL-RUN-01/REDUCE-20260919-225900-910411"
 
 

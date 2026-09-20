@@ -15,7 +15,7 @@ from quicklook_spectrum import (
 )
 
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 PROFILE = ROOT / "data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.npz"
 SOURCE = ROOT / "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/antenna_a.h5"
 DIRECT = ROOT / "data/rf_characterization/RF-CHAIN-ISOLATION-02-20260826T210837Z/direct/rtl_direct_50ohm_gain_40.2.h5"

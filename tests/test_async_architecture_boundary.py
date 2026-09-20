@@ -15,7 +15,7 @@ what they deliberately do NOT do - never counts as a real call.
 import ast
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 
 # Every module whose async I/O this pass explicitly wired (or re-audited)
 # to have NO internal asyncio.run() / new event loop of its own.

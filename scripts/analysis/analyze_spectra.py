@@ -5,7 +5,7 @@ HI Spectrum Analyzer - Visualización y análisis de espectros calibrados
 Muestra espectros en dB y Kelvin, con información sobre el proceso de calibración.
 
 Usage:
-    python3 analyze_spectra.py --spectra data/iq/Target-YYYYMMDD-HH:MM:SS/spectrum/ \
+    python3 scripts/analysis/analyze_spectra.py --spectra data/iq/Target-YYYYMMDD-HH:MM:SS/spectrum/ \
         --calibration data/calibration/YYYYMMDD-HH:MM:SS/
 """
 

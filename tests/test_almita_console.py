@@ -18,7 +18,7 @@ import wifi_health
 from runtime_state import announce_session, atomic_write_json, read_json_safe, utcnow
 from serve_dashboard import make_server
 
-ROOT = Path(__file__).parent.resolve()
+ROOT = Path(__file__).parent.parent.resolve()
 CONSOLE = ROOT / "console"
 
 
@@ -973,7 +973,7 @@ def test_43d_contract_console_waterfall_thumb_file_matches_watcher_gate_file(tmp
     the naming drift that caused this bug (e92caad updated the served file
     but not the gate) must fail this test immediately if it recurs for any
     product, not just be caught by luck in a fixture."""
-    app_js = (Path(__file__).parent / "console" / "app.js").read_text()
+    app_js = (Path(__file__).parent.parent / "console" / "app.js").read_text()
     match = re.search(r'\["waterfall","([a-zA-Z0-9_.]+)\.png"', app_js)
     assert match, "could not find the WATERFALL thumb's served filename in console/app.js"
     served_stem = match.group(1)

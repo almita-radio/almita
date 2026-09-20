@@ -2,11 +2,11 @@
 
 Question of this pass: *can we trust the LEVEL 2 products scientifically?* Everything below was measured on this Pi
 (single driver, runs executed sequentially). Foundation commit `fd9ca3a`; REDUCE (`2afc4c5`) untouched (`git diff` on
-`reduce_engine/` and `almita_reduce.py` is empty). Reproduce with `pytest test_science_*.py -s` (tables print) and
-`science_acceptance_measure.py`.
+`reduce_engine/` and `almita_reduce.py` is empty). Reproduce with `pytest tests/test_science_*.py -s` (tables print) and
+`scripts/validation/science_acceptance_measure.py`.
 
 ## 1. Test counts
-`pytest test_science_*.py` -> **296 passed** in ~36 s (foundation had 75; the first stopped attempt of this pass left 41).
+`pytest tests/test_science_*.py` -> **296 passed** in ~36 s (foundation had 75; the first stopped attempt of this pass left 41).
 Per file: beam 10, beam_contract 18, boundaries 57, cube 11, golden 11, gridding 20, gridding_truth 53, ingest 6,
 integration 5, integration_truth 15, moments 4, nan_matrix 21, resample_strict 11, resample_truth 10, self_description 3,
 sigma_audit 13, spatial 9, storage_and_security 10, uncertainty_and_coverage 4, uncertainty_mc 5.

@@ -7,7 +7,7 @@ Genera mapas de temperatura de brillo en el cielo:
   2. Mapa interpolado suavizado (más bonito)
 
 Usage:
-    python3 plot_sky_map.py --spectra data/.../spectra/ --output sky_map.png
+    python3 scripts/analysis/plot_sky_map.py --spectra data/.../spectra/ --output sky_map.png
 """
 
 import argparse

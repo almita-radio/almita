@@ -8,7 +8,7 @@ import pytest
 import almita_system_blackbox as bb
 import wifi_health
 
-ROOT = Path(__file__).parent.resolve()
+ROOT = Path(__file__).parent.parent.resolve()
 
 
 # ---------------------------------------------------------------- individual readers tolerate missing sources

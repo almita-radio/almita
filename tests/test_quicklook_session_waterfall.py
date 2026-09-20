@@ -7,7 +7,7 @@ from PIL import Image
 from quicklook_session_waterfall import update_session_waterfall
 from quicklook_spectrum import generate_quicklook
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 PROFILE = ROOT / "data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.npz"
 SOURCE = ROOT / "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/antenna_a.h5"
 

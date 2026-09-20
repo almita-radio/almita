@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT=Path(__file__).parent.resolve(); DASH=ROOT/"dashboard"
+ROOT=Path(__file__).parent.parent.resolve(); DASH=ROOT/"dashboard"
 
 
 class Quiet(SimpleHTTPRequestHandler):

@@ -71,7 +71,7 @@ una falla, atraso o crash en él no debe poder bloquear, pausar ni alterar la
 adquisición de MAIN.
 
 Esta arquitectura fue validada en hardware con
-[`dual_sdr_benchmark.py`](dual_sdr_benchmark.py):
+[`dual_sdr_benchmark.py`](../../dual_sdr_benchmark.py):
 
 ```bash
 python3 dual_sdr_benchmark.py --duration 180
@@ -109,7 +109,7 @@ código.
 ## RFI_REF integrado en Capture: sidecar opcional y desechable
 
 El benchmark standalone de arriba valida el par rtl_tcp MAIN+RFI_REF de forma
-aislada. [`rfi_monitor.py`](rfi_monitor.py) (`RFIReferenceMonitor`) lleva esa
+aislada. [`rfi_monitor.py`](../../rfi_monitor.py) (`RFIReferenceMonitor`) lleva esa
 misma arquitectura — verificación de ownership del socket por PID, subproceso
 propio nunca gestionado por `rtl_tcp.service`, FFT quicklook en thread aparte,
 sin persistir IQ — dentro de `capture.py`, como un sidecar real de campo.

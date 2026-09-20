@@ -30,7 +30,7 @@ FORBIDDEN_NAMES = ("absolute_power_dbm", "system_temperature_k", "noise_figure_d
 
 
 def test_no_forbidden_absolute_terminology_in_calibration_engine_source():
-    package_dir = Path(__file__).parent / "calibration_engine"
+    package_dir = Path(__file__).parent.parent / "calibration_engine"
     offenders = []
     for path in package_dir.rglob("*.py"):
         text = path.read_text().lower()
