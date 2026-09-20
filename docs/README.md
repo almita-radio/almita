@@ -12,7 +12,7 @@
 | SCIENCE forensics experiment design (field plan that breaks time/sky confounding) | [EXPERIMENT RUNBOOK](SCIENCE_FORENSICS_EXPERIMENT_RUNBOOK.md), plan `examples/science_forensics_experiment.yaml` |
 | SCIENCE forensics field execution pack (operator commands: status/precheck/preflight/run/postcheck/analyze) | [FIELD RUNBOOK](SCIENCE_FORENSICS_FIELD_RUNBOOK.md), `scripts/science_forensics_field.py` |
 | SCIENCE forensics indoor bench (infrastructure checks with zero mount movement; not astronomy) | [INDOOR BENCH](SCIENCE_FORENSICS_INDOOR_BENCH.md), `scripts/science_forensics_bench.py` |
-| Web (Field Console :8088 + Observe API :8090): architecture, operations, test report | [ARCHITECTURE](WEB_ARCHITECTURE.md), [OPERATIONS](WEB_OPERATIONS.md), [TEST REPORT](WEB_TEST_REPORT.md) |
+| Web (Field Console :8088 + Observe API :8090): architecture, operations, test report | [ARCHITECTURE](WEB_ARCHITECTURE.md), [OPERATIONS](WEB_OPERATIONS.md), [TEST REPORT](WEB_TEST_REPORT.md), [FREEZE](WEB_V1_FREEZE.md) |
 
 ## Project overview
 [ALMITA_OVERVIEW](ALMITA_OVERVIEW.md) - the long-form project guide (hardware, observation workflow, grid generator, alignment,
