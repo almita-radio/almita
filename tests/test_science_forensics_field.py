@@ -21,6 +21,12 @@ F = importlib.util.module_from_spec(spec)
 sys.modules["sff"] = F
 spec.loader.exec_module(F)
 
+@pytest.fixture(autouse=True)
+def _no_indoor_mode(monkeypatch):
+    """A developer's shell may export INDOOR_MODE=1; the field-pack tests must not depend on it."""
+    monkeypatch.delenv("INDOOR_MODE", raising=False)
+
+
 NOW_OK = datetime(2026, 9, 21, 14, 0, tzinfo=timezone.utc)            # inside a negative-HA window for A, B, C (65 min run)
 NOW_BAD = datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc)            # positions far from the planned geometry
 

@@ -147,6 +147,16 @@ class FieldError(Exception):
     pass
 
 
+def indoor_mode_active() -> bool:
+    """INDOOR_MODE=1 (set it while the antenna/mount are indoors): the wrapper refuses `preflight` and any live `run`. A preflight recorded
+    indoors must never unlock READY FOR FIELD, and no code path that could move the mount may start. Use scripts/science_forensics_bench.py."""
+    return os.environ.get("INDOOR_MODE") == "1"
+
+
+INDOOR_MESSAGE = ("INDOOR_MODE=1: preflight and live run are disabled while the antenna/mount are indoors "
+                  "(use scripts/science_forensics_bench.py; unset INDOOR_MODE outdoors)")
+
+
 def load_plan(ctx: Ctx) -> dict:
     import yaml
     if not ctx.plan_path.is_file():
@@ -455,6 +465,8 @@ def do_preflight(ctx: Ctx, plan: dict, exp: str, *, print_only: bool = False, ti
     argv_preview = capture_argv(plan, d / "mosaic.csv", preflight=True)
     if print_only:
         return {"printed_only": True, "argv": argv_preview}
+    if indoor_mode_active():
+        return {"status": "BLOCKED", "reasons": [INDOOR_MESSAGE], "argv": argv_preview}
     pc = precheck(ctx, plan, exp, live_endpoints=False)
     if pc["status"] != "PASS":
         return {"status": "BLOCKED", "reasons": [f"precheck failed: {pc['failed']}"], "argv": argv_preview}
@@ -559,6 +571,8 @@ def run_experiment(ctx: Ctx, plan: dict, exp: str, *, dry_run: bool, yes: bool, 
     gate = gate_preflight(ctx, plan, exp, now)
     procs = ctx.capture_procs()
     blockers = []
+    if indoor_mode_active():
+        blockers.append(INDOOR_MESSAGE)
     if pc["status"] != "PASS":
         blockers.append(f"precheck: {pc['failed']}")
     if window["status"] != "OK":
@@ -1044,7 +1058,7 @@ def cmd_status(ctx: Ctx, args) -> int:
         conflicts = sorted(p.name for p in ctx.p(MOSAIC_ROOT).glob(f"FORENSICS-{exp}-*")) if ctx.p(MOSAIC_ROOT).is_dir() else []
         rows.append({"experiment": exp, "precheck": pc["status"], "precheck_failed": pc["failed"], "window": window, "epoch": epoch, "preflight_gate": {k: v for k, v in gate.items() if k != "report"},
                      "existing_campaigns": conflicts, "field_status": field_status(ctx, plan, exp, window, epoch, pc, frozen, gate)})
-    payload = {"git": git, "plan": str(ctx.plan_path), "plan_sha256": sha256_file(ctx.plan_path), "utc_now": _utc(ctx.now()),
+    payload = {"indoor_mode": indoor_mode_active(), "git": git, "plan": str(ctx.plan_path), "plan_sha256": sha256_file(ctx.plan_path), "utc_now": _utc(ctx.now()),
                "mount_indi_listening": ENDPOINTS["INDI"] in ports, "main_sdr_rtl_tcp_listening": ENDPOINTS["MAIN rtl_tcp"] in ports,
                "services": {u: ctx.service_active(u) for u in SERVICES}, "capture_processes_running": procs, "stale_active_or_paused_sessions_in_data_IQ": sess_active[-5:],
                "frozen_modules": frozen, "output_paths": {"campaign_data": f"{MOSAIC_ROOT}/<CAMPAIGN_ID>/", "field_metadata": f"{FIELD_ROOT}/<CAMPAIGN_ID>/"},
@@ -1054,7 +1068,7 @@ def cmd_status(ctx: Ctx, args) -> int:
     else:
         print(f"commit {git['commit'][:12]} on {git['branch']} | plan {ctx.plan_path} | UTC {payload['utc_now']}")
         print(f"MAIN rtl_tcp :1234 listening={payload['main_sdr_rtl_tcp_listening']} | INDI :7624 listening={payload['mount_indi_listening']} | services {payload['services']} | capture.py running: {len(procs)}")
-        print(f"frozen modules: {'UNCHANGED' if frozen['ok'] else 'DIFFER ' + str(frozen['differs'] or 'git unavailable')}")
+        print(f"frozen modules: {'UNCHANGED' if frozen['ok'] else 'DIFFER ' + str(frozen['differs'] or 'git unavailable')} | INDOOR_MODE={'1 (preflight/run blocked)' if payload['indoor_mode'] else 'off'}")
         for r in rows:
             w = r["window"]
             print(f"[{r['experiment']}] precheck {r['precheck']} {r['precheck_failed']} | window {w['status']} | epoch {r['epoch']['status']} | conflicts {r['existing_campaigns']} | => {r['field_status']}")

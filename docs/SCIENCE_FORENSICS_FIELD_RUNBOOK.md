@@ -148,7 +148,13 @@ undefined"; no cause is inferred); frame coherence (forensics V1); control featu
 geometry only; and the classification. Vocabulary: `CONSISTENT WITH`, `INCONSISTENT WITH`, `UNRESOLVED` (chi2/dof < 4, >= 9, otherwise). Every prediction uses the
 capture timestamps in Level 1; a cross-check of REDUCE's LSRK shift against the frozen helper at those timestamps is reported (`shift_crosscheck_ok`).
 
-## 8. What this pack will not do
+## 8. Indoors: INDOOR_MODE
+
+While the antenna/mount are indoors, `export INDOOR_MODE=1`: `preflight` and any live `run` are refused (dry-run and `preflight --print-only` still work), so a preflight
+recorded indoors cannot unlock READY FOR FIELD. Use `scripts/science_forensics_bench.py` (`docs/SCIENCE_FORENSICS_INDOOR_BENCH.md`) for the indoor infrastructure checks.
+`unset INDOOR_MODE` outdoors before the real `preflight`.
+
+## 9. What this pack will not do
 
 Change `capture.py`, REDUCE, SCIENCE, forensics V1, the OBSERVE scheduler/orchestrator, systemd, `rtl_tcp`, gain, centre frequency or `observer_config.json`;
 move the mount outside an explicit `run`; SYNC; delete or clean data; push. `data/IQ/session.csv` is rewritten by `capture.py` during a run (it already shows as
