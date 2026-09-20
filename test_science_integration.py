@@ -58,7 +58,7 @@ def test_masked_window_above_threshold_still_valid_and_reports_coverage():
     result = integrated_map(cube, config)
     center_y, center_x = grid.ny // 2, grid.nx // 2
     assert result.valid[center_y, center_x]
-    coverage = np.array(result.metadata["spectral_coverage_fraction"])
+    coverage = result.spectral_coverage
     assert coverage[center_y, center_x] < 1.0
     assert coverage[center_y, center_x] > 0.9
 

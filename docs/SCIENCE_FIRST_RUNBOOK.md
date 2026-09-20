@@ -31,12 +31,13 @@ available, calibration level `RELATIVE`.
   --beam-fwhm-deg 1.5 --output-root data/science
 ```
 
-`--beam-fwhm-deg 1.5` matches THIS campaign's own known
-`grid_metadata.json` spacing (learned out-of-band, not auto-discovered
-by SCIENCE - see `docs/SCIENCE_SCOPE.md`'s beam-gap section). Omitting
-it falls back to `observer_config.json`'s site-wide default (20.0),
-which is far larger than this field and would blend every point into
-one beam - fine for a quick check, misleading for a real map.
+`--beam-fwhm-deg 1.5` is an OPERATOR-PROVIDED value (this campaign's
+observation grid spacing, read by the operator from
+`grid_metadata.json`; SCIENCE never discovers it). A beam is mandatory:
+without `--beam-fwhm-deg` or `--beam-from-observer-config [PATH]` the CLI
+refuses, because a wrong beam silently changes the grid size (a real
+4.7 GB OOM-kill happened this way). `plan` prints estimated RAM, disk and
+the machine's MemAvailable.
 
 Expected: grid shape, beam summary, memory/disk estimate, all checks OK.
 
@@ -48,11 +49,14 @@ Expected: grid shape, beam summary, memory/disk estimate, all checks OK.
   --beam-fwhm-deg 1.5 --output-root data/science
 ```
 
-Real measured result (this pass): `SCIENCE COMPLETED`, 21x21 grid, 8192
-velocity channels, quality `WARNING` (reason:
-`BEAM_MODEL_PROVISIONAL` - always present in V1, honest by design),
-~2.8-3.0s wall time, 115 MB output. See `docs/SCIENCE_PIPELINE.md`'s
-Performance section.
+Real measured result (second pass, after hardening): `SCIENCE COMPLETED`,
+data completeness `COMPLETE`, 21x21 grid, 8192 ascending velocity channels,
+quality `GOOD` with limitations `PROVISIONAL_BEAM_MODEL` and
+`VELOCITY_RESAMPLED` (limitations do not downgrade the state), 2.3 s,
+peak RSS 282 MB, 119 MB output. The run prints the QC summary (input
+REDUCE, campaign, points used/excluded, beam, grid, cube, velocity range,
+resampling, window, valid map fraction, median uncertainty, runtime, RSS,
+output). See `docs/SCIENCE_ACCEPTANCE.md` for the three real campaigns.
 
 ## 4. Validate output integrity
 
@@ -108,3 +112,13 @@ then compare each `cube/science_cube.h5`'s arrays with `h5py` + `numpy.
 array_equal(..., equal_nan=True)` - verified byte-for-byte identical in
 this pass's own test suite
 (`test_science_storage_and_security.py::test_two_runs_of_the_same_input_and_config_are_numerically_identical`).
+
+## 5. Replay and compare
+
+```
+./.venv/bin/python almita_science.py replay <SCIENCE_SESSION_DIR>      # same REDUCE input + config -> NEW session, then compare
+./.venv/bin/python almita_science.py compare <SESSION_A> <SESSION_B>   # read-only
+```
+Replay refuses if the REDUCE manifest changed (`--allow-changed-input` overrides) and never touches the original.
+Per-artifact classes: BYTE IDENTICAL, NUMERICALLY IDENTICAL, NUMERICALLY EQUIVALENT, EXPECTED DIFFERENCE (input/config
+differs), UNEXPECTED DIFFERENCE (a determinism bug). Exit 0 = equivalent, 1 = different.

@@ -89,25 +89,25 @@ real campaign lives in `data/mosaic/<campaign>/grid_metadata.json`
 (upstream, off-limits to SCIENCE by this document's own first rule).
 This repo also has two OTHER historical beam-FWHM values that disagree
 with each other (`alignment_engine/config.py`'s own documented
-14.0/20.0 discrepancy). SCIENCE V1 does not invent a resolution to this:
-`ScienceConfig.beam_fwhm_deg` defaults to `observer_config.json`'s
-`observation_defaults.beam_fwhm_deg` (matching `alignment_engine`'s own
-established "single documented source of truth" precedent), is always
-explicit and overridable (`almita_science.py run --beam-fwhm-deg`), and
-`BeamModel.status` is always `CONFIGURED_OPERATIONAL` (or
-`PROVISIONAL_OPERATIONAL`), never silently presented as a measured beam.
-The real run documented in `docs/SCIENCE_FIRST_RUNBOOK.md` explicitly
-overrides it to `1.5` (matching this specific campaign's own known
-`grid_metadata.json` value, learned out-of-band by the operator running
-this pass, not auto-discovered by SCIENCE's own code).
+14.0/20.0 discrepancy). SCIENCE V1 does not resolve it and does not pick
+one silently: the beam is **operator-provided operational metadata**
+(`--beam-fwhm-deg`, recorded as `source=operator_config`; or
+`--beam-from-observer-config [PATH]`, which records the file's path, field
+and sha256). With neither, the CLI refuses. The library default is a
+labelled placeholder (`PROVISIONAL_DEFAULT`), never read from a file. The
+real runs of the second pass used the observation grid's own
+`beam_fwhm_deg` (1.5, 1.1111 and 3.3333 deg for the three real sessions),
+passed by the operator: the grid spacing configured for OBSERVE, a
+configured beam assumption, and a physical beam measurement are three
+different things, and only the first two exist. Future improvement (schema
+V2, not now): carry explicit beam metadata into Level 1.
 
 ## Explicitly out of scope for V1
 
 - Hardware control, network access, and a web UI - same rules as REDUCE.
 - Cross-campaign / multi-REDUCE-session stacking (section 86): one
   REDUCE session -> one SCIENCE session, always.
-- l-v (Galactic longitude x velocity) diagrams (sections 49-50, 93): not
-  implemented. The 9-point real fixture's Galactic longitude coverage is
+- l-v (Galactic longitude x velocity) diagrams: deferred, not implemented. The 9-point real fixture's Galactic longitude coverage is
   too narrow to demonstrate one meaningfully, and this pass prioritized
   the cube/map/moment core over an additional product family.
 - FITS export (sections 62, 125-127): not implemented. HDF5 is V1's only
@@ -120,9 +120,7 @@ this pass, not auto-discovered by SCIENCE's own code).
   for ALIGN). SCIENCE follows that exact precedent rather than
   reinventing a different answer: not implemented, explicitly, until a
   real local survey file exists.
-- SCIENCE `compare`/`replay` CLI subcommands (sections 87-89): the
-  underlying property (two runs of the same input+config are
-  numerically identical) IS verified
-  (`test_science_storage_and_security.py`), but no dedicated `compare`/
-  `replay` CLI command was built in V1 - `run` twice and diff the HDF5
-  arrays is the documented workaround today.
+- Moment-like products exist but are gated by signal (see SCIENCE_MODEL.md); they are not a claim of professionally
+  reduced moment maps.
+
+`compare` and `replay` ARE implemented in the second pass (see SCIENCE_PIPELINE.md).

@@ -8,6 +8,10 @@ by test_science_beam.py rather than only asserted here.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 
 from science_engine.models import BeamModel
@@ -34,3 +38,17 @@ def beam_footprint_radius_deg(beam: BeamModel) -> float:
     - used to restrict which input points are even considered for a given
     output pixel (a cheap pre-filter, not the weighting itself)."""
     return beam.cutoff_n_fwhm * beam.fwhm_deg
+
+
+def beam_settings_from_observer_config(path: str | Path) -> dict:
+    """Read the operator's configured beam FWHM from an observer_config.json FILE THE OPERATOR NAMED and
+    return every field needed to persist where it came from (path, field, sha256). This is the ONLY place
+    SCIENCE reads a beam from a file, and it never searches for one (in particular it never navigates into
+    data/mosaic/*/grid_metadata.json). The value is operational metadata supplied by the operator."""
+    path = Path(path).resolve()
+    raw = path.read_bytes()
+    field = "observation_defaults.beam_fwhm_deg"
+    value = json.loads(raw)["observation_defaults"]["beam_fwhm_deg"]
+    return {"beam_fwhm_deg": float(value), "beam_source": f"{path.name}:{field}", "beam_status": "CONFIGURED_OPERATIONAL",
+            "beam_source_path": str(path), "beam_source_field": field,
+            "beam_source_sha256": hashlib.sha256(raw).hexdigest()}

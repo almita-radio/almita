@@ -13,7 +13,9 @@ from science_engine.spatial import angular_separation_deg, tangent_plane_offsets
 
 def build_beam_model(config: ScienceConfig) -> BeamModel:
     return BeamModel(fwhm_deg=config.beam_fwhm_deg, source=config.beam_source,
-                     status=config.beam_status, cutoff_n_fwhm=config.beam_cutoff_n_fwhm)
+                     status=config.beam_status, cutoff_n_fwhm=config.beam_cutoff_n_fwhm,
+                     source_path=config.beam_source_path, source_field=config.beam_source_field,
+                     source_sha256=config.beam_source_sha256)
 
 
 def build_grid(science_input: ScienceInput, beam: BeamModel, config: ScienceConfig) -> ScienceGrid:
@@ -36,7 +38,8 @@ def build_grid(science_input: ScienceInput, beam: BeamModel, config: ScienceConf
     half_height = max(float(np.max(np.abs(y))), 1e-6) + margin_deg
     width_deg, height_deg = 2 * half_width, 2 * half_height
 
-    pixel_scale_deg = config.pixel_scale_deg or (beam.fwhm_deg / config.pixels_per_beam)
+    pixel_scale_deg = (config.pixel_scale_deg if config.pixel_scale_deg is not None
+                       else beam.fwhm_deg / config.pixels_per_beam)
     nx = max(int(np.ceil(width_deg / pixel_scale_deg)), 1)
     ny = max(int(np.ceil(height_deg / pixel_scale_deg)), 1)
 

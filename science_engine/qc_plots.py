@@ -27,7 +27,7 @@ def _save_map(fig, ax, im, out_path: Path, title: str, colorbar_label: str) -> N
     import matplotlib.pyplot as plt
     cbar = fig.colorbar(im, ax=ax)
     cbar.set_label(colorbar_label)
-    ax.set_title(title)
+    ax.set_title(title, fontsize=8)
     ax.set_xlabel("x (pixel)")
     ax.set_ylabel("y (pixel)")
     fig.tight_layout()
@@ -38,8 +38,17 @@ def _save_map(fig, ax, im, out_path: Path, title: str, colorbar_label: str) -> N
 def _resolution_caption(grid_json: dict, beam_json: dict | None) -> str:
     """Section 72: every map declares pixel scale + beam FWHM so a
     reader never mistakes pixel count for spatial resolution."""
-    fwhm = beam_json.get("fwhm_deg") if beam_json else "?"
-    return f"pixel scale={grid_json['pixel_scale_deg']:.3f} deg, beam FWHM={fwhm} deg (effective resolution)"
+    fwhm = f"{beam_json['fwhm_deg']:.4g}" if beam_json else "unknown"
+    return f"pixel scale={grid_json['pixel_scale_deg']:.3f} deg (sampling)\nconfigured beam FWHM={fwhm} deg (operator-provided)"
+
+
+def _beam_of(session_dir: Path):
+    """The beam recorded in the session itself (manifest), so every plot states the same configured beam."""
+    return json.loads((Path(session_dir) / "manifest.json").read_text()).get("beam")
+
+
+def _bad_transparent(cmap):
+    return cmap.with_extremes(bad=(0, 0, 0, 0))     # invalid = transparent, never black/zero
 
 
 def plot_science_map(science_session_dir: str | Path, map_name: str, out_path: str | Path) -> Path:
@@ -55,8 +64,7 @@ def plot_science_map(science_session_dir: str | Path, map_name: str, out_path: s
         grid_json = json.loads(handle.attrs["grid_json"])
 
     masked = _masked(value, valid)
-    cmap = plt.get_cmap("viridis" if "intensity" in map_name else "coolwarm").copy()
-    cmap.set_bad(alpha=0.0)  # section 67: invalid = transparent, never black/zero
+    cmap = _bad_transparent(plt.get_cmap("viridis" if "intensity" in map_name else "coolwarm"))
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(masked, origin="lower", cmap=cmap)
     caption = _resolution_caption(grid_json, manifest.get("beam"))
@@ -75,32 +83,30 @@ def plot_uncertainty_map(science_session_dir: str | Path, map_name: str, out_pat
         grid_json = json.loads(handle.attrs["grid_json"])
 
     masked = _masked(uncertainty, valid)
-    cmap = plt.get_cmap("magma").copy()
-    cmap.set_bad(alpha=0.0)
+    cmap = _bad_transparent(plt.get_cmap("magma"))
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(masked, origin="lower", cmap=cmap)
-    _save_map(fig, ax, im, Path(out_path), f"{map_name} uncertainty\n{_resolution_caption(grid_json, None)}",
-             "uncertainty")
+    _save_map(fig, ax, im, Path(out_path), f"{map_name} uncertainty (1-sigma, statistical, independent-input model)\n{_resolution_caption(grid_json, _beam_of(session_dir))}",
+             "uncertainty (same unit as the map)")
     return Path(out_path)
 
 
 def plot_coverage_map(science_session_dir: str | Path, out_path: str | Path) -> Path:
-    """Section 69: n_contributing, from the integrated map (a well-defined
+    """Section 69: n_pointings, from the integrated map (a well-defined
     2D product) rather than the full cube."""
     import matplotlib.pyplot as plt
     session_dir = Path(science_session_dir)
     with h5py.File(session_dir / "maps" / "integrated_relative_intensity.h5", "r") as handle:
-        n_contributing = handle["n_contributing"][:]
+        n_pointings = handle["n_pointings"][:]
         valid = handle["valid"][:]
         grid_json = json.loads(handle.attrs["grid_json"])
 
-    masked = _masked(n_contributing.astype(float), n_contributing > 0)
-    cmap = plt.get_cmap("cividis").copy()
-    cmap.set_bad(alpha=0.0)
+    masked = _masked(n_pointings.astype(float), n_pointings > 0)
+    cmap = _bad_transparent(plt.get_cmap("cividis"))
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(masked, origin="lower", cmap=cmap)
-    _save_map(fig, ax, im, Path(out_path), f"coverage (n contributing points)\n{_resolution_caption(grid_json, None)}",
-             "n_contributing")
+    _save_map(fig, ax, im, Path(out_path), f"pointing count: n_pointings = pointings with non-zero weight (not coverage, not integration time)\n{_resolution_caption(grid_json, _beam_of(session_dir))}",
+             "n_pointings")
     return Path(out_path)
 
 
@@ -117,12 +123,11 @@ def plot_channel_map(science_session_dir: str | Path, channel_index: int, out_pa
         grid_json = json.loads(handle.attrs["grid_json"])
 
     masked = _masked(value, valid)
-    cmap = plt.get_cmap("viridis").copy()
-    cmap.set_bad(alpha=0.0)
+    cmap = _bad_transparent(plt.get_cmap("viridis"))
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(masked, origin="lower", cmap=cmap)
     _save_map(fig, ax, im, Path(out_path),
-             f"channel {channel_index} (v={velocity:.0f} m/s)\n{_resolution_caption(grid_json, None)}",
+             f"channel {channel_index} (v={velocity:.0f} m/s)\n{_resolution_caption(grid_json, _beam_of(session_dir))}",
              "relative_intensity")
     return Path(out_path)
 

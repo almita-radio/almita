@@ -3,18 +3,17 @@
 ## Canonical order (`science_engine.products.run_science_session`)
 
 ```
-INGEST (reduce_engine.science_contract gate) -> VALIDATE CONTRACT
-  -> BUILD BEAM + GRID -> VALIDATE/RESAMPLE VELOCITY AXIS
-  -> GRID SPECTRA INTO CUBE -> DERIVE INTEGRATED MAP
-  -> DERIVE MOMENT-1/2-LIKE MAPS -> ASSESS SCIENCE QUALITY
-  -> PERSIST -> (VALIDATE OUTPUT via `almita_science.py validate`)
+INGEST (reduce_engine.science_contract gate + per-point checks + sha256)
+  -> BUILD BEAM + GRID -> PREFLIGHT (RAM/disk, blocks BEFORE any cube-sized allocation)
+  -> CREATE SESSION (fail closed on collision; manifest status RUNNING)
+  -> CUBE (sigma-local check, ascending canonical axis, resample, beam x 1/sigma^2 accumulation)
+  -> INTEGRATED MAP -> MOMENT-LIKE MAPS -> QUALITY
+  -> PERSIST (atomic HDF5) -> INDEX (sha256) -> MANIFEST status COMPLETED (the commit point)
 ```
 
-An exception propagates BEFORE `manifest.json` is written - a session
-directory can exist with partial products on disk, but `status` is
-never falsely `"COMPLETED"`, mirroring `reduce_engine.pipeline`'s own
-crash-recovery contract exactly (sections 110-112). A `KeyboardInterrupt`
-is not caught anywhere in this path either, for the same reason.
+Crash safety: any exception rewrites the manifest `FAILED` (`CANCELLED` for KeyboardInterrupt, CLI exit 130) and
+re-raises; HDF5 files are written to `.tmp` and renamed, so no half-written canonical file can exist. Two separate status
+axes: `status` (execution) and `data_completeness` (COMPLETE|PARTIAL).
 
 ## Storage layout
 
@@ -69,37 +68,23 @@ being valid for a given pixel, that pixel's integrated value is
 
 ## CLI (`almita_science.py`)
 
-`inspect` (read-only contract+summary), `plan` (no writes; grid/beam
-shape, memory/disk estimate, blocking checks), `run` (build+persist),
-`validate` (output integrity for a finished session), `status`
-(pipeline/schema version). Mirrors `almita_reduce.py`'s own command set
-and `--json`/human-summary convention. No `compare`/`replay`/
-`export-fits` subcommands in V1 - see `docs/SCIENCE_SCOPE.md`.
+`inspect`, `plan` (no writes; grid/beam, RAM/disk estimate, MemAvailable, checks), `run`, `replay`, `compare`,
+`validate`, `status`. `--json` everywhere. Beam mandatory (see runbook).
 
-## Performance (measured, real 9-point campaign)
+## Performance (measured on this Pi; see SCIENCE_ACCEPTANCE.md)
 
-`data/reduced/ALMITA-WEB-SMALL-RUN-01/REDUCE-20260919-225900-910411`
-(9 real points, `--beam-fwhm-deg 1.5` matching this campaign's own known
-grid spacing, default 4 px/beam -> 21x21 grid, 8192 velocity channels
-carried through unchanged from REDUCE):
+| session | points | grid x channels | runtime | peak RSS | output |
+|---|---|---|---|---|---|
+| 9-pt real | 9 | 21x21 x 8192 | 2.3 s | 282 MB | 119 MB |
+| PARTIAL real (50 of 100 COMPLETED) | 50 | 33x56 x 8192 | 31.2 s | 928 MB | 500 MB |
+| 100-pt real | 100 | 49x51 x 8192 | 77.6 s | 1237 MB | 676 MB |
+| synthetic stress | 9 | 50x50 x 8192 | 9.5 s cube | 1194 MB (est. 1213) | 645 MB |
 
-| metric | value |
-|---|---|
-| wall time | 2.8-3.0s (two independent measured runs) |
-| peak RSS | 274.5 MB |
-| output size | 115 MB (`estimate_output_bytes` predicted ~138 MB - same order, conservative) |
+Top bottlenecks (100-pt real): cube accumulation 70.6 s of 77.6 s (91 %), persistence 3.0 s, integrated products 1.4 s.
+Accumulation cost is ~ (points x voxels); restricting each point to the bounding box of its non-zero beam support would give
+bit-identical results (adding exact zeros) with a large speedup - **not applied** (not pathological; frozen semantics).
 
-`science_engine/validation.py::run_preflight` estimates peak memory
-BEFORE allocation (`8x` a single `(Nv,Ny,Nx)` float64 array - the
-`GriddingAccumulator` holds 4 such arrays at once plus ~4 transient
-finalize-step arrays) so a pathological grid request (e.g. a 4000x4000
-spatial grid at full REDUCE spectral resolution) is caught and blocked
-at `plan` time, never attempted (sections 119, 123).
-
-Accumulation loops over INPUT POINTS, not a single
-`(N_points, N_pixels, N_velocity)` tensor - peak memory scales with the
-OUTPUT cube size only, never with how many points contributed to it
-(`science_engine/gridding.py`'s own docstring).
+Memory: 57 B/voxel + ~100 MB + 48 B per point-channel; accumulation loops over points and works in 256-channel blocks.
 
 ## Known limitations
 

@@ -41,7 +41,7 @@ def test_constant_sky_recovers_approximately_constant_map():
 
     peak_channel = 32  # center of the line (velocity=0 is near mid-array for a symmetric linspace)
     slice_2d = cube.relative_intensity[peak_channel]
-    high_coverage = cube.n_contributing[peak_channel] >= 5
+    high_coverage = cube.n_pointings[peak_channel] >= 5
     assert np.any(high_coverage)
     values = slice_2d[high_coverage]
     assert np.nanstd(values) < 0.15 * np.nanmean(values)  # roughly constant, well within the injected amplitude
@@ -104,7 +104,7 @@ def test_warning_point_included_under_standard_policy():
     beam = build_beam_model(config)
     grid = build_grid(si, beam, config)
     cube = build_cube(si, grid, beam, config)
-    assert np.any(cube.n_contributing == 9) or np.max(cube.n_contributing) >= 5  # the WARNING point still counted
+    assert np.any(cube.n_pointings == 9) or np.max(cube.n_pointings) >= 5  # the WARNING point still counted
 
 
 def test_masked_channel_does_not_contribute_there_but_does_elsewhere():
@@ -119,8 +119,8 @@ def test_masked_channel_does_not_contribute_there_but_does_elsewhere():
     grid = build_grid(si, beam, config)
     cube = build_cube(si, grid, beam, config)
     center_y, center_x = grid.ny // 2, grid.nx // 2
-    assert cube.n_contributing[10, center_y, center_x] == 0     # masked channel: no contribution
-    assert cube.n_contributing[25, center_y, center_x] == 1     # unmasked channel: contributes normally
+    assert cube.n_pointings[10, center_y, center_x] == 0     # masked channel: no contribution
+    assert cube.n_pointings[25, center_y, center_x] == 1     # unmasked channel: contributes normally
 
 
 def test_variable_uncertainty_favors_the_more_certain_point():

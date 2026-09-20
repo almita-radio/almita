@@ -77,7 +77,7 @@ def test_two_runs_of_the_same_input_and_config_are_numerically_identical(tmp_pat
     import h5py
     with h5py.File(Path(report_a.output_dir) / "cube" / "science_cube.h5") as fa, \
          h5py.File(Path(report_b.output_dir) / "cube" / "science_cube.h5") as fb:
-        for key in ("velocity_lsrk_m_s", "relative_intensity", "uncertainty", "weight_sum", "n_contributing", "valid"):
+        for key in ("velocity_lsrk_m_s", "relative_intensity", "uncertainty", "weight_sum", "n_pointings", "valid"):
             a, b = fa[key][:], fb[key][:]
             assert np.array_equal(a, b, equal_nan=True), f"{key} differs between two runs of identical input"
 

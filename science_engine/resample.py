@@ -40,21 +40,52 @@ class VelocityResampleResult:
 def resample_to_velocity_axis(source_velocity_m_s: np.ndarray, relative_intensity: np.ndarray,
                               uncertainty: np.ndarray, mask: np.ndarray,
                               target_velocity_m_s: np.ndarray) -> VelocityResampleResult:
-    # np.interp requires an increasing x; a real velocity axis can be
-    # decreasing (frequency and velocity are inversely related) - sort
-    # once, explicitly, rather than assume an order (mirrors
-    # alignment_engine/hi/cube_reduction.py's own explicit handling of
-    # increasing-or-decreasing spectral axes).
-    order = np.argsort(source_velocity_m_s)
+    """Linear interpolation of value and sigma onto `target_velocity_m_s`.
+
+    Explicit bracket-and-weight implementation (not np.interp) so mask/NaN semantics are exact:
+
+    - A target bin is GOOD iff every source bin that carries non-zero interpolation weight is GOOD
+      (mask == GOOD, finite value, finite positive sigma). A target that lands exactly on a GOOD source
+      bin depends on that bin ONLY, whatever its neighbours are.
+    - Otherwise (a masked/non-finite contributor, or target outside the source range) the target bin is
+      MISSING with value/sigma NaN. There is no tolerance: leakage of a masked neighbour, however small,
+      makes the bin MISSING (conservative - a masked bin can widen by up to one channel per side).
+      The previous np.interp version accepted >=0.999 GOOD weight and could therefore emit a GOOD bin
+      whose value was NaN (masked neighbour with ~1e-4 weight), poisoning the downstream sum.
+    - sigma is interpolated linearly with the same weights (documented convention, mirrors REDUCE's own
+      frequency resample). For independent source noise this over-states the per-channel sigma by up to
+      sqrt(2) at a half-channel shift and ignores the neighbour correlation the interpolation introduces;
+      the two effects cancel in the INTEGRATED-map variance (measured in test_science_resample_truth.py).
+
+    Source axis may be increasing or decreasing; it is sorted once here, never assumed."""
+    source_velocity_m_s = np.asarray(source_velocity_m_s, dtype=np.float64)
+    order = np.argsort(source_velocity_m_s, kind="stable")
     src_v = source_velocity_m_s[order]
-    src_value = relative_intensity[order]
-    src_unc = uncertainty[order]
-    usable = (np.asarray(mask, dtype=np.int64)[order] == MaskFlag.GOOD.value)
+    src_value = np.asarray(relative_intensity, dtype=np.float64)[order]
+    src_unc = np.asarray(uncertainty, dtype=np.float64)[order]
+    usable = ((np.asarray(mask, dtype=np.int64)[order] == MaskFlag.GOOD.value)
+              & np.isfinite(src_value) & np.isfinite(src_unc) & (src_unc > 0))
+    target = np.asarray(target_velocity_m_s, dtype=np.float64)
+    n = src_v.shape[0]
 
-    out_value = np.interp(target_velocity_m_s, src_v, src_value, left=np.nan, right=np.nan)
-    out_unc = np.interp(target_velocity_m_s, src_v, src_unc, left=np.nan, right=np.nan)
-    usable_at_target = np.interp(target_velocity_m_s, src_v, usable.astype(float), left=0.0, right=0.0)
-    out_mask = np.where(usable_at_target >= 0.999, MaskFlag.GOOD.value, MaskFlag.MISSING.value).astype(np.int64)
+    out_value = np.full(target.shape, np.nan)
+    out_unc = np.full(target.shape, np.nan)
+    if n < 2 or not np.all(np.diff(src_v) > 0):
+        raise ValueError("source velocity axis must have >= 2 strictly distinct samples")
 
-    return VelocityResampleResult(velocity_lsrk_m_s=target_velocity_m_s, relative_intensity=out_value,
+    in_range = np.isfinite(target) & (target >= src_v[0]) & (target <= src_v[-1])
+    j = np.clip(np.searchsorted(src_v, target, side="right") - 1, 0, n - 2)
+    t = np.where(in_range, (target - src_v[j]) / (src_v[j + 1] - src_v[j]), 0.0)   # 0 <= t <= 1 where in range
+    w0, w1 = 1.0 - t, t
+    good = in_range & ((w0 == 0.0) | usable[j]) & ((w1 == 0.0) | usable[j + 1])
+
+    # Select-then-multiply: unusable neighbours are replaced by a finite placeholder before the
+    # arithmetic and their result is discarded by `good`; no NaN is ever an operand of the sum.
+    v0, v1 = np.where(usable[j], src_value[j], 0.0), np.where(usable[j + 1], src_value[j + 1], 0.0)
+    u0, u1 = np.where(usable[j], src_unc[j], 0.0), np.where(usable[j + 1], src_unc[j + 1], 0.0)
+    out_value = np.where(good, w0 * v0 + w1 * v1, np.nan)
+    out_unc = np.where(good, w0 * u0 + w1 * u1, np.nan)
+    out_mask = np.where(good, MaskFlag.GOOD.value, MaskFlag.MISSING.value).astype(np.int64)
+
+    return VelocityResampleResult(velocity_lsrk_m_s=target, relative_intensity=out_value,
                                   uncertainty=out_unc, mask=out_mask)
