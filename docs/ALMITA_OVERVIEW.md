@@ -244,9 +244,6 @@ Planning products can show the same observation in:
 
 A local HI sky dataset can be used as **context** during planning, but contextual sky data are always kept separate from measured ALMITA data.
 
-One campaign still carries the highly formal working title:
-
-**the little Milky Way arm survey.**
 
 ---
 
