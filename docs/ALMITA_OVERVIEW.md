@@ -6,7 +6,7 @@
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
-ALMITA is an open-source amateur 21 cm neutral hydrogen radio telescope developed in **Chile** by **Felipe Fridman G.**  
+ALMITA is a **fully open-source, open-hardware amateur 21 cm neutral hydrogen radio telescope project** developed in **Chile** by **Felipe Fridman G.**  
 Contact: **ffridman@gmail.com**
 
 It combines a Raspberry Pi 5, RTL-SDR receivers, an equatorial mount controlled through INDI/OnStep, automated observing, reproducible reduction and science pipelines, and a local web interface designed to work completely offline in the field.
@@ -83,6 +83,10 @@ The current system is built around:
 - Independent reference antenna for RFI monitoring
 
 The hardware is intentionally accessible, experimental and repairable.
+
+ALMITA’s original hardware design, integration, wiring and build documentation are published under **CERN-OHL-S-2.0**. The software is published under the **MIT License**. Commercial off-the-shelf modules retain their manufacturers’ own licences and terms.
+
+Build documentation: [docs/hardware/](hardware/README.md).
 
 It is not a commercial telescope kit.
 
