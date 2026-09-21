@@ -50,6 +50,14 @@ SCIENCE_PATHS = ("data/mosaic", "data/reduced", "data/iq", "data/IQ", "data/scie
 PORTS = {"MAIN rtl_tcp": 1234, "RFI_REF rtl_tcp": 1235, "INDI": 7624, "OBSERVE API": 8090, "Field Console": 8088}
 SERVICES = ("rtl_tcp.service", "almita-observe-api.service", "almita-console-web.service", "almita-console-watcher.service")
 ALLOWED_RTL_COMMANDS = {0x01: "SET FREQUENCY", 0x02: "SET SAMPLE RATE", 0x03: "SET GAIN MODE", 0x04: "SET GAIN"}   # receiver tuner only, as capture.py
+RTL_RECV_BYTES = 262144                 # one large recv per call: the hot loop does no processing (metrics are computed after the read)
+STALL_TIMEOUT_S = 1.0                   # no bytes for this long = the stream stalled
+DEFAULT_SETTLE_S = 0.5                  # capture.py's own retune settle (SDRCapture.retune_settle_seconds): bytes in it are discarded
+# Stream validation is by THROUGHPUT against the rate the receiver must deliver (2 bytes per complex sample). A real MAIN stream measured 0.98 of
+# it; USB/rtl_tcp can lose a little, so >= 0.90 is "alive and complete". Above 1.15 the receiver is delivering more than the configured rate
+# allows (rate not applied), which is also not a healthy stream. The bounds are tested against exact, 95 %, 50 % and 24 % streams.
+MIN_THROUGHPUT_RATIO = 0.90
+MAX_THROUGHPUT_RATIO = 1.15
 BANNER = "BENCH DATA - NOT SCIENCE"
 NO_MOVEMENT = "NO MOUNT MOVEMENT: the bench sends only INDI <getProperties/> and rtl_tcp receiver commands (frequency, sample rate, gain); every other action is blocked"
 MOVEMENT_PROPERTIES = ("EQUATORIAL_EOD_COORD", "EQUATORIAL_COORD", "ON_COORD_SET", "TELESCOPE_ABORT_MOTION", "TELESCOPE_PARK", "TELESCOPE_TRACK_MODE",
@@ -366,7 +374,7 @@ class Bench:
 
     def __init__(self, root=REPO, plan=DEFAULT_PLAN, now=None, ctx=None, trace=None, listeners=None, established=None, service_active=None,
                  usb=None, meminfo=None, timedatectl=None, execstart=None, h5_samples=None, indi_factory=None, sdr_factory=None, disk_free=None,
-                 mono=None, sleep=None, expected_plan_sha256=None):
+                 mono=None, sleep=None, expected_plan_sha256=None, sdr_clock=None):
         import science_forensics_field as F
         self.F, self.root = F, Path(root)
         self.plan_arg = plan
@@ -383,6 +391,7 @@ class Bench:
         self.indi_factory, self.sdr_factory = indi_factory, sdr_factory
         self.disk_free = disk_free or (lambda p: __import__("shutil").disk_usage(p).free)
         self.mono, self.sleep = mono or time.monotonic, sleep or time.sleep
+        self.sdr_clock = sdr_clock or time.monotonic       # the SDR read window's own clock (injectable so stream tests need no real time)
         self.expected_plan_sha256 = expected_plan_sha256 or (PINNED_PLAN_SHA256 if str(plan) == DEFAULT_PLAN else None)
         self.written = []
 
@@ -599,32 +608,112 @@ def sdr_config_report(b: Bench, plan: dict) -> dict:
 
 # ------------------------------------------------------------------ SDR bench
 
-def sdr_stream_metrics(chunks, rate, seconds, elapsed, gaps) -> dict:
+def rtl_config_commands(inst: dict) -> list:
+    """The receiver settings the bench applies, in the ORDER SDRCapture._configure_network sends them (initial connection):
+    frequency, sample rate, manual gain mode, gain (tenths of dB). Nothing else, and never Bias-T."""
+    return [(0x01, int(inst["sdr_center_frequency_hz"])), (0x02, int(inst["sdr_sample_rate_hz"])), (0x03, 1), (0x04, round(float(inst["sdr_gain_db"]) * 10))]
+
+
+def read_stream(sock, *, seconds: float, settle_s: float, recv_size: int = RTL_RECV_BYTES, clock=time.monotonic) -> dict:
+    """Read the rtl_tcp stream. HOT PATH = recv + list append + two counters: no numpy, no copies, no per-block processing.
+    Bytes received during `settle_s` (retune settle) are counted and dropped; the following `seconds` are kept as-is (accumulate first,
+    measure later). The caller sets the socket timeout (a stall). Returns the raw chunks and timing; it never raises for stream problems."""
+    chunks, settle_bytes, gaps, calls = [], 0, 0, 0
+    ended_by, error = "duration", None
+    t_start = clock()
+    t_settle_end, t_end = t_start + settle_s, t_start + settle_s + seconds
+    t_first = t_last = None
+    last_recv = t_start
+    kept = 0
+    while clock() < t_end:
+        try:
+            data = sock.recv(recv_size)
+        except socket.timeout:
+            ended_by, error = "timeout", f"no bytes for {STALL_TIMEOUT_S:.1f} s (stream stalled)"
+            break
+        except OSError as exc:
+            ended_by, error = "error", f"{type(exc).__name__}: {exc}"
+            break
+        t = clock()
+        calls += 1
+        if not data:
+            ended_by, error = "closed", "rtl_tcp closed the connection"
+            break
+        if t - last_recv > 0.25:
+            gaps += 1
+        last_recv = t
+        if t < t_settle_end:
+            settle_bytes += len(data)
+            continue
+        if t_first is None:
+            t_first = t
+        t_last = t
+        kept += len(data)
+        chunks.append(data)
+    # rate estimate: bytes after the first chunk over the time they took (a chunk's own arrival time is not the time it took to produce)
+    rate = None
+    if len(chunks) >= 2 and t_last > t_first:
+        rate = (kept - len(chunks[0])) / (t_last - t_first)
+    return {"chunks": chunks, "kept_bytes": kept, "settle_discarded_bytes": settle_bytes, "recv_calls": calls, "recv_size": recv_size,
+            "gaps_over_0.25s": gaps, "ended_by": ended_by, "error": error, "measured_bytes_per_s": rate,
+            "window_seconds": (t_last - t_first) if t_first is not None else 0.0, "settle_s": settle_s}
+
+
+def sdr_stream_metrics(chunks, rate, seconds, elapsed, gaps, *, read: dict | None = None) -> dict:
+    """Sanity of what was received, computed AFTER the read and chunk by chunk (memory stays at one chunk of temporaries, never a
+    whole-stream float array). With `read` (from read_stream) the verdict uses the real measured throughput against
+    2 x sample_rate bytes/s; without it (legacy callers) the total received is compared with the total expected."""
     import numpy as np
     n = sum(len(c) for c in chunks)
-    raw = np.frombuffer(b"".join(chunks), dtype=np.uint8) if n else np.zeros(0, dtype=np.uint8)
-    expected = int(2 * rate * seconds)
-    x = raw.astype(np.float64) - 127.5
-    blocks = raw[: (raw.size // 4096) * 4096].reshape(-1, 4096) if raw.size >= 4096 else np.zeros((0, 4096), dtype=np.uint8)
-    zero_blocks = int(np.sum(np.all(blocks == blocks[:, :1], axis=1))) if blocks.size else 0
-    rms = float(np.sqrt(np.mean(x ** 2))) if x.size else float("nan")
-    clip = float(np.mean((raw == 0) | (raw == 255))) if raw.size else float("nan")
-    ratio = n / expected if expected else 0.0
-    alive = bool(n > 0 and np.isfinite(rms) and rms > 0.5 and clip < 0.05 and zero_blocks == 0 and ratio > 0.5)
-    return {"banner": BANNER, "samples_received_bytes": n, "expected_bytes": expected, "received_over_expected": ratio, "elapsed_s": elapsed,
-            "rms_counts": rms, "rms_finite": bool(np.isfinite(rms)), "clipping_fraction": clip, "zero_or_constant_blocks": zero_blocks, "blocks_checked": int(blocks.shape[0]),
-            "recv_gaps_over_0.25s": gaps, "nan_inf": "not applicable (uint8 interleaved I/Q)", "stream_alive_and_sane": alive,
-            "not_reported": "spectrum, lines, RFI and sky validity are NOT assessed: indoor data carry no astronomical meaning"}
+    expected_rate = 2.0 * rate
+    ss, clipped, zero_blocks, blocks = 0, 0, 0, 0
+    for c in chunks:
+        a = np.frombuffer(c, dtype=np.uint8)
+        t = a.astype(np.int16) * 2 - 255                      # 2 * (v - 127.5): exact in integers
+        ss += int(np.square(t, dtype=np.int64).sum())
+        clipped += int(np.count_nonzero((a == 0) | (a == 255)))
+        nb = a.size // 4096
+        if nb:
+            blk = a[: nb * 4096].reshape(nb, 4096)
+            zero_blocks += int(np.count_nonzero(np.all(blk == blk[:, :1], axis=1)))
+            blocks += nb
+    rms = float(np.sqrt(ss / 4.0 / n)) if n else float("nan")
+    clip = clipped / n if n else float("nan")
+    measured = read["measured_bytes_per_s"] if read and read.get("measured_bytes_per_s") is not None else None
+    if read is not None:
+        ratio = (measured / expected_rate) if measured is not None else 0.0
+        ended = read["ended_by"]
+    else:
+        ratio = n / (expected_rate * seconds) if seconds else 0.0
+        ended = "duration"
+    throughput_ok = bool(MIN_THROUGHPUT_RATIO <= ratio <= MAX_THROUGHPUT_RATIO)
+    alive = bool(n > 0 and np.isfinite(rms) and rms > 0.5 and clip < 0.05 and zero_blocks == 0 and throughput_ok and ended == "duration")
+    out = {"banner": BANNER, "samples_received_bytes": n, "expected_bytes": int(expected_rate * (read["window_seconds"] if read else seconds)),
+           "received_over_expected": ratio, "expected_bytes_per_s": expected_rate,
+           "throughput_bytes_per_s": measured if measured is not None else (n / seconds if (read is None and seconds) else None),
+           "throughput_MB_s": (measured / 1e6) if measured is not None else None, "throughput_MS_s_iq": (measured / 2e6) if measured is not None else None,
+           "throughput_ratio_bounds": [MIN_THROUGHPUT_RATIO, MAX_THROUGHPUT_RATIO], "throughput_ok": throughput_ok, "elapsed_s": elapsed,
+           "rms_counts": rms, "rms_finite": bool(np.isfinite(rms)), "clipping_fraction": clip, "zero_or_constant_blocks": zero_blocks, "blocks_checked": blocks,
+           "recv_gaps_over_0.25s": gaps, "nan_inf": "not applicable (uint8 interleaved I/Q)", "stream_alive_and_sane": alive, "ended_by": ended,
+           "not_reported": "spectrum, lines, RFI and sky validity are NOT assessed: indoor data carry no astronomical meaning"}
+    if read is not None:
+        out.update({"recv_size_bytes": read["recv_size"], "recv_calls": read["recv_calls"], "settle_discarded_bytes": read["settle_discarded_bytes"],
+                    "window_seconds": read["window_seconds"], "stream_error": read["error"], "peak_retained_bytes": n})
+    return out
 
 
-def sdr_bench(b: Bench, plan: dict, seconds: float, trace: Trace, save_sample=False, bench_id="BENCH") -> dict:
-    """Connect to MAIN rtl_tcp, apply the plan's receiver settings through the SAME class capture.py uses, read a few seconds, report sanity."""
+def sdr_bench(b: Bench, plan: dict, seconds: float, trace: Trace, save_sample=False, bench_id="BENCH", *, host="localhost", port=1234, settle_s=None) -> dict:
+    """Connect to the MAIN rtl_tcp, apply the plan's four receiver settings, read a few seconds, report throughput and sanity.
+
+    ONE reader only. SDRCapture.configure() starts its own continuous consumer thread that drains the same socket (it is "the sole owner of
+    streaming recv()"): a second reader in the bench would split the stream with it and see only a fraction of the bytes. So the bench uses
+    SDRCapture only to connect (handshake), sends the same four commands in the same order itself, and is the sole reader."""
     if seconds <= 0 or seconds > 5:
         raise ValueError("bench SDR stream is limited to 0 < seconds <= 5")
     inst = plan["instrument_config_identical_to_feature_campaign"]
     passive = ports_and_services(b, plan)["main_rtl_tcp"]
     res = {"banner": BANNER, "main_rtl_tcp_state": passive, "requested": {"center_frequency_hz": inst["sdr_center_frequency_hz"], "sample_rate_hz": inst["sdr_sample_rate_hz"],
-                                                                        "gain_db": inst["sdr_gain_db"], "host": "localhost", "port": 1234, "seconds": seconds}}
+                                                                        "gain_db": inst["sdr_gain_db"], "host": host, "port": port, "seconds": seconds}}
     if passive["state"] == "BUSY":
         res.update({"executed": False, "reason": "MAIN rtl_tcp is BUSY: not touched"})
         return res
@@ -632,42 +721,36 @@ def sdr_bench(b: Bench, plan: dict, seconds: float, trace: Trace, save_sample=Fa
         res.update({"executed": False, "reason": passive["reason"]})
         return res
     if b.sdr_factory is None:
-        from sdr_capture import SDRCapture                       # receiver-side class only (no INDI, no mount)
+        from sdr_capture import SDRCapture                       # connect/handshake only (no INDI, no mount, no configure(), no consumer thread)
         factory = lambda **kw: SDRCapture(**kw)
     else:
         factory = b.sdr_factory
-    wire, chunks, gaps = [], [], 0
-    sdr = factory(mode="network", host="localhost", port=1234, verbose=False)
+    wire, read = [], None
+    sdr = factory(mode="network", host=host, port=port, verbose=False)
+    settle = DEFAULT_SETTLE_S if settle_s is None else settle_s
 
     async def go():
-        nonlocal gaps
         t0 = time.monotonic()
         await sdr.connect()
-        trace.add("CONNECT", "RTL MAIN localhost:1234")
-        sdr.socket = RecordingSocket(sdr.socket, trace, wire)
-        await sdr.configure(center_freq=inst["sdr_center_frequency_hz"], sample_rate=inst["sdr_sample_rate_hz"], gain=inst["sdr_gain_db"])
-        loop = asyncio.get_event_loop()
-        sdr.socket.settimeout(1.0)
-        end, last = time.monotonic() + seconds, time.monotonic()
-        while time.monotonic() < end:
-            data = await loop.run_in_executor(None, sdr.socket.recv, 65536)
-            if not data:
-                break
-            now = time.monotonic()
-            if now - last > 0.25:
-                gaps += 1
-            last = now
-            chunks.append(data)
-            trace_once = len(chunks) == 1
-            if trace_once:
-                trace.add("READ", "RTL stream first bytes", str(len(data)))
-        return time.monotonic() - t0
+        trace.add("CONNECT", f"RTL MAIN {host}:{port}")
+        sock = RecordingSocket(sdr.socket, trace, wire)
+        sdr.socket = sock
+        for cmd, value in rtl_config_commands(inst):               # the ONLY writes: 0x01 frequency, 0x02 rate, 0x03 gain mode, 0x04 gain
+            sock.sendall(struct.pack(">BI", cmd, value))
+        sock.settimeout(STALL_TIMEOUT_S)
+        result = await asyncio.get_running_loop().run_in_executor(None, lambda: read_stream(sock, seconds=seconds, settle_s=settle, clock=b.sdr_clock))
+        if result["chunks"]:
+            trace.add("READ", "RTL stream", f"{result['kept_bytes']} bytes kept in {result['recv_calls']} recv({result['recv_size']}) calls, "
+                                            f"{result['settle_discarded_bytes']} bytes discarded in the {settle:.2f} s settle")
+        return time.monotonic() - t0, result
 
     try:
-        elapsed = asyncio.run(go())
+        elapsed, read = asyncio.run(go())
         res["executed"] = True
         res["commands_sent"] = wire
-        res["metrics"] = sdr_stream_metrics(chunks, inst["sdr_sample_rate_hz"], seconds, elapsed, gaps)
+        res["metrics"] = sdr_stream_metrics(read["chunks"], inst["sdr_sample_rate_hz"], seconds, elapsed, read["gaps_over_0.25s"], read=read)
+        if read["error"]:
+            res["error"] = read["error"]
     except MovementBlocked:
         raise
     except Exception as exc:
@@ -677,11 +760,11 @@ def sdr_bench(b: Bench, plan: dict, seconds: float, trace: Trace, save_sample=Fa
             asyncio.run(sdr.close())
         except Exception:
             pass
-    if save_sample and chunks:
+    if save_sample and read and read["chunks"]:
         d = b.bench_dir(bench_id)
         d.mkdir(parents=True, exist_ok=True)
         p = assert_bench_path(b.root, d / f"BENCH_NOT_SCIENCE_{bench_id}.u8")
-        p.write_bytes(b"".join(chunks))
+        p.write_bytes(b"".join(read["chunks"]))
         (d / f"BENCH_NOT_SCIENCE_{bench_id}.json").write_text(json.dumps({"banner": BANNER, "note": "raw uint8 I/Q bytes for infrastructure testing only; never input to REDUCE/SCIENCE/FORENSICS"}))
         b.written += [str(p)]
         res["sample_file"] = str(p)
@@ -927,8 +1010,12 @@ def run_checks(b: Bench, plan: dict, *, live_indi=False, with_sdr=False, sdr_sec
             result["sdr"] = sdr
             m = sdr.get("metrics")
             if sdr.get("executed") and m:
+                mb = m["throughput_MB_s"]
                 ck.add("MAIN SDR short stream sane (BENCH DATA, NOT SCIENCE)", "PASS" if m["stream_alive_and_sane"] else "FAIL",
-                       f"{m['samples_received_bytes']} of {m['expected_bytes']} bytes ({m['received_over_expected']:.2f}), RMS {m['rms_counts']:.2f}, clipping {m['clipping_fraction']:.4f}, constant blocks {m['zero_or_constant_blocks']}, gaps {m['recv_gaps_over_0.25s']}", "soft")
+                       f"throughput {mb:.3f} MB/s = {m['throughput_MS_s_iq']:.3f} MS/s IQ (expected {m['expected_bytes_per_s'] / 1e6:.3f} MB/s; ratio {m['received_over_expected']:.3f}, "
+                       f"accepted {m['throughput_ratio_bounds'][0]:.2f}-{m['throughput_ratio_bounds'][1]:.2f}); {m['samples_received_bytes']} bytes kept, RMS {m['rms_counts']:.2f}, "
+                       f"clipping {m['clipping_fraction']:.4f}, constant blocks {m['zero_or_constant_blocks']}, gaps {m['recv_gaps_over_0.25s']}, ended by {m['ended_by']}"
+                       if mb is not None else f"no throughput estimate ({m['samples_received_bytes']} bytes, ended by {m['ended_by']}, {m.get('stream_error')})", "soft")
             else:
                 ck.add("MAIN SDR short stream sane (BENCH DATA, NOT SCIENCE)", "FAIL", sdr.get("reason") or sdr.get("error") or "not executed", "soft")
     else:

@@ -28,7 +28,7 @@ readable coordinates and tracking state, and **zero mount movement commands**.
 | services and ports | read-only `systemctl is-active`; passive listening check on 1234 (MAIN), 1235 (RFI_REF), 7624 (INDI), 8090, 8088 from `/proc/net/tcp`; MAIN state `AVAILABLE` / `BUSY` / `UNKNOWN` (an established client on :1234 = BUSY, never touched) |
 | MAIN SDR config | serial/gain/rate/port/`-T` (Bias-T) read from the `rtl_tcp.service` unit and compared with the plan (frequency: the unit starts at 1420405000, capture.py retunes to 1420405752 on every run) |
 | INDI (live, read-only) | device name, CONNECTION, RA/Dec (validated), tracking state, pier side, park state, OnStep status, mount state; only `<getProperties/>` is sent |
-| short SDR stream (live, `--yes`) | connect, plan settings through the same `SDRCapture` class capture.py uses, 0.2-5 s of bytes: samples received vs expected, RMS finite, clipping, constant blocks, receive gaps. Marked `BENCH DATA - NOT SCIENCE` |
+| short SDR stream (live, `--yes`) | connect (via `SDRCapture.connect()` only), the plan's four receiver settings, then 0.2-5 s of bytes read by ONE reader (`recv(262144)`, no per-block processing) after a 0.5 s settle that is discarded. Verdict by measured **throughput** against `2 x sample_rate` bytes/s (see below), plus RMS finite, clipping, constant blocks, receive gaps. Marked `BENCH DATA - NOT SCIENCE` |
 | zero movement | see section 4 |
 
 ## 3. What it does NOT prove
@@ -62,7 +62,15 @@ Geometry windows are computed but marked `CALCULATED ONLY - NOT FIELD VALIDATED`
   `run_preflight`. All of them live inside `execute_observation_plan` (lines 1197-2305), which preflight never enters.
 - **INDI:** `INDITelescopeControl.connect()` sends `getProperties` and, **only if the device is not yet CONNECTED**, a `CONNECTION` switch (`indi_telescope_control.py:247`; a driver connect, not a
   motion, park or tracking command). `get_coordinates()` sends only `getProperties`; `_read_indi_preflight_properties` runs `indi_getprop` (read). No tracking write, no park change, no mount config change.
-- **SDR:** `SDRCapture.connect()` + `configure()` send only 0x01, 0x02, 0x03, 0x04 (receiver tuner) and read the dongle info/stream; no Bias-T command (Bias-T is the service's `-T` flag).
+- **SDR:** the bench sends only 0x01 (frequency), 0x02 (sample rate), 0x03 (gain mode), 0x04 (gain), in the order `SDRCapture._configure_network` uses, through a whitelist wrapper that refuses any other command; no Bias-T command (Bias-T is the service's `-T` flag). `SDRCapture.connect()`/`close()` are used for the handshake; `SDRCapture.configure()` is **not** called by the bench (see below).
+
+### Why the bench does not call `SDRCapture.configure()` (bug found on the first live run)
+
+`configure()` starts SDRCapture's continuous consumer thread, which is the sole owner of `recv()` on that socket (it drains the stream to keep rtl_tcp from stalling). The first bench version then read the same socket itself: two readers split the stream and the consumer thread discarded most of it (2.29 MB of 9.6 MB expected, ratio 0.2388), while a direct `recv(262144)` test on the same rtl_tcp got 4.709 MB/s (ratio 0.981). Hardware, USB and rtl_tcp were healthy; the bench was the limit. The bench is now the **only** reader and the hot loop is just `recv` + append + counters; RMS/clipping/constant-block metrics are computed afterwards, chunk by chunk (integer math, no whole-stream float array; peak extra memory is a few chunk-sized temporaries; the bytes kept are at most ~12 MB for 5 s).
+
+### Throughput criterion
+
+Expected rate = `2 x sample_rate` bytes/s (uint8 interleaved I/Q: 4.8 MB/s at 2.4 MS/s). Measured over the window after the 0.5 s settle (bytes after the first chunk over the time they took). **Accepted: 0.90 <= measured/expected <= 1.15.** 100 % is not required (the real MAIN measured 0.981; USB/rtl_tcp may lose a little); below 0.90 the stream is short (the buggy reader's 0.24, a half-rate stream and 0.85 are all rejected in tests); above 1.15 the receiver delivers more than the configured rate allows, so the rate was not applied. A stall (no bytes for 1 s), a closed connection or a socket error ends the read and is reported as `ended_by` timeout/closed/error, never as a pass.
 - Filesystem side effects only: a temporary HDF5 and a probe file are created and removed; `SessionManager()` initialises `data/IQ/session.csv` if missing.
 - Caveats: preflight retunes MAIN rtl_tcp to the plan values; it may write `CONNECTION=On` once. The bench itself never runs capture.py, and the wrapper's `preflight` stays an **outdoor** step.
 Negative controls are tested: a copy of capture.py with a `goto`/`ensure_tracking_off` inside `run_preflight`, the gate removed, a Bias-T command in `configure`, or a `new*Vector` in `get_coordinates` is judged `NOT SAFE INDOOR`.

@@ -102,41 +102,66 @@ class FakeTransport:
         self.closed = True
 
 
+class VClock:
+    """Virtual monotonic clock: the SDR tests never sleep and never depend on the machine's speed."""
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
 class FakeSocket:
-    def __init__(self, generator):
-        self.sent, self.gen = [], generator
+    """rtl_tcp socket paced by a virtual clock: every recv returns up to `chunk` bytes and advances the clock by what a receiver
+    producing `rate` bytes/s would need (rate=None: no pacing). `script` (list of bytes / exceptions) overrides the generator."""
+    def __init__(self, generator, clock=None, rate=4_800_000, chunk=None, script=None):
+        self.sent, self.gen, self.clock, self.rate, self.chunk, self.script = [], generator, clock, rate, chunk, script
+        self.recv_sizes, self.timeout = [], None
 
     def sendall(self, data):
         self.sent.append(data)
 
     def settimeout(self, t):
-        pass
+        self.timeout = t
 
     def recv(self, n):
-        time.sleep(0.004)
-        return self.gen(n)
+        self.recv_sizes.append(n)
+        if self.script is not None:
+            item = self.script.pop(0) if self.script else b""
+            if isinstance(item, BaseException):
+                raise item
+            if self.clock is not None and self.rate:
+                self.clock.t += len(item) / self.rate
+            return item
+        data = self.gen(min(n, self.chunk) if self.chunk else n)
+        if self.clock is not None and self.rate:
+            self.clock.t += len(data) / self.rate
+        return data
 
     def close(self):
         pass
 
 
+_LIVE = np.random.default_rng(5).normal(127.5, 25, 1 << 20).clip(1, 254).astype(np.uint8).tobytes()
+
+
 def live_bytes(n):
-    return np.random.default_rng(5).normal(127.5, 25, n).clip(1, 254).astype(np.uint8).tobytes()
+    return _LIVE[:n] if n <= len(_LIVE) else (_LIVE * (n // len(_LIVE) + 1))[:n]
 
 
 class FakeSDR:
-    """Same surface capture.py's preflight uses: connect / configure / close; configure sends the 4 rtl_tcp commands over the socket."""
-    def __init__(self, generator=live_bytes, extra_cmd=None, mode=None, host=None, port=None, verbose=False):
-        self.generator, self.extra_cmd, self.socket, self.closed = generator, extra_cmd, None, False
+    """What the bench uses of SDRCapture: connect / socket / close. configure() must NEVER be called (it would start SDRCapture's own
+    consumer thread on the same socket): calling it fails the test."""
+    def __init__(self, generator=live_bytes, mode=None, host=None, port=None, verbose=False, clock=None, **sockopts):
+        self.generator, self.clock, self.sockopts, self.socket, self.closed = generator, clock, sockopts, None, False
+        self.configure_called = False
 
     async def connect(self):
-        self.socket = FakeSocket(self.generator)
+        self.socket = FakeSocket(self.generator, clock=self.clock, **self.sockopts)
 
-    async def configure(self, center_freq, sample_rate, gain):
-        for cmd, val in ((1, center_freq), (2, sample_rate), (3, 1), (4, round(float(gain) * 10))):
-            self.socket.sendall(struct.pack(">BI", cmd, int(val)))
-        if self.extra_cmd is not None:
-            self.socket.sendall(struct.pack(">BI", self.extra_cmd, 1))
+    async def configure(self, *a, **k):
+        self.configure_called = True
+        raise AssertionError("the bench must not call SDRCapture.configure(): it starts a competing consumer thread on the same socket")
 
     async def close(self):
         self.closed = True
@@ -151,10 +176,15 @@ def make_bench(repo, now=NOW, runner=None, **kw):
                     timedatectl=lambda: {"Timezone": "Etc/UTC", "NTPSynchronized": "yes"},
                     execstart=lambda: "/usr/bin/rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 -f 1420405000 -s 2400000 -g 40.2 -T",
                     h5_samples=lambda: [(12_000_000, 10.0)] * 5, disk_free=lambda p: 10 ** 12, indi_factory=lambda h, p, t: FakeTransport(),
-                    sdr_factory=lambda **k: FakeSDR())
+                    sdr_factory=None)
+    vclock = kw.pop("sdr_clock", None) or VClock()
     defaults.update(kw)
+    defaults["sdr_clock"] = vclock
+    if defaults["sdr_factory"] is None:
+        defaults["sdr_factory"] = lambda **k: FakeSDR(clock=vclock)
     b = B.Bench(root=repo, ctx=ctx, **defaults)
     b.runner = runner
+    b.vclock = vclock
     return b
 
 
@@ -269,10 +299,24 @@ def test_movement_seen_on_the_wire_blocks_the_bench(repo, monkeypatch):
 
 # ------------------------------------------------------------------ SDR
 
+def run_sdr(b, seconds=2.0, **kw):
+    return B.sdr_bench(b, B.load_plan(b), seconds, b.trace, **kw)
+
+
+def bench_with(repo, rate=4_800_000, chunk=None, **kw):
+    clock = VClock()
+    holder = {"clock": clock}
+
+    def factory(**k):
+        holder["sdr"] = FakeSDR(clock=clock, rate=rate, chunk=chunk, **kw)
+        return holder["sdr"]
+    b = make_bench(repo, sdr_factory=factory, sdr_clock=clock)
+    return b, holder
+
+
 def test_rtl_connect_and_plan_configuration_allowed_with_trace(repo):
-    b = make_bench(repo)
-    plan = B.load_plan(b)
-    r = B.sdr_bench(b, plan, 0.2, b.trace)
+    b, h = bench_with(repo)
+    r = run_sdr(b, 0.2)
     assert r["executed"] and r["banner"] == "BENCH DATA - NOT SCIENCE"
     cmds = {c["name"]: c["value"] for c in r["commands_sent"]}
     assert cmds == {"SET FREQUENCY": 1420405752, "SET SAMPLE RATE": 2400000, "SET GAIN MODE": 1, "SET GAIN": 402}
@@ -283,11 +327,175 @@ def test_rtl_connect_and_plan_configuration_allowed_with_trace(repo):
     assert "NOT assessed" in m["not_reported"] and "hydrogen" not in json.dumps(m).lower() and "detected" not in json.dumps(m).lower()
 
 
-def test_bias_t_or_any_other_rtl_command_is_blocked(repo):
-    b = make_bench(repo, sdr_factory=lambda **k: FakeSDR(extra_cmd=0x0e))            # 0x0e = bias-T on some rtl_tcp builds
+def test_only_the_four_allowed_commands_are_sent_in_capture_py_order_and_configure_is_never_called(repo):
+    b, h = bench_with(repo)
+    run_sdr(b, 0.2)
+    sent = [struct.unpack(">BI", d) for d in h["sdr"].socket.sent]
+    assert sent == [(0x01, 1420405752), (0x02, 2400000), (0x03, 1), (0x04, 402)]          # same order/values as SDRCapture._configure_network
+    assert {c for c, _ in sent} == set(B.ALLOWED_RTL_COMMANDS) == {1, 2, 3, 4} and not any(c == 0x0e for c, _ in sent)
+    assert h["sdr"].configure_called is False and h["sdr"].closed is True
+
+
+def test_bias_t_or_any_other_rtl_command_is_blocked(repo, monkeypatch):
+    b, h = bench_with(repo)
+    monkeypatch.setattr(B, "rtl_config_commands", lambda inst: [(0x01, 1420405752), (0x0e, 1)])      # 0x0e = bias-T on some rtl_tcp builds
     with pytest.raises(B.MovementBlocked):
-        B.sdr_bench(b, B.load_plan(b), 0.2, b.trace)
+        run_sdr(b, 0.2)
     assert b.trace.count("BLOCKED_WRITE") == 1
+    assert [struct.unpack(">BI", d)[0] for d in h["sdr"].socket.sent] == [0x01]                # the forbidden command never reached the socket
+
+
+@pytest.mark.parametrize("cmd", [0x00, 0x05, 0x06, 0x0d, 0x0e, 0x0f, 0x10, 0xff])
+def test_recording_socket_refuses_everything_outside_the_four(cmd):
+    tr, log, sock = B.Trace(), [], FakeSocket(live_bytes)
+    rs = B.RecordingSocket(sock, tr, log)
+    with pytest.raises(B.MovementBlocked):
+        rs.sendall(struct.pack(">BI", cmd, 1))
+    with pytest.raises(B.MovementBlocked):
+        rs.sendall(b"garbage")
+    assert sock.sent == [] and tr.count("BLOCKED_WRITE") == 2
+
+
+def test_reader_uses_one_large_recv_and_sdrcapture_is_only_used_to_connect(repo):
+    b, h = bench_with(repo)
+    r = run_sdr(b, 1.0)
+    assert B.RTL_RECV_BYTES == 262144
+    assert set(h["sdr"].socket.recv_sizes) == {262144}
+    assert r["metrics"]["recv_size_bytes"] == 262144 and r["metrics"]["recv_calls"] == len(h["sdr"].socket.recv_sizes)
+    assert h["sdr"].socket.timeout == B.STALL_TIMEOUT_S
+
+
+def test_exact_expected_throughput_passes(repo):
+    b, _ = bench_with(repo, rate=4_800_000)
+    m = run_sdr(b, 2.0)["metrics"]
+    assert m["expected_bytes_per_s"] == 4_800_000
+    assert m["received_over_expected"] == pytest.approx(1.0, abs=0.01) and m["stream_alive_and_sane"] and m["throughput_ok"]
+    assert m["throughput_MS_s_iq"] == pytest.approx(2.4, abs=0.03) and m["throughput_MB_s"] == pytest.approx(4.8, abs=0.05)
+    assert m["ended_by"] == "duration"
+
+
+def test_fast_reader_measures_the_real_rate_not_the_read_speed(repo):
+    """Reads (and the bench's own processing) are not the limit: the throughput reported is what the receiver delivered."""
+    b, _ = bench_with(repo, rate=4_709_000)               # the value measured on the real MAIN with a direct recv(262144) test
+    m = run_sdr(b, 2.0)["metrics"]
+    assert m["received_over_expected"] == pytest.approx(0.981, abs=0.005) and m["stream_alive_and_sane"]
+
+
+def test_about_95_percent_of_expected_still_passes(repo):
+    b, _ = bench_with(repo, rate=4_560_000)
+    m = run_sdr(b, 2.0)["metrics"]
+    assert m["received_over_expected"] == pytest.approx(0.95, abs=0.01) and m["stream_alive_and_sane"]
+
+
+def test_clearly_insufficient_throughput_fails(repo):
+    for rate in (0.2388 * 4_800_000, 0.5 * 4_800_000, 0.85 * 4_800_000):           # 0.2388 = the bug's symptom
+        b, _ = bench_with(repo, rate=rate)
+        m = run_sdr(b, 2.0)["metrics"]
+        assert not m["stream_alive_and_sane"] and not m["throughput_ok"] and m["ended_by"] == "duration"
+        assert m["received_over_expected"] == pytest.approx(rate / 4_800_000, abs=0.01)
+
+
+def test_a_stream_far_above_the_configured_rate_is_not_healthy_either(repo):
+    b, _ = bench_with(repo, rate=2 * 4_800_000)
+    assert not run_sdr(b, 1.0)["metrics"]["stream_alive_and_sane"]
+
+
+def test_slow_reader_is_not_hidden_by_the_bench(repo):
+    """A reader that takes long per recv (small chunks at a low rate) is reported as insufficient throughput, never as a sane stream."""
+    b, _ = bench_with(repo, rate=900_000, chunk=65536)                 # the ~0.9 MB/s the operator saw
+    m = run_sdr(b, 2.0)["metrics"]
+    assert m["throughput_MB_s"] == pytest.approx(0.9, abs=0.02) and not m["stream_alive_and_sane"]
+
+
+def test_partial_recv_sizes_are_accumulated_correctly(repo):
+    sizes = iter([1, 7, 4096, 100_000, 3, 262144, 999] * 100_000)
+    clock = VClock()
+    rng = np.random.default_rng(1)
+
+    def gen(n):
+        return rng.integers(30, 220, min(n, next(sizes)), dtype=np.uint8).tobytes()
+    b = make_bench(repo, sdr_clock=clock, sdr_factory=lambda **k: FakeSDR(gen, clock=clock, rate=4_800_000))
+    r = run_sdr(b, 0.05, settle_s=0.0)
+    m = r["metrics"]
+    assert m["samples_received_bytes"] > 100_000 and m["recv_calls"] > 5 and m["ended_by"] == "duration"
+    # the per-chunk metrics equal the whole-buffer metrics for arbitrary chunk boundaries
+    chunks = [bytes([a % 250 + 3 for a in range(n)]) for n in (1, 7, 4095, 4097, 12345)]
+    whole = np.frombuffer(b"".join(chunks), dtype=np.uint8).astype(np.float64) - 127.5
+    got = B.sdr_stream_metrics(chunks, 2_400_000, 1.0, 1.0, 0)
+    assert got["samples_received_bytes"] == sum(map(len, chunks))
+    assert got["rms_counts"] == pytest.approx(float(np.sqrt(np.mean(whole ** 2))), rel=1e-9)
+    assert got["clipping_fraction"] == pytest.approx(float(np.mean((whole == -127.5) | (whole == 127.5))))
+
+
+def test_settle_period_is_discarded_and_not_counted_in_the_rate(repo):
+    b, h = bench_with(repo, rate=4_800_000)
+    r = run_sdr(b, 1.0)
+    m = r["metrics"]
+    assert m["settle_discarded_bytes"] == pytest.approx(0.5 * 4_800_000, rel=0.1)
+    assert m["samples_received_bytes"] == pytest.approx(1.0 * 4_800_000, rel=0.1) and m["window_seconds"] == pytest.approx(1.0, abs=0.1)
+
+
+def test_timeout_is_a_reported_stall_not_a_crash_or_a_pass(repo):
+    import socket as pysocket
+    clock = VClock()
+    script = [live_bytes(262144)] * 6 + [pysocket.timeout("timed out")]
+    b = make_bench(repo, sdr_clock=clock, sdr_factory=lambda **k: FakeSDR(clock=clock, script=script))
+    r = run_sdr(b, 2.0)
+    m = r["metrics"]
+    assert r["executed"] and m["ended_by"] == "timeout" and not m["stream_alive_and_sane"] and "stalled" in r["error"]
+
+
+def test_connection_closed_by_rtl_tcp_is_reported(repo):
+    clock = VClock()
+    script = [live_bytes(262144)] * 5 + [b""]
+    b = make_bench(repo, sdr_clock=clock, sdr_factory=lambda **k: FakeSDR(clock=clock, script=script))
+    r = run_sdr(b, 2.0)
+    m = r["metrics"]
+    assert m["ended_by"] == "closed" and not m["stream_alive_and_sane"] and "closed" in r["error"]
+
+
+def test_socket_error_is_reported(repo):
+    clock = VClock()
+    script = [live_bytes(262144)] * 5 + [ConnectionResetError("reset")]
+    b = make_bench(repo, sdr_clock=clock, sdr_factory=lambda **k: FakeSDR(clock=clock, script=script))
+    r = run_sdr(b, 2.0)
+    assert r["metrics"]["ended_by"] == "error" and not r["metrics"]["stream_alive_and_sane"] and "ConnectionResetError" in r["error"]
+
+
+def test_no_bytes_at_all_is_not_alive(repo):
+    clock = VClock()
+    b = make_bench(repo, sdr_clock=clock, sdr_factory=lambda **k: FakeSDR(clock=clock, script=[b""]))
+    m = run_sdr(b, 1.0)["metrics"]
+    assert m["samples_received_bytes"] == 0 and not m["stream_alive_and_sane"]
+
+
+def _func(name):
+    tree = ast.parse((ROOT / "scripts/science_forensics_bench.py").read_text())
+    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def test_hot_path_does_no_numpy_and_metrics_memory_is_bounded():
+    def refs(fn):
+        return {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+    hot = refs(_func("read_stream"))
+    assert not hot & {"np", "numpy", "astype", "frombuffer", "join", "concatenate", "bytearray"}, hot             # recv + append + counters only
+    assert not {n.id for n in ast.walk(_func("read_stream")) if isinstance(n, ast.Import)}
+    cold = refs(_func("sdr_stream_metrics"))
+    assert not cold & {"join", "float64", "concatenate"}, cold                                                     # no whole-stream copy / float64 blow-up
+    import tracemalloc
+    chunks = [live_bytes(262144) for _ in range(40)]                                                             # 10.5 MB kept by the caller
+    tracemalloc.start()
+    B.sdr_stream_metrics(chunks, 2_400_000, 2.0, 2.0, 0)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert peak < 4 * 1024 * 1024                                                                                # a few chunk-sized temporaries, not 8x the stream
+
+
+def test_bench_sdr_run_never_moves_the_mount_and_writes_no_indi(repo):
+    b, h = bench_with(repo)
+    r = run_sdr(b, 0.5)
+    assert r["executed"] and b.trace.count("BLOCKED_MOVEMENT") == 0 and b.trace.count("BLOCKED_WRITE") == 0
+    assert all(e["kind"] in ("CONNECT", "CONFIGURE", "READ") for e in b.trace.events)
 
 
 def test_dead_or_clipped_streams_are_not_declared_sane():
