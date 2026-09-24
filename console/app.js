@@ -502,6 +502,8 @@ function render(status){
   LINK.statusUpdatedMs=Date.parse(status.updated_utc);renderLink();
   const systemState=status.system_state||"READY";
   $("system-badge").textContent=systemState;$("system-badge").className=badgeClass(systemState);
+  {const acq=status.acquisition||{},chip=$("ops-chip");if(chip){const live=["RUNNING","STARTING","STOPPING"].includes(acq.state);
+    chip.textContent="OPERATIONAL · "+systemState+(live?" · ACQUISITION "+acq.state+" "+(acq.points_success??0)+"/"+(acq.points_total??"?"):" · operate from PIPELINE →");}}
   $("updated").textContent=_shortTime(status.updated_utc);
   renderInstrument(status.instrument||{},status.wifi||{});
   renderSession(status.acquisition||{state:"IDLE"});
@@ -532,6 +534,62 @@ function syncJson(name){
   return request.status===200?JSON.parse(request.responseText):null;
 }
 
+// MOUNT CAMERA — same-origin MJPEG relay only (this :8088 server, /mount_camera/*), never the ESP32-CAM's own
+// address. Deliberately independent of poll()/render() above: a camera fault here must never affect any other
+// MONITOR tile, so every operation below is self-contained and defensively try/caught.
+function initMountCamera(){
+  const img=document.getElementById("mount-camera-img"),placeholder=document.getElementById("mount-camera-placeholder");
+  const badge=document.getElementById("mount-camera-badge"),kv=document.getElementById("mount-camera-kv");
+  const retryBtn=document.getElementById("mount-camera-retry");
+  const urlInput=document.getElementById("mount-camera-url"),saveBtn=document.getElementById("mount-camera-save"),note=document.getElementById("mount-camera-config-note");
+  if(!img||!badge)return;   // page variant without this tile - nothing to do
+
+  function loadStream(){
+    // Cache-busted src: forces a fresh GET (a fresh subscribe() to the shared relay) - the browser's own
+    // multipart/x-mixed-replace support renders each frame as it arrives; nothing here decodes/redraws it.
+    img.src="/mount_camera/stream?t="+Date.now();
+    img.hidden=false;
+  }
+  img.addEventListener("load",()=>{placeholder.hidden=true;img.hidden=false});
+  img.addEventListener("error",()=>{img.hidden=true;placeholder.hidden=false;placeholder.textContent="STREAM UNAVAILABLE — see status below, or REINTENTAR"});
+
+  async function refreshStatus(){
+    try{
+      const ctl=typeof AbortController==="function"?new AbortController():null;
+      const timer=ctl?setTimeout(()=>ctl.abort(),6000):null;
+      let response;
+      try{response=await fetch("/mount_camera/status",{cache:"no-store",signal:ctl?ctl.signal:undefined})}
+      finally{if(timer)clearTimeout(timer)}
+      if(!response.ok)throw new Error("HTTP "+response.status);
+      const s=await response.json();
+      badge.textContent=s.state||"—";badge.className="badge status-"+String(s.state||"unknown").toLowerCase();
+      kv.innerHTML=[pair("VIEWERS (this ALMITA process)",s.viewers),pair("SOURCE",s.configured_url),s.last_error?pair("LAST ERROR",s.last_error):""].join("");
+      if(urlInput&&document.activeElement!==urlInput)urlInput.value=s.configured_url||s.default_url||"";
+      if(urlInput&&!urlInput.value)urlInput.placeholder=s.default_url||"";
+    }catch(err){
+      badge.textContent="UNKNOWN";badge.className="badge status-unknown";
+      kv.innerHTML=pair("STATUS","console link degraded — "+(err&&err.message||err));
+    }
+  }
+
+  if(retryBtn)retryBtn.addEventListener("click",()=>{try{loadStream();refreshStatus()}catch(e){/* isolated - never affects the rest of MONITOR */}});
+  if(saveBtn)saveBtn.addEventListener("click",async()=>{
+    try{
+      const url=(urlInput&&urlInput.value||"").trim();
+      note.textContent="saving…";
+      const response=await fetch("/mount_camera/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stream_url:url})});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok||!data.ok){note.textContent="save failed: "+(data.error||("HTTP "+response.status));return}
+      note.textContent="saved — will be used on the next (re)connect";
+      loadStream();refreshStatus();
+    }catch(err){note.textContent="save failed: "+String(err&&err.message||err)}
+  });
+
+  try{loadStream()}catch(e){/* isolated */}
+  refreshStatus();
+  setInterval(()=>{if(!document.hidden){try{refreshStatus()}catch(e){/* isolated - never throws into the main poll loop */}}},5000);
+}
+
 function start(){
   if(PARAMETERS.get("snapshot")==="1"){const status=syncJson("almita_status.json");if(status)render(status);return}
   poll();
@@ -540,6 +598,7 @@ function start(){
   document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
   setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z";renderLink()},1000);
   if(window.AlmitaUI&&AlmitaUI.mountFooter)AlmitaUI.mountFooter();
+  try{initMountCamera()}catch(e){console.error("mount camera init failed (isolated, other tiles unaffected):",e)}
 }
 window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,
   drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG,linkState,LINK};

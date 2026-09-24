@@ -4,9 +4,12 @@
   <title>ALMITA Field Console</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
 <body data-version-url="/version.json">
   <header class="topbar">
-    <div><h1>ALMITA FIELD CONSOLE</h1><span class="readonly">READ ONLY</span></div>
+    <div><h1>ALMITA FIELD CONSOLE</h1><span id="ops-chip" class="readonly">OPERATIONAL STATE …</span></div>
     <nav class="obs-nav">
+      <a class="obs-nav-link" id="nav-pipeline" href="#">PIPELINE</a>
       <a class="obs-nav-link" id="nav-observe" href="#">OBSERVE</a>
+      <a class="obs-nav-link" id="nav-align" href="#">ALIGN</a>
+      <a class="obs-nav-link" id="nav-calibrate" href="#">CALIBRATE</a>
       <a class="obs-nav-link" id="nav-status" href="#">STATUS</a>
       <a class="obs-nav-link active" href="#">MONITOR</a>
       <a class="obs-nav-link" href="#last-session">LAST SESSION</a>
@@ -28,6 +31,20 @@
         <div id="quicklook-kv" class="kv"></div></article>
       <article class="panel"><header><h2>RFI REFERENCE</h2><span id="rfi-ref-badge" class="badge">—</span></header>
         <div id="rfi-ref-kv" class="kv"></div></article>
+      <article class="panel" id="mount-camera-panel"><header><h2>MOUNT CAMERA</h2><span id="mount-camera-badge" class="badge">—</span></header>
+        <div class="mount-camera-frame">
+          <img id="mount-camera-img" alt="Mount camera live stream" hidden>
+          <div id="mount-camera-placeholder" class="mount-camera-placeholder">—</div>
+        </div>
+        <div id="mount-camera-kv" class="kv"></div>
+        <div class="obs-actions"><button type="button" id="mount-camera-retry">REINTENTAR</button></div>
+        <details id="mount-camera-config">
+          <summary>Configure stream URL</summary>
+          <div class="obs-row"><label for="mount-camera-url">STREAM URL</label><input type="text" id="mount-camera-url" placeholder="e.g. 192.168.1.164:81/stream (include http:// or https://)"></div>
+          <div class="obs-actions"><button type="button" id="mount-camera-save">SAVE</button></div>
+          <div id="mount-camera-config-note" class="muted"></div>
+        </details>
+      </article>
     </section>
     <div class="science-row">
       <div class="science-row-left">
@@ -79,8 +96,12 @@
   <script src="common.js"></script>
   <script src="app.js"></script>
   <script>
-    // Points OBSERVE at the orchestrator's own API/UI server (a separate
-    // process/port from this read-only console) — never touches app.js.
+    // The operating pages (PIPELINE, OBSERVE, ALIGN, CALIBRATE: real RW, with typed confirmations) live on the orchestrator's own server
+    // (:8090). This :8088 page stays the always-on monitor (it serves GET/HEAD only) and shows the live operational state in its header.
+    const base = location.protocol + "//" + location.hostname + ":8090";
+    document.getElementById("nav-pipeline").href = base + "/pipeline.html";
+    document.getElementById("nav-align").href = base + "/align.html";
+    document.getElementById("nav-calibrate").href = base + "/calibrate.html";
     document.getElementById("nav-observe").href =
       location.protocol + "//" + location.hostname + ":8090/observe.html";
     document.getElementById("nav-status").href =
