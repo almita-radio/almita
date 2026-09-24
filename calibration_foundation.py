@@ -279,6 +279,11 @@ def check_calibration_compatibility(
         "50_OHM_AT_LNA_INPUT": expected_topology,
         "ANTENNA_AT_LNA_INPUT_INDOOR": expected_topology,
         "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR": expected_topology,
+        # calibration_operational_realtest.py's real "REAL CALIBRATION" captures record this exact string
+        # (rf_input="ANTENNA_CURRENT_OPERATIONAL") - verified against a real capture's own HDF5 attrs; without
+        # this alias a real antenna capture from that tool was INCOMPATIBLE with every relative profile, even
+        # a genuinely matching one.
+        "ANTENNA_CURRENT_OPERATIONAL": expected_topology,
     }
     normalized = aliases.get(str(capture_topology), str(capture_topology))
     if normalized != expected_topology:

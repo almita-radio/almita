@@ -151,8 +151,17 @@ async def _do_50r_capture(session_dir: Path, state: Dict[str, Any], simulate: Op
             if simulate:
                 await backend.capture(**kwargs, metadata={"reference_kind": "AMBIENT_50R", "simulated_scenario": simulate}, index=i)
             else:
+                # sdr_capture.py's own HDF5-attrs-writing code (_capture_network, frozen module - never
+                # modified here) defaults center_frequency_hz to a HARDCODED 1420405752 and gain to the
+                # literal string "auto" unless the metadata dict supplies the EXACT keys
+                # 'center_frequency_hz'/'gain_requested_db' (capture_metadata.update(metadata) then
+                # overrides the placeholder - the same pattern calibration_operational_realtest.py already
+                # uses, documented there). Found live: an earlier real wizard session's 50R/HI captures
+                # recorded the placeholder values because this dict was missing them.
                 await backend.capture(**kwargs, metadata={"reference_kind": "AMBIENT_50R",
-                                                           "configuration_source": "VERIFIED_BY_SERVICE_COMMAND_LINE"})
+                                                           "configuration_source": "VERIFIED_BY_SERVICE_COMMAND_LINE",
+                                                           "center_frequency_hz": cfg.center_frequency_hz,
+                                                           "gain_requested_db": cfg.gain_db})
             iq, _ = read_capture_iq(str(path))
             iq_arrays.append(iq)
     finally:
@@ -258,8 +267,14 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
         mount_ra, mount_dec = await telescope.get_coordinates(force_refresh=True)
         for i in range(n_captures):
             path = cap_dir / f"capture_{i:03d}.h5"
+            # sdr_capture.py's HDF5-attrs writer (frozen, never modified here) defaults center_frequency_hz to
+            # a hardcoded 1420405752 unless the metadata dict has the EXACT key 'center_frequency_hz' (the
+            # 'gain' key here already correctly overrides the placeholder gain, by coincidence of matching the
+            # base dict's own key name - frequency needs the same exact-key treatment; see the analogous
+            # fix/comment in _do_50r_capture above).
             await sdr.capture(capture_seconds, str(path), int(sample_rate_hz),
-                              {"gain": gain_db, "purpose": "calibrate_wizard_hi", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
+                              {"gain": gain_db, "center_frequency_hz": center_frequency_hz,
+                               "purpose": "calibrate_wizard_hi", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
             paths.append(path)
         return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg,
                "mount_ra_hours": mount_ra, "mount_dec_deg": mount_dec, "gain_db": gain_db,
