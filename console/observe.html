@@ -71,6 +71,54 @@
       <div class="reason" data-for="btn-start" role="status"></div>
     </section>
 
+    <section id="gain-pilot-panel" class="panel" hidden aria-labelledby="h-gp">
+      <header><h2 id="h-gp">GAIN PILOT <span class="muted">(optional · real MAIN captures + real mount movement when run · linked to this grid)</span></h2><span id="gp-badge" class="badge">—</span></header>
+      <div class="obs-row"><label><input type="checkbox" id="gp-enabled" checked> Enable gain-pilot stage before START (suggested: ON)</label></div>
+      <div id="gp-config" >
+        <div class="obs-row"><label for="gp-max-pilots">MAX PILOT POINTS (1 = HIGH only ever; 2 = HIGH, +LOW if needed — suggested)</label><input type="number" id="gp-max-pilots" min="1" max="2" value="2"></div>
+        <div class="obs-row"><label for="gp-capture-s">CAPTURE TIME PER PILOT (s)</label><input type="number" id="gp-capture-s" min="0.5" max="30" step="any" value="2"></div>
+        <div class="obs-row"><label for="gp-settle-s">SETTLE TIME (s)</label><input type="number" id="gp-settle-s" min="0" max="60" step="any" value="1"></div>
+        <div class="obs-row"><label for="gp-headroom">HEADROOM TARGET (x warning threshold — suggested)</label><input type="number" id="gp-headroom" min="1" max="5" step="any" value="1.5"></div>
+        <div class="obs-row"><label for="gp-clip">CLIPPING RAIL-HIT THRESHOLD (fraction)</label><input type="number" id="gp-clip" min="0.000001" max="0.1" step="any" value="0.0001"></div>
+        <div class="obs-row"><label for="gp-rfi">RFI PROXY: MIN USABLE BAND FRACTION</label><input type="number" id="gp-rfi" min="0" max="1" step="any" value="0.5"></div>
+        <div class="obs-row"><label for="gp-gain">STARTING GAIN (dB — from the grid plan, editable)</label><input type="number" id="gp-gain" min="0" max="60" step="any" value="40.2"></div>
+        <div class="obs-row"><label><input type="checkbox" id="gp-final-check" checked> Offer a final stability check after the grid finishes (suggested: ON)</label></div>
+        <div class="obs-actions"><button type="button" id="gp-plan-btn">PLAN GAIN PILOT</button></div>
+      </div>
+      <div class="obs-row"><label for="gp-move-confirm">TYPE MOVE TO ALLOW REAL PILOT CAPTURES (GOTO + MAIN capture)</label><input type="text" id="gp-move-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+      <div id="gp-stale" class="obs-summary" hidden style="color:var(--warn,#e6b85c)"></div>
+      <div id="gp-plan-result" hidden>
+        <div class="obs-summary" id="gp-plan-summary"></div>
+        <div class="twrap"><table id="gp-plan-table" class="status-table"><thead><tr><th>label</th><th>RA (h)</th><th>Dec (deg)</th><th>pred. alt</th><th>HI4PI N_HI (×10²⁰cm⁻²)</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div id="gp-step-prepare" hidden>
+        <div class="obs-summary" id="gp-prepare-note"></div>
+        <div class="obs-actions"><button type="button" id="gp-capture-btn">CAPTURE PILOT NOW (real GOTO + capture)</button></div>
+      </div>
+      <div id="gp-step-decision" hidden>
+        <div class="obs-summary" id="gp-decision-summary"></div>
+        <div class="obs-row"><label for="gp-approve-gain">APPROVE GAIN (dB, real admitted value)</label><input type="number" id="gp-approve-gain" step="any"></div>
+        <div class="obs-actions">
+          <button type="button" id="gp-approve-btn">APPROVE THIS GAIN</button>
+          <button type="button" id="gp-measure-low-btn" hidden>MEASURE LOW TOO (optional, real GOTO + capture)</button>
+        </div>
+      </div>
+      <div id="gp-step-verify" hidden>
+        <div class="obs-summary">Gain changed — re-measuring at the new gain before it can be used (rtl_tcp has no gain readback; this real re-capture is the only way to confirm the effective result).</div>
+        <div class="obs-actions"><button type="button" id="gp-verify-btn">VERIFY NEW GAIN (real capture)</button></div>
+      </div>
+      <div id="gp-step-ready" hidden>
+        <div class="obs-summary" id="gp-ready-summary"></div>
+      </div>
+      <div id="gp-final-check-panel" hidden>
+        <div class="obs-summary" id="gp-final-summary"></div>
+        <div class="obs-actions"><button type="button" id="gp-final-btn">RUN FINAL STABILITY CHECK (real capture)</button></div>
+        <div class="obs-summary" id="gp-final-result"></div>
+      </div>
+      <div class="obs-actions"><button type="button" id="gp-abort-btn">ABORT GAIN PILOT</button></div>
+      <div id="job-gain-pilot"></div>
+    </section>
+
     <section id="run-status" class="panel obs-run-status" hidden aria-labelledby="h-run">
       <header><h2 id="h-run">OBSERVATION RUN</h2><span id="run-badge" class="badge">—</span></header>
       <div id="run-kind" class="run-kind" role="status"></div>

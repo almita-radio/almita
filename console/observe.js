@@ -112,6 +112,8 @@
     if (blocked) return U.setEnabled(btn, false, "the plan is BLOCKED — see the preflight checks");
     if (observationState && ACTIVE.includes(observationState)) return U.setEnabled(btn, false, `an observation is already ${observationState}`);
     if (planDeadlineMs && Date.now() > planDeadlineMs) return U.setEnabled(btn, false, "the plan is stale (start-delay budget exceeded): re-plan");
+    const gpReason = gainPilotBlockReason();
+    if (gpReason) return U.setEnabled(btn, false, gpReason);
     U.setEnabled(btn, true, "");
   }
 
@@ -159,6 +161,7 @@
       }
     }
     $("plan-result").hidden = false;
+    resetGainPilotForPlan(plan);
     updateStartButton();
     showError("");
   }
@@ -322,4 +325,179 @@
     updateStartButton();
   })();
   window.addEventListener("pagehide", () => { if (runPoller) runPoller.stop(); });
+
+  // ------------------------------------------------------------------ GAIN PILOT (optional, real MAIN captures + real mount
+  // movement when actually run - linked to the grid session via observation_gain_pilot.py). Declared at this top level (not
+  // nested) so updateStartButton() above can call gainPilotBlockReason() directly.
+  let gpState = null;           // last gain_pilot_state.json content (via the job's own facts), or null if never planned for this grid session
+
+  function gainPilotBlockReason() {
+    // Mirrors observation_gain_pilot.check_ready_for_grid_start() exactly: gpState is null whenever the gain
+    // pilot was never actually planned for THIS grid session (no gain_pilot_state.json - the "gp-enabled"
+    // checkbox alone does not create one, it only shows/hides the panel), which is "unchanged OBSERVE
+    // behaviour", never a block. Gating on the checkbox's checked-by-default state here used to block every
+    // fresh plan's START button before the operator had touched gain pilot at all.
+    if (!gpState) return null;
+    if (gpState.step === "ABORTED") return null;                // operator explicitly chose not to use it after all
+    if (gpState.step !== "READY") return `gain pilot is not READY yet (currently at ${gpState.step})`;
+    if (lastPlan && gpState.grid_config_hash !== lastPlan.observation_config_sha256) return "the grid plan changed since the gain pilot was checked - PLAN the gain pilot again";
+    const verified = gpState.verified_gain_db, gridGain = lastPlan && (lastPlan.main || {}).gain_db;
+    if (verified == null || gridGain == null || Math.abs(verified - gridGain) > 1e-6) {
+      return `gain pilot verified ${verified} dB but the grid plan uses ${gridGain} dB - RE-PLAN THE GRID with the approved gain`;
+    }
+    return null;
+  }
+
+  function resetGainPilotForPlan(plan) {
+    gpState = null;
+    $("gain-pilot-panel").hidden = false;
+    $("gp-gain").value = (plan.main || {}).gain_db != null ? plan.main.gain_db : 40.2;
+    for (const id of ["gp-plan-result", "gp-step-prepare", "gp-step-decision", "gp-step-verify", "gp-step-ready", "gp-final-check-panel", "gp-stale"]) $(id).hidden = true;
+    $("gp-config").hidden = false;
+    U.setBadge($("gp-badge"), "NOT PLANNED");
+    // Recover an existing gain-pilot session tied to THIS grid, if the operator already ran one (e.g. after a page reload).
+    gpFetchStatus(plan.grid_session_dir).catch(() => {});
+  }
+
+  async function gpJobAction(stage, params, timeoutMs, confirm) {
+    const r = await U.api(`/api/ops/start/${stage}`, { method: "POST", body: { params, confirm: confirm || null }, timeoutMs: timeoutMs || 20000 });
+    if (!r.ok) throw new Error(U.errorText(r.error));
+    const jobId = r.data.data.job_id;
+    const deadline = Date.now() + (timeoutMs || 60000);
+    for (;;) {
+      const jr = await U.api(`/api/ops/job/${jobId}?tail=40`, { timeoutMs: 15000 });
+      if (!jr.ok) throw new Error(U.errorText(jr.error));
+      const job = jr.data.data;
+      if (job.state !== "RUNNING") {
+        if (job.state !== "EXITED" || !job.facts || !job.facts.step) throw new Error(job.detail || `${stage} did not return a usable state`);
+        return job;
+      }
+      if (Date.now() > deadline) throw new Error(`${stage} timed out waiting for the job to finish`);
+      await new Promise((res) => setTimeout(res, 800));
+    }
+  }
+
+  async function gpFetchStatus(sessionDir) {
+    try {
+      const job = await gpJobAction("observe_gain_pilot_admin", { action: "status", session_dir: sessionDir }, 15000);
+      gpRender(job.facts, sessionDir);
+    } catch (err) { /* no gain_pilot_state.json yet for this grid session - stay at NOT PLANNED, not an error */ }
+  }
+
+  function gpRequireMoveConfirm() {
+    if ($("gp-move-confirm").value !== "MOVE") { window.alert('Type MOVE (uppercase, exactly) in the confirmation field before a real pilot capture.'); return false; }
+    return true;
+  }
+
+  function gpRender(facts, sessionDir) {
+    gpState = facts;
+    U.setBadge($("gp-badge"), facts.step);
+    for (const id of ["gp-plan-result", "gp-step-prepare", "gp-step-decision", "gp-step-verify", "gp-step-ready", "gp-final-check-panel"]) $(id).hidden = true;
+    $("gp-stale").hidden = true;
+    if (lastPlan && facts.grid_config_hash && facts.grid_config_hash !== lastPlan.observation_config_sha256) {
+      $("gp-stale").hidden = false;
+      $("gp-stale").textContent = "GAIN PILOT OBSOLETE — the grid plan changed since this gain pilot was made. PLAN the gain pilot again.";
+      updateStartButton();
+      return;
+    }
+    $("gp-plan-result").hidden = false;
+    $("gp-plan-summary").textContent = `${facts.observation_name || ""} · ${facts.estimated_extra_points} extra point(s) · ~${Math.round(facts.estimated_duration_s || 0)}s estimated. ${facts.candidate_note || ""}`;
+    const tbody = document.querySelector("#gp-plan-table tbody");
+    tbody.textContent = "";
+    for (const cand of Object.values(facts.candidates || {})) {
+      const tr = document.createElement("tr");
+      for (const v of [cand.label, cand.ra_hours != null ? cand.ra_hours.toFixed(4) : "—", cand.dec_deg != null ? cand.dec_deg.toFixed(3) : "—",
+                       cand.predicted_altitude_deg != null ? cand.predicted_altitude_deg.toFixed(1) + "°" : "—",
+                       cand.hi4pi_n_hi_1e20cm2 != null ? cand.hi4pi_n_hi_1e20cm2.toFixed(3) : "—"]) {
+        const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    if (facts.step === "PREPARE_HIGH" || facts.step === "PREPARE_LOW") {
+      $("gp-step-prepare").hidden = false;
+      const label = facts.step === "PREPARE_HIGH" ? "HIGH" : "LOW";
+      const cand = (facts.candidates || {})[label] || {};
+      $("gp-prepare-note").textContent = `Next: real GOTO + capture at the ${label} candidate point (id ${cand.point_id}, alt ${cand.predicted_altitude_deg != null ? cand.predicted_altitude_deg.toFixed(1) : "?"}°) at the grid's current gain (${facts.initial_gain_db} dB). The mount WILL move.`;
+      $("gp-capture-btn").onclick = U.guard($("gp-capture-btn"), async () => {
+        if (!gpRequireMoveConfirm()) return;
+        const action = facts.step === "PREPARE_HIGH" ? "capture_high" : "capture_low";
+        if (!window.confirm(`Real GOTO + capture at the ${label} point now. The mount WILL move. Confirm physically: free travel, cables, antenna, nobody in the way.\nProceed?`)) return;
+        const job = await gpJobAction("observe_gain_pilot_capture", { action, session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+        gpRender(job.facts, sessionDir);
+      }, "CAPTURING…");
+    } else if (facts.step === "GAIN_DECISION") {
+      $("gp-step-decision").hidden = false;
+      const rec = facts.gain_recommendation || {};
+      const need = facts.need_low || {};
+      const evLines = Object.entries(facts.evaluations || {}).map(([k, ev]) =>
+        `  ${k}: clipping=${ev.clipping.status}, headroom margin ${ev.clipping.percentile_margin_codes != null ? ev.clipping.percentile_margin_codes.toFixed(1) : "?"} codes, usable band ${ev.usable_band_fraction != null ? ev.usable_band_fraction.toFixed(2) : "?"}${ev.rfi_flag ? " (RFI proxy flagged)" : ""}`);
+      $("gp-decision-summary").textContent = `${need.reason || ""}\n${evLines.join("\n")}\n\nRecommended: ${rec.recommended_gain_db} dB (was ${rec.current_gain_db} dB) — ${rec.reason || ""}`;
+      $("gp-approve-gain").value = rec.recommended_gain_db != null ? rec.recommended_gain_db : facts.initial_gain_db;
+      $("gp-approve-btn").onclick = U.guard($("gp-approve-btn"), async () => {
+        const job = await gpJobAction("observe_gain_pilot_admin", { action: "set_gain", session_dir: sessionDir, gain_db: Number($("gp-approve-gain").value) }, 15000);
+        gpRender(job.facts, sessionDir);
+      }, "APPROVING…");
+      // LOW is optional extra information here (e.g. after a CLIPPED HIGH skipped straight to this step) -
+      // never required, never a substitute for HIGH's own verification at the approved gain.
+      const lowBtn = $("gp-measure-low-btn");
+      if (lowBtn) {
+        const lowAvailable = !!(facts.candidates || {}).LOW && !(facts.evaluations || {}).LOW;
+        lowBtn.hidden = !lowAvailable;
+        if (lowAvailable) {
+          lowBtn.onclick = U.guard(lowBtn, async () => {
+            if (!gpRequireMoveConfirm()) return;
+            if (!window.confirm("Real GOTO + capture at the LOW point (optional extra information). The mount WILL move.\nProceed?")) return;
+            const job = await gpJobAction("observe_gain_pilot_capture", { action: "capture_low", session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+            gpRender(job.facts, sessionDir);
+          }, "CAPTURING…");
+        }
+      }
+    } else if (facts.step === "VERIFY_GAIN") {
+      $("gp-step-verify").hidden = false;
+      $("gp-verify-btn").onclick = U.guard($("gp-verify-btn"), async () => {
+        if (!gpRequireMoveConfirm()) return;
+        if (!window.confirm("Real GOTO + capture to verify the new gain. The mount WILL move.\nProceed?")) return;
+        const job = await gpJobAction("observe_gain_pilot_capture", { action: "verify_gain", session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+        gpRender(job.facts, sessionDir);
+      }, "VERIFYING…");
+    } else if (facts.step === "READY") {
+      $("gp-step-ready").hidden = false;
+      $("gp-ready-summary").textContent = `READY — verified gain ${facts.verified_gain_db} dB. START will use this gain for every grid capture (a single effective gain for the whole grid).`;
+      if (facts.config && facts.config.final_check_enabled) {
+        $("gp-final-check-panel").hidden = false;
+        $("gp-final-summary").textContent = "Optional: repeat a pilot capture (same point/conditions as the initial HIGH pilot) to check for drift. Best run AFTER the grid observation finishes. Relative stability only — not an absolute calibration.";
+        $("gp-final-btn").onclick = U.guard($("gp-final-btn"), async () => {
+          if (!gpRequireMoveConfirm()) return;
+          if (!window.confirm("Real GOTO + capture for the final stability check. The mount WILL move.\nProceed?")) return;
+          const job = await gpJobAction("observe_gain_pilot_capture", { action: "final_check", session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+          gpRender(job.facts, sessionDir);
+          const fc = job.facts.final_check;
+          if (fc && fc.evaluation != null) {
+            $("gp-final-result").textContent = `${fc.label}: relative power delta ${(fc.relative_power_delta_fraction * 100).toFixed(1)}% at ${fc.compared_gain_db} dB vs the ${fc.baseline_gain_db} dB baseline (clipping ${fc.baseline_clipping} -> ${fc.current_clipping})`;
+          } else if (fc) {
+            $("gp-final-result").textContent = `${fc.label}: ${fc.reason}`;
+          }
+        }, "CHECKING…");
+      }
+    }
+    updateStartButton();
+  }
+
+  $("gp-enabled").addEventListener("change", () => { $("gp-config").hidden = !$("gp-enabled").checked; updateStartButton(); });
+  $("gp-plan-btn").addEventListener("click", U.guard($("gp-plan-btn"), async () => {
+    if (!lastPlan) return;
+    const params = {
+      resolved_plan_path: lastPlan._resolved_plan_path, max_pilots: Number($("gp-max-pilots").value),
+      capture_seconds: Number($("gp-capture-s").value), settle_seconds: Number($("gp-settle-s").value),
+      headroom_multiplier: Number($("gp-headroom").value), clipping_threshold: Number($("gp-clip").value),
+      rfi_threshold: Number($("gp-rfi").value), gain_db: Number($("gp-gain").value), final_check: $("gp-final-check").checked,
+    };
+    const job = await gpJobAction("observe_gain_pilot_plan", params, 30000);
+    gpRender(job.facts, lastPlan.grid_session_dir);
+  }, "PLANNING…"));
+  $("gp-abort-btn").addEventListener("click", U.guard($("gp-abort-btn"), async () => {
+    if (!lastPlan || !window.confirm("Abort the gain pilot for this grid session?")) return;
+    const job = await gpJobAction("observe_gain_pilot_admin", { action: "abort", session_dir: lastPlan.grid_session_dir }, 15000);
+    gpRender(job.facts, lastPlan.grid_session_dir);
+  }, "…"));
 })();
