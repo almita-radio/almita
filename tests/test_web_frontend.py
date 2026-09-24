@@ -412,7 +412,7 @@ out.after = [$("btn-run-sim").disabled, $("btn-profile-build").disabled];
     assert out["errors"] == []
     assert "<b onclick" in out["cards"] and out["bolds"] == 0                                                                     # text, not markup
     assert any("1420.405752 MHz" in c and "VERIFIED BY SERVICE COMMAND LINE" in c for c in out["freq"]) and any("2.40 MS/s" in c for c in out["freq"])   # MHz with units + provenance tag
-    assert out["real"] == [True, "blocked by policy: real capture is not wired to hardware from the web", True]
+    assert out["real"] == [False, "", True]                                  # REAL calibration is enabled (MAIN free in the stub): its panel runs the real command
     assert out["runPosts"] == 1 and out["runBtn"] == [True, "a calibration simulation is running"]
     assert "No captures" in out["empty"]
     assert "NaN" not in out["nan"] and "undefined" not in out["nan"] and out["after"][0] is False

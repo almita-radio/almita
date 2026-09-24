@@ -6,6 +6,80 @@
   <header id="almita-header"><h1>ALMITA CALIBRATE</h1></header>
 
   <main id="app">
+    <section class="panel" id="wizard-panel" aria-labelledby="h-wizard">
+      <header><h2 id="h-wizard">PHYSICAL REFERENCE WIZARD <span class="muted">(50 Ω / HOT / COLD · real MAIN captures · no mount movement)</span></h2><span id="wizard-badge" class="badge">—</span></header>
+      <div class="obs-summary">Chain: antenna → Nooelec SAWbird H1 (LNA + filter) → RTL-SDR Blog V4 (rtl_tcp, Bias-T). Tests receiver-chain quality with physical references you connect by hand. It never picks sky coordinates and never claims an absolute gain calibration by itself — see the Y-FACTOR result at the end for the one narrow case where a physical number is justified.</div>
+      <div id="wizard-biast" class="obs-summary"></div>
+
+      <div id="wizard-setup">
+        <div class="obs-row"><label for="wz-n">CAPTURES PER REFERENCE (suggested, editable)</label><input type="number" id="wz-n" min="2" max="20" value="5"></div>
+        <div class="obs-row"><label for="wz-s">SECONDS PER CAPTURE</label><input type="number" id="wz-s" min="0.5" max="30" step="any" value="2"></div>
+        <div class="obs-row"><label for="wz-stab">STABILIZATION TIME (s — suggested; CAPTURE still needs your explicit click, never automatic)</label><input type="number" id="wz-stab" min="0" max="600" value="20"></div>
+        <div class="obs-row"><label for="wz-freq">CENTER FREQUENCY (Hz)</label><input type="number" id="wz-freq" value="1420405000"></div>
+        <div class="obs-row"><label for="wz-rate">SAMPLE RATE (samples/s)</label><input type="number" id="wz-rate" value="2400000"></div>
+        <div class="obs-row"><label for="wz-gain">GAIN (dB)</label><input type="number" id="wz-gain" value="40.2" step="any"></div>
+        <div class="obs-row"><label for="wz-clip">CLIPPING RAIL-HIT THRESHOLD (fraction)</label><input type="number" id="wz-clip" value="0.0001" step="any"></div>
+        <div class="obs-row"><label for="wz-stab-th">STABILITY RMS-FRACTION THRESHOLD</label><input type="number" id="wz-stab-th" value="0.10" step="any"></div>
+        <div class="obs-row"><label for="wz-rfi">RFI PROXY: MIN USABLE BAND FRACTION</label><input type="number" id="wz-rfi" value="0.5" step="any"></div>
+        <div class="obs-actions"><button type="button" id="wz-start">START WIZARD</button></div>
+      </div>
+
+      <div id="wizard-active" hidden>
+        <div class="obs-summary" id="wz-session-note"></div>
+
+        <div id="wz-step-prepare" hidden>
+          <h3 id="wz-prepare-kind"></h3>
+          <div class="obs-summary" id="wz-prepare-instructions"></div>
+          <div class="obs-row"><label for="wz-cp">CONNECTION POINT</label>
+            <select id="wz-cp"><option value="LNA_INPUT">LNA INPUT (replaces the antenna)</option><option value="LNA_OUTPUT">LNA OUTPUT (bypasses the LNA)</option><option value="SDR_INPUT">SDR INPUT (dongle only)</option></select></div>
+          <div id="wz-cp-explain" class="obs-summary"></div>
+          <div class="obs-row"><label for="wz-temp">TEMPERATURE (°C — leave blank if not measured)</label><input type="number" id="wz-temp" step="any"></div>
+          <div class="obs-row"><label for="wz-temp-src">TEMPERATURE SOURCE / PROVENANCE</label><input type="text" id="wz-temp-src" placeholder="not measured"></div>
+          <div class="obs-actions">
+            <button type="button" id="wz-confirm-connected">I'VE CONNECTED IT — CONFIRM</button>
+            <button type="button" id="wz-skip">SKIP THIS REFERENCE (not available)</button>
+          </div>
+        </div>
+
+        <div id="wz-step-stabilize" hidden>
+          <div class="obs-summary" id="wz-stabilize-note"></div>
+          <div class="obs-summary" id="wz-countdown"></div>
+          <div class="obs-row"><label for="wz-simulate">TEST MODE ONLY — simulate instead of a real capture</label>
+            <select id="wz-simulate"><option value="">(real capture)</option><option value="HEALTHY">HEALTHY</option><option value="CLIPPED">CLIPPED</option><option value="THERMAL_DRIFT">THERMAL_DRIFT</option><option value="RFI_CONTAMINATED">RFI_CONTAMINATED</option></select></div>
+          <div class="obs-actions"><button type="button" id="wz-capture">CAPTURE NOW</button></div>
+        </div>
+
+        <div id="wz-step-result" hidden>
+          <div class="obs-summary" id="wz-result-summary"></div>
+          <div class="twrap"><table id="wz-result-table" class="status-table"><thead><tr><th>#</th><th>clipping</th><th>usable band</th><th>rel. digital power</th></tr></thead><tbody></tbody></table></div>
+          <div class="obs-actions"><button type="button" id="wz-next">NEXT REFERENCE</button></div>
+        </div>
+
+        <div id="wz-step-reconnect" hidden>
+          <div class="obs-summary">All references settled. RECONNECT THE ANTENNA now, physically.</div>
+          <div class="obs-actions"><button type="button" id="wz-finish">ANTENNA RECONNECTED — CONFIRM &amp; FINISH</button></div>
+        </div>
+
+        <div id="wz-step-done" hidden>
+          <div class="obs-summary" id="wz-done-summary"></div>
+          <div class="obs-summary" id="wz-yfactor"></div>
+        </div>
+
+        <div class="obs-actions"><button type="button" id="wz-abort">ABORT WIZARD</button></div>
+      </div>
+      <div id="wizard-job"></div>
+    </section>
+
+    <section class="panel" id="real-panel" aria-labelledby="h-real">
+      <header><h2 id="h-real">REAL CALIBRATION <span class="muted">(calibration_operational_realtest.py · real MAIN captures · no mount movement · receiver config read-only)</span></h2><span id="real-badge" class="badge">—</span></header>
+      <div class="obs-summary">Runs the real command against the real MAIN SDR. Result level is OPERATIONAL_RELATIVE: engineering / non-science, no physical units.</div>
+      <div class="obs-row"><label for="real-n">CAPTURES</label><input type="number" id="real-n" min="1" max="20" value="5"></div>
+      <div class="obs-row"><label for="real-s">SECONDS PER CAPTURE</label><input type="number" id="real-s" min="0.5" max="30" step="any" value="2"></div>
+      <div class="obs-actions"><button type="button" id="real-run">RUN REAL CALIBRATION</button></div>
+      <div class="reason" data-for="real-run" role="status"></div>
+      <div id="real-job-calibrate"></div>
+    </section>
+
     <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.08em">
       LEVEL: OPERATIONAL_RELATIVE &nbsp;·&nbsp; ABSOLUTE RF CALIBRATION: UNAVAILABLE — no Kelvin, no dBm, no noise figure is measured here.
     </div>
@@ -38,7 +112,7 @@
       </div>
       <div class="obs-actions">
         <button type="button" id="btn-run-sim">RUN SIMULATION</button>
-        <button type="button" id="btn-run-real" disabled title="blocked - see STATUS panel above">RUN REAL</button>
+        <button type="button" id="btn-run-real" title="go to the REAL CALIBRATION panel">RUN REAL ▲</button>
       </div>
       <div class="reason" data-for="btn-run-sim" role="status"></div>
       <div class="reason" data-for="btn-run-real" role="status"></div>
