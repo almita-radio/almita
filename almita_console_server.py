@@ -14,19 +14,128 @@ from __future__ import annotations
 
 import argparse
 import errno
+import functools
 import hashlib
 import json
+import select
 import shutil
 import signal
 import socket
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from serve_dashboard import make_server
+from serve_dashboard import ReadOnlyHandler, ReadOnlyServer
+
+import mount_camera
 
 ROOT = Path(__file__).parent.resolve()
 CONSOLE_SOURCE = ROOT / "console"
+
+_MOUNT_CAMERA_STREAM_PATH = "/mount_camera/stream"
+_MOUNT_CAMERA_STATUS_PATH = "/mount_camera/status"
+_MOUNT_CAMERA_CONFIG_PATH = "/mount_camera/config"
+
+
+class ConsoleHandler(ReadOnlyHandler):
+    """serve_dashboard.ReadOnlyHandler (static files, GET/HEAD only, every write rejected) plus exactly
+    three /mount_camera/* routes for the MOUNT CAMERA tile: GET stream (the MJPEG relay - see
+    mount_camera.py), GET status, and GET/POST config. POST config is the ONE deliberate, narrow
+    exception to this server's read-only contract - it writes a single JSON file holding only the
+    camera's stream URL, nothing else, and every other path/method is still rejected exactly as before.
+    """
+
+    def do_GET(self):  # noqa: N802 - http.server's own naming convention
+        path = urlsplit(self.path).path
+        if path == _MOUNT_CAMERA_STREAM_PATH:
+            return self._mount_camera_stream()
+        if path == _MOUNT_CAMERA_STATUS_PATH:
+            return self._json_ok(mount_camera.RELAY.status())
+        if path == _MOUNT_CAMERA_CONFIG_PATH:
+            return self._json_ok({"stream_url": mount_camera.RELAY.get_url(), "default_url": mount_camera.DEFAULT_STREAM_URL})
+        return super().do_GET()
+
+    def do_POST(self):  # noqa: N802
+        if urlsplit(self.path).path == _MOUNT_CAMERA_CONFIG_PATH:
+            return self._mount_camera_set_config()
+        return self._reject()
+
+    def _json_ok(self, payload) -> None:
+        self._json(200, payload)
+
+    def _json(self, status: int, payload) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _mount_camera_set_config(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 4096:
+            return self._json(400, {"ok": False, "error": "empty or oversized request body"})
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return self._json(400, {"ok": False, "error": "invalid JSON body"})
+        url = str(body.get("stream_url", "")).strip()
+        if not mount_camera.valid_stream_url(url):
+            return self._json(400, {"ok": False, "error": "stream_url must be an http:// or https:// URL, 8-500 characters"})
+        mount_camera.RELAY.set_url(url)
+        return self._json(200, {"ok": True, "stream_url": url})
+
+    def _mount_camera_stream(self) -> None:
+        """One subscriber to the shared relay per viewer connection - never a second upstream camera
+        connection regardless of how many browsers/tabs are watching (see mount_camera.py)."""
+        relay = mount_camera.RELAY
+        sub = relay.subscribe()
+        try:
+            relay.wait_connected_or_failed(mount_camera.CONNECTED_WAIT_TIMEOUT_S)
+            st = relay.status()
+            if st["state"] == "ERROR":
+                relay.unsubscribe(sub)
+                return self._json(503, {"ok": False, "error": st["last_error"] or "camera unavailable"})
+            self.send_response(200)
+            self.send_header("Content-Type", relay.content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            while True:
+                # Prompt disconnect detection: a write-only loop can otherwise take a long time to notice a
+                # viewer that already closed its side - TCP happily accepts writes into its send buffer well
+                # after the peer is gone, especially on loopback/LAN with generous buffers (found live: a
+                # closed curl client was still counted as a viewer tens of seconds later). A cheap
+                # non-blocking peek catches a half-closed socket immediately instead of waiting on write()
+                # to eventually fail, which is what actually lets the idle timeout ever fire.
+                readable, _, _ = select.select([self.connection], [], [], 0)
+                if readable:
+                    try:
+                        if self.connection.recv(1, socket.MSG_PEEK) == b"":
+                            break
+                    except OSError:
+                        break
+                data = sub.read(timeout=1.0)
+                if data is None:
+                    break
+                if data:
+                    self.wfile.write(data)
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+            pass
+        finally:
+            relay.unsubscribe(sub)
+
+
+def make_console_server(root: Path, bind: str = "0.0.0.0", port: int = 8088) -> ReadOnlyServer:
+    root = Path(root).resolve()
+    handler = functools.partial(ConsoleHandler, directory=str(root))
+    return ReadOnlyServer((bind, port), handler)
 
 
 def _asset_version(path: Path) -> str:
@@ -129,7 +238,7 @@ def main() -> int:
     public_root = prepare_console_web(Path(args.console_source), Path(args.runtime_dir), Path(args.public_root))
     write_version_json(public_root)
     try:
-        server = make_server(public_root, bind=args.bind, port=args.port)
+        server = make_console_server(public_root, bind=args.bind, port=args.port)
     except OSError as exc:
         reason = "port already in use (another instance or service holds it; nothing was killed)" if exc.errno == errno.EADDRINUSE else str(exc)
         print(f"ALMITA CONSOLE ERROR cannot bind {args.bind}:{args.port}: {reason}", flush=True)
