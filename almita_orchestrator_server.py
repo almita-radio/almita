@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import observation_orchestrator
 import observation_plan
@@ -39,6 +39,7 @@ import observation_spec
 
 import almita_web_align
 import almita_web_calibrate
+import almita_web_ops
 import almita_web_system
 
 MAX_BODY_BYTES = 1_000_000
@@ -75,6 +76,9 @@ STATIC_FILES = {
     "/common.js": "common.js",
     "/status.html": "status.html",
     "/status.js": "status.js",
+    # RW operations: the real end-to-end pipeline page (preflight -> align -> calibrate -> observe -> reduce -> science)
+    "/pipeline.html": "pipeline.html",
+    "/pipeline.js": "pipeline.js",
 }
 _STATIC_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")  # Fase 57: no path traversal via a session id
@@ -82,6 +86,9 @@ _ALIGN_SESSION_RE = re.compile(r"^/api/align/session/(?P<id>[^/]+)$")
 _CALIBRATE_SESSION_RE = re.compile(r"^/api/calibrate/session/(?P<id>[^/]+)$")
 _ALIGN_MODE_ACTION_RE = re.compile(r"^/api/align/(?P<action>plan|preflight|run)/(?P<mode>solar|hi)$")
 _ALIGN_SYNC_RE = re.compile(r"^/api/align/sync/(?P<step>prepare|apply)/(?P<mode>solar|hi)$")
+_OPS_JOB_RE = re.compile(r"^/api/ops/job/(?P<id>[A-Za-z0-9_-]{6,64})$")
+_OPS_START_RE = re.compile(r"^/api/ops/start/(?P<stage>[a-z_]{3,24})$")
+_OPS_STOP_RE = re.compile(r"^/api/ops/stop/(?P<id>[A-Za-z0-9_-]{6,64})$")
 
 
 def _log(level: str, message: str) -> None:
@@ -229,6 +236,24 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return _json_response(self, 200, almita_web_align.get_status())
             if path == "/api/calibrate/status":
                 return _json_response(self, 200, almita_web_calibrate.get_status())
+            if path == "/api/ops/jobs":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.list_jobs()})
+            if path == "/api/ops/mount":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.read_mount()})
+            if path == "/api/ops/campaigns":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.campaigns()})
+            if path == "/api/ops/align/defaults":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.align_defaults()})
+            if path == "/api/ops/align/sky":
+                return self._ops_align_sky()
+            if path == "/api/ops/file":
+                return self._ops_file()
+            ops_job = _OPS_JOB_RE.match(path)
+            if ops_job:
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": almita_web_ops.get_job(ops_job.group("id"), tail=int(parse_qs(urlsplit(self.path).query).get("tail", ["80"])[0]))})
+                except FileNotFoundError:
+                    return _error_response(self, 404, "unknown job")
             align_session = _ALIGN_SESSION_RE.match(path)
             if align_session:
                 return self._align_session(align_session.group("id"))
@@ -290,6 +315,19 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return self._handle_start()
             if path == "/api/observe/stop":
                 return self._handle_stop()
+            if path == "/api/ops/preflight":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.preflight()})
+            ops_start = _OPS_START_RE.match(path)
+            if ops_start:
+                body = _read_json_body(self)
+                _log("INFO", f"req={self._request_id} OPS START {ops_start.group('stage')} params={json.dumps(body.get('params') or {})[:200]}")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.start(ops_start.group("stage"), body.get("params") or {}, confirm=body.get("confirm"))})
+            ops_stop = _OPS_STOP_RE.match(path)
+            if ops_stop:
+                if _read_json_body(self).get("confirm") is not True:
+                    raise ValueError("confirm: true is required - STOP does not proceed implicitly")
+                _log("INFO", f"req={self._request_id} OPS STOP {ops_stop.group('id')}")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.stop(ops_stop.group("id"))})
 
             align_action = _ALIGN_MODE_ACTION_RE.match(path)
             if align_action:
@@ -326,6 +364,10 @@ class ObserveHandler(BaseHTTPRequestHandler):
             _error_response(self, 409, f"blocked: {exc}")
         except observation_orchestrator.OrchestratorError as exc:
             _error_response(self, 409, str(exc))
+        except almita_web_ops.OpsBlocked as exc:
+            _error_response(self, 409, f"blocked: {exc}")
+        except FileNotFoundError as exc:
+            _error_response(self, 404, f"not found: {exc}")
         except OSError as exc:
             self._fail(exc, 503, f"dependency unavailable ({type(exc).__name__})")
         except Exception as exc:  # noqa: BLE001
@@ -380,6 +422,16 @@ class ObserveHandler(BaseHTTPRequestHandler):
         if confirm is not True:
             raise ValueError("confirm: true is required — START does not proceed implicitly")
         resolved_plan_path = _validated_resolved_plan_path(raw_path)
+        held = almita_web_ops.busy_reason()
+        if held:
+            return _error_response(self, 409, f"blocked: {held}")
+        # Optional gain-pilot stage: if it was never used for this grid session, this is a no-op (unchanged
+        # OBSERVE behaviour). If it WAS used, it must have reached READY against THIS exact resolved plan
+        # (same config hash, same gain) - never let a stale/partial/mismatched pilot silently pass.
+        import observation_gain_pilot
+        pilot_block = observation_gain_pilot.check_ready_for_grid_start(Path(resolved_plan_path))
+        if pilot_block:
+            return _error_response(self, 409, f"blocked: gain pilot: {pilot_block}")
         # The browser's explicit START click + confirmation dialog IS the
         # deliberate operator GO; equivalent to the CLI's explicit --yes.
         # Backend is the authority on conflicts: run_observation holds an flock and refuses (409) when a run is already active.
@@ -397,6 +449,42 @@ class ObserveHandler(BaseHTTPRequestHandler):
         _log("INFO", f"req={self._request_id} STOP requested")
         result = observation_orchestrator.stop_observation(confirm=True)
         _json_response(self, 200, result)
+
+    def _ops_align_sky(self) -> None:
+        q = parse_qs(urlsplit(self.path).query)
+        mode = (q.get("mode") or ["hi"])[0]
+        if mode not in ("hi", "solar"):
+            return _error_response(self, 400, "mode must be hi or solar")
+        try:
+            radii = [float(x) for x in (q.get("ring_radii") or ["5.0,2.0,0.6"])[0].split(",") if x.strip()]
+            ring_points = int((q.get("ring_points") or ["16"])[0])
+            min_elevation = float((q.get("min_elevation") or ["20"])[0])
+            beam_fwhm = float((q.get("beam_fwhm") or ["20"])[0])
+            capture_time = float((q.get("capture_time") or ["20"])[0])
+        except ValueError:
+            return _error_response(self, 400, "ring_radii/ring_points/min_elevation/beam_fwhm/capture_time must be numbers")
+        if (not radii or any(r <= 0 for r in radii) or not (3 <= ring_points <= 64)
+                or not (0 <= min_elevation <= 89) or not (0.1 <= beam_fwhm <= 90) or not (0.5 <= capture_time <= 120)):
+            return _error_response(self, 400, "ring_radii/ring_points/min_elevation/beam_fwhm/capture_time out of range")
+        return _json_response(self, 200, {"ok": True,
+            "data": almita_web_ops.align_sky(mode, radii, ring_points, min_elevation, beam_fwhm, capture_time)})
+
+    def _ops_file(self) -> None:
+        rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
+        try:
+            path, ctype = almita_web_ops.resolve_file(rel)
+        except FileNotFoundError:
+            return _error_response(self, 404, "not found")
+        except ValueError as exc:
+            return _error_response(self, 400, str(exc))
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        _common_headers(self)
+        self.end_headers()
+        _write_body(self, data)
 
     def _serve_asset(self, rel: str) -> None:
         try:
