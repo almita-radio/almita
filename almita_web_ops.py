@@ -193,11 +193,18 @@ STAGES: Dict[str, Dict[str, Any]] = {
     "align_plan": {"physical": False, "resources": ()},                      # alignment.py --dry-run: resolves the region and the pattern, moves nothing
     "align": {"physical": True, "resources": ("mount", "sdr")},
     "calibrate": {"physical": False, "resources": ("sdr",)},
-    # calibrate_wizard: one stage, many actions (start/set_reference/skip_reference/capture/next/abort/finish/status) -
-    # every web click is one short calibrate_reference_wizard.py invocation against a session dir it persists to
-    # disk between clicks. "sdr" resource claim covers every action (even the non-capturing ones) so only one
-    # wizard step can be mid-flight at a time and it can never overlap a real align/calibrate run on MAIN.
+    # calibrate_wizard: one stage, many NON-MOVING actions (start/set_reference/skip_reference/capture_50r/next/
+    # confirm_antenna/plan_hi/approve_hi_plan/abort/finish/status) - every web click is one short
+    # calibrate_reference_wizard.py invocation against a session dir it persists to disk between clicks. "sdr"
+    # resource claim covers every action (even the non-capturing ones) so only one wizard step can be mid-flight
+    # at a time and it can never overlap a real align/calibrate run on MAIN.
     "calibrate_wizard": {"physical": False, "resources": ("sdr",)},
+    # calibrate_wizard_move: the ONE action (capture_hi) that does a real GOTO for the HI ALTO/HI BAJO step -
+    # physical=True gives it the SAME real-preflight + typed-MOVE-confirmation gate as ALIGN's real RUN and
+    # OBSERVE's gain-pilot capture (reused unmodified below in start()); never reachable while the 50 ohm
+    # terminator could still be connected (calibrate_reference_wizard.py's own state machine enforces that
+    # structurally, not just by convention here).
+    "calibrate_wizard_move": {"physical": True, "resources": ("mount", "sdr")},
     # OBSERVE's optional gain-pilot stage: PLAN never moves anything; the actual pilot captures need a real
     # GOTO (physical=True, same real-preflight + typed MOVE confirmation gate as ALIGN's real RUN); the small
     # admin actions (approve a gain value, abort, poll status) touch neither the mount nor the SDR.
@@ -301,45 +308,45 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         return [PY, "calibration_operational_realtest.py", "--n-captures", str(n), "--capture-seconds", str(secs)], {"n_captures": n, "capture_seconds": secs}
     if stage == "calibrate_wizard":
         action = str(p.get("action", ""))
-        valid_actions = {"start", "set_reference", "skip_reference", "capture", "next", "abort", "finish", "status"}
+        valid_actions = {"start", "set_reference", "skip_reference", "capture_50r", "next", "confirm_antenna",
+                         "plan_hi", "approve_hi_plan", "abort", "finish", "status"}
         if action not in valid_actions:
             raise ValueError(f"action must be one of {sorted(valid_actions)}")
         if action == "start":
             n = int(_float(p, "n_captures", 2, 20, 5))
             cs = _float(p, "capture_seconds", 0.5, 30, 2.0)
             ss = _float(p, "stabilize_seconds", 0, 600, 20.0)
+            hss = _float(p, "hi_settle_seconds", 0, 120, 2.0)
             cf = _float(p, "center_frequency_hz", 1e6, 2e9, 1_420_405_000.0)
             sr = _float(p, "sample_rate_hz", 200_000, 4e6, 2_400_000.0)
             gain = _float(p, "gain_db", 0, 60, 40.2)
             ct = _float(p, "clipping_threshold", 1e-6, 0.1, 1e-4)
             st = _float(p, "stability_threshold", 0.001, 1.0, 0.10)
             rt = _float(p, "rfi_threshold", 0.0, 1.0, 0.5)
+            me = _float(p, "min_elevation_deg", 5, 89, 20.0)
+            bf = _float(p, "beam_fwhm_deg", 1, 90, 20.0)
+            sig = _float(p, "significance_threshold", 1.0, 10.0, 3.0)
             argv = [PY, "calibrate_reference_wizard.py", "start", "--session-root", "data/calibration",
                    "--n-captures", str(n), "--capture-seconds", str(cs), "--stabilize-seconds", str(ss),
-                   "--center-freq", str(cf), "--sample-rate", str(sr), "--gain", str(gain),
-                   "--clipping-threshold", str(ct), "--stability-threshold", str(st), "--rfi-threshold", str(rt)]
+                   "--hi-settle-seconds", str(hss), "--center-freq", str(cf), "--sample-rate", str(sr),
+                   "--gain", str(gain), "--clipping-threshold", str(ct), "--stability-threshold", str(st),
+                   "--rfi-threshold", str(rt), "--min-elevation", str(me), "--beam-fwhm", str(bf),
+                   "--significance-threshold", str(sig)]
             return argv, {"action": action}
         session_dir = _path_in(p, "session_dir", SERVE_ROOTS["calibration"])
         meta = {"action": action, "output_dir": str(session_dir.relative_to(ROOT))}
         rel = str(session_dir.relative_to(ROOT))
         if action == "set_reference":
-            kind, cp = str(p.get("kind", "")), str(p.get("connection_point", ""))
-            if kind not in ("AMBIENT_50R", "HOT", "COLD"):
-                raise ValueError("kind must be AMBIENT_50R, HOT or COLD")
+            cp = str(p.get("connection_point", ""))
             if cp not in ("LNA_INPUT", "LNA_OUTPUT", "SDR_INPUT"):
                 raise ValueError("connection_point must be LNA_INPUT, LNA_OUTPUT or SDR_INPUT")
-            temp_source = str(p.get("temperature_source") or "not measured")
-            argv = [PY, "calibrate_reference_wizard.py", "set-reference", "--session-dir", rel,
-                   "--kind", kind, "--connection-point", cp, "--temperature-source", temp_source]
-            temp = p.get("temperature_c")
-            if temp not in (None, ""):
-                argv += ["--temperature-c", str(_float(p, "temperature_c", -273.15, 5000))]
+            argv = [PY, "calibrate_reference_wizard.py", "set-reference", "--session-dir", rel, "--connection-point", cp]
         elif action == "skip_reference":
             argv = [PY, "calibrate_reference_wizard.py", "skip-reference", "--session-dir", rel]
             if p.get("reason"):
                 argv += ["--reason", str(p["reason"])[:200]]
-        elif action == "capture":
-            argv = [PY, "calibrate_reference_wizard.py", "capture", "--session-dir", rel]
+        elif action == "capture_50r":
+            argv = [PY, "calibrate_reference_wizard.py", "capture-50r", "--session-dir", rel]
             sim = p.get("simulate")
             if sim:
                 if sim not in ("HEALTHY", "CLIPPED", "THERMAL_DRIFT", "RFI_CONTAMINATED"):
@@ -347,13 +354,31 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
                 argv += ["--simulate", str(sim)]
         elif action == "next":
             argv = [PY, "calibrate_reference_wizard.py", "next", "--session-dir", rel]
+        elif action == "confirm_antenna":
+            argv = [PY, "calibrate_reference_wizard.py", "confirm-antenna", "--session-dir", rel]
+        elif action == "plan_hi":
+            argv = [PY, "calibrate_reference_wizard.py", "plan-hi", "--session-dir", rel]
+        elif action == "approve_hi_plan":
+            argv = [PY, "calibrate_reference_wizard.py", "approve-hi-plan", "--session-dir", rel]
         elif action == "abort":
             argv = [PY, "calibrate_reference_wizard.py", "abort", "--session-dir", rel]
         elif action == "finish":
-            argv = [PY, "calibrate_reference_wizard.py", "finish", "--session-dir", rel, "--confirm", "true"]
+            argv = [PY, "calibrate_reference_wizard.py", "finish", "--session-dir", rel]
         else:  # status
             argv = [PY, "calibrate_reference_wizard.py", "status", "--session-dir", rel]
         return argv, meta
+    if stage == "calibrate_wizard_move":
+        # The ONLY action: a real GOTO + capture at the (already operator-approved) HI ALTO or HI BAJO
+        # candidate. --simulate is never forwarded here - a physical stage's own start() gate (typed MOVE +
+        # real preflight) must never be bypassable from a web param; offline testing calls the CLI directly,
+        # the same convention observe_gain_pilot_capture already established.
+        label = str(p.get("label", ""))
+        if label not in ("HI_ALTO", "HI_BAJO"):
+            raise ValueError("label must be HI_ALTO or HI_BAJO")
+        session_dir = _path_in(p, "session_dir", SERVE_ROOTS["calibration"])
+        rel = str(session_dir.relative_to(ROOT))
+        return [PY, "calibrate_reference_wizard.py", "capture-hi", "--session-dir", rel, "--label", label], \
+              {"action": "capture_hi", "label": label, "output_dir": rel}
     if stage == "observe_gain_pilot_plan":
         raw = p.get("resolved_plan_path")
         if not isinstance(raw, str) or not raw:
@@ -657,7 +682,7 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 out["verdict"] = "PASS" if qv == "GOOD" else "PARTIAL"
                 out["detail"] = (f"real MAIN captures; quality {qv}; level {res.get('calibration_level')} (absolute_calibration={res.get('absolute_calibration')}: "
                                  "engineering/non-science, NO physical units claimed)")
-    elif stage == "calibrate_wizard":
+    elif stage in ("calibrate_wizard", "calibrate_wizard_move"):
         # Every calibrate_reference_wizard.py subcommand prints exactly one JSON blob (session_dir + state) and
         # nothing else to stdout - extract it from the combined stdout+stderr log rather than needing a second
         # result file, the same "one script invocation, one real artifact" contract as every other stage.
@@ -668,31 +693,41 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 blob = json.loads(m.group(0))
             except ValueError:
                 blob = None
-        action = (j.get("meta") or {}).get("action")
+        meta = j.get("meta") or {}
+        action = meta.get("action")
         if blob and blob.get("state"):
             st = blob["state"]
             out["output_dir"] = str((ROOT / blob["session_dir"]).resolve().relative_to(ROOT)) if blob.get("session_dir") else out["output_dir"]
             out["facts"] = {"session_id": st.get("session_id"), "session_dir": blob.get("session_dir"), "action": action,
-                            "step": st.get("step"), "reference_index": st.get("reference_index"),
-                            "references": st.get("references"), "config": st.get("config"),
-                            # results: every reference's full evaluation (not just the one just captured) - the
+                            "step": st.get("step"), "config": st.get("config"),
+                            "fifty_ohm": st.get("fifty_ohm"), "fifty_ohm_result": st.get("fifty_ohm_result"),
+                            "reconnect_antenna_confirmed_utc": st.get("reconnect_antenna_confirmed_utc"),
+                            "hi_plan": st.get("hi_plan"), "hi_plan_approved_utc": st.get("hi_plan_approved_utc"),
+                            # hi_references: every HI kind's full result (not just the one just captured) - the
                             # web UI's RESULT step needs this on every render, including after a page reload/
-                            # recovery where the LAST job might be "next"/"status", not "capture" itself.
-                            "results": st.get("results"),
+                            # recovery where the LAST job might be "next"/"status", not "capture-hi" itself.
+                            "hi_references": st.get("hi_references"),
                             "bias_t_facts": st.get("bias_t_facts"), "receiver_snapshot": st.get("receiver_snapshot"),
-                            "y_factor": st.get("y_factor"), "profile_path": st.get("profile_path"),
-                            "reconnect_antenna_confirmed_utc": st.get("reconnect_antenna_confirmed_utc")}
-            if action == "capture" and st.get("references"):
-                last = st["references"][-1]
-                result = (st.get("results") or {}).get(last.get("kind"))
-                out["facts"]["last_reference_result"] = result
+                            "spectral_contrast": st.get("spectral_contrast"), "profile_path": st.get("profile_path")}
+            if action == "capture_50r" and st.get("fifty_ohm_result"):
+                out["facts"]["last_reference_result"] = st["fifty_ohm_result"]
+            elif action == "capture_hi" and meta.get("label") and st.get("hi_references", {}).get(meta["label"]):
+                out["facts"]["last_reference_result"] = st["hi_references"][meta["label"]]["quality_result"]
         if state == "EXITED":
             if rc != 0 or not blob:
                 out["detail"] = f"exit {rc}; {_tail(Path(j['log']), 5) if not blob else 'no JSON result from calibrate_reference_wizard.py'}"
-            elif action == "capture" and out["facts"].get("last_reference_result"):
+            elif action == "capture_50r" and out["facts"].get("last_reference_result"):
                 r = out["facts"]["last_reference_result"]
                 out["verdict"] = r["verdict"]
-                out["detail"] = f"{out['facts']['references'][-1]['kind']} reference: {r['verdict']} ({'; '.join(r['verdict_reasons'])})"
+                out["detail"] = f"50 ohm reference: {r['verdict']} ({'; '.join(r['verdict_reasons'])})"
+            elif action == "capture_hi" and out["facts"].get("last_reference_result"):
+                r = out["facts"]["last_reference_result"]
+                out["verdict"] = r["verdict"]
+                out["detail"] = f"{meta.get('label')}: quality {r['verdict']} ({'; '.join(r['verdict_reasons'])}) - see spectral_result for the real HI-line measurement"
+            elif action == "finish" and st.get("spectral_contrast"):
+                sc = st["spectral_contrast"]
+                out["verdict"] = "PASS" if sc["verdict"] == "DEFENSIBLE_CONTRAST" else "PARTIAL"
+                out["detail"] = f"spectral contrast: {sc['verdict']} - {sc['reason']}"
             else:
                 out["verdict"] = "PASS"
                 out["detail"] = f"wizard step '{action}' OK - now at {out['facts'].get('step')}"

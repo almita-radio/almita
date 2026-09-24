@@ -332,7 +332,11 @@
     updateReal();
   }
 
-  // ------------------------------------------------------------------ PHYSICAL REFERENCE WIZARD (50R / HOT / COLD through calibrate_reference_wizard.py)
+  // ------------------------------------------------------------------ REFERENCE WIZARD (50R / HI ALTO / HI BAJO through calibrate_reference_wizard.py)
+  // 50R is instrument-only (no mount movement) via the calibrate_wizard stage; HI ALTO/HI BAJO's capture-hi
+  // action is the ONLY real-GOTO step, dispatched through the SEPARATE calibrate_wizard_move stage so it gets
+  // the exact same real-preflight + typed-MOVE gate ALIGN's real RUN and OBSERVE's gain-pilot capture use
+  // (reused unmodified server-side - nothing about that gate is reimplemented here).
   {
     const $w = (id) => document.getElementById(id);
     const wzErr = (e) => U.showError(document.getElementById("error-banner"), e);
@@ -343,8 +347,6 @@
       LNA_OUTPUT: "Includes: cabling (post-LNA), Bias-T (if still downstream), RTL-SDR Blog V4. Excludes: antenna, the SAWbird H1 LNA (bypassed).",
       SDR_INPUT: "Includes: RTL-SDR Blog V4 only. Excludes: antenna, the SAWbird H1 LNA, upstream cabling/Bias-T.",
     };
-    const KIND_LABEL = { AMBIENT_50R: "50 Ω TERMINATION (ambient temperature — NOT automatically “cold”)", HOT: "HOT REFERENCE", COLD: "COLD REFERENCE" };
-    const ORDER = ["AMBIENT_50R", "HOT", "COLD"];
 
     async function pollJobUntilDone(jobId, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
@@ -357,8 +359,8 @@
         await new Promise((res) => setTimeout(res, 800));
       }
     }
-    async function wizardAction(params, timeoutMs) {
-      const r = await U.api("/api/ops/start/calibrate_wizard", { method: "POST", body: { params, confirm: null }, timeoutMs: 20000 });
+    async function startAndPoll(stage, params, confirmText, timeoutMs) {
+      const r = await U.api(`/api/ops/start/${stage}`, { method: "POST", body: { params, confirm: confirmText === undefined ? null : confirmText }, timeoutMs: 20000 });
       if (!r.ok) throw new Error(U.errorText(r.error));
       const job = await pollJobUntilDone(r.data.data.job_id, timeoutMs || 60000);
       if (job.state !== "EXITED" || !job.facts || !job.facts.step) {
@@ -366,6 +368,8 @@
       }
       return job;
     }
+    const wizardAction = (params, timeoutMs) => startAndPoll("calibrate_wizard", params, null, timeoutMs);
+    const wizardMoveAction = (params, confirmText, timeoutMs) => startAndPoll("calibrate_wizard_move", params, confirmText, timeoutMs);
 
     function updateCpExplain() { $w("wz-cp-explain").textContent = CONNECTION_EXPLAIN[$w("wz-cp").value] || ""; }
     $w("wz-cp").addEventListener("change", updateCpExplain);
@@ -383,7 +387,7 @@
       countdownTimer = setInterval(() => { remaining -= 1; paint(); if (remaining <= 0) clearInterval(countdownTimer); }, 1000);
     }
 
-    function renderResultTable(result) {
+    function renderQualityTable(result) {
       const tbody = document.querySelector("#wz-result-table tbody");
       tbody.textContent = "";
       for (const c of result.per_capture) {
@@ -394,6 +398,33 @@
         tbody.appendChild(tr);
       }
     }
+    function qualitySummary(label, result) {
+      return `${label} (instrument quality): ${result.verdict} — ${result.verdict_reasons.join("; ")} — mean relative digital power ${result.mean_relative_digital_power.toFixed(3)}`;
+    }
+    function spectralSummary(label, spectral) {
+      const c = spectral && spectral.combined;
+      if (!c) return `${label} (HI-line spectral metric): not computed — ${(spectral && spectral.reason) || "no result"}`;
+      if (!c.metric_valid) return `${label} (HI-line spectral metric): NOT VALID — ${c.reason}`;
+      return `${label} (HI-line spectral metric): ${c.metric.toFixed(4)} ± ${c.uncertainty.toFixed(4)} (1σ) · usable ${((c.usable_fraction) * 100).toFixed(1)}% · `
+           + `RFI-flagged channels ${((c.rfi_flag_fraction) * 100).toFixed(1)}% · masked ${c.masked_channels}/${c.total_channels}`
+           + (spectral.cross_capture_metric_std != null ? ` · cross-capture metric std ${spectral.cross_capture_metric_std.toFixed(4)}` : "");
+    }
+
+    function renderHiPlanTable(plan) {
+      const tbody = document.querySelector("#wz-plan-hi-table tbody");
+      tbody.textContent = "";
+      for (const label of ["HI_ALTO", "HI_BAJO"]) {
+        const c = plan.candidates[label];
+        if (!c) continue;
+        const tr = document.createElement("tr");
+        for (const v of [label, c.ra_hours.toFixed(4), c.dec_deg.toFixed(3), c.alt_deg.toFixed(1) + "°",
+                         c.mean_n_hi_1e20cm2.toFixed(3), c.reason]) {
+          const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      $w("wz-plan-hi-rfi-note").textContent = plan.rfi_note || "";
+    }
 
     function render(state) {
       lastState = state;
@@ -402,44 +433,69 @@
       $w("wizard-setup").hidden = true;
       $w("wizard-active").hidden = false;
       U.setBadge($w("wizard-badge"), state.step);
-      for (const id of ["wz-step-prepare", "wz-step-stabilize", "wz-step-result", "wz-step-reconnect", "wz-step-done"]) $w(id).hidden = true;
-      const settled = (state.references || []).filter((r) => r.status === "DONE" || r.status === "SKIPPED").length;
-      $w("wz-session-note").textContent = `session ${state.session_id} · step ${state.step} · reference ${Math.min(state.reference_index + 1, 3)}/3 (${settled} settled so far)`;
-      if (state.step === "PREPARE") {
-        const kind = ORDER[state.reference_index];
+      for (const id of ["wz-step-prepare", "wz-step-stabilize", "wz-step-result", "wz-step-reconnect",
+                        "wz-step-plan-hi", "wz-step-ready-hi", "wz-step-result-hi", "wz-step-done"]) $w(id).hidden = true;
+      const fiftyDone = state.fifty_ohm && (state.fifty_ohm.status === "DONE" || state.fifty_ohm.status === "SKIPPED");
+      const hiDone = ["HI_ALTO", "HI_BAJO"].filter((k) => state.hi_references && state.hi_references[k]).length;
+      $w("wz-session-note").textContent = `session ${state.session_id} · step ${state.step} · 50Ω ${fiftyDone ? "settled" : "pending"} · HI zones measured ${hiDone}/2`;
+
+      if (state.step === "PREPARE_50R") {
         $w("wz-step-prepare").hidden = false;
-        $w("wz-prepare-kind").textContent = KIND_LABEL[kind] || kind;
-        $w("wz-prepare-instructions").textContent = kind === "AMBIENT_50R"
-          ? "Physically connect the 50 Ω termination now. Choose where below, declare its temperature if you know it (otherwise leave blank = not measured), then confirm."
-          : `Physically connect your real ${kind} reference now, if you have one. If you do NOT have a real ${kind} load, use SKIP — never declare a fabricated one.`;
         updateCpExplain();
-        $w("wz-temp").value = ""; $w("wz-temp-src").value = "";
-      } else if (state.step === "STABILIZE") {
+      } else if (state.step === "STABILIZE_50R") {
         $w("wz-step-stabilize").hidden = false;
-        const kind = state.references[state.references.length - 1].kind;
-        $w("wz-stabilize-note").textContent = `${KIND_LABEL[kind] || kind} connected. Let it settle (suggested ${state.config.stabilize_seconds}s) — capture only starts on your CAPTURE NOW click.`;
+        $w("wz-stabilize-note").textContent = `50 Ω termination connected. Let it settle (suggested ${state.config.stabilize_seconds}s) — capture only starts on your CAPTURE NOW click.`;
         startCountdown(state.config.stabilize_seconds);
-      } else if (state.step === "RESULT") {
+      } else if (state.step === "RESULT_50R") {
         $w("wz-step-result").hidden = false;
-        const last = state.references[state.references.length - 1];
-        const result = (state.results || {})[last.kind];
-        if (result) {
-          $w("wz-result-summary").textContent = `${KIND_LABEL[last.kind] || last.kind}: ${result.verdict} — ${result.verdict_reasons.join("; ")} — mean relative digital power ${result.mean_relative_digital_power.toFixed(3)}`;
-          renderResultTable(result);
-        }
+        const result = state.fifty_ohm_result;
+        if (result) { $w("wz-result-summary").textContent = qualitySummary("50 Ω", result); renderQualityTable(result); }
       } else if (state.step === "RECONNECT_ANTENNA") {
         $w("wz-step-reconnect").hidden = false;
+        $w("wz-reconnect-note").textContent = state.fifty_ohm && state.fifty_ohm.status === "DONE"
+          ? "50 Ω result recorded. RECONNECT THE ANTENNA now, physically, before any sky pointing."
+          : "50 Ω was skipped. CONFIRM the antenna is connected before any sky pointing.";
+      } else if (state.step === "PLAN_HI") {
+        $w("wz-step-plan-hi").hidden = false;
+        if (!state.hi_plan) {
+          $w("wz-plan-hi-note").textContent = "Proposes HI ALTO (strong-line candidate) and HI BAJO (weak-line candidate) from the real HI4PI map, "
+            + "considering beam width, altitude, hold duration and slew distance. RFI cannot be predicted per sky position — see the result step's own RFI proxy.";
+          $w("wz-plan-hi-result").hidden = true;
+        } else {
+          $w("wz-plan-hi-note").textContent = `proposed ${state.hi_plan.generated_utc} — ${state.hi_plan.grid_points_considered} visible points considered`;
+          $w("wz-plan-hi-result").hidden = false;
+          renderHiPlanTable(state.hi_plan);
+        }
+      } else if (state.step === "READY_HI_ALTO" || state.step === "READY_HI_BAJO") {
+        const label = state.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+        const cand = state.hi_plan.candidates[label];
+        $w("wz-step-ready-hi").hidden = false;
+        $w("wz-ready-hi-label").textContent = `${label} — RA ${cand.ra_hours.toFixed(4)} h, Dec ${cand.dec_deg.toFixed(3)}°`;
+        $w("wz-ready-hi-note").textContent = `Real GOTO + ${state.config.n_captures} capture(s) at this approved point. ${cand.reason}. The mount WILL move.`;
+        $w("wz-hi-move-confirm").value = "";
+      } else if (state.step === "RESULT_HI_ALTO" || state.step === "RESULT_HI_BAJO") {
+        const label = state.step === "RESULT_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+        const ref = state.hi_references[label];
+        $w("wz-step-result-hi").hidden = false;
+        $w("wz-result-hi-label").textContent = label;
+        $w("wz-result-hi-quality").textContent = qualitySummary(label, ref.quality_result);
+        $w("wz-result-hi-spectral").textContent = spectralSummary(label, ref.spectral_result);
+        $w("wz-next-hi").hidden = label !== "HI_ALTO";
+        $w("wz-finish-hi").hidden = label !== "HI_BAJO";
       } else if (state.step === "DONE") {
         $w("wz-step-done").hidden = false;
-        const done = state.references.filter((r) => r.status === "DONE").map((r) => r.kind);
-        const skipped = state.references.filter((r) => r.status === "SKIPPED").map((r) => r.kind);
-        $w("wz-done-summary").textContent = `DONE. Tested: ${done.join(", ") || "none"}. Skipped: ${skipped.join(", ") || "none"}. Draft profile: ${state.profile_path || "—"}`;
-        const yf = state.y_factor;
-        $w("wz-yfactor").textContent = yf
-          ? (yf.physical_units_justified
-            ? `Y-FACTOR ${yf.y_factor.toFixed(3)} · noise temperature ${yf.noise_temperature_k.toFixed(1)} K · characterizes: ${yf.characterizes} · ${yf.caveats.join(" | ")}`
-            : `Y-factor NOT computed: ${yf.reason} — OPERATIONAL_RELATIVE only, no Kelvin/gain figure claimed`)
-          : "Y-factor not computed (HOT and/or COLD not both measured/done) — OPERATIONAL_RELATIVE only";
+        $w("wz-done-summary").textContent = `DONE. 50Ω: ${state.fifty_ohm ? state.fifty_ohm.status : "—"}. HI ALTO/HI BAJO: measured. Draft profile: ${state.profile_path || "—"}`;
+        const sc = state.spectral_contrast;
+        const banner = $w("wz-contrast-banner"), detail = $w("wz-contrast-detail");
+        if (sc) {
+          banner.textContent = `${sc.verdict} — ${sc.label}`;
+          banner.style.color = sc.verdict === "DEFENSIBLE_CONTRAST" ? "var(--ok)" : "var(--warn)";
+          const parts = [sc.reason];
+          if (sc.contrast_metric != null) parts.push(`contrast ${sc.contrast_metric.toFixed(4)} · combined uncertainty ${sc.combined_uncertainty != null ? sc.combined_uncertainty.toFixed(4) : "—"} · significance ${sc.significance != null ? sc.significance.toFixed(2) + "σ" : "—"} (threshold ${sc.significance_threshold}σ)`);
+          if (sc.alto_metric != null) parts.push(`HI ALTO metric ${sc.alto_metric.toFixed(4)} · HI BAJO metric ${sc.bajo_metric.toFixed(4)}`);
+          parts.push(...sc.caveats);
+          detail.textContent = parts.join(" | ");
+        } else { banner.textContent = ""; detail.textContent = ""; }
       } else if (state.step === "ABORTED") {
         $w("wizard-active").hidden = true;
         $w("wizard-setup").hidden = false;
@@ -449,9 +505,9 @@
     async function recoverWizard() {
       const r = await U.api("/api/ops/jobs", { timeoutMs: 15000 });
       if (!r.ok) return;
-      // /api/ops/jobs returns newest-first - the most recent calibrate_wizard job (any action) carries the
-      // latest state of whichever session is currently in progress.
-      const rows = (r.data.data || []).filter((x) => x.stage === "calibrate_wizard");
+      // /api/ops/jobs returns newest-first - the most recent job on EITHER wizard stage (non-moving or the
+      // real-GOTO capture-hi action) carries the latest state of whichever session is currently in progress.
+      const rows = (r.data.data || []).filter((x) => x.stage === "calibrate_wizard" || x.stage === "calibrate_wizard_move");
       if (!rows.length) return;
       const last = rows[0];
       const jr = await U.api(`/api/ops/job/${last.job_id}`, { timeoutMs: 15000 });
@@ -466,10 +522,12 @@
       try {
         const job = await wizardAction({
           action: "start", n_captures: Number($w("wz-n").value), capture_seconds: Number($w("wz-s").value),
-          stabilize_seconds: Number($w("wz-stab").value), center_frequency_hz: Number($w("wz-freq").value),
-          sample_rate_hz: Number($w("wz-rate").value), gain_db: Number($w("wz-gain").value),
-          clipping_threshold: Number($w("wz-clip").value), stability_threshold: Number($w("wz-stab-th").value),
-          rfi_threshold: Number($w("wz-rfi").value),
+          stabilize_seconds: Number($w("wz-stab").value), hi_settle_seconds: Number($w("wz-hi-settle").value),
+          center_frequency_hz: Number($w("wz-freq").value), sample_rate_hz: Number($w("wz-rate").value),
+          gain_db: Number($w("wz-gain").value), clipping_threshold: Number($w("wz-clip").value),
+          stability_threshold: Number($w("wz-stab-th").value), rfi_threshold: Number($w("wz-rfi").value),
+          min_elevation_deg: Number($w("wz-min-alt").value), beam_fwhm_deg: Number($w("wz-beam").value),
+          significance_threshold: Number($w("wz-sig").value),
         }, 20000);
         wzErr(""); sessionDir = job.facts.session_dir; render(job.facts);
       } catch (err) { wzErr(`START failed: ${msg(err)}`); }
@@ -477,18 +535,13 @@
 
     $w("wz-confirm-connected").addEventListener("click", U.guard($w("wz-confirm-connected"), async () => {
       try {
-        const kind = ORDER[lastState.reference_index];
-        const tempVal = $w("wz-temp").value;
-        const job = await wizardAction({
-          action: "set_reference", session_dir: sessionDir, kind, connection_point: $w("wz-cp").value,
-          temperature_c: tempVal === "" ? null : Number(tempVal), temperature_source: $w("wz-temp-src").value || "not measured",
-        }, 15000);
+        const job = await wizardAction({ action: "set_reference", session_dir: sessionDir, connection_point: $w("wz-cp").value }, 15000);
         wzErr(""); render(job.facts);
       } catch (err) { wzErr(`confirm failed: ${msg(err)}`); }
     }, "CONFIRMING…"));
 
     $w("wz-skip").addEventListener("click", U.guard($w("wz-skip"), async () => {
-      if (!confirm("Skip this reference? It will not be measured.")) return undefined;
+      if (!confirm("Skip the 50 Ω reference? It will not be measured.")) return undefined;
       try {
         const job = await wizardAction({ action: "skip_reference", session_dir: sessionDir, reason: "operator: not available" }, 15000);
         wzErr(""); render(job.facts);
@@ -498,7 +551,7 @@
     $w("wz-capture").addEventListener("click", U.guard($w("wz-capture"), async () => {
       try {
         const sim = $w("wz-simulate").value;
-        const job = await wizardAction({ action: "capture", session_dir: sessionDir, simulate: sim || undefined }, 120000);
+        const job = await wizardAction({ action: "capture_50r", session_dir: sessionDir, simulate: sim || undefined }, 120000);
         wzErr(""); render(job.facts);
       } catch (err) { wzErr(`capture failed: ${msg(err)}`); }
     }, "CAPTURING…"));
@@ -510,8 +563,52 @@
       } catch (err) { wzErr(`next failed: ${msg(err)}`); }
     }, "…"));
 
-    $w("wz-finish").addEventListener("click", U.guard($w("wz-finish"), async () => {
-      if (!confirm("Confirm the antenna is physically reconnected?")) return undefined;
+    $w("wz-confirm-antenna").addEventListener("click", U.guard($w("wz-confirm-antenna"), async () => {
+      if (!confirm("Confirm the antenna is physically connected (not the 50 Ω terminator)?")) return undefined;
+      try {
+        const job = await wizardAction({ action: "confirm_antenna", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`confirm failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-plan-hi").addEventListener("click", U.guard($w("wz-plan-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "plan_hi", session_dir: sessionDir }, 30000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`propose failed: ${msg(err)}`); }
+    }, "PROPOSING…"));
+    $w("wz-replan-hi").addEventListener("click", U.guard($w("wz-replan-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "plan_hi", session_dir: sessionDir }, 30000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`re-propose failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-approve-hi-plan").addEventListener("click", U.guard($w("wz-approve-hi-plan"), async () => {
+      try {
+        const job = await wizardAction({ action: "approve_hi_plan", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`approve failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-capture-hi").addEventListener("click", U.guard($w("wz-capture-hi"), async () => {
+      const label = lastState.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+      if ($w("wz-hi-move-confirm").value !== "MOVE") { window.alert('Type MOVE (uppercase, exactly) before a real GOTO + capture.'); return undefined; }
+      if (!confirm(`Real GOTO + capture at ${label} now. The mount WILL move. Confirm physically: free travel, cables, antenna, nobody in the way.\nProceed?`)) return undefined;
+      try {
+        const job = await wizardMoveAction({ action: "capture_hi", session_dir: sessionDir, label }, $w("wz-hi-move-confirm").value, 180000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`capture failed: ${msg(err)}`); }
+    }, "CAPTURING…"));
+
+    $w("wz-next-hi").addEventListener("click", U.guard($w("wz-next-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "next", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`next failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-finish-hi").addEventListener("click", U.guard($w("wz-finish-hi"), async () => {
       try {
         const job = await wizardAction({ action: "finish", session_dir: sessionDir }, 20000);
         wzErr(""); render(job.facts);

@@ -7,20 +7,24 @@
 
   <main id="app">
     <section class="panel" id="wizard-panel" aria-labelledby="h-wizard">
-      <header><h2 id="h-wizard">PHYSICAL REFERENCE WIZARD <span class="muted">(50 Ω / HOT / COLD · real MAIN captures · no mount movement)</span></h2><span id="wizard-badge" class="badge">—</span></header>
-      <div class="obs-summary">Chain: antenna → Nooelec SAWbird H1 (LNA + filter) → RTL-SDR Blog V4 (rtl_tcp, Bias-T). Tests receiver-chain quality with physical references you connect by hand. It never picks sky coordinates and never claims an absolute gain calibration by itself — see the Y-FACTOR result at the end for the one narrow case where a physical number is justified.</div>
+      <header><h2 id="h-wizard">REFERENCE WIZARD <span class="muted">(50 Ω · HI ALTO · HI BAJO · real MAIN captures · real mount movement for the HI steps only)</span></h2><span id="wizard-badge" class="badge">—</span></header>
+      <div class="obs-summary">Chain: antenna → Nooelec SAWbird H1 (LNA + filter) → RTL-SDR Blog V4 (rtl_tcp, Bias-T). Measures the RELATIVE HI-line spectral contrast between two real sky zones (HI ALTO/HI BAJO), after a 50 Ω instrument-quality check. This is NEVER a Y-factor, noise temperature, kelvin or absolute RF gain — see the RESULT at the end, always labeled RELATIVE.</div>
       <div id="wizard-biast" class="obs-summary"></div>
 
       <div id="wizard-setup">
         <div class="obs-row"><label for="wz-n">CAPTURES PER REFERENCE (suggested, editable)</label><input type="number" id="wz-n" min="2" max="20" value="5"></div>
         <div class="obs-row"><label for="wz-s">SECONDS PER CAPTURE</label><input type="number" id="wz-s" min="0.5" max="30" step="any" value="2"></div>
-        <div class="obs-row"><label for="wz-stab">STABILIZATION TIME (s — suggested; CAPTURE still needs your explicit click, never automatic)</label><input type="number" id="wz-stab" min="0" max="600" value="20"></div>
+        <div class="obs-row"><label for="wz-stab">50 Ω STABILIZATION TIME (s — suggested; CAPTURE still needs your explicit click, never automatic)</label><input type="number" id="wz-stab" min="0" max="600" value="20"></div>
+        <div class="obs-row"><label for="wz-hi-settle">HI GOTO SETTLE TIME (s — real, after the mount stops slewing)</label><input type="number" id="wz-hi-settle" min="0" max="120" step="any" value="2"></div>
         <div class="obs-row"><label for="wz-freq">CENTER FREQUENCY (Hz)</label><input type="number" id="wz-freq" value="1420405000"></div>
         <div class="obs-row"><label for="wz-rate">SAMPLE RATE (samples/s)</label><input type="number" id="wz-rate" value="2400000"></div>
         <div class="obs-row"><label for="wz-gain">GAIN (dB)</label><input type="number" id="wz-gain" value="40.2" step="any"></div>
         <div class="obs-row"><label for="wz-clip">CLIPPING RAIL-HIT THRESHOLD (fraction)</label><input type="number" id="wz-clip" value="0.0001" step="any"></div>
         <div class="obs-row"><label for="wz-stab-th">STABILITY RMS-FRACTION THRESHOLD</label><input type="number" id="wz-stab-th" value="0.10" step="any"></div>
         <div class="obs-row"><label for="wz-rfi">RFI PROXY: MIN USABLE BAND FRACTION</label><input type="number" id="wz-rfi" value="0.5" step="any"></div>
+        <div class="obs-row"><label for="wz-min-alt">HI CANDIDATES: MIN ELEVATION (deg)</label><input type="number" id="wz-min-alt" min="5" max="89" value="20"></div>
+        <div class="obs-row"><label for="wz-beam">HI CANDIDATES: BEAM FWHM (deg)</label><input type="number" id="wz-beam" min="1" max="90" step="any" value="20"></div>
+        <div class="obs-row"><label for="wz-sig">CONTRAST SIGNIFICANCE THRESHOLD (σ)</label><input type="number" id="wz-sig" min="1" max="10" step="any" value="3"></div>
         <div class="obs-actions"><button type="button" id="wz-start">START WIZARD</button></div>
       </div>
 
@@ -28,13 +32,11 @@
         <div class="obs-summary" id="wz-session-note"></div>
 
         <div id="wz-step-prepare" hidden>
-          <h3 id="wz-prepare-kind"></h3>
-          <div class="obs-summary" id="wz-prepare-instructions"></div>
+          <h3>50 Ω TERMINATION</h3>
+          <div class="obs-summary">Physically connect the 50 Ω termination now. Choose where below, then confirm. Instrument-quality test only — no sky coordinates, no mount movement.</div>
           <div class="obs-row"><label for="wz-cp">CONNECTION POINT</label>
             <select id="wz-cp"><option value="LNA_INPUT">LNA INPUT (replaces the antenna)</option><option value="LNA_OUTPUT">LNA OUTPUT (bypasses the LNA)</option><option value="SDR_INPUT">SDR INPUT (dongle only)</option></select></div>
           <div id="wz-cp-explain" class="obs-summary"></div>
-          <div class="obs-row"><label for="wz-temp">TEMPERATURE (°C — leave blank if not measured)</label><input type="number" id="wz-temp" step="any"></div>
-          <div class="obs-row"><label for="wz-temp-src">TEMPERATURE SOURCE / PROVENANCE</label><input type="text" id="wz-temp-src" placeholder="not measured"></div>
           <div class="obs-actions">
             <button type="button" id="wz-confirm-connected">I'VE CONNECTED IT — CONFIRM</button>
             <button type="button" id="wz-skip">SKIP THIS REFERENCE (not available)</button>
@@ -52,17 +54,45 @@
         <div id="wz-step-result" hidden>
           <div class="obs-summary" id="wz-result-summary"></div>
           <div class="twrap"><table id="wz-result-table" class="status-table"><thead><tr><th>#</th><th>clipping</th><th>usable band</th><th>rel. digital power</th></tr></thead><tbody></tbody></table></div>
-          <div class="obs-actions"><button type="button" id="wz-next">NEXT REFERENCE</button></div>
+          <div class="obs-actions"><button type="button" id="wz-next">NEXT</button></div>
         </div>
 
         <div id="wz-step-reconnect" hidden>
-          <div class="obs-summary">All references settled. RECONNECT THE ANTENNA now, physically.</div>
-          <div class="obs-actions"><button type="button" id="wz-finish">ANTENNA RECONNECTED — CONFIRM &amp; FINISH</button></div>
+          <div class="obs-summary" id="wz-reconnect-note"></div>
+          <div class="obs-actions"><button type="button" id="wz-confirm-antenna">CONFIRM &amp; CONTINUE TO HI ZONE PROPOSAL</button></div>
+        </div>
+
+        <div id="wz-step-plan-hi" hidden>
+          <div class="obs-summary" id="wz-plan-hi-note"></div>
+          <div class="obs-actions"><button type="button" id="wz-plan-hi">PROPOSE HI ALTO / HI BAJO ZONES</button></div>
+          <div id="wz-plan-hi-result" hidden>
+            <div class="twrap"><table id="wz-plan-hi-table" class="status-table"><thead><tr><th>zone</th><th>RA (h)</th><th>Dec (deg)</th><th>alt</th><th>HI4PI N_HI (×10²⁰cm⁻²)</th><th>reason</th></tr></thead><tbody></tbody></table></div>
+            <div class="obs-summary" id="wz-plan-hi-rfi-note"></div>
+            <div class="obs-actions">
+              <button type="button" id="wz-approve-hi-plan">APPROVE THESE ZONES</button>
+              <button type="button" id="wz-replan-hi">RE-PROPOSE (refresh)</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="wz-step-ready-hi" hidden>
+          <h3 id="wz-ready-hi-label"></h3>
+          <div class="obs-summary" id="wz-ready-hi-note"></div>
+          <div class="obs-row"><label for="wz-hi-move-confirm">TYPE MOVE TO ALLOW THE REAL GOTO + CAPTURE</label><input type="text" id="wz-hi-move-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+          <div class="obs-actions"><button type="button" id="wz-capture-hi">CAPTURE NOW (real GOTO + capture)</button></div>
+        </div>
+
+        <div id="wz-step-result-hi" hidden>
+          <h3 id="wz-result-hi-label"></h3>
+          <div class="obs-summary" id="wz-result-hi-quality"></div>
+          <div class="obs-summary" id="wz-result-hi-spectral"></div>
+          <div class="obs-actions"><button type="button" id="wz-next-hi" hidden>NEXT: HI BAJO</button><button type="button" id="wz-finish-hi" hidden>FINISH — COMPUTE CONTRAST</button></div>
         </div>
 
         <div id="wz-step-done" hidden>
           <div class="obs-summary" id="wz-done-summary"></div>
-          <div class="obs-summary" id="wz-yfactor"></div>
+          <div class="banner" id="wz-contrast-banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700"></div>
+          <div class="obs-summary" id="wz-contrast-detail"></div>
         </div>
 
         <div class="obs-actions"><button type="button" id="wz-abort">ABORT WIZARD</button></div>
