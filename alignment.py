@@ -38,6 +38,17 @@ DEFAULT_HI_INTEGRATION_SECONDS = 20.0
 DEFAULT_MINIMUM_VALID_POSITIONS = 8
 HI_INTEGRATION_VALIDATION_STATUS = "PROVISIONAL — OFFLINE EXTRAPOLATED NOT HARDWARE VALIDATED"
 
+# Real, measured GOTO+settle+mount-readback overhead per ALIGN position (excludes the capture itself, added
+# separately as capture_time_s) - from the real 49-point HI run WEB-AUTO-20260922T234824Z: 1709.98 s of Pass 1
+# acquire() / 49 points = 34.9 s/point at a 20 s capture -> 14.9 s/point overhead. Single source of truth for
+# both the web's duration estimate (almita_web_ops.align_defaults() imports this, not a second hardcoded copy)
+# and the real per-point WALL-CLOCK schedule pattern_temporal_altitudes() below uses to know when each position
+# will actually be captured during a real ~30-minute run - the reason this constant needs to live in alignment.py
+# itself now, not just in the web layer.
+MEASURED_ACQUIRE_OVERHEAD_PER_POINT_S = 14.9
+MEASURED_OVERHEAD_SOURCE = ("real 49-point HI run WEB-AUTO-20260922T234824Z: 1709.98 s Pass-1 acquire / 49 points "
+                            "= 34.9 s/point at a 20 s capture -> 14.9 s/point GOTO+settle+readback overhead")
+
 
 def sun_eod(obstime):
     """Return the Sun in the equatorial-of-date frame commanded by INDI EOD."""
@@ -120,6 +131,53 @@ def multiscale_pattern(center, radii=(5.0, 2.0, 0.6), ring_points=16):
         for angle in np.linspace(0, 2 * np.pi, ring_points, endpoint=False):
             east.append(radius * np.cos(angle)); north.append(radius * np.sin(angle))
     return offset_coordinates(center, east, north)
+
+
+def pattern_temporal_altitudes(center, radii, ring_points, location, start_time, capture_time_s,
+                                overhead_per_point_s=MEASURED_ACQUIRE_OVERHEAD_PER_POINT_S):
+    """Real Alt/Az altitude of EVERY pattern point (multiscale_pattern's own ordering: centre first, then each
+    ring's points in angle order) at the WALL-CLOCK TIME it will actually be captured during a real RUN starting
+    at start_time - not a single shared 'now' snapshot. A ~30-minute, 25-point ALIGN run visits its last points
+    long after PLAN/RUN was clicked, and the sky keeps moving throughout (Earth's rotation dominates - ~15
+    deg/hour in Alt/Az - not the pattern's own few-degree radius): a centre that clears MIN ELEVATION right now
+    can still have later points fall below it well before the run finishes, which a single-instant check (the
+    previous fix) cannot catch. Point i's capture window is
+    [start_time + i*(overhead_per_point_s+capture_time_s), + capture_time_s later] (acquire()'s own real GOTO ->
+    settle -> capture loop, in this exact order); this evaluates altitude at BOTH ends of that window (the sky
+    keeps moving during the capture itself, not just between points) and takes the lower of the two per point.
+    Returns each point's own schedule/altitude plus the overall minimum: which point, what real wall-clock
+    instant, and the value - what a real multi-point run actually needs checked, not just its centre or a
+    single shared moment."""
+    positions = multiscale_pattern(center, radii, ring_points)
+    n = len(positions)
+    step_s = float(overhead_per_point_s) + float(capture_time_s)
+    offsets_s = np.arange(n) * step_s
+    starts = start_time + offsets_s * u.s
+    ends = starts + float(capture_time_s) * u.s
+    alt_start = positions.transform_to(AltAz(obstime=starts, location=location)).alt.deg
+    alt_end = positions.transform_to(AltAz(obstime=ends, location=location)).alt.deg
+    alt_min_per_point = np.minimum(alt_start, alt_end)
+    points = []
+    for i in range(n):
+        worst_end = bool(alt_end[i] < alt_start[i])
+        points.append({
+            "index": i, "ra_hours": float(positions[i].ra.hour), "dec_deg": float(positions[i].dec.deg),
+            "elapsed_offset_s": float(offsets_s[i]),
+            "capture_start_utc": starts[i].to_datetime(timezone.utc).isoformat(),
+            "capture_end_utc": ends[i].to_datetime(timezone.utc).isoformat(),
+            "alt_at_capture_start_deg": float(alt_start[i]), "alt_at_capture_end_deg": float(alt_end[i]),
+            "alt_min_deg": float(alt_min_per_point[i]),
+            "alt_min_utc": (ends[i] if worst_end else starts[i]).to_datetime(timezone.utc).isoformat(),
+        })
+    worst = int(np.argmin(alt_min_per_point))
+    return {
+        "points": points, "min_altitude_deg": float(alt_min_per_point[worst]),
+        "min_altitude_point_index": worst, "min_altitude_utc": points[worst]["alt_min_utc"],
+        "run_duration_s": float(n * step_s) if n else 0.0,
+        "start_utc": start_time.to_datetime(timezone.utc).isoformat(),
+        "overhead_per_point_s": float(overhead_per_point_s), "capture_time_s": float(capture_time_s),
+        "overhead_source": MEASURED_OVERHEAD_SOURCE,
+    }
 
 
 def shifted_positions(positions, center, east, north):
@@ -219,6 +277,41 @@ def choose_hi_region(catalog_coords, values, location, obstime, min_altitude, be
                      "template_contrast": best[3]}
 
 
+def rank_hi_regions(catalog_coords, values, location, obstime, min_altitude, beam, exterior_radius_deg, top_n=3):
+    """Read-only, no hardware: score every above-horizon catalog candidate with the EXACT SAME formula and probe
+    pattern as choose_hi_region() (contrast x log1p(signal), a fixed (5.0, 2.0)x8 probe - not the operator's own
+    ring pattern, for scoring consistency with the single-choice path), then return up to top_n distinct centers
+    at least one exterior-circle diameter (2 x exterior_radius_deg) apart, ranked best first. Returns [] rather
+    than raising when nothing is visible or no defendible ranking exists - callers must say so honestly, never
+    fabricate a ranking."""
+    altaz = catalog_coords.transform_to(AltAz(obstime=obstime, location=location))
+    visible = altaz.alt.deg >= min_altitude
+    if not np.any(visible):
+        return []
+    idx = np.flatnonzero(visible)
+    scored = []
+    for i in idx[::max(1, idx.size // 180)]:
+        center = catalog_coords[i]
+        probe = multiscale_pattern(center, (5.0, 2.0), 8)
+        expected = gaussian_convolved_template(probe, catalog_coords, values, beam)
+        contrast, signal = float(np.std(expected)), float(np.mean(expected))
+        scored.append((contrast * math.log1p(max(signal, 0)), i, center, signal, contrast))
+    scored.sort(key=lambda item: -item[0])
+    min_separation_deg = 2.0 * exterior_radius_deg
+    chosen = []
+    for score, i, center, signal, contrast in scored:
+        if any(center.separation(c["coord"]).deg < min_separation_deg for c in chosen):
+            continue
+        chosen.append({"score": score, "coord": center, "ra_hours": float(center.ra.hour), "dec_deg": float(center.dec.deg),
+                       "az_deg": float(altaz[i].az.deg), "alt_deg": float(altaz[i].alt.deg),
+                       "template_mean_k": signal, "template_contrast_k": contrast})
+        if len(chosen) >= top_n:
+            break
+    for row in chosen:
+        del row["coord"]
+    return chosen
+
+
 def synthetic_template(center, coordinates):
     local = coordinates.transform_to(SkyOffsetFrame(origin=center))
     x, y = local.lon.deg, local.lat.deg
@@ -314,9 +407,20 @@ class AlignmentRunner:
             return "sun", sun, {"sun_altitude_deg": sun_altitude, "physical_visibility_assumed": False}
         if self.args.reference == "auto" and sun_altitude > 0:
             return "sun", sun, {"sun_altitude_deg": sun_altitude, "physical_visibility_assumed": False}
+        if self.args.center_ra_hours is not None and self.args.center_dec_deg is not None:
+            # The operator picked this center visually (e.g. one of the A/B/C areas the web sky view ranked) -
+            # use it exactly, never silently re-pick a different one with choose_hi_region().
+            center = SkyCoord(ra=self.args.center_ra_hours * u.hourangle, dec=self.args.center_dec_deg * u.deg)
+            altitude = float(center.transform_to(AltAz(obstime=now, location=self.location)).alt.deg)
+            if altitude < self.args.min_elevation:
+                raise RuntimeError(f"--center-ra-hours/--center-dec-deg is at {altitude:.1f} deg altitude, below "
+                                   f"--min-elevation {self.args.min_elevation:.1f} deg")
+            return "hi", center, {"selection_score": None, "template_mean": None, "template_contrast": None,
+                                 "operator_selected_center": True, "center_altitude_deg": altitude, "auto_fallback_from_sun": False}
         center, info = choose_hi_region(self.catalog_coords, self.catalog_values, self.location,
                                         now, self.args.min_elevation, self.args.beam_fwhm)
         info["auto_fallback_from_sun"] = self.args.reference == "auto"
+        info["operator_selected_center"] = False
         return "hi", center, info
 
     @staticmethod
@@ -341,14 +445,20 @@ class AlignmentRunner:
             raw = handle["iq_data"][:]
         return raw, metadata
 
-    async def acquire(self, reference, positions):
-        """Pass 1: acquire captures only; HI metrics wait for the full ensemble."""
+    async def connect_hardware(self, reference):
+        """Connect INDI + MAIN only; no movement, no capture. Split out of acquire() so the solar branch can set up
+        tracking (and confirm it) on self.telescope before the first real GOTO."""
         self.telescope = INDITelescopeControl(self.args.host, self.args.port, self.args.device, self.args.verbose)
         self.sdr = SDRCapture("network", self.args.sdr_host, self.args.sdr_port, verbose=self.args.verbose)
         if not await self.telescope.connect(): raise RuntimeError("INDI connection failed")
         await self.sdr.connect()
         gain = self.args.sun_gain if reference == "sun" else self.args.gain
         await self.sdr.configure(int(self.args.center_freq), self.args.sample_rate, gain=gain)
+        return gain
+
+    async def acquire(self, reference, positions, gain):
+        """Pass 1: acquire captures only; HI metrics wait for the full ensemble. Hardware must already be
+        connected (connect_hardware())."""
         duration = self.args.integration_seconds if reference == "hi" else (self.args.capture_time or 2.0)
         records = []
         for index, position in enumerate(positions, 1):
@@ -633,22 +743,114 @@ class AlignmentRunner:
             except (OSError, ValueError, KeyError) as exc:
                 record.update(status="METRIC_FAILED", error=str(exc))
 
+    def resolve_from_approved_plan(self):
+        """Load reference/pattern from an approved PLAN (--dry-run) result so RUN uses EXACTLY what the operator
+        reviewed - never re-resolves a fresh HI region (the PLAN-vs-RUN center mismatch this replaces: PLAN chose
+        one region, RUN silently chose a different one because resolve_reference() runs the clock- and
+        sky-dependent selection again). For HI the saved center is reused as-is. For solar, only the reference
+        ("sun") is locked - its position is inherently time-varying and is always recomputed fresh from the real
+        clock at RUN time, never replayed stale."""
+        path = Path(self.args.approved_plan)
+        payload = json.loads(path.read_text())
+        reference = payload.get("reference")
+        if reference not in ("hi", "sun"):
+            raise ValueError(f"approved plan has no usable reference: {reference!r}")
+        if self.args.reference not in (None, "auto") and self.args.reference != reference:
+            raise ValueError(f"--reference {self.args.reference!r} conflicts with the approved plan's reference {reference!r} - do not override it")
+        pc = payload.get("pattern_config") or {}
+        approved_radii = tuple(pc.get("ring_radii_deg") or ())
+        approved_points = pc.get("ring_points_per_ring")
+        if approved_radii and tuple(round(r, 9) for r in self.args.ring_radii) != tuple(round(r, 9) for r in approved_radii):
+            raise ValueError(f"--ring-radii {list(self.args.ring_radii)} conflicts with the approved plan's pattern {list(approved_radii)}")
+        if approved_points and self.args.ring_points != approved_points:
+            raise ValueError(f"--ring-points {self.args.ring_points} conflicts with the approved plan's pattern {approved_points}")
+        approved_run = payload.get("run_config") or {}
+        for cli_value, approved_value, flag in ((self.args.integration_seconds, approved_run.get("capture_time_s"), "--capture-time"),
+                                                 (self.args.beam_fwhm, payload.get("beam_fwhm_deg"), "--beam-fwhm"),
+                                                 (self.args.min_elevation, approved_run.get("min_elevation_deg"), "--min-elevation")):
+            if approved_value is not None and round(float(cli_value), 6) != round(float(approved_value), 6):
+                raise ValueError(f"{flag} {cli_value} conflicts with the approved plan's {approved_value} - do not override it")
+        selection = {"approved_plan_path": str(path), "approved_plan_timestamp_utc": payload.get("timestamp_utc")}
+        now = Time.now()
+        if reference == "hi":
+            cc = payload["center_coordinates"]
+            center = SkyCoord(ra=float(cc["ra_hours"]) * u.hourangle, dec=float(cc["dec_deg"]) * u.deg)
+            altitude = float(center.transform_to(AltAz(obstime=now, location=self.location)).alt.deg)
+            if altitude < self.args.min_elevation:
+                raise RuntimeError(f"approved HI plan center is now at {altitude:.1f} deg altitude, below "
+                                   f"--min-elevation {self.args.min_elevation:.1f} deg - PLAN is no longer "
+                                   "executable, PLAN again")
+            selection["approved_center_altitude_now_deg"] = altitude
+        else:
+            center = sun_eod(now)
+            sun_altitude = float(center.transform_to(AltAz(obstime=now, location=self.location)).alt.deg)
+            if sun_altitude <= 0:
+                raise RuntimeError("Sun is astronomically below horizon now - PLAN is no longer executable, PLAN again")
+            selection["sun_altitude_deg"] = sun_altitude
+            selection["physical_visibility_assumed"] = False
+        return reference, center, selection
+
     async def run(self):
+        if self.args.replay_dir and self.args.approved_plan:
+            raise ValueError("--replay-dir and --approved-plan are mutually exclusive")
         if self.args.replay_dir:
             reference, center, selection, replay_records = self.replay_records()
+        elif self.args.approved_plan:
+            reference, center, selection = self.resolve_from_approved_plan()
+            replay_records = None
         else:
             reference, center, selection = self.resolve_reference()
             replay_records = None
         print("ALMITA ALIGNMENT V2"); print(f"Reference      {reference.upper()}")
         print(f"Beam           {self.args.beam_fwhm:.1f} deg provisional")
         print("Physical mask  NOT inferred")
-        positions = multiscale_pattern(center)
+        positions = multiscale_pattern(center, self.args.ring_radii, self.args.ring_points)
+        print(f"Pattern        {len(positions)} positions (center + {len(self.args.ring_radii)} ring(s) x {self.args.ring_points}: radii {list(self.args.ring_radii)} deg)")
+        capture_time_s = self.args.integration_seconds if reference == "hi" else (self.args.capture_time or 2.0)
         if self.args.dry_run:
-            self.save(reference, center, [], None, selection, False, "PASS", {})
-            print("SYNC           NO\nResult         PASS (DRY RUN)"); return 0
+            temporal = pattern_temporal_altitudes(center, self.args.ring_radii, self.args.ring_points, self.location,
+                                                  Time.now(), capture_time_s)
+            temporal_ok = temporal["min_altitude_deg"] >= self.args.min_elevation
+            preview = [{"index": i, "ra_hours": float(p.ra.hour), "dec_deg": float(p.dec.deg),
+                        "separation_from_center_deg": float(center.separation(p).deg),
+                        "elapsed_offset_s": temporal["points"][i]["elapsed_offset_s"],
+                        "capture_start_utc": temporal["points"][i]["capture_start_utc"],
+                        "alt_min_deg": temporal["points"][i]["alt_min_deg"]} for i, p in enumerate(positions)]
+            status = "PASS" if temporal_ok else "TEMPORAL ALTITUDE CHECK FAILED"
+            self.save(reference, center, [], None, selection, False, status,
+                     {"planned_positions": preview,
+                      "temporal_check": {**temporal, "min_elevation_deg": self.args.min_elevation,
+                                         "margin_deg": temporal["min_altitude_deg"] - self.args.min_elevation,
+                                         "ok": temporal_ok}})
+            print(f"Temporal check {'OK' if temporal_ok else 'FAILED'}: minimum altitude over the run "
+                  f"{temporal['min_altitude_deg']:.2f} deg at point {temporal['min_altitude_point_index']} "
+                  f"(~{temporal['min_altitude_utc']}), margin {temporal['min_altitude_deg']-self.args.min_elevation:+.2f} deg "
+                  f"vs --min-elevation {self.args.min_elevation:.1f} deg over a {temporal['run_duration_s']/60:.1f} min run")
+            print(f"SYNC           NO\nResult         {status}{'' if temporal_ok else ' (DRY RUN)'}")
+            return 0 if temporal_ok else 2
+        # RUN, before the first real movement: the SAME temporal check PLAN reported, re-run fresh (never trusts a
+        # PLAN made minutes/hours ago) using this run's actual centre/pattern/capture_time - if the sky has moved
+        # on since PLAN (or PLAN was never actually checked, e.g. a direct CLI invocation), this blocks BEFORE any
+        # GOTO rather than letting a real position drop below MIN ELEVATION partway through the run. Replay never
+        # moves the mount at all, so it is exempt.
+        if not self.args.replay_dir:
+            temporal = pattern_temporal_altitudes(center, self.args.ring_radii, self.args.ring_points, self.location,
+                                                  Time.now(), capture_time_s)
+            if temporal["min_altitude_deg"] < self.args.min_elevation:
+                raise RuntimeError(
+                    f"pattern would reach {temporal['min_altitude_deg']:.2f} deg altitude at point "
+                    f"{temporal['min_altitude_point_index']} (~{temporal['min_altitude_utc']}, "
+                    f"{temporal['points'][temporal['min_altitude_point_index']]['elapsed_offset_s']/60:.1f} min into "
+                    f"the run), below --min-elevation {self.args.min_elevation:.1f} deg - PLAN is no longer "
+                    "executable, PLAN again")
+        self._previous_track_mode = None
         try:
             if reference == "hi":
-                records = replay_records if replay_records is not None else await self.acquire(reference, positions)
+                if replay_records is not None:
+                    records = replay_records
+                else:
+                    gain = await self.connect_hardware(reference)
+                    records = await self.acquire(reference, positions, gain)
                 _, analysis = self.analyze_hi_ensemble(records)
                 analysis["metric_version"] = "2"
                 analysis["metric_algorithm"] = "signed_fractional_residual_integrated_km_s"
@@ -704,7 +906,27 @@ class AlignmentRunner:
                     return 0
                 return 2
             else:
-                records = replay_records if replay_records is not None else await self.acquire(reference, positions)
+                if replay_records is not None:
+                    records = replay_records
+                else:
+                    gain = await self.connect_hardware(reference)
+                    self._previous_track_mode = await self.telescope.get_track_mode(timeout=2.0)
+                    print(f"Tracking       previous mode (real, read-only): {self._previous_track_mode}")
+                    await self.telescope.set_track_mode("solar")
+                    solar_confirmed = await self.telescope.wait_track_mode("solar", timeout=5.0)
+                    if not solar_confirmed:
+                        readback = await self.telescope.get_track_mode(timeout=2.0)
+                        selection["solar_track_mode_previous"] = self._previous_track_mode
+                        selection["solar_track_mode_readback"] = readback
+                        self.save(reference, center, [], None, selection, False,
+                                 "SOLAR TRACK MODE NOT CONFIRMED", {})
+                        print(f"Tracking       SOLAR requested, readback={readback} - NOT confirmed")
+                        print("SYNC           NO\nResult         BLOCKED: solar tracking rate not confirmed by OnStep before RUN")
+                        return 2
+                    print("Tracking       SOLAR confirmed by OnStep readback")
+                    selection["solar_track_mode_previous"] = self._previous_track_mode
+                    selection["solar_track_mode_confirmed"] = True
+                    records = await self.acquire(reference, positions, gain)
                 self.analyze_sun_records(records)
                 valid = [record for record in records if record.get("status") == "VALID"]
                 if len(valid) < self.args.minimum_valid_positions:
@@ -758,6 +980,13 @@ class AlignmentRunner:
             self.print_result(estimate, sync_applied, status)
             return 0 if status == "PASS" else 2
         finally:
+            if self.telescope and self._previous_track_mode not in (None, "unknown", "alert", "solar"):
+                # Restore whatever real tracking mode was in effect before this solar ALIGN touched it -
+                # on success, on a blocked/insufficient result, and on any exception (e.g. Ctrl-C).
+                print(f"Tracking       restoring previous mode: {self._previous_track_mode}")
+                await self.telescope.set_track_mode(self._previous_track_mode)
+                restored = await self.telescope.wait_track_mode(self._previous_track_mode, timeout=5.0)
+                print(f"Tracking       restore {'confirmed' if restored else 'NOT CONFIRMED - check the mount manually'}")
             if self.sdr: await self.sdr.close()
             if self.telescope: await self.telescope.disconnect()
 
@@ -779,6 +1008,10 @@ class AlignmentRunner:
                   "gain": self.args.sun_gain if reference == "sun" else self.args.gain,
                   "temperatures": [{"pre": r.get("temperatures_pre"), "post": r.get("temperatures_post")} for r in records],
                   "beam_fwhm_deg": self.args.beam_fwhm, "beam_provisional": True,
+                  "pattern_config": {"ring_radii_deg": list(self.args.ring_radii), "ring_points_per_ring": self.args.ring_points,
+                                     "total_positions": 1 + len(self.args.ring_radii) * self.args.ring_points},
+                  "run_config": {"capture_time_s": self.args.integration_seconds, "settle_s": self.args.settle,
+                                "min_elevation_deg": self.args.min_elevation, "approved_plan_path": self.args.approved_plan},
                   "sync_applied": sync_applied, "sync_executed": sync_applied,
                   "status": status, "result_status": status,
                   **analysis_metadata}
@@ -857,12 +1090,37 @@ def parse_args(argv=None):
     p.add_argument("--sdr-port", type=int, default=1234); p.add_argument("--observer-config", default="observer_config.json")
     p.add_argument("--catalog", default="data/hi_sky_catalog_2000pts.csv"); p.add_argument("--output-dir")
     p.add_argument("--replay-dir")
+    p.add_argument("--approved-plan", help="path to a PLAN's (--dry-run) alignment_result.json; RUN then uses "
+                   "exactly that reference/pattern/center (HI) or reference (solar) instead of resolving again")
     p.add_argument("--minimum-valid-positions", type=int, default=DEFAULT_MINIMUM_VALID_POSITIONS)
     p.add_argument("--minimum-robust-positions", type=int, default=4)
     p.add_argument("--replay-tolerance", type=float, default=1e-9)
+    p.add_argument("--ring-radii", default="5.0,2.0,0.6",
+                   help="comma-separated ring radii in degrees around the center (default: 5.0,2.0,0.6, i.e. the original fixed pattern)")
+    p.add_argument("--ring-points", type=int, default=16, help="points per ring, the same count on every ring (default: 16)")
+    p.add_argument("--center-ra-hours", type=float, default=None, help="HI only: use exactly this RA (hours) as the center - e.g. an "
+                   "operator-picked A/B/C area - instead of choose_hi_region() picking one automatically. Requires --center-dec-deg too.")
+    p.add_argument("--center-dec-deg", type=float, default=None, help="HI only: paired with --center-ra-hours")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args(argv)
     if args.no_sync: args.apply_sync = False
+    try:
+        ring_radii = tuple(float(token) for token in args.ring_radii.split(",") if token.strip() != "")
+    except ValueError:
+        p.error("--ring-radii must be a comma-separated list of numbers, e.g. 5.0,2.0,0.6")
+    if not ring_radii or any(not math.isfinite(r) or r <= 0 for r in ring_radii):
+        p.error("--ring-radii must list one or more positive, finite degrees")
+    if len(set(round(r, 9) for r in ring_radii)) != len(ring_radii):
+        p.error("--ring-radii must not repeat the same radius twice")
+    if args.ring_points < 3:
+        p.error("--ring-points must be at least 3 (a ring needs at least 3 points)")
+    args.ring_radii = ring_radii
+    if (args.center_ra_hours is None) != (args.center_dec_deg is None):
+        p.error("--center-ra-hours and --center-dec-deg must be given together")
+    if args.center_ra_hours is not None and not (0 <= args.center_ra_hours < 24):
+        p.error("--center-ra-hours must be in [0, 24)")
+    if args.center_dec_deg is not None and not (-90 <= args.center_dec_deg <= 90):
+        p.error("--center-dec-deg must be in [-90, 90]")
     if args.integration_seconds is None:
         args.integration_seconds = (args.capture_time if args.capture_time is not None
                                     else DEFAULT_HI_INTEGRATION_SECONDS)
@@ -884,7 +1142,15 @@ async def async_main(args):
         print(f"Mean error     {summary['mean_error_deg']:.3f} deg\nMax error      {summary['max_error_deg']:.3f} deg")
         print(f"Result         {'PASS' if summary['success_rate'] >= .95 else 'FAIL'}")
         return 0 if summary["success_rate"] >= .95 else 2
-    return await AlignmentRunner(args).run()
+    try:
+        return await AlignmentRunner(args).run()
+    except (RuntimeError, ValueError) as exc:
+        # A rejected/expired --approved-plan, a conflicting override, or a pre-movement temporal-altitude
+        # refusal is an operational "PLAN again", not a crash: no traceback, a clear one-line reason, a
+        # distinct exit code. Applies whether or not --approved-plan was used - the pre-movement temporal
+        # check in run() can raise on a direct CLI invocation too.
+        print(f"Result         BLOCKED: {exc}")
+        return 3
 
 
 def main(argv=None): return asyncio.run(async_main(parse_args(argv)))

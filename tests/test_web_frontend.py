@@ -365,8 +365,8 @@ window.__routes["GET /api/align/status"] = "network-error"; await sleep(11000); 
     out = run_page(tmp_path, "align", ALIGN_ROUTES, driver, budget=60000)
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
-    assert out["initial"][:4] == [True, True, True, "blocked by policy: real hardware alignment is not available from the web"]
-    assert "blocked by policy" in out["initial"][4] and "plan first" in out["initial"][5] and out["header"] == "ALMITA ALIGN"
+    assert out["initial"][:4] == [True, True, False, ""]                     # REAL alignment is enabled from its own panel (typed MOVE + real plan gate it there)
+    assert out["initial"][4] == "" and "plan first" in out["initial"][5] and out["header"] == "ALMITA ALIGN"
     assert out["planPosts"] == 1 and out["runEnabled"] is False and out["runPosts"] == 1 and out["runBtn"] == [True, "a simulation is running"] and out["simFlag"] is False
     assert out["afterJob"] == [False]
     assert "POST /api/align/plan/solar" in out["err"] and "unexpected error (OSError)" in out["err"] and "[request r7]" in out["err"]

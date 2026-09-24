@@ -6,6 +6,45 @@
   <header id="almita-header"><h1>ALMITA ALIGN</h1></header>
 
   <main id="app">
+    <section class="panel" id="real-panel" aria-labelledby="h-real">
+      <header><h2 id="h-real">REAL ALIGNMENT <span class="muted">(alignment.py · real INDI mount + real MAIN SDR · SYNC is never sent)</span></h2><span id="real-badge" class="badge">—</span></header>
+      <div class="obs-summary">This runs the real command on the real mount. Nothing here is simulated. The mount will slew and capture; the operator confirms physically by typing MOVE.</div>
+      <dl class="kv" id="real-mount-kv"></dl><div class="obs-actions"><span>MOUNT</span><span id="real-mount-badge" class="badge">—</span></div>
+
+      <div class="obs-actions">
+        <button type="button" id="real-mode-hi" class="mode-btn active">HI (night)</button>
+        <button type="button" id="real-mode-solar" class="mode-btn">SOLAR (day)</button>
+      </div>
+      <div class="obs-summary" id="real-track-mode-row" hidden>Real tracking mode (read-only - not settable from this field): <b id="real-track-mode">—</b></div>
+
+      <canvas id="real-sky" width="420" height="360" style="width:100%;max-width:420px;height:360px;display:block;margin:10px auto;border:1px solid var(--line);border-radius:8px"></canvas>
+      <canvas id="real-sky-legend" width="300" height="34" style="width:100%;max-width:300px;height:34px;display:block;margin:0 auto 6px" hidden title="HI4PI real map colour scale - N_HI column density, not an Almita measurement"></canvas>
+      <div class="obs-summary" id="real-sky-note">Loading sky view…</div>
+      <div class="obs-actions"><button type="button" id="real-sky-refresh">REFRESH SKY VIEW</button></div>
+      <div id="real-hi-areas" class="obs-checks"></div>
+
+      <div class="obs-row"><label for="real-ring-radii">RING RADII (deg, comma-separated - suggested, editable)</label><input type="text" id="real-ring-radii" autocomplete="off"></div>
+      <div class="obs-row"><label for="real-ring-points">POINTS PER RING (suggested, editable)</label><input type="number" id="real-ring-points" min="3" max="64"></div>
+      <div class="obs-row"><label for="real-capture-time">CAPTURE TIME PER POSITION (s - suggested, editable, same for every position)</label><input type="number" id="real-capture-time" min="0.5" max="120" step="any"></div>
+      <div class="obs-row"><label for="real-beam-fwhm">BEAM FWHM (deg - suggested, editable)</label><input type="number" id="real-beam-fwhm" min="1" max="60" step="any"></div>
+      <div class="obs-summary" id="real-beam-note"></div>
+      <div class="obs-row"><label for="real-min-elevation">MIN ELEVATION (deg - suggested, editable)</label><input type="number" id="real-min-elevation" min="5" max="89" step="any"></div>
+      <div class="obs-summary" id="real-pattern-total"></div>
+      <div class="obs-summary" id="real-duration-estimate"></div>
+      <div class="obs-actions"><button type="button" id="real-preflight">REAL PREFLIGHT</button><button type="button" id="real-plan">PLAN (real, moves nothing)</button></div>
+      <div id="real-preflight-out" class="obs-summary" hidden></div>
+      <div id="real-plan-stale" class="obs-summary" hidden style="color:var(--warn,#e6b85c)"></div>
+      <div id="real-preview" hidden>
+        <div class="obs-summary" id="real-preview-summary"></div>
+        <div class="obs-summary" id="real-preview-temporal" hidden></div>
+        <div class="twrap"><table id="real-preview-table" class="status-table"><thead><tr><th>idx</th><th>ring</th><th>RA (h)</th><th>Dec (deg)</th><th>sep. from center (deg)</th><th>est. capture time (UTC)</th><th>alt at capture (min)</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="obs-row"><label for="real-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="real-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+      <div class="obs-actions"><button type="button" id="real-run">RUN REAL ALIGNMENT</button></div>
+      <div class="reason" data-for="real-run" role="status"></div>
+      <div id="real-job-align_plan"></div><div id="real-job-align"></div>
+    </section>
+
     <section class="panel compact">
       <header><h2>STATUS</h2></header>
       <dl class="kv">
@@ -33,7 +72,7 @@
         <button type="button" id="btn-plan">PLAN</button>
         <button type="button" id="btn-preflight" disabled>PREFLIGHT</button>
         <button type="button" id="btn-run-sim" disabled>RUN SIMULATION</button>
-        <button type="button" id="btn-run-real" type="button" disabled title="blocked by policy">RUN REAL</button>
+        <button type="button" id="btn-run-real" type="button" title="go to the REAL ALIGNMENT panel">RUN REAL ▲</button>
       </div>
       <div class="reason" data-for="btn-preflight" role="status"></div>
       <div class="reason" data-for="btn-run-sim" role="status"></div>

@@ -1346,6 +1346,76 @@ class INDITelescopeControl:
                 return False
             await asyncio.sleep(min(0.1, max(0.0, deadline - asyncio.get_event_loop().time())))
 
+    _TRACK_MODE_SWITCHES = {"sidereal": "TRACK_SIDEREAL", "solar": "TRACK_SOLAR",
+                           "lunar": "TRACK_LUNAR", "custom": "TRACK_CUSTOM"}
+
+    @classmethod
+    def _extract_track_mode(cls, xml_messages) -> str:
+        """Normalize the latest TELESCOPE_TRACK_MODE vector (sidereal/solar/lunar/custom/unknown/alert)."""
+        result = "unknown"
+        for message in xml_messages:
+            try:
+                root = ET.fromstring(message)
+            except ET.ParseError:
+                continue
+            if root.attrib.get("name") != "TELESCOPE_TRACK_MODE":
+                continue
+            if root.attrib.get("state") == "Alert":
+                result = "alert"
+                continue
+            values = {child.attrib.get("name"): (child.text or "").strip() for child in root}
+            on = [mode for mode, switch in cls._TRACK_MODE_SWITCHES.items() if values.get(switch) == "On"]
+            result = on[0] if len(on) == 1 else "unknown"
+        return result
+
+    async def get_track_mode(self, timeout: float = 1.0) -> str:
+        """Read-only: which TELESCOPE_TRACK_MODE switch (sidereal/solar/lunar/custom) is On right now. Never writes."""
+        if timeout <= 0:
+            return "unknown"
+        query = (f'<getProperties device="{self.device_name}" name="TELESCOPE_TRACK_MODE" version="1.7"/>')
+        baseline = self._property_cache.get((self.device_name, "TELESCOPE_TRACK_MODE"), {}).get("update_seq", 0)
+        await self._send_command(query)
+        try:
+            item = await self._wait_property("TELESCOPE_TRACK_MODE", timeout, baseline)
+        except (asyncio.TimeoutError, ConnectionError):
+            return "unknown"
+        return self._extract_track_mode([item["raw"]])
+
+    async def wait_track_mode(self, expected: str, timeout: float = 5.0) -> bool:
+        """Wait, read-only, for TELESCOPE_TRACK_MODE to confirm `expected` (one of sidereal/solar/lunar/custom).
+        Never assumes a write succeeded: this is the ONLY thing that may declare it confirmed."""
+        if timeout <= 0 or expected not in self._TRACK_MODE_SWITCHES:
+            return False
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return False
+            state = await self.get_track_mode(timeout=min(0.5, remaining))
+            if state == expected:
+                return True
+            if state == "alert":
+                return False
+            await asyncio.sleep(min(0.1, max(0.0, deadline - asyncio.get_event_loop().time())))
+
+    async def set_track_mode(self, mode: str) -> bool:
+        """Write TELESCOPE_TRACK_MODE (sidereal/solar/lunar/custom). Returns True only if the command was sent;
+        callers MUST confirm with wait_track_mode() before relying on it - a driver can refuse or ignore the write."""
+        switch = self._TRACK_MODE_SWITCHES.get(mode)
+        if switch is None:
+            self.log(f"Unknown track mode requested: {mode!r}", "ERROR")
+            return False
+        try:
+            self.log(f"Setting TELESCOPE_TRACK_MODE -> {switch}")
+            cmd = f'<newSwitchVector device="{self.device_name}" name="TELESCOPE_TRACK_MODE">\n' + \
+                "\n".join(f'  <oneSwitch name="{s}">{"On" if s == switch else "Off"}</oneSwitch>' for s in self._TRACK_MODE_SWITCHES.values()) + \
+                "\n</newSwitchVector>"
+            await self._send_command(cmd)
+            return True
+        except Exception as e:
+            self.log(f"Error setting track mode: {e}", "ERROR")
+            return False
+
     async def set_tracking(self, enable: bool) -> bool:
         """Activa o desactiva el tracking"""
         try:
