@@ -708,7 +708,12 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                             # recovery where the LAST job might be "next"/"status", not "capture-hi" itself.
                             "hi_references": st.get("hi_references"),
                             "bias_t_facts": st.get("bias_t_facts"), "receiver_snapshot": st.get("receiver_snapshot"),
-                            "spectral_contrast": st.get("spectral_contrast"), "profile_path": st.get("profile_path")}
+                            "spectral_contrast": st.get("spectral_contrast"), "profile_path": st.get("profile_path"),
+                            # observe_profile: the OBSERVE/REDUCE-consumable .json+.npz pair FINISH built
+                            # automatically from this session's real 50R captures (or why it could not) -
+                            # deliberately a separate field from profile_path (the operational DRAFT above),
+                            # so the web UI can never present one as if it were the other.
+                            "observe_profile": st.get("observe_profile")}
             if action == "capture_50r" and st.get("fifty_ohm_result"):
                 out["facts"]["last_reference_result"] = st["fifty_ohm_result"]
             elif action == "capture_hi" and meta.get("label") and st.get("hi_references", {}).get(meta["label"]):
@@ -726,8 +731,11 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 out["detail"] = f"{meta.get('label')}: quality {r['verdict']} ({'; '.join(r['verdict_reasons'])}) - see spectral_result for the real HI-line measurement"
             elif action == "finish" and st.get("spectral_contrast"):
                 sc = st["spectral_contrast"]
+                op = st.get("observe_profile") or {}
                 out["verdict"] = "PASS" if sc["verdict"] == "DEFENSIBLE_CONTRAST" else "PARTIAL"
-                out["detail"] = f"spectral contrast: {sc['verdict']} - {sc['reason']}"
+                profile_note = (f"OBSERVE profile READY: {op.get('profile_path_for_observe')}" if op.get("status") == "READY"
+                               else f"NO USABLE OBSERVE PROFILE - {op.get('reason', 'unknown reason')}")
+                out["detail"] = f"spectral contrast: {sc['verdict']} - {sc['reason']} | {profile_note}"
             else:
                 out["verdict"] = "PASS"
                 out["detail"] = f"wizard step '{action}' OK - now at {out['facts'].get('step')}"

@@ -429,6 +429,37 @@ def _build_and_write_profile(session_dir: Path, state: Dict[str, Any]):
     return write_profile(profile, session_dir.parent / "profiles")
 
 
+def _build_observe_profile(session_dir: Path) -> Dict[str, Any]:
+    """Automatically builds and verifies the OBSERVE/REDUCE-consumable RELATIVE profile (.json+.npz) from
+    THIS session's real 50 ohm captures - calibration_engine.wizard_profile_converter does the real work
+    (validation, DSP, the write-then-reload-through-OBSERVE's-own-loader check with cleanup on failure);
+    nothing is reimplemented here. Deliberately separate from _build_and_write_profile's own operational
+    DRAFT profile above (a diagnostic summary only - no .npz, not directly loadable by
+    calibration_foundation.load_calibration_profile - see its own "DRAFT" limitations entry): the two must
+    never be confused for each other, which is exactly why the web UI shows them as two distinct results.
+    Returns {"status": "READY", ...path/report...} or {"status": "UNAVAILABLE", "reason": <exact cause>} -
+    FINISH must show this honestly either way, never an ambiguous success."""
+    from calibration_engine.wizard_profile_converter import WizardProfileError, build_profile_from_wizard
+    stem = session_dir / "observe_profile" / "calibration_profile_v1"
+    try:
+        built = build_profile_from_wizard(session_dir, stem, fft_size=8192)
+    except WizardProfileError as exc:
+        return {"status": "UNAVAILABLE", "reason": str(exc)}
+    except Exception as exc:  # noqa: BLE001 - never let an unexpected error look like ambiguous success
+        return {"status": "UNAVAILABLE", "reason": f"unexpected error building the OBSERVE profile: {type(exc).__name__}: {exc}"}
+    return {
+        "status": "READY",
+        "profile_json_path": str(stem.with_suffix(".json")),
+        "profile_npz_path": str(stem.with_suffix(".npz")),
+        "profile_path_for_observe": str(stem.with_suffix(".json")),
+        "verified_by_observe_loader": True,       # build_profile_from_wizard already re-loaded it through
+                                                   # calibration_foundation.load_calibration_profile() - the
+                                                   # exact function OBSERVE's own quicklook_spectrum.py calls
+                                                   # first - and deletes the pair instead of returning if that fails.
+        "report": built["report"],
+    }
+
+
 def cmd_finish(args) -> int:
     session_dir = Path(args.session_dir)
     state = _load_state(session_dir)
@@ -441,6 +472,7 @@ def cmd_finish(args) -> int:
     state["spectral_contrast"] = contrast.to_dict()
     profile_path = _build_and_write_profile(session_dir, state)
     state["profile_path"] = str(profile_path) if profile_path else None
+    state["observe_profile"] = _build_observe_profile(session_dir)
     state["step"] = WizardStep.DONE.value
     _save_state(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})

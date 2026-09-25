@@ -484,7 +484,34 @@
         $w("wz-finish-hi").hidden = label !== "HI_BAJO";
       } else if (state.step === "DONE") {
         $w("wz-step-done").hidden = false;
-        $w("wz-done-summary").textContent = `DONE. 50Ω: ${state.fifty_ohm ? state.fifty_ohm.status : "—"}. HI ALTO/HI BAJO: measured. Draft profile: ${state.profile_path || "—"}`;
+        $w("wz-done-summary").textContent = `DONE. 50Ω: ${state.fifty_ohm ? state.fifty_ohm.status : "—"}. HI ALTO/HI BAJO: measured.`;
+
+        const op = state.observe_profile;
+        const opBanner = $w("wz-observe-profile-banner"), opPath = $w("wz-observe-profile-path"), opDetail = $w("wz-observe-profile-detail");
+        if (op && op.status === "READY") {
+          opBanner.textContent = "READY — use this exact path in OBSERVE's calibration profile field";
+          opBanner.style.background = "#122a1e"; opBanner.style.color = "var(--ok)"; opBanner.style.borderColor = "#1e5c3d";
+          opPath.textContent = "";
+          const code = document.createElement("code"); code.textContent = op.profile_path_for_observe; code.style.userSelect = "all";
+          opPath.append("PATH: ", code);
+          const r = op.report || {};
+          opDetail.textContent = `verified by OBSERVE's own loader · ${r.reference_count ?? "?"} real 50Ω captures · `
+            + `valid_fraction ${r.valid_fraction != null ? r.valid_fraction.toFixed(3) : "—"} · dc_mask_bins ${r.dc_mask_bins ?? "—"} · spur_count ${r.spur_count ?? "—"}`
+            + ((r.caveats || []).length ? ` · caveats: ${r.caveats.join(" | ")}` : "");
+        } else if (op && op.status === "UNAVAILABLE") {
+          opBanner.textContent = "NO USABLE PROFILE";
+          opBanner.style.background = "#2a1414"; opBanner.style.color = "var(--error)"; opBanner.style.borderColor = "#7a2a2a";
+          opPath.textContent = "";
+          opDetail.textContent = op.reason || "unknown reason";
+        } else {
+          opBanner.textContent = "NOT BUILT"; opBanner.style.background = ""; opBanner.style.color = ""; opBanner.style.borderColor = "";
+          opPath.textContent = ""; opDetail.textContent = "";
+        }
+
+        $w("wz-draft-profile-note").textContent = state.profile_path
+          ? `operational draft JSON (diagnostic summary, no .npz, not loadable by OBSERVE): ${state.profile_path}`
+          : "no operational draft was produced (no reference reached DONE)";
+
         const sc = state.spectral_contrast;
         const banner = $w("wz-contrast-banner"), detail = $w("wz-contrast-detail");
         if (sc) {

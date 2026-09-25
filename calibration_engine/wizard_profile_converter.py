@@ -164,10 +164,13 @@ def build_profile_from_wizard(session_dir: str | Path, output_stem: str | Path, 
     captures. Raises WizardProfileError (never writes a partial/fabricated profile) if any requirement in the
     module docstring is not met. Returns {"profile": <loaded profile dict>, "report": <validation/provenance
     report dict>}."""
+    # No blanket "wizard step must be DONE" gate: the real, sufficient requirement is the 50 ohm reference's
+    # OWN status (checked below by require_fifty_ohm_ready), independent of whether HI ALTO/HI BAJO/contrast
+    # have happened yet - this is what lets calibrate_reference_wizard.py's own cmd_finish call this AS PART
+    # OF the transition into DONE (the on-disk wizard_state.json still reads its PREVIOUS step at that exact
+    # point, since this runs before that step is saved).
     session_dir = Path(session_dir)
     state = _read_wizard_state(session_dir)
-    if state.get("step") != "DONE":
-        raise WizardProfileError(f"wizard session step is {state.get('step')!r}, not DONE")
     capture_paths = require_fifty_ohm_ready(state, session_dir)
     verified = resolve_verified_config(state)
 
@@ -268,7 +271,17 @@ def build_profile_from_wizard(session_dir: str | Path, output_stem: str | Path, 
                         reference_sigma=reference_sigma, fractional_variability=fractional_variability,
                         valid_mask=valid, dc_mask=dc, spur_mask=spur)
     stem.with_suffix(".json").write_text(json.dumps(metadata, indent=2))
-    profile = load_calibration_profile(stem)
+    # Verify the file pair this function just wrote is genuinely usable by re-loading it through the SAME
+    # loader OBSERVE's real quicklook_spectrum.generate_quicklook() calls first - never leave a half-good-
+    # looking .json+.npz pair on disk if that fails; delete both rather than let a caller mistake an unverified
+    # write for a working profile.
+    try:
+        profile = load_calibration_profile(stem)
+    except Exception as exc:  # noqa: BLE001 - any failure here means "not usable", regardless of cause
+        stem.with_suffix(".json").unlink(missing_ok=True)
+        stem.with_suffix(".npz").unlink(missing_ok=True)
+        raise WizardProfileError(f"profile was written but failed OBSERVE's own loader verification "
+                                 f"({type(exc).__name__}: {exc}) - deleted, not left on disk as a false success") from exc
     report = {
         "verified_config": {"center_frequency_hz": verified.center_frequency_hz, "sample_rate_hz": verified.sample_rate_hz,
                             "gain_db": verified.gain_db, "bias_t_verified_on": verified.bias_t_verified_on,

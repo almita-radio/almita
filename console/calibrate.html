@@ -91,6 +91,16 @@
 
         <div id="wz-step-done" hidden>
           <div class="obs-summary" id="wz-done-summary"></div>
+
+          <h3>OBSERVE CALIBRATION PROFILE</h3>
+          <div class="banner" id="wz-observe-profile-banner" style="font-weight:700"></div>
+          <div class="obs-summary" id="wz-observe-profile-path"></div>
+          <div class="obs-summary" id="wz-observe-profile-detail"></div>
+
+          <h3>OPERATIONAL DRAFT <span class="muted">(diagnostic summary only — NOT the file above, not directly usable by OBSERVE)</span></h3>
+          <div class="obs-summary" id="wz-draft-profile-note"></div>
+
+          <h3>HI ALTO vs HI BAJO CONTRAST <span class="muted">(a separate, RELATIVE sky-position result — not used to build the profile above)</span></h3>
           <div class="banner" id="wz-contrast-banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700"></div>
           <div class="obs-summary" id="wz-contrast-detail"></div>
         </div>
@@ -102,7 +112,7 @@
 
     <section class="panel" id="real-panel" aria-labelledby="h-real">
       <header><h2 id="h-real">REAL CALIBRATION <span class="muted">(calibration_operational_realtest.py · real MAIN captures · no mount movement · receiver config read-only)</span></h2><span id="real-badge" class="badge">—</span></header>
-      <div class="obs-summary">Runs the real command against the real MAIN SDR. Result level is OPERATIONAL_RELATIVE: engineering / non-science, no physical units.</div>
+      <div class="obs-summary">Runs the real command against the real MAIN SDR. Result level is OPERATIONAL_RELATIVE: engineering / non-science, no physical units. A PASS here is an instrument-quality check only — it does NOT build or imply an OBSERVE calibration profile; that only comes from the REFERENCE WIZARD's own FINISH step above.</div>
       <div class="obs-row"><label for="real-n">CAPTURES</label><input type="number" id="real-n" min="1" max="20" value="5"></div>
       <div class="obs-row"><label for="real-s">SECONDS PER CAPTURE</label><input type="number" id="real-s" min="0.5" max="30" step="any" value="2"></div>
       <div class="obs-actions"><button type="button" id="real-run">RUN REAL CALIBRATION</button></div>
