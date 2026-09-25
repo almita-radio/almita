@@ -315,6 +315,28 @@ def _require_fresh_plan(run_stage: str, run_meta: Dict[str, Any], p: Dict[str, A
                          f"(planned: {plan_meta}, now: {run_meta}) - PLAN again")
 
 
+def _require_uncalibrated_confirmation(campaign_rel: str, profile_rel: str, p: Dict[str, Any]) -> None:
+    """Server-side gate for RUNning a campaign whose profile is not COMPATIBLE with every accepted point.
+    The campaign is still allowed to run (this is a real, existing, supported mode: incompatible/unverifiable
+    points are reduced UNCALIBRATED by reduce_engine.calibration.apply_calibration() itself, never partially
+    corrected) - but only after the operator has explicitly, and typedly, acknowledged it. Computed fresh
+    here (not trusted from an earlier PLAN or from the browser's own count) via the SAME per-point preview the
+    UI shows before RUN (reduce_campaign_calibration_preview) - so what gates RUN and what the operator saw are
+    always the same real check, never a stale or client-reported one."""
+    preview = reduce_campaign_calibration_preview(campaign_rel, profile_rel)
+    if preview["requires_confirmation"]:
+        token = p.get("confirm_uncalibrated")
+        if token != "RUN UNCALIBRATED":
+            c = preview["counts"]
+            raise ValueError(
+                f"this campaign's calibration profile is COMPATIBLE with only {c.get('COMPATIBLE', 0)} of "
+                f"{preview['total_accepted_points']} accepted points ({c.get('INCOMPATIBLE', 0)} incompatible, "
+                f"{c.get('UNKNOWN', 0)} unverifiable) - those points will be reduced UNCALIBRATED, the profile "
+                "will NOT be partially applied to them. To proceed anyway, resend with confirm_uncalibrated = "
+                "\"RUN UNCALIBRATED\" (exact text) - the operator's explicit, typed acknowledgement."
+            )
+
+
 def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str], Dict[str, Any]]:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if stage in ("align_plan", "align"):
@@ -490,6 +512,8 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         meta = {"campaign_dir": str(camp.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
         if stage == "reduce":
             _require_fresh_plan("reduce", meta, p)
+            if prof:
+                _require_uncalibrated_confirmation(str(camp.relative_to(ROOT)), str(prof), p)
         return argv, meta
     if stage in ("reduce_capture_plan", "reduce_capture"):
         cap = _file_in(p, "capture", (SERVE_ROOTS["mosaic"], SERVE_ROOTS["calibration"]))
@@ -1108,6 +1132,47 @@ def reduce_check_compatibility(*, capture_rel: Optional[str], campaign_rel: Opti
         return {"basis": "campaign_representative_point", "campaign_dir": str(camp.relative_to(ROOT)),
                "profile": str(pp.relative_to(ROOT)), "sample_point_index": sample.point_index, **result}
     raise ValueError("either capture or campaign_dir is required")
+
+
+def reduce_campaign_calibration_preview(campaign_rel: str, profile_rel: str) -> Dict[str, Any]:
+    """Per-point compatibility of a CALIBRATE-produced relative profile against EVERY accepted point in a
+    campaign - not the single representative sample reduce_check_compatibility() uses for its early, cheap
+    banner. Same calibration_foundation.check_calibration_compatibility() the real calibration stage itself
+    calls at RUN time (reduce_engine/calibration.py, frozen) - called once per accepted point's real HDF5
+    attrs here, read-only, before anything is reduced. This is also the SAME function build_command() calls,
+    server-side, to decide whether RUN needs the operator's explicit confirm_uncalibrated - so what this
+    preview shows before RUN and what actually gates RUN are never two different computations."""
+    from calibration_foundation import check_calibration_compatibility, load_calibration_profile
+    from reduce_engine.ingest import discover_campaign
+    pp = (ROOT / profile_rel).resolve()
+    if not _within(pp, SERVE_ROOTS["calibration"]) or not pp.with_suffix(".json").is_file() or not pp.with_suffix(".npz").is_file():
+        raise ValueError("calibration_profile must be an existing .json+.npz pair inside data/calibration")
+    profile = load_calibration_profile(pp)
+    camp = _path_in({"campaign_dir": campaign_rel}, "campaign_dir", SERVE_ROOTS["mosaic"])
+    manifest = discover_campaign(camp)
+    accepted = manifest.accepted_points()
+    counts = {"COMPATIBLE": 0, "INCOMPATIBLE": 0, "UNKNOWN": 0}
+    points: List[Dict[str, Any]] = []
+    for pt in accepted:
+        if pt.resolved_path is None:
+            status, reason = "UNKNOWN", "no resolved capture file for this point"
+        else:
+            try:
+                result = check_calibration_compatibility(profile, pt.resolved_path)
+                status, reason = result["status"], result["reason"]
+            except (OSError, ValueError, KeyError) as exc:
+                status, reason = "UNKNOWN", str(exc)
+        counts[status] = counts.get(status, 0) + 1
+        points.append({"point_index": pt.point_index, "status": status, "reason": reason})
+    all_compatible = counts.get("INCOMPATIBLE", 0) == 0 and counts.get("UNKNOWN", 0) == 0
+    return {
+        "campaign_dir": str(camp.relative_to(ROOT)), "profile": str(pp.relative_to(ROOT)),
+        "total_accepted_points": len(accepted), "counts": counts, "points": points,
+        "all_compatible": all_compatible,
+        # Whenever any point would NOT get the real relative correction, RUN needs the operator's explicit,
+        # typed acknowledgement (confirm_uncalibrated="RUN UNCALIBRATED") - never a silent partial apply.
+        "requires_confirmation": not all_compatible,
+    }
 
 
 # ------------------------------------------------------------------ ALIGN: suggested defaults + real sky view (both read-only, no hardware)

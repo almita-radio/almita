@@ -41,6 +41,17 @@
         <select id="in-profile"><option value="">(none — run UNCALIBRATED)</option></select></div>
       <div class="banner" id="compat-banner" style="font-weight:700" hidden></div>
       <div class="obs-summary" id="compat-detail"></div>
+      <div id="campaign-calibration-preview" hidden>
+        <h3>PER-POINT COMPATIBILITY (every accepted point, checked before RUN)</h3>
+        <div class="obs-summary" id="campaign-calibration-counts"></div>
+        <div class="obs-summary" id="campaign-calibration-note"></div>
+        <div class="obs-checks" id="campaign-calibration-points"></div>
+        <div class="obs-row" id="campaign-calibration-confirm-row" hidden>
+          <label><input type="checkbox" id="in-confirm-uncalibrated">
+            I understand: the incompatible/unverifiable points above will NOT get the relative profile applied
+            (no partial correction) and will be reduced UNCALIBRATED. Run anyway.</label>
+        </div>
+      </div>
     </section>
 
     <section class="panel" id="plan-panel" hidden aria-labelledby="h-plan">
@@ -71,7 +82,7 @@
       <div class="obs-summary" id="results-summary"></div>
       <div class="obs-summary" id="results-provenance"></div>
       <div class="twrap"><table id="results-points-table" class="status-table">
-        <thead><tr><th>point</th><th>status</th><th>quality</th><th>calibration</th><th>velocity</th><th>usable</th><th>baseline rms</th><th></th></tr></thead>
+        <thead><tr><th>point</th><th>status</th><th>quality</th><th>calibration</th><th>compat.</th><th>reason</th><th>velocity</th><th>usable</th><th>baseline rms</th><th></th></tr></thead>
         <tbody></tbody></table></div>
       <div id="spectrum-view" hidden>
         <h3>SPECTRUM — point <span id="spectrum-point-label"></span></h3>

@@ -20,6 +20,10 @@
   let lastPlanJobId = null;          // the PLAN job's own id - RUN must send it back; the SERVER re-checks it
                                       // (not just this page's own paramsEqual gate) - see _require_fresh_plan
   let lastRunOutputDir = null;
+  let lastCalibrationPreview = null; // campaign mode + a profile: per-point compatibility (all accepted points,
+                                      // not just a representative sample) - drives the confirmation checkbox and
+                                      // the RUN gate the server independently re-checks (_require_uncalibrated_confirmation)
+  let lastSingleCaptureCompat = null; // capture mode + a profile: the one point's {status, reason} - shown again in RESULTS
 
   function currentParams() {
     return {
@@ -33,6 +37,9 @@
 
   function invalidateDownstream() {
     lastPlanParams = null; lastPlanFacts = null; lastPlanJobId = null; lastRunOutputDir = null;
+    lastCalibrationPreview = null;
+    $("campaign-calibration-preview").hidden = true;
+    $("in-confirm-uncalibrated").checked = false;
     $("plan-panel").hidden = selectedInput === "";
     $("plan-summary").textContent = ""; $("plan-checks").textContent = ""; $("job-reduce-plan").textContent = "";
     U.setBadge($("plan-badge"), "—");
@@ -164,9 +171,22 @@
   $("in-profile").addEventListener("change", () => { selectedProfile = $("in-profile").value; invalidateDownstream(); refreshCompatibility(); });
   $("in-velocity-frame").addEventListener("change", invalidateDownstream);
 
+  function setBanner(banner, status, text) {
+    const ok = status === "COMPATIBLE";
+    banner.hidden = false; banner.textContent = text;
+    banner.style.background = ok ? "#122a1e" : (status === "UNKNOWN" ? "" : "#2a1414");
+    banner.style.color = ok ? "var(--ok)" : (status === "UNKNOWN" ? "var(--warn)" : "var(--error)");
+    banner.style.borderColor = ok ? "#1e5c3d" : (status === "UNKNOWN" ? "" : "#7a2a2a");
+  }
+
   async function refreshCompatibility() {
     selectedProfile = $("in-profile").value;
     const banner = $("compat-banner"), detail = $("compat-detail");
+    const preview = $("campaign-calibration-preview");
+    preview.hidden = true;
+    $("in-confirm-uncalibrated").checked = false;
+    lastCalibrationPreview = null;
+    lastSingleCaptureCompat = null;
     if (!selectedInput) { banner.hidden = true; detail.textContent = ""; return; }
     if (!selectedProfile) {
       banner.hidden = false; banner.textContent = "UNCALIBRATED (no profile selected)";
@@ -174,21 +194,57 @@
       detail.textContent = "REDUCE will run without a relative-calibration profile — a real, supported mode (reduce_engine.calibration.apply_calibration accepts profile=None). Results are labeled calibration_level=UNCALIBRATED.";
       return;
     }
+    if (mode === "campaign") { await refreshCampaignCalibrationPreview(); return; }
     banner.hidden = false; banner.textContent = "CHECKING…"; detail.textContent = "";
     try {
-      const q = mode === "capture" ? `capture=${encodeURIComponent(selectedInput)}` : `campaign_dir=${encodeURIComponent(selectedInput)}`;
-      const r = await U.api(`/api/ops/reduce/compatibility?${q}&profile=${encodeURIComponent(selectedProfile)}`, { timeoutMs: 20000 });
+      const r = await U.api(`/api/ops/reduce/compatibility?capture=${encodeURIComponent(selectedInput)}&profile=${encodeURIComponent(selectedProfile)}`, { timeoutMs: 20000 });
       if (!r.ok) throw new Error(U.errorText(r.error));
       const c = r.data.data;
-      const ok = c.status === "COMPATIBLE";
-      banner.textContent = `${c.status}${c.basis === "campaign_representative_point" ? ` (checked against representative point ${c.sample_point_index})` : ""}`;
-      banner.style.background = ok ? "#122a1e" : (c.status === "UNKNOWN" ? "" : "#2a1414");
-      banner.style.color = ok ? "var(--ok)" : (c.status === "UNKNOWN" ? "var(--warn)" : "var(--error)");
-      banner.style.borderColor = ok ? "#1e5c3d" : (c.status === "UNKNOWN" ? "" : "#7a2a2a");
-      detail.textContent = c.reason + (c.basis === "campaign_representative_point" ? " — other points in this campaign share the same session config but are not individually verified here; the real per-point check happens again during RUN itself, honestly, for every point." : "");
+      lastSingleCaptureCompat = { status: c.status, reason: c.reason };
+      setBanner(banner, c.status, c.status);
+      detail.textContent = c.reason;
     } catch (err) {
       banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "#2a1414"; banner.style.color = "var(--error)";
       detail.textContent = msg(err);
+    }
+  }
+
+  // Every accepted point in the campaign, checked individually - not a representative sample. Drives the
+  // typed-confirmation gate the server independently re-checks at RUN (_require_uncalibrated_confirmation) -
+  // showing anything less than this before RUN would not match what actually gates RUN.
+  async function refreshCampaignCalibrationPreview() {
+    const banner = $("compat-banner"), detail = $("compat-detail");
+    const preview = $("campaign-calibration-preview");
+    banner.hidden = false; banner.textContent = "CHECKING EVERY POINT…"; detail.textContent = "";
+    try {
+      const r = await U.api(`/api/ops/reduce/campaign_calibration_preview?campaign_dir=${encodeURIComponent(selectedInput)}&profile=${encodeURIComponent(selectedProfile)}`, { timeoutMs: 30000 });
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      const d = r.data.data;
+      lastCalibrationPreview = d;
+      const c = d.counts;
+      const overallStatus = d.all_compatible ? "COMPATIBLE" : ((c.INCOMPATIBLE || 0) > 0 ? "INCOMPATIBLE" : "UNKNOWN");
+      setBanner(banner, overallStatus, d.all_compatible ? "COMPATIBLE (every accepted point)"
+        : `MIXED / NOT ALL COMPATIBLE (${c.COMPATIBLE || 0} compatible, ${c.INCOMPATIBLE || 0} incompatible, ${c.UNKNOWN || 0} unverifiable of ${d.total_accepted_points})`);
+      detail.textContent = d.all_compatible
+        ? "every accepted point was checked individually against this profile (frequency, sample rate, gain, topology) - none are only assumed."
+        : "the profile will NOT be applied to the incompatible/unverifiable points below (no partial correction) - those points will be reduced UNCALIBRATED. Compatible points still get the real relative correction.";
+      preview.hidden = false;
+      $("campaign-calibration-counts").textContent = `${c.COMPATIBLE || 0} compatible · ${c.INCOMPATIBLE || 0} incompatible · ${c.UNKNOWN || 0} unverifiable · of ${d.total_accepted_points} accepted points`;
+      $("campaign-calibration-note").textContent = d.all_compatible ? "" :
+        "Continuing will produce calibration_level=UNCALIBRATED for the incompatible/unverifiable points listed below; calibration_level=RELATIVE for the compatible ones.";
+      const list = $("campaign-calibration-points"); list.textContent = "";
+      for (const pt of d.points.slice(0, 30)) {
+        const row = document.createElement("div");
+        row.className = "obs-check-row " + (pt.status === "COMPATIBLE" ? "status-pass" : pt.status === "UNKNOWN" ? "status-warning" : "status-block");
+        row.textContent = `point ${pt.point_index}: [${pt.status}] ${pt.reason}`;
+        list.appendChild(row);
+      }
+      if (d.points.length > 30) { const row = document.createElement("div"); row.className = "muted"; row.textContent = `… and ${d.points.length - 30} more points`; list.appendChild(row); }
+      $("campaign-calibration-confirm-row").hidden = d.all_compatible;
+    } catch (err) {
+      banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "#2a1414"; banner.style.color = "var(--error)";
+      detail.textContent = msg(err);
+      lastCalibrationPreview = null;
     }
   }
 
@@ -261,9 +317,17 @@
       $("run-panel").hidden = false; U.setEnabled($("btn-run"), false, "PLAN again — inputs/parameters changed");
       return;
     }
-    if (!confirm("Run REDUCE on this input? Writes a new session under data/reduced. No hardware, no mount, no SDR, nothing overwritten.")) return;
+    const needsUncalibratedConfirm = mode === "campaign" && lastCalibrationPreview && lastCalibrationPreview.requires_confirmation;
+    if (needsUncalibratedConfirm && !$("in-confirm-uncalibrated").checked) {
+      showError("some accepted points are not COMPATIBLE with the selected profile — check the confirmation "
+        + "box in section 3 (PER-POINT COMPATIBILITY) to acknowledge those points will run UNCALIBRATED, or choose a different profile");
+      return;
+    }
+    if (!confirm("Run REDUCE on this input? Writes a new session under data/reduced. No hardware, no mount, no SDR, nothing overwritten."
+      + (needsUncalibratedConfirm ? "\n\nSome points are NOT compatible with the selected profile and will be UNCALIBRATED (no partial correction)." : ""))) return;
     try {
       const params = { ...inputParams(), plan_job_id: lastPlanJobId };
+      if (needsUncalibratedConfirm) params.confirm_uncalibrated = "RUN UNCALIBRATED";
       const r = await U.api(`/api/ops/start/${stageFor("run")}`, { method: "POST", body: { params, confirm: null }, timeoutMs: 30000 });
       if (!r.ok) throw new Error(U.errorText(r.error));
       U.setBadge($("run-badge"), "RUNNING");
@@ -323,7 +387,7 @@
         if (mr.ok) {
           for (const pt of mr.data.points || []) {
             const tr = document.createElement("tr");
-            const cells = [pt.point_index, pt.status, "—", "—", "—", "—", "—"];
+            const cells = [pt.point_index, pt.status, "—", "—", "—", "—", "—", "—", "—"];
             for (const v of cells) { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); }
             const td = document.createElement("td");
             if (pt.status === "COMPLETED") {
@@ -342,20 +406,30 @@
 
   async function fillPointDetails(outputDir, points) {
     const rows = document.querySelectorAll("#results-points-table tbody tr");
+    // Same per-point compatibility status/reason shown before RUN (section 3) - not re-derived, just looked up
+    // by point_index, so RESULTS never disagrees with what the operator was shown before confirming.
+    const previewByPoint = new Map((lastCalibrationPreview && lastCalibrationPreview.points || []).map((pt) => [pt.point_index, pt]));
     let i = 0;
     for (const pt of points) {
       const tr = rows[i]; i += 1;
       if (pt.status !== "COMPLETED") continue;
+      const tds = tr.querySelectorAll("td");
+      const compat = mode === "campaign" ? previewByPoint.get(pt.point_index) : lastSingleCaptureCompat;
+      if (compat) {
+        tds[4].textContent = compat.status; tds[4].className = "status-" + (compat.status === "COMPATIBLE" ? "pass" : compat.status === "UNKNOWN" ? "warning" : "block");
+        tds[5].textContent = compat.reason;
+      } else if (!selectedProfile) {
+        tds[4].textContent = "—"; tds[5].textContent = "no profile selected (UNCALIBRATED by choice)";
+      }
       try {
         const r = await U.api(`/api/ops/reduce/point?session_dir=${encodeURIComponent(outputDir)}&point_index=${pt.point_index}`, { timeoutMs: 15000 });
         if (!r.ok) continue;
         const m = r.data.data.metadata;
-        const tds = tr.querySelectorAll("td");
         tds[2].textContent = m.quality.state; tds[2].className = "status-" + m.quality.state.toLowerCase();
         tds[3].textContent = m.calibration_level;
-        tds[4].textContent = m.velocity_frame;
-        tds[5].textContent = U.fixed(m.quality.metrics.usable_fraction, 3);
-        tds[6].textContent = U.fixed(m.quality.metrics.baseline_fit_quality_rms_fraction, 3);
+        tds[6].textContent = m.velocity_frame;
+        tds[7].textContent = U.fixed(m.quality.metrics.usable_fraction, 3);
+        tds[8].textContent = U.fixed(m.quality.metrics.baseline_fit_quality_rms_fraction, 3);
       } catch (err) { /* leave as — */ }
     }
   }
@@ -383,9 +457,16 @@
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
-    const freq = arrays.frequency_hz, val = arrays.relative_intensity, mask = arrays.mask;
+    const freq = arrays.frequency_hz, val = arrays.relative_intensity || [], mask = arrays.mask;
     if (!freq || !freq.length) { ctx.fillStyle = "#91a2ad"; ctx.fillText("no data", 10, 20); return; }
     const finiteVals = val.filter((v) => Number.isFinite(v));
+    if (finiteVals.length === 0) {
+      // Every relative_intensity bin is null (fully masked/unavailable) - never draw a flat/fabricated line
+      // through null values; say so plainly instead.
+      ctx.fillStyle = "#91a2ad"; ctx.font = "13px ui-monospace,monospace";
+      ctx.fillText("no relative intensity values to plot for this point (array is entirely null/masked)", 12, cssH / 2);
+      return;
+    }
     const vlo = Math.min(...finiteVals), vhi = Math.max(...finiteVals);
     const pad = 24;
     const x = (i) => pad + (i / (freq.length - 1)) * (cssW - 2 * pad);

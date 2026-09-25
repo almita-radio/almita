@@ -254,6 +254,8 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return self._ops_reduce_inspect_campaign()
             if path == "/api/ops/reduce/compatibility":
                 return self._ops_reduce_compatibility()
+            if path == "/api/ops/reduce/campaign_calibration_preview":
+                return self._ops_reduce_campaign_calibration_preview()
             if path == "/api/ops/reduce/point":
                 return self._ops_reduce_point()
             if path == "/api/ops/align/defaults":
@@ -507,6 +509,17 @@ class ObserveHandler(BaseHTTPRequestHandler):
         try:
             return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_check_compatibility(
                 capture_rel=capture, campaign_rel=campaign_dir, profile_rel=profile)})
+        except (ValueError, FileNotFoundError) as exc:
+            return _error_response(self, 400, str(exc))
+
+    def _ops_reduce_campaign_calibration_preview(self) -> None:
+        q = parse_qs(urlsplit(self.path).query)
+        campaign_dir = (q.get("campaign_dir") or [None])[0]
+        profile = (q.get("profile") or [None])[0]
+        if not campaign_dir or not profile:
+            return _error_response(self, 400, "campaign_dir and profile are both required")
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_campaign_calibration_preview(campaign_dir, profile)})
         except (ValueError, FileNotFoundError) as exc:
             return _error_response(self, 400, str(exc))
 
