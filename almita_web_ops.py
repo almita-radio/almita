@@ -213,6 +213,12 @@ STAGES: Dict[str, Dict[str, Any]] = {
     "observe_gain_pilot_admin": {"physical": False, "resources": ()},
     "reduce_plan": {"physical": False, "resources": ("cpu",)},
     "reduce": {"physical": False, "resources": ("cpu",)},
+    # reduce_single_capture.py bridges the ONE gap almita_reduce.py itself has (it only reads whole OBSERVE
+    # campaigns via mosaic.csv): reducing one standalone HDF5 capture that isn't part of a grid campaign. Same
+    # frozen reduce_engine functions underneath (see reduce_single_capture.py's own docstring) - never a second
+    # reduction algorithm.
+    "reduce_capture_plan": {"physical": False, "resources": ("cpu",)},
+    "reduce_capture": {"physical": False, "resources": ("cpu",)},
     "science_plan": {"physical": False, "resources": ("cpu",)},
     "science": {"physical": False, "resources": ("cpu",)},
 }
@@ -236,6 +242,21 @@ def _path_in(p: Dict[str, Any], key: str, root: Path) -> Path:
     cand = cand if cand.is_absolute() else ROOT / cand
     if not _within(cand, root) or not cand.is_dir():
         raise ValueError(f"{key} must be an existing directory inside {root.relative_to(ROOT)}")
+    return cand.resolve()
+
+
+def _file_in(p: Dict[str, Any], key: str, roots: Tuple[Path, ...]) -> Path:
+    """Like _path_in but for a FILE (e.g. one HDF5 capture) allowed under any of several roots - a standalone
+    capture worth reducing on its own can live under a grid campaign (data/mosaic) or a CALIBRATE session
+    (data/calibration), never assumed to be in only one of them."""
+    raw = p.get(key)
+    if not isinstance(raw, str) or not raw or "\x00" in raw:
+        raise ValueError(f"{key} (string) is required")
+    cand = Path(raw)
+    cand = cand if cand.is_absolute() else ROOT / cand
+    if not any(_within(cand, r) for r in roots) or not cand.is_file():
+        names = ", ".join(str(r.relative_to(ROOT)) for r in roots)
+        raise ValueError(f"{key} must be an existing file inside one of: {names}")
     return cand.resolve()
 
 
@@ -424,14 +445,40 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         raise ValueError("action must be one of set_gain, abort, status")
     if stage in ("reduce_plan", "reduce"):
         camp = _path_in(p, "campaign_dir", SERVE_ROOTS["mosaic"])
-        argv = [PY, "almita_reduce.py", "plan" if stage == "reduce_plan" else "run", str(camp.relative_to(ROOT))]
+        argv = [PY, "almita_reduce.py", "plan" if stage == "reduce_plan" else "run", str(camp.relative_to(ROOT)), "--json"]
+        vf = str(p.get("velocity_frame") or "lsrk")
+        if vf not in ("topocentric", "heliocentric", "barycentric", "lsrk"):
+            raise ValueError("velocity_frame must be one of topocentric, heliocentric, barycentric, lsrk")
+        argv += ["--velocity-frame", vf]
         prof = p.get("calibration_profile")
         if prof:
             pp = (ROOT / str(prof)).resolve()
             if not _within(pp, SERVE_ROOTS["calibration"]) or not pp.is_file():
                 raise ValueError("calibration_profile must be an existing file inside data/calibration")
             argv += ["--calibration-profile", str(pp.relative_to(ROOT))]
-        return argv, {"campaign_dir": str(camp.relative_to(ROOT))}
+        return argv, {"campaign_dir": str(camp.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
+    if stage in ("reduce_capture_plan", "reduce_capture"):
+        cap = _file_in(p, "capture", (SERVE_ROOTS["mosaic"], SERVE_ROOTS["calibration"]))
+        argv = [PY, "reduce_single_capture.py", "plan" if stage == "reduce_capture_plan" else "run",
+               str(cap.relative_to(ROOT)), "--json"]
+        vf = str(p.get("velocity_frame") or "topocentric")
+        if vf not in ("topocentric", "heliocentric", "barycentric", "lsrk"):
+            raise ValueError("velocity_frame must be one of topocentric, heliocentric, barycentric, lsrk")
+        argv += ["--velocity-frame", vf]
+        prof = p.get("calibration_profile")
+        if prof:
+            pp = (ROOT / str(prof)).resolve()
+            if not _within(pp, SERVE_ROOTS["calibration"]) or not pp.is_file():
+                raise ValueError("calibration_profile must be an existing file inside data/calibration")
+            argv += ["--calibration-profile", str(pp.relative_to(ROOT))]
+        obs_cfg = ROOT / "observer_config.json"
+        if obs_cfg.is_file():
+            argv += ["--observer-config", str(obs_cfg.relative_to(ROOT))]
+        ra = p.get("ra_hours")
+        dec = p.get("dec_deg")
+        if ra not in (None, "") and dec not in (None, ""):
+            argv += ["--ra-hours", str(_float(p, "ra_hours", 0, 24)), "--dec-deg", str(_float(p, "dec_deg", -90, 90))]
+        return argv, {"capture": str(cap.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
     if stage in ("science_plan", "science"):
         red = _path_in(p, "reduce_session_dir", SERVE_ROOTS["reduced"])
         argv = [PY, "almita_science.py", "plan" if stage == "science_plan" else "run", str(red.relative_to(ROOT))]
@@ -796,8 +843,45 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 out["verdict"] = "PASS"
                 out["detail"] = f"{action} OK - now at {out['facts'].get('step')}"
-    elif stage in ("reduce", "science", "reduce_plan", "science_plan"):
-        kind = "REDUCE" if stage.startswith("reduce") else "SCIENCE"
+    elif stage in ("reduce", "reduce_plan", "reduce_capture_plan", "reduce_capture"):
+        # almita_reduce.py / reduce_single_capture.py are both always invoked with --json now - one real JSON
+        # blob on stdout, same "one script invocation, one real artifact" contract as every other stage.
+        # reduce_single_capture.py's plan/run payload shapes are DELIBERATELY IDENTICAL to almita_reduce.py's
+        # own (run's is the literal same CampaignReduceReport) - this block never needs to know which one ran.
+        blob = None
+        m = re.search(r"\{.*\}", log, re.S)
+        if m:
+            try:
+                blob = json.loads(m.group(0))
+            except ValueError:
+                blob = None
+        is_plan = stage.endswith("_plan")
+        if blob is not None:
+            out["facts"] = blob
+            if not is_plan and blob.get("output_dir"):
+                odp = ROOT / blob["output_dir"]
+                out["output_dir"] = str(odp.resolve().relative_to(ROOT)) if odp.exists() and _within(odp, ROOT) else None
+        if state == "EXITED":
+            script = "reduce_single_capture.py" if "capture" in stage else "almita_reduce.py"
+            if not blob:
+                out["detail"] = f"exit {rc}; no JSON result from {script}: {_tail(Path(j['log']), 5)}"
+            elif is_plan:
+                checks = blob.get("checks") or []
+                failing = [c["name"] for c in checks if not c.get("ok", True)]
+                out["verdict"] = "FAIL" if blob.get("blocked") else "PASS"
+                out["detail"] = (f"BLOCKED: {'; '.join(failing)}" if blob.get("blocked") else
+                                 f"PLAN OK - config_hash {blob.get('config_hash', '')[:12]} - real engine "
+                                 f"preflight passed ({len(checks)} checks)")
+            else:
+                status = blob.get("status")
+                qc = blob.get("quality_counts") or {}
+                bad_or_unknown = qc.get("BAD", 0) + qc.get("UNKNOWN", 0)
+                out["verdict"] = ("PASS" if status == "COMPLETED" and not bad_or_unknown else
+                                  "PARTIAL" if status in ("COMPLETED", "PARTIAL") else "FAIL")
+                out["detail"] = (f"REDUCE {status} - calibration {blob.get('calibration_level_counts')}, "
+                                 f"velocity {blob.get('velocity_frame_counts')}, quality {qc}")
+    elif stage in ("science", "science_plan"):
+        kind = "SCIENCE"
         od = grab(r"^Output:\s+(.+)$")
         odp = (Path(od) if Path(od).is_absolute() else ROOT / od) if od else None
         out["output_dir"] = str(odp.resolve().relative_to(ROOT)) if odp and odp.exists() and _within(odp, ROOT) else None
@@ -811,7 +895,7 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
             elif blocked or rc != 0 or status not in ("COMPLETED", "PARTIAL", "VALID"):
                 out["detail"] = f"exit {rc}; {blocked or status or 'no status line'}"
             else:
-                out["verdict"] = "PASS" if status in ("COMPLETED", "VALID") and (kind == "REDUCE" or out["facts"]["quality"] in (None, "GOOD")) else "PARTIAL"
+                out["verdict"] = "PASS" if status in ("COMPLETED", "VALID") and out["facts"]["quality"] in (None, "GOOD") else "PARTIAL"
                 out["detail"] = f"{kind} {status} (real engine result)" + (f"; quality {out['facts']['quality']}" if out["facts"]["quality"] else "")
     if state == "EXITED" and j.get("stopped_by_operator"):
         if out["verdict"] == "PASS":
@@ -888,6 +972,105 @@ def campaigns(limit: int = 40) -> Dict[str, List[Dict[str, Any]]]:
     profiles = sorted(SERVE_ROOTS["calibration"].glob("**/calibration_profile*.json"), key=lambda q: -q.stat().st_mtime)[:limit] if SERVE_ROOTS["calibration"].is_dir() else []
     return {"campaigns": newest(SERVE_ROOTS["mosaic"], 1, "observation_resolved.json"), "reduce_sessions": newest(SERVE_ROOTS["reduced"], 2, "manifest.json"),
             "science_sessions": newest(SERVE_ROOTS["science"], 2, "manifest.json"), "profiles": [{"path": str(q.relative_to(ROOT)), "name": q.name} for q in profiles]}
+
+
+# ------------------------------------------------------------------ REDUCE: discovery + metadata preview + compatibility (all read-only, no hardware)
+def reduce_list_captures(limit: int = 80) -> List[Dict[str, Any]]:
+    """Standalone HDF5 captures worth reducing on their own (real directories, real files) - grid-campaign
+    point captures under data/mosaic and CALIBRATE session captures under data/calibration. Never a synthetic
+    listing: every row is a file that genuinely exists right now."""
+    rows: List[Dict[str, Any]] = []
+    for root, glob_pat in ((SERVE_ROOTS["mosaic"], "*/data/iq/*.h5"), (SERVE_ROOTS["calibration"], "*/captures/**/*.h5")):
+        if not root.is_dir():
+            continue
+        for f in root.glob(glob_pat):
+            if f.is_file() and not f.name.endswith(".part"):
+                rows.append({"path": str(f.relative_to(ROOT)), "name": f.name, "mtime": f.stat().st_mtime,
+                            "size_bytes": f.stat().st_size})
+    return sorted(rows, key=lambda r: -r["mtime"])[:limit]
+
+
+def reduce_inspect_capture(rel_path: str) -> Dict[str, Any]:
+    """Real, read-only metadata preview of ONE HDF5 capture - reuses reduce_single_capture.py's own function,
+    never a second implementation of the attrs read."""
+    cap = _file_in({"capture": rel_path}, "capture", (SERVE_ROOTS["mosaic"], SERVE_ROOTS["calibration"]))
+    import reduce_single_capture
+    return reduce_single_capture.inspect_capture_metadata(cap)
+
+
+def reduce_inspect_campaign(rel_path: str) -> Dict[str, Any]:
+    """Real, read-only campaign discovery - reuses reduce_engine.ingest.discover_campaign() (the SAME function
+    almita_reduce.py's own `inspect` subcommand calls), never re-derived here."""
+    camp = _path_in({"campaign_dir": rel_path}, "campaign_dir", SERVE_ROOTS["mosaic"])
+    from reduce_engine.ingest import discover_campaign
+    manifest = discover_campaign(camp)
+    accepted = manifest.accepted_points()
+    sample = accepted[0] if accepted else None
+    sample_metadata = None
+    if sample is not None and sample.resolved_path is not None:
+        import reduce_single_capture
+        try:
+            sample_metadata = reduce_single_capture.inspect_capture_metadata(sample.resolved_path)
+        except (OSError, ValueError) as exc:
+            sample_metadata = {"error": str(exc)}
+    return {
+        "campaign_id": manifest.campaign_id, "root": str(manifest.root.relative_to(ROOT)) if _within(manifest.root, ROOT) else str(manifest.root),
+        "session_id": manifest.session_id, "grid": manifest.grid, "observer": manifest.observer.get("observer", {}),
+        "points_discovered": len(manifest.points), "points_accepted": len(accepted),
+        "points_rejected": [{"point_index": pt.point_index, "reason": pt.reject_reason} for pt in manifest.points if not pt.accepted],
+        "sample_point_index": sample.point_index if sample else None,
+        "sample_point_metadata": sample_metadata,
+    }
+
+
+def reduce_point_result(rel_session_dir: str, point_index: int) -> Dict[str, Any]:
+    """Real, read-only Level-1 result for one REDUCE point - reuses reduce_engine.storage.load_master_spectrum()
+    (the same accessor compare/replay use), never re-reads the HDF5 by hand. Arrays are downsampled for the web
+    view only when large; the full-resolution master_spectrum.h5/.json remain the real, unmodified artifacts."""
+    session_dir = _path_in({"session_dir": rel_session_dir}, "session_dir", SERVE_ROOTS["reduced"])
+    point_dir = session_dir / "points" / str(int(point_index))
+    if not point_dir.is_dir():
+        raise FileNotFoundError(f"no point {point_index} under {rel_session_dir}")
+    from reduce_engine.storage import load_master_spectrum
+    metadata, arrays = load_master_spectrum(point_dir)
+    n = arrays["frequency_hz"].shape[0]
+    step = max(1, n // 1600)          # web-view decimation only - the real files keep every bin
+    out_arrays = {}
+    for key in ("frequency_hz", "relative_intensity", "uncertainty", "mask", "n_contributing", "velocity_lsrk_m_s"):
+        if key in arrays:
+            out_arrays[key] = [(v.item() if hasattr(v, "item") else v) for v in arrays[key][::step]]
+    return {"metadata": metadata, "arrays": out_arrays, "decimation_step": step, "n_bins_full": int(n),
+           "master_spectrum_json": str((point_dir / "master_spectrum.json").relative_to(ROOT)),
+           "master_spectrum_h5": str((point_dir / "master_spectrum.h5").relative_to(ROOT))}
+
+
+def reduce_check_compatibility(*, capture_rel: Optional[str], campaign_rel: Optional[str], profile_rel: str) -> Dict[str, Any]:
+    """Real compatibility check via calibration_foundation.check_calibration_compatibility() - the SAME
+    function REDUCE's own calibration stage and OBSERVE's quicklook use, never reimplemented. For a campaign,
+    checks its first accepted point as a representative sample - disclosed as such, never presented as a
+    guarantee for every point in the campaign."""
+    from calibration_foundation import check_calibration_compatibility, load_calibration_profile
+    pp = (ROOT / profile_rel).resolve()
+    if not _within(pp, SERVE_ROOTS["calibration"]) or not pp.with_suffix(".json").is_file() or not pp.with_suffix(".npz").is_file():
+        raise ValueError("calibration_profile must be an existing .json+.npz pair inside data/calibration")
+    profile = load_calibration_profile(pp)
+    if capture_rel:
+        cap = _file_in({"capture": capture_rel}, "capture", (SERVE_ROOTS["mosaic"], SERVE_ROOTS["calibration"]))
+        result = check_calibration_compatibility(profile, cap)
+        return {"basis": "single_capture", "capture": str(cap.relative_to(ROOT)), "profile": str(pp.relative_to(ROOT)), **result}
+    if campaign_rel:
+        camp = _path_in({"campaign_dir": campaign_rel}, "campaign_dir", SERVE_ROOTS["mosaic"])
+        from reduce_engine.ingest import discover_campaign
+        manifest = discover_campaign(camp)
+        accepted = manifest.accepted_points()
+        if not accepted or accepted[0].resolved_path is None:
+            return {"basis": "campaign_representative_point", "campaign_dir": str(camp.relative_to(ROOT)),
+                   "profile": str(pp.relative_to(ROOT)), "status": "UNKNOWN", "reason": "no accepted point with a resolved capture file to check"}
+        sample = accepted[0]
+        result = check_calibration_compatibility(profile, sample.resolved_path)
+        return {"basis": "campaign_representative_point", "campaign_dir": str(camp.relative_to(ROOT)),
+               "profile": str(pp.relative_to(ROOT)), "sample_point_index": sample.point_index, **result}
+    raise ValueError("either capture or campaign_dir is required")
 
 
 # ------------------------------------------------------------------ ALIGN: suggested defaults + real sky view (both read-only, no hardware)

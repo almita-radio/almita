@@ -79,6 +79,10 @@ STATIC_FILES = {
     # RW operations: the real end-to-end pipeline page (preflight -> align -> calibrate -> observe -> reduce -> science)
     "/pipeline.html": "pipeline.html",
     "/pipeline.js": "pipeline.js",
+    # REDUCE console: pick a capture/campaign, preview metadata + compatibility, PLAN, RUN, see results -
+    # the dedicated, full-featured page (the PIPELINE panel above stays as the quick/linear path).
+    "/reduce.html": "reduce.html",
+    "/reduce.js": "reduce.js",
 }
 _STATIC_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")  # Fase 57: no path traversal via a session id
@@ -242,6 +246,16 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.read_mount()})
             if path == "/api/ops/campaigns":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.campaigns()})
+            if path == "/api/ops/reduce/captures":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_list_captures()})
+            if path == "/api/ops/reduce/inspect_capture":
+                return self._ops_reduce_inspect_capture()
+            if path == "/api/ops/reduce/inspect_campaign":
+                return self._ops_reduce_inspect_campaign()
+            if path == "/api/ops/reduce/compatibility":
+                return self._ops_reduce_compatibility()
+            if path == "/api/ops/reduce/point":
+                return self._ops_reduce_point()
             if path == "/api/ops/align/defaults":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.align_defaults()})
             if path == "/api/ops/align/sky":
@@ -468,6 +482,45 @@ class ObserveHandler(BaseHTTPRequestHandler):
             return _error_response(self, 400, "ring_radii/ring_points/min_elevation/beam_fwhm/capture_time out of range")
         return _json_response(self, 200, {"ok": True,
             "data": almita_web_ops.align_sky(mode, radii, ring_points, min_elevation, beam_fwhm, capture_time)})
+
+    def _ops_reduce_inspect_capture(self) -> None:
+        rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_inspect_capture(rel)})
+        except (ValueError, FileNotFoundError) as exc:
+            return _error_response(self, 400, str(exc))
+
+    def _ops_reduce_inspect_campaign(self) -> None:
+        rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_inspect_campaign(rel)})
+        except (ValueError, FileNotFoundError) as exc:
+            return _error_response(self, 400, str(exc))
+
+    def _ops_reduce_compatibility(self) -> None:
+        q = parse_qs(urlsplit(self.path).query)
+        capture = (q.get("capture") or [None])[0]
+        campaign_dir = (q.get("campaign_dir") or [None])[0]
+        profile = (q.get("profile") or [None])[0]
+        if not profile:
+            return _error_response(self, 400, "profile is required")
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_check_compatibility(
+                capture_rel=capture, campaign_rel=campaign_dir, profile_rel=profile)})
+        except (ValueError, FileNotFoundError) as exc:
+            return _error_response(self, 400, str(exc))
+
+    def _ops_reduce_point(self) -> None:
+        q = parse_qs(urlsplit(self.path).query)
+        session_dir = (q.get("session_dir") or [""])[0]
+        try:
+            point_index = int((q.get("point_index") or ["0"])[0])
+        except ValueError:
+            return _error_response(self, 400, "point_index must be an integer")
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_point_result(session_dir, point_index)})
+        except (ValueError, FileNotFoundError, KeyError, OSError) as exc:
+            return _error_response(self, 400, str(exc))
 
     def _ops_file(self) -> None:
         rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
