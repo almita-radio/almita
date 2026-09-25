@@ -104,11 +104,26 @@ def _read_mosaic_points(mosaic_csv_path: Path) -> Dict[int, Dict[str, float]]:
     return points
 
 
-def choose_pilot_candidates(resolved_plan: Dict[str, Any], beam_fwhm_deg: float, max_pilots: int) -> Dict[str, Any]:
+def choose_pilot_candidates(resolved_plan: Dict[str, Any], beam_fwhm_deg: float, max_pilots: int,
+                            min_elevation_deg: float, hold_seconds: float) -> Dict[str, Any]:
     """HIGH = the grid point with the greatest real HI4PI N_HI within the grid footprint; LOW = the least. Picked
     only to ORIENT which points to actually measure - see this module's own docstring for why brightness here
     does not predict SDR/ADC power. Falls back to an honest 'no HI orientation' note (geometric centre + a
-    corner, never invented) if the real map is unavailable - never the synthetic catalog."""
+    corner, never invented) if the real map is unavailable - never the synthetic catalog.
+
+    ALTITUDE: target_list's own predicted_altitude_deg describes each point's altitude AT ITS OWN SCHEDULED
+    OFFSET WITHIN THE EVENTUAL GRID RUN (t0 + scan_order*per_point_seconds from whenever the grid was last
+    planned) - NOT the altitude the pilot itself would see, since the pilot runs BEFORE the grid, at
+    essentially real "now" (which can also be much later than t0 if real time elapsed since PLAN without a
+    re-plan - found live: a real session's displayed ~27 deg/~17 deg candidates were actually at ~20 deg/~12
+    deg by the time anyone looked, real time having passed since the grid was planned). This function
+    therefore computes a FRESH real-time altitude for every candidate it considers
+    (calibration_engine.hi_reference_selection.point_stays_above_elevation, reused - not reimplemented) and
+    only offers a candidate that clears min_elevation_deg for the whole hold_seconds a real pilot capture
+    would occupy it - walking the N_HI ranking until one clears, never just taking the top/bottom value
+    unconditionally. min_elevation_deg should be the SAME floor the grid PLAN itself used
+    (requested.grid.min_altitude_deg) - not a new, separately-configured number."""
+    from calibration_engine.hi_reference_selection import point_stays_above_elevation
     mosaic_path = Path(resolved_plan["mosaic_csv_path"])
     points = _read_mosaic_points(mosaic_path)
     target_list = {int(t["point_id"]): t for t in resolved_plan["target_list"]}
@@ -130,31 +145,59 @@ def choose_pilot_candidates(resolved_plan: Dict[str, Any], beam_fwhm_deg: float,
         finite = np.isfinite(values)
         if not finite.any():
             raise hi4pi_map.HI4PIUnavailable("no grid point mapped to a finite value in the real HI4PI raster")
-        order = np.argsort(np.where(finite, values, -np.inf))[::-1]   # descending, NaNs last
-        high_idx, low_idx = int(order[0]), int(order[finite.sum() - 1])
+        order = np.argsort(np.where(finite, values, -np.inf))[::-1]   # descending, NaNs last (HIGH-first order)
         source = hi4pi_map.SOURCE
         note = ("pilot points chosen by real HI4PI N_HI contrast within the grid footprint (orientation only - "
-               "see note: N_HI brightness does not predict SDR/ADC power)")
+               "see note: N_HI brightness does not predict SDR/ADC power), filtered to real-time-altitude-safe "
+               "points only")
     except Exception as exc:  # noqa: BLE001 - HI4PIUnavailable or any real read failure: fall back honestly, never silently substitute
-        high_idx, low_idx = 0, len(ids) - 1     # geometric fallback: first and last scan-order points
+        order = np.arange(len(ids))   # geometric fallback: scan order (HIGH searches from the front, LOW from the back)
         values = None
         source = None
-        note = (f"real HI4PI map unavailable ({type(exc).__name__}: {exc}) - falling back to the grid's first and "
-               "last scan-order points (no HI orientation); the synthetic catalog is NOT used as a substitute")
+        note = (f"real HI4PI map unavailable ({type(exc).__name__}: {exc}) - falling back to the grid's scan order "
+               "(no HI orientation); the synthetic catalog is NOT used as a substitute; still filtered to "
+               "real-time-altitude-safe points only")
 
-    def _row(idx: int, label: str) -> Dict[str, Any]:
+    def _row(idx: int, label: str, check: Dict[str, Any]) -> Dict[str, Any]:
         pid = ids[idx]
         t = target_list.get(pid, {})
         row = {"label": label, "point_id": pid, "ra_hours": points[pid]["ra_hours"], "dec_deg": points[pid]["dec_deg"],
-              "predicted_altitude_deg": t.get("predicted_altitude_deg"), "scan_order": t.get("scan_order")}
+              "predicted_altitude_deg": t.get("predicted_altitude_deg"), "scan_order": t.get("scan_order"),
+              "real_time_altitude_check": check}
         if values is not None and np.isfinite(values[idx]):
             row["hi4pi_n_hi_1e20cm2"] = float(values[idx])
         return row
 
-    candidates = {"HIGH": _row(high_idx, "HIGH")}
+    def _find_safe(order_indices, exclude=None) -> Tuple[Optional[int], Optional[Dict[str, Any]], int]:
+        exclude = exclude or set()
+        rejected = 0
+        for raw_idx in order_indices:
+            idx = int(raw_idx)
+            if idx in exclude:
+                continue
+            check = point_stays_above_elevation(float(ra_deg[idx] / 15.0), float(dec_deg[idx]), min_elevation_deg, hold_seconds)
+            if check["clears"]:
+                return idx, check, rejected
+            rejected += 1
+        return None, None, rejected
+
+    high_idx, high_check, high_rejected = _find_safe(order)
+    if high_idx is None:
+        raise SystemExit(f"no grid point (of {len(ids)} considered) currently clears min_elevation_deg="
+                         f"{min_elevation_deg:g} deg for a {hold_seconds:g} s hold, checked in real time just now - "
+                         f"cannot propose a HIGH pilot point right now ({high_rejected} candidate(s) rejected on "
+                         "altitude); the grid's own displayed predicted_altitude_deg describes a different, "
+                         "scheduled-for-later moment and must not be used to judge this")
+    candidates = {"HIGH": _row(high_idx, "HIGH", high_check)}
+    low_note = ""
     if max_pilots >= 2:
-        candidates["LOW"] = _row(low_idx, "LOW")
-    return {"candidates": candidates, "note": note, "catalog_source": source, "grid_points_considered": len(ids)}
+        low_idx, low_check, low_rejected = _find_safe(order[::-1], exclude={high_idx})
+        if low_idx is not None:
+            candidates["LOW"] = _row(low_idx, "LOW", low_check)
+        else:
+            low_note = f" LOW omitted: no other grid point currently clears the same real-time altitude floor ({low_rejected} rejected)."
+    return {"candidates": candidates, "note": note + low_note, "catalog_source": source,
+           "grid_points_considered": len(ids), "min_elevation_deg": min_elevation_deg, "hold_seconds": hold_seconds}
 
 
 # ------------------------------------------------------------------ real capture + analysis (reused primitives)
@@ -255,12 +298,20 @@ def recommend_gain(evals: Dict[str, Dict[str, Any]], current_gain_db: float, con
 def cmd_plan(args) -> int:
     resolved_plan_path = Path(args.resolved_plan_path).resolve()
     resolved_plan = _load_resolved_plan(resolved_plan_path)
+    if resolved_plan.get("visibility") == "BLOCK":
+        raise SystemExit("the grid PLAN itself is BLOCKed (some point falls below its own planning floor during "
+                         "the run) - PLAN the grid again before planning a gain pilot against it")
     session_dir = Path(resolved_plan["grid_session_dir"]).resolve()
     config = PilotConfig(max_pilots=args.max_pilots, capture_seconds=args.capture_seconds, settle_seconds=args.settle_seconds,
                          headroom_comfortable_multiplier=args.headroom_multiplier, clipping_rail_hit_fraction=args.clipping_threshold,
                          rfi_min_usable_band_fraction=args.rfi_threshold, gain_db_suggested=args.gain_db, final_check_enabled=args.final_check)
     beam_fwhm_deg = args.beam_fwhm if args.beam_fwhm else resolved_plan["resolved"]["spacing_deg"]
-    picked = choose_pilot_candidates(resolved_plan, beam_fwhm_deg, config.max_pilots)
+    # The SAME floor the grid PLAN itself used (requested.grid.min_altitude_deg) - never a separately invented
+    # number - and a real, right-now altitude check for the actual time a pilot capture would occupy the point
+    # (settle + capture, not the grid's own per-point scan timing).
+    min_elevation_deg = float(resolved_plan["requested"]["grid"]["min_altitude_deg"])
+    hold_seconds = config.settle_seconds + config.capture_seconds
+    picked = choose_pilot_candidates(resolved_plan, beam_fwhm_deg, config.max_pilots, min_elevation_deg, hold_seconds)
     n_extra_points = len(picked["candidates"])
     overhead_per_point_s = _acquire_overhead_s()
     est_capture_s = n_extra_points * (overhead_per_point_s + config.settle_seconds + config.capture_seconds)
@@ -269,6 +320,7 @@ def cmd_plan(args) -> int:
         "grid_config_hash": resolved_plan["observation_config_sha256"], "observation_name": resolved_plan["observation_name"],
         "config": config.to_dict(), "step": "PREPARE_HIGH", "candidates": picked["candidates"], "candidate_note": picked["note"],
         "catalog_source": picked["catalog_source"], "grid_points_considered": picked["grid_points_considered"],
+        "min_elevation_deg": min_elevation_deg,
         "initial_gain_db": resolved_plan["main"]["gain_db"], "captures": {}, "evaluations": {}, "need_low": None,
         "gain_recommendation": None, "approved_gain_db": None, "verified_gain_db": None, "final_check": None,
         "estimated_duration_s": est_capture_s, "estimated_extra_points": n_extra_points,
@@ -330,6 +382,23 @@ async def _do_capture(state: Dict[str, Any], label: str, gain_db: float, simulat
     session_dir = Path(state["grid_session_dir"])
     captures_dir = session_dir / "gain_pilot_captures"
     captures_dir.mkdir(exist_ok=True)
+    if not simulate:
+        # Real GOTO ahead - re-check the point's altitude RIGHT NOW, never trust the candidate's own
+        # predicted_altitude_deg (that describes the grid's own scheduled-for-later moment, or simply how
+        # things looked whenever PLAN GAIN PILOT last ran - either can be stale by the time an operator
+        # actually clicks a capture button). min_elevation_deg falls back to a fresh read of the grid's own
+        # floor for a session planned before this field existed.
+        from calibration_engine.hi_reference_selection import point_stays_above_elevation
+        min_elevation_deg = state.get("min_elevation_deg")
+        if min_elevation_deg is None:
+            min_elevation_deg = float(resolved_plan["requested"]["grid"]["min_altitude_deg"])
+        hold_seconds = state["config"]["settle_seconds"] + state["config"]["capture_seconds"]
+        fresh = point_stays_above_elevation(cand["ra_hours"], cand["dec_deg"], min_elevation_deg, hold_seconds)
+        if not fresh["clears"]:
+            raise SystemExit(f"{label} no longer clears min_elevation_deg={min_elevation_deg:g} deg, checked in "
+                             f"real time right now (worst-case altitude {fresh['worst_case_altitude_deg']:.1f} deg, "
+                             f"margin {fresh['margin_deg']:+.1f} deg over a {hold_seconds:g} s hold) - refusing "
+                             f"the real GOTO; PLAN the gain pilot again ({fresh})")
     idx = sum(1 for k in state["captures"] if k.startswith(label))
     path = captures_dir / f"{label.lower()}_{idx:02d}.h5"
     if simulate:

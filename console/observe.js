@@ -406,8 +406,13 @@
     tbody.textContent = "";
     for (const cand of Object.values(facts.candidates || {})) {
       const tr = document.createElement("tr");
+      const rt = cand.real_time_altitude_check || {};
+      const rtText = rt.worst_case_altitude_deg != null
+        ? `${rt.worst_case_altitude_deg.toFixed(1)}° (margin ${rt.margin_deg >= 0 ? "+" : ""}${rt.margin_deg.toFixed(1)}°)`
+        : "—";
       for (const v of [cand.label, cand.ra_hours != null ? cand.ra_hours.toFixed(4) : "—", cand.dec_deg != null ? cand.dec_deg.toFixed(3) : "—",
                        cand.predicted_altitude_deg != null ? cand.predicted_altitude_deg.toFixed(1) + "°" : "—",
+                       rtText,
                        cand.hi4pi_n_hi_1e20cm2 != null ? cand.hi4pi_n_hi_1e20cm2.toFixed(3) : "—"]) {
         const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
       }
@@ -417,7 +422,13 @@
       $("gp-step-prepare").hidden = false;
       const label = facts.step === "PREPARE_HIGH" ? "HIGH" : "LOW";
       const cand = (facts.candidates || {})[label] || {};
-      $("gp-prepare-note").textContent = `Next: real GOTO + capture at the ${label} candidate point (id ${cand.point_id}, alt ${cand.predicted_altitude_deg != null ? cand.predicted_altitude_deg.toFixed(1) : "?"}°) at the grid's current gain (${facts.initial_gain_db} dB). The mount WILL move.`;
+      const rt = cand.real_time_altitude_check || {};
+      $("gp-prepare-note").textContent = `Next: real GOTO + capture at the ${label} candidate point (id ${cand.point_id}). `
+        + `Altitude at the grid's own scheduled moment: ${cand.predicted_altitude_deg != null ? cand.predicted_altitude_deg.toFixed(1) : "?"}° — `
+        + `real altitude checked live just now (CAPTURE will re-check again, right before the GOTO): `
+        + `${rt.worst_case_altitude_deg != null ? rt.worst_case_altitude_deg.toFixed(1) + "°, margin " + (rt.margin_deg >= 0 ? "+" : "") + rt.margin_deg.toFixed(1) + "°" : "?"} `
+        + `over min_elevation_deg=${facts.min_elevation_deg != null ? facts.min_elevation_deg : "?"}°. `
+        + `Gain: ${facts.initial_gain_db} dB. The mount WILL move.`;
       $("gp-capture-btn").onclick = U.guard($("gp-capture-btn"), async () => {
         if (!gpRequireMoveConfirm()) return;
         const action = facts.step === "PREPARE_HIGH" ? "capture_high" : "capture_low";

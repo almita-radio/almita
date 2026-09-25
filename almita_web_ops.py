@@ -762,7 +762,7 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                             "approved_gain_db": st.get("approved_gain_db"), "verified_gain_db": st.get("verified_gain_db"),
                             "final_check": st.get("final_check"), "estimated_duration_s": st.get("estimated_duration_s"),
                             "estimated_extra_points": st.get("estimated_extra_points"), "duration_source": st.get("duration_source"),
-                            "grid_config_hash": st.get("grid_config_hash")}
+                            "grid_config_hash": st.get("grid_config_hash"), "min_elevation_deg": st.get("min_elevation_deg")}
         if state == "EXITED":
             # A real, honest non-PASS conclusion (e.g. final-check's "no same-gain baseline on record") returns a
             # non-zero exit by design, same convention as ALIGN's own non-crash exit codes - only a MISSING JSON
