@@ -284,6 +284,37 @@ def _ring_pattern(p: Dict[str, Any]) -> Optional[Tuple[List[float], int]]:
     return radii, points
 
 
+def _require_fresh_plan(run_stage: str, run_meta: Dict[str, Any], p: Dict[str, Any]) -> None:
+    """Server-side PLAN-before-RUN gate for REDUCE. almita_reduce.py/reduce_single_capture.py have no
+    ALIGN-style --approved-plan flag to re-validate (PLAN writes nothing to disk - see their own docstrings),
+    so the check lives entirely here: RUN must name a real PLAN job (plan_job_id, the job_id a prior PLAN
+    call returned), that job must have EXITED with blocked=False, and its recorded input identity/parameters
+    (meta, the same dict build_command() itself returns and job.json persists) must match this RUN's byte for
+    byte. Without this, only the browser's own JS staleness check (paramsEqual in reduce.js) enforced
+    replanning - real, but bypassable by any direct HTTP call, which is exactly what this closes."""
+    plan_stage = {"reduce": "reduce_plan", "reduce_capture": "reduce_capture_plan"}[run_stage]
+    job_id = p.get("plan_job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError("plan_job_id (string) is required: RUN must reference a PLAN job with these exact "
+                         "same inputs and parameters - PLAN first, then RUN")
+    try:
+        j = _load(job_id)
+    except (OSError, ValueError):
+        raise ValueError(f"plan_job_id {job_id!r} does not refer to a known job - PLAN again")
+    if j.get("stage") != plan_stage:
+        raise ValueError(f"plan_job_id {job_id!r} is a {j.get('stage')!r} job, not {plan_stage!r} - PLAN again")
+    if _state(j) != "EXITED":
+        raise ValueError(f"plan_job_id {job_id!r} has not finished (state={_state(j)}) - wait for PLAN to "
+                         "finish, or PLAN again")
+    facts = classify(j).get("facts") or {}
+    if facts.get("blocked", True):
+        raise ValueError(f"plan_job_id {job_id!r} was BLOCKED - resolve the blocking checks and PLAN again")
+    plan_meta = j.get("meta") or {}
+    if plan_meta != run_meta:
+        raise ValueError("inputs or parameters changed since that PLAN "
+                         f"(planned: {plan_meta}, now: {run_meta}) - PLAN again")
+
+
 def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str], Dict[str, Any]]:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if stage in ("align_plan", "align"):
@@ -456,7 +487,10 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             if not _within(pp, SERVE_ROOTS["calibration"]) or not pp.is_file():
                 raise ValueError("calibration_profile must be an existing file inside data/calibration")
             argv += ["--calibration-profile", str(pp.relative_to(ROOT))]
-        return argv, {"campaign_dir": str(camp.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
+        meta = {"campaign_dir": str(camp.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
+        if stage == "reduce":
+            _require_fresh_plan("reduce", meta, p)
+        return argv, meta
     if stage in ("reduce_capture_plan", "reduce_capture"):
         cap = _file_in(p, "capture", (SERVE_ROOTS["mosaic"], SERVE_ROOTS["calibration"]))
         argv = [PY, "reduce_single_capture.py", "plan" if stage == "reduce_capture_plan" else "run",
@@ -478,7 +512,10 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         dec = p.get("dec_deg")
         if ra not in (None, "") and dec not in (None, ""):
             argv += ["--ra-hours", str(_float(p, "ra_hours", 0, 24)), "--dec-deg", str(_float(p, "dec_deg", -90, 90))]
-        return argv, {"capture": str(cap.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
+        meta = {"capture": str(cap.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
+        if stage == "reduce_capture":
+            _require_fresh_plan("reduce_capture", meta, p)
+        return argv, meta
     if stage in ("science_plan", "science"):
         red = _path_in(p, "reduce_session_dir", SERVE_ROOTS["reduced"])
         argv = [PY, "almita_science.py", "plan" if stage == "science_plan" else "run", str(red.relative_to(ROOT))]

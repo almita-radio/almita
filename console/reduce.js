@@ -17,6 +17,8 @@
   let lastMetadata = null;
   let lastPlanParams = null;         // the exact params PLAN last succeeded with - RUN refuses if current params differ
   let lastPlanFacts = null;
+  let lastPlanJobId = null;          // the PLAN job's own id - RUN must send it back; the SERVER re-checks it
+                                      // (not just this page's own paramsEqual gate) - see _require_fresh_plan
   let lastRunOutputDir = null;
 
   function currentParams() {
@@ -30,7 +32,7 @@
   }
 
   function invalidateDownstream() {
-    lastPlanParams = null; lastPlanFacts = null; lastRunOutputDir = null;
+    lastPlanParams = null; lastPlanFacts = null; lastPlanJobId = null; lastRunOutputDir = null;
     $("plan-panel").hidden = selectedInput === "";
     $("plan-summary").textContent = ""; $("plan-checks").textContent = ""; $("job-reduce-plan").textContent = "";
     U.setBadge($("plan-badge"), "—");
@@ -203,7 +205,14 @@
     }
   }
 
-  function stageFor(action) { return mode === "capture" ? `reduce_capture_${action}` : (action === "plan" ? "reduce_plan" : "reduce"); }
+  function stageFor(action) {
+    // Real registered stage names only (almita_web_ops.py's STAGES): reduce_capture_plan/reduce_capture for a
+    // single HDF5 capture, reduce_plan/reduce for a campaign - never `reduce_capture_${action}`, which for
+    // action="run" produced "reduce_capture_run", a stage that has never existed (a real bug found and fixed
+    // during REDUCE verification: the single-capture RUN button always 400'd with "unknown stage").
+    if (mode === "capture") return action === "plan" ? "reduce_capture_plan" : "reduce_capture";
+    return action === "plan" ? "reduce_plan" : "reduce";
+  }
   function inputParams() {
     const p = { calibration_profile: selectedProfile || undefined, velocity_frame: $("in-velocity-frame").value };
     p[mode === "capture" ? "capture" : "campaign_dir"] = selectedInput;
@@ -220,6 +229,7 @@
       if (job.state !== "EXITED" || !job.facts) throw new Error(job.detail || "PLAN did not return a usable result");
       lastPlanFacts = job.facts;
       lastPlanParams = currentParams();
+      lastPlanJobId = job.job_id;
       renderPlan(job.facts);
       showError("");
     } catch (err) { showError(`PLAN failed: ${msg(err)}`); }
@@ -253,8 +263,8 @@
     }
     if (!confirm("Run REDUCE on this input? Writes a new session under data/reduced. No hardware, no mount, no SDR, nothing overwritten.")) return;
     try {
-      const params = inputParams();
-      const r = await U.api(`/api/ops/start/${stageFor("run") === "reduce_plan" ? "reduce" : stageFor("run")}`, { method: "POST", body: { params, confirm: null }, timeoutMs: 30000 });
+      const params = { ...inputParams(), plan_job_id: lastPlanJobId };
+      const r = await U.api(`/api/ops/start/${stageFor("run")}`, { method: "POST", body: { params, confirm: null }, timeoutMs: 30000 });
       if (!r.ok) throw new Error(U.errorText(r.error));
       U.setBadge($("run-badge"), "RUNNING");
       const jobId = r.data.data.job_id;
