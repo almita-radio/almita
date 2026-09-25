@@ -284,14 +284,46 @@ def _ring_pattern(p: Dict[str, Any]) -> Optional[Tuple[List[float], int]]:
     return radii, points
 
 
+def _file_signature(path: Path) -> Dict[str, Any]:
+    st = path.stat()
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def _reduce_input_signatures(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Cheap (size, mtime_ns) signatures for exactly the real files a REDUCE PLAN/RUN identity (meta: the
+    same dict build_command() returns and job.json persists) points at right now - a capture (or every
+    accepted point's capture, for a campaign) and the calibration profile's .json+.npz, if any. Used to
+    detect a file being replaced or edited between PLAN and RUN, without hashing every raw IQ capture's full
+    content (a 10+ MB file each, for a large campaign - see reduce_calibration_record.py's own docstring for
+    the same tradeoff). Never a partial/best-effort result: a missing campaign/capture/profile file raises,
+    same as it would when almita_reduce.py/reduce_single_capture.py themselves try to read it."""
+    sigs: Dict[str, Any] = {"points": {}, "profile": None}
+    if meta.get("campaign_dir"):
+        from reduce_engine.ingest import discover_campaign
+        camp = (ROOT / meta["campaign_dir"]).resolve()
+        manifest = discover_campaign(camp)
+        for pt in manifest.accepted_points():
+            sigs["points"][str(pt.point_index)] = _file_signature(pt.resolved_path) if pt.resolved_path else None
+    elif meta.get("capture"):
+        cap = (ROOT / meta["capture"]).resolve()
+        sigs["points"]["0"] = _file_signature(cap)
+    if meta.get("calibration_profile"):
+        pp = (ROOT / meta["calibration_profile"]).resolve()
+        sigs["profile"] = {"json": _file_signature(pp.with_suffix(".json")), "npz": _file_signature(pp.with_suffix(".npz"))}
+    return sigs
+
+
 def _require_fresh_plan(run_stage: str, run_meta: Dict[str, Any], p: Dict[str, Any]) -> None:
     """Server-side PLAN-before-RUN gate for REDUCE. almita_reduce.py/reduce_single_capture.py have no
     ALIGN-style --approved-plan flag to re-validate (PLAN writes nothing to disk - see their own docstrings),
     so the check lives entirely here: RUN must name a real PLAN job (plan_job_id, the job_id a prior PLAN
-    call returned), that job must have EXITED with blocked=False, and its recorded input identity/parameters
-    (meta, the same dict build_command() itself returns and job.json persists) must match this RUN's byte for
-    byte. Without this, only the browser's own JS staleness check (paramsEqual in reduce.js) enforced
-    replanning - real, but bypassable by any direct HTTP call, which is exactly what this closes."""
+    call returned), that job must have EXITED with blocked=False, its recorded input identity/parameters
+    (meta) must match this RUN's byte for byte, AND the real files that identity points at (every accepted
+    point's capture, plus the calibration profile) must not have changed since PLAN computed their
+    signatures - a path staying the same says nothing about its content staying the same. Without this, only
+    the browser's own JS staleness check (paramsEqual in reduce.js) enforced replanning - real, but
+    bypassable by any direct HTTP call, and blind to a file being edited/replaced in place - which is exactly
+    what this closes."""
     plan_stage = {"reduce": "reduce_plan", "reduce_capture": "reduce_capture_plan"}[run_stage]
     job_id = p.get("plan_job_id")
     if not isinstance(job_id, str) or not job_id:
@@ -313,6 +345,18 @@ def _require_fresh_plan(run_stage: str, run_meta: Dict[str, Any], p: Dict[str, A
     if plan_meta != run_meta:
         raise ValueError("inputs or parameters changed since that PLAN "
                          f"(planned: {plan_meta}, now: {run_meta}) - PLAN again")
+    plan_sigs = facts.get("file_signatures")
+    try:
+        current_sigs = _reduce_input_signatures(run_meta)
+    except (OSError, FileNotFoundError, ValueError) as exc:
+        raise ValueError(f"could not re-check the campaign/capture files that PLAN reviewed: {exc} - PLAN again")
+    if plan_sigs is None or plan_sigs != current_sigs:
+        raise ValueError(
+            "the capture file(s) and/or calibration profile reviewed by that PLAN have changed on disk since "
+            "(a file was added, removed, replaced, or its content edited) - a preview and PLAN reflect what "
+            "was on disk when they ran, not necessarily what is there now: request a fresh preview and PLAN "
+            "before RUN."
+        )
 
 
 def _require_uncalibrated_confirmation(campaign_rel: str, profile_rel: str, p: Dict[str, Any]) -> None:
@@ -498,7 +542,12 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         raise ValueError("action must be one of set_gain, abort, status")
     if stage in ("reduce_plan", "reduce"):
         camp = _path_in(p, "campaign_dir", SERVE_ROOTS["mosaic"])
-        argv = [PY, "almita_reduce.py", "plan" if stage == "reduce_plan" else "run", str(camp.relative_to(ROOT)), "--json"]
+        # PLAN still goes straight through the frozen almita_reduce.py CLI (unchanged). RUN goes through
+        # reduce_campaign_run.py instead - a thin bridge (same frozen reduce_engine calls underneath) that
+        # additionally records a verifiable, RUN-time calibration-compatibility result per point - see its
+        # own docstring and reduce_calibration_record.py's.
+        script = "almita_reduce.py" if stage == "reduce_plan" else "reduce_campaign_run.py"
+        argv = [PY, script, "plan" if stage == "reduce_plan" else "run", str(camp.relative_to(ROOT)), "--json"]
         vf = str(p.get("velocity_frame") or "lsrk")
         if vf not in ("topocentric", "heliocentric", "barycentric", "lsrk"):
             raise ValueError("velocity_frame must be one of topocentric, heliocentric, barycentric, lsrk")
@@ -919,11 +968,18 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
         is_plan = stage.endswith("_plan")
         if blob is not None:
             out["facts"] = blob
+            if is_plan:
+                # Persisted once by the runner right when this PLAN subprocess actually finished (see
+                # _runner()) - a real snapshot of what was on disk at PLAN time, NOT recomputed here: classify()
+                # runs fresh on every poll, so computing it here would silently reflect the CURRENT disk
+                # instead of PLAN's own moment, defeating the whole point of a staleness check.
+                out["facts"]["file_signatures"] = j.get("file_signatures")
             if not is_plan and blob.get("output_dir"):
                 odp = ROOT / blob["output_dir"]
                 out["output_dir"] = str(odp.resolve().relative_to(ROOT)) if odp.exists() and _within(odp, ROOT) else None
         if state == "EXITED":
-            script = "reduce_single_capture.py" if "capture" in stage else "almita_reduce.py"
+            script = ("reduce_campaign_run.py" if stage == "reduce" else
+                     "reduce_single_capture.py" if "capture" in stage else "almita_reduce.py")
             if not blob:
                 out["detail"] = f"exit {rc}; no JSON result from {script}: {_tail(Path(j['log']), 5)}"
             elif is_plan:
@@ -1343,6 +1399,17 @@ def _runner(job_path: str) -> int:
     log.write(f"[{_utc()}] exit code {rc}\n".encode())
     job = json.loads(p.read_text())
     job.update(exit_code=rc, ended_utc=_utc(), stopped_by_operator=state["stopped"])
+    if job.get("stage") in ("reduce_plan", "reduce_capture_plan") and rc == 0:
+        # Captured ONCE, right here, the moment PLAN's own subprocess actually finished reading these files -
+        # a true snapshot, never recomputed later. classify() is a stateless log parser re-run on every poll;
+        # computing "PLAN-time" signatures there would silently re-read the CURRENT disk instead (the bug this
+        # replaces - caught during this feature's own verification: a file mutated after PLAN was still
+        # reported as matching, because the signature was being freshly recomputed on every classify() call
+        # rather than pinned to when PLAN actually ran).
+        try:
+            job["file_signatures"] = _reduce_input_signatures(job.get("meta") or {})
+        except (OSError, FileNotFoundError, ValueError):
+            job["file_signatures"] = None
     _write_json(p, job)
     return 0
 

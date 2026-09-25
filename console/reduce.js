@@ -373,7 +373,8 @@
 
     const artifacts = $("results-artifacts"); artifacts.textContent = "";
     if (job.output_dir) {
-      for (const rel of ["manifest.json", "config.json", "provenance.json", "qc/quality_summary.json", "qc/calibration_summary.json", "qc/velocity_summary.json", "qc/mask_occupancy.json"]) {
+      for (const rel of ["manifest.json", "config.json", "provenance.json", "calibration_compatibility_record.json",
+        "qc/quality_summary.json", "qc/calibration_summary.json", "qc/velocity_summary.json", "qc/mask_occupancy.json"]) {
         const a = document.createElement("a"); a.href = `/api/ops/file?path=${encodeURIComponent(job.output_dir + "/" + rel)}`;
         a.target = "_blank"; a.rel = "noopener"; a.textContent = rel; a.style.marginRight = "12px";
         artifacts.appendChild(a);
@@ -398,28 +399,39 @@
             tr.appendChild(td);
             tbody.appendChild(tr);
           }
-          fillPointDetails(job.output_dir, mr.data.points || []);
+          // The REAL, RUN-time compatibility record - written by reduce_campaign_run.py/reduce_single_capture.py
+          // right before the frozen reduce_campaign() call (see reduce_calibration_record.py) - never the
+          // pre-RUN preview shown in section 3, which can go stale between preview/PLAN and RUN. Absent when no
+          // profile was requested at all (nothing to record).
+          let runRecord = null;
+          try {
+            const rr = await U.api(`/api/ops/file?path=${encodeURIComponent(job.output_dir + "/calibration_compatibility_record.json")}`, { timeoutMs: 15000 });
+            if (rr.ok) runRecord = rr.data;
+          } catch (err) { /* no profile was used - no record written, that is expected */ }
+          fillPointDetails(job.output_dir, mr.data.points || [], runRecord);
         }
       } catch (err) { /* manifest not fetchable yet - job panel above still shows the raw artifact list */ }
     }
   }
 
-  async function fillPointDetails(outputDir, points) {
+  async function fillPointDetails(outputDir, points, runRecord) {
     const rows = document.querySelectorAll("#results-points-table tbody tr");
-    // Same per-point compatibility status/reason shown before RUN (section 3) - not re-derived, just looked up
-    // by point_index, so RESULTS never disagrees with what the operator was shown before confirming.
-    const previewByPoint = new Map((lastCalibrationPreview && lastCalibrationPreview.points || []).map((pt) => [pt.point_index, pt]));
+    // Looked up by point_index from the REAL run-time record (runRecord), not the pre-RUN preview - see
+    // renderResults() above and reduce_calibration_record.py for why these can legitimately differ if a file
+    // changed between preview/PLAN and RUN (a case the server now refuses before it gets this far - see
+    // _require_fresh_plan - but this table reflects what RUN itself actually saw, not an assumption).
+    const recordByPoint = new Map((runRecord && runRecord.points || []).map((pt) => [pt.point_index, pt]));
     let i = 0;
     for (const pt of points) {
       const tr = rows[i]; i += 1;
       if (pt.status !== "COMPLETED") continue;
       const tds = tr.querySelectorAll("td");
-      const compat = mode === "campaign" ? previewByPoint.get(pt.point_index) : lastSingleCaptureCompat;
+      const compat = recordByPoint.get(pt.point_index);
       if (compat) {
         tds[4].textContent = compat.status; tds[4].className = "status-" + (compat.status === "COMPATIBLE" ? "pass" : compat.status === "UNKNOWN" ? "warning" : "block");
         tds[5].textContent = compat.reason;
-      } else if (!selectedProfile) {
-        tds[4].textContent = "—"; tds[5].textContent = "no profile selected (UNCALIBRATED by choice)";
+      } else if (!runRecord) {
+        tds[4].textContent = "—"; tds[5].textContent = "no profile was requested for this RUN (UNCALIBRATED by choice)";
       }
       try {
         const r = await U.api(`/api/ops/reduce/point?session_dir=${encodeURIComponent(outputDir)}&point_index=${pt.point_index}`, { timeoutMs: 15000 });

@@ -197,6 +197,7 @@ def cmd_run(args) -> int:
     from reduce_engine.config import ReduceConfig
     from reduce_engine.pipeline import reduce_campaign
     from reduce_engine.validation import blocking_reason, run_preflight
+    import reduce_calibration_record as calrecord
 
     capture_path = Path(args.capture)
     manifest = _build_single_capture_manifest(capture_path, args.observer_config, args.ra_hours, args.dec_deg)
@@ -207,11 +208,20 @@ def cmd_run(args) -> int:
         _print({"blocked": True, "reason": reason}, args.json, [f"BLOCKED: {reason}"])
         return 1
 
+    # Captured HERE - immediately before the real frozen reduce_campaign() call - see reduce_calibration_record's
+    # own docstring for why this, not a pre-RUN preview or a post-hoc re-check, is the record's real source.
+    record = calrecord.compute_record(
+        args.calibration_profile,
+        [(pt.point_index, pt.resolved_path) for pt in manifest.accepted_points()],
+    )
+
     # SAME frozen reduce_engine.pipeline.reduce_campaign() a real campaign RUN calls - a synthetic one-point
     # manifest is a valid CampaignManifest like any other; nothing about reduce_campaign() is single/multi-
     # point-aware beyond iterating manifest.points, so this is genuine reuse, not a parallel implementation.
     report = reduce_campaign(manifest, config, output_root=args.output_root, calibration_profile_path=args.calibration_profile)
-    payload = report.__dict__
+    record_path = calrecord.write_record(report.output_dir, record)
+    payload = dict(report.__dict__)
+    payload["calibration_compatibility_record_path"] = record_path
     _print(payload, args.json, [
         f"REDUCE (single capture) {report.status}",
         f"Capture:         {capture_path}",
