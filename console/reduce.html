@@ -20,8 +20,15 @@
       </div>
       <div class="obs-row" id="row-capture"><label for="in-capture">CAPTURE (data/mosaic or data/calibration)</label>
         <select id="in-capture"><option value="">(choose)</option></select></div>
-      <div class="obs-row" id="row-campaign" hidden><label for="in-campaign">CAMPAIGN (data/mosaic)</label>
+      <div class="obs-row" id="row-campaign" hidden><label for="in-campaign">CAMPAIGN (with at least one usable HDF5 capture)</label>
         <select id="in-campaign"><option value="">(choose)</option></select></div>
+      <details id="campaign-no-data-details" hidden>
+        <summary>Campaigns with 0 usable captures (<span id="campaign-no-data-count">0</span>) - diagnostic only, hidden from the list above; nothing on disk was deleted or changed</summary>
+        <div class="obs-summary">A plan with 0 usable captures cannot be reduced (there is nothing real to process) - these are shown here only so a missing/failed capture run can be diagnosed, never as a choice for PLAN/RUN.</div>
+        <div class="twrap"><table class="status-table" id="campaign-no-data-table">
+          <thead><tr><th>campaign</th><th>session</th><th>expected points</th><th>usable captures</th><th>status</th></tr></thead>
+          <tbody></tbody></table></div>
+      </details>
       <div class="obs-summary" id="input-note"></div>
     </section>
 
@@ -33,6 +40,11 @@
         <div class="obs-checks" id="metadata-problems-list"></div>
       </div>
       <div id="metadata-frequency-note" class="obs-summary"></div>
+      <div id="campaign-points-breakdown" hidden>
+        <h3>WHICH POINTS HAVE DATA</h3>
+        <div class="obs-summary" id="campaign-points-summary"></div>
+        <div class="obs-checks" id="campaign-points-list"></div>
+      </div>
     </section>
 
     <section class="panel" id="profile-panel" hidden aria-labelledby="h-profile">

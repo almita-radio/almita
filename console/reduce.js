@@ -40,6 +40,7 @@
     lastCalibrationPreview = null;
     $("campaign-calibration-preview").hidden = true;
     $("in-confirm-uncalibrated").checked = false;
+    $("campaign-points-breakdown").hidden = true;
     $("plan-panel").hidden = selectedInput === "";
     $("plan-summary").textContent = ""; $("plan-checks").textContent = ""; $("job-reduce-plan").textContent = "";
     U.setBadge($("plan-badge"), "—");
@@ -51,25 +52,59 @@
 
   // ------------------------------------------------------------------ 1) input discovery + selection
   async function loadInputs() {
-    const [capRes, campRes] = await Promise.all([
+    $("input-note").textContent = "discovering captures and classifying campaigns… the very first load after "
+      + "data changes can take up to a minute (every declared-success capture is independently opened and "
+      + "validated, once - cached after that).";
+    const [capRes, campListRes, campRes] = await Promise.all([
       U.api("/api/ops/reduce/captures", { timeoutMs: 15000 }),
-      U.api("/api/ops/campaigns", { timeoutMs: 15000 }),
+      U.api("/api/ops/reduce/campaigns", { timeoutMs: 90000 }),
+      U.api("/api/ops/campaigns", { timeoutMs: 15000 }),           // still the source for calibration profiles
     ]);
     const capSel = $("in-capture"); capSel.textContent = "";
     capSel.appendChild(new Option("(choose)", ""));
     if (capRes.ok) for (const c of capRes.data.data) capSel.appendChild(new Option(`${c.path} (${U.bytes(c.size_bytes)})`, c.path));
+
     const campSel = $("in-campaign"); campSel.textContent = "";
     campSel.appendChild(new Option("(choose)", ""));
-    if (campRes.ok) for (const c of campRes.data.data.campaigns) campSel.appendChild(new Option(c.path, c.path));
+    let usableCampaigns = [], noDataCampaigns = [];
+    if (campListRes.ok) {
+      usableCampaigns = campListRes.data.data.campaigns || [];
+      noDataCampaigns = campListRes.data.data.no_data || [];
+      // Newest first is already how the server orders them; COMPLETA before PARCIAL only as a tie-break within
+      // that order would hide recency, so keep server order (mtime-descending) - just label each option clearly.
+      for (const c of usableCampaigns) {
+        const label = `${c.completeness} · ${c.points_usable}/${c.points_expected == null ? "?" : c.points_expected} usable · ${c.session_label} · ${c.name}`;
+        campSel.appendChild(new Option(label, c.campaign_dir));
+      }
+    }
+    renderNoDataCampaigns(noDataCampaigns);
+
     const profSel = $("in-profile");
     const keepProfile = profSel.value;
     profSel.textContent = "";
     profSel.appendChild(new Option("(none — run UNCALIBRATED)", ""));
     if (campRes.ok) for (const pr of campRes.data.data.profiles || []) profSel.appendChild(new Option(pr.name, pr.path));
     if (keepProfile) profSel.value = keepProfile;
-    $("input-note").textContent = capRes.ok && campRes.ok
-      ? `${capRes.data.data.length} standalone capture(s) · ${campRes.data.data.campaigns.length} campaign(s) · ${(campRes.data.data.profiles || []).length} calibration profile(s) discovered on the server`
+
+    $("input-note").textContent = capRes.ok && campListRes.ok
+      ? `${capRes.data.data.length} standalone capture(s) · ${usableCampaigns.length} campaign(s) with usable data `
+        + `(${noDataCampaigns.length} more with 0 usable captures, see "campaigns with 0 usable captures" below) · `
+        + `${(campRes.ok ? campRes.data.data.profiles || [] : []).length} calibration profile(s) discovered on the server`
       : "could not discover inputs";
+  }
+
+  function renderNoDataCampaigns(rows) {
+    const details = $("campaign-no-data-details");
+    $("campaign-no-data-count").textContent = rows.length;
+    details.hidden = rows.length === 0;
+    const tbody = document.querySelector("#campaign-no-data-table tbody"); tbody.textContent = "";
+    for (const c of rows) {
+      const tr = document.createElement("tr");
+      const cells = [c.name, c.session_label || "—", c.points_expected == null ? "—" : c.points_expected,
+        c.points_usable, c.completeness + (c.error ? `: ${c.error}` : "")];
+      for (const v of cells) { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); }
+      tbody.appendChild(tr);
+    }
   }
 
   function setMode(newMode) {
@@ -120,6 +155,7 @@
     const cards = $("metadata-cards"); cards.textContent = "";
     const m = lastMetadata;
     if (mode === "capture") {
+      $("campaign-points-breakdown").hidden = true;
       U.setBadge($("metadata-badge"), (m.attrs_missing_required.length || m.contradictions.length) ? "WARNING" : "OK");
       cards.append(
         metaCard("CAPTURE", m.capture), metaCard("STATUS", m.capture_status),
@@ -138,10 +174,13 @@
       const list = $("metadata-problems-list"); list.textContent = "";
       for (const p of probs) { const row = document.createElement("div"); row.className = "obs-check-row status-warning"; row.textContent = p; list.appendChild(row); }
     } else {
-      U.setBadge($("metadata-badge"), m.points_accepted > 0 ? "OK" : "WARNING");
+      U.setBadge($("metadata-badge"), m.completeness === "COMPLETA" ? "OK" : m.completeness === "PARCIAL" ? "WARNING" : "WARNING");
       cards.append(
-        metaCard("CAMPAIGN ID", m.campaign_id), metaCard("ROOT", m.root),
-        metaCard("POINTS DISCOVERED", m.points_discovered), metaCard("POINTS ACCEPTED", m.points_accepted, m.points_accepted === 0),
+        metaCard("CAMPAIGN ID", m.campaign_id), metaCard("SESSION", m.session_label),
+        metaCard("COMPLETENESS", m.completeness, m.completeness !== "COMPLETA"),
+        metaCard("USABLE CAPTURES / EXPECTED", `${m.points_usable} / ${m.points_expected}`, m.points_usable < m.points_expected),
+        metaCard("DEFERRED (excluded by the plan itself)", m.points_deferred, false),
+        metaCard("MISSING OR INVALID", m.points_missing_or_invalid, m.points_missing_or_invalid > 0),
         metaCard("GRID", m.grid ? `${m.grid.rows || "?"}x${m.grid.columns || "?"} · ${U.num(m.grid.total_points)} pts · spacing ${U.deg(m.grid.nominal_spacing_deg)}` : "—"),
         metaCard("OBSERVER", m.observer && m.observer.name ? m.observer.name : "UNKNOWN", !(m.observer && m.observer.name)),
       );
@@ -154,17 +193,43 @@
           metaCard("SAMPLE TOPOLOGY", sm.topology, sm.topology === "UNKNOWN"),
         );
       }
-      $("metadata-frequency-note").textContent = m.points_accepted === 0
-        ? "no accepted point has a real capture file yet — this campaign cannot be reduced until at least one point is really captured"
-        : `metadata above is from a REPRESENTATIVE point (index ${m.sample_point_index}); other points share the same session config but are not individually re-checked here`;
-      $("metadata-problems").hidden = !(m.points_rejected && m.points_rejected.length);
+      $("metadata-frequency-note").textContent = m.points_usable === 0
+        ? "no point has a real, independently-validated capture yet — this campaign cannot be reduced until at least one point is really captured"
+        : `metadata above is from a REAL, VALIDATED sample point (index ${m.sample_point_index}); other usable points share the same session config but are not individually re-checked here — PLAN itself re-validates every point`;
+      const problems = (m.points_detail || []).filter((p) => p.status === "MISSING" || p.status === "INVALID");
+      $("metadata-problems").hidden = problems.length === 0;
       const list = $("metadata-problems-list"); list.textContent = "";
-      for (const rjr of (m.points_rejected || []).slice(0, 20)) {
+      for (const p of problems.slice(0, 20)) {
         const row = document.createElement("div"); row.className = "obs-check-row status-warning";
-        row.textContent = `point ${rjr.point_index}: ${rjr.reason}`; list.appendChild(row);
+        row.textContent = `point ${p.point_index} [${p.status}]: ${p.reason}`; list.appendChild(row);
       }
-      if ((m.points_rejected || []).length > 20) { const row = document.createElement("div"); row.className = "muted"; row.textContent = `… and ${m.points_rejected.length - 20} more`; list.appendChild(row); }
+      if (problems.length > 20) { const row = document.createElement("div"); row.className = "muted"; row.textContent = `… and ${problems.length - 20} more`; list.appendChild(row); }
+      renderCampaignPointsBreakdown(m);
     }
+  }
+
+  // "Which points have data and which don't" - shown for any campaign that is not fully COMPLETA, straight
+  // from the same points_detail the selector's own classification computed (never re-derived here).
+  function renderCampaignPointsBreakdown(m) {
+    const box = $("campaign-points-breakdown");
+    if (m.completeness === "COMPLETA" || !(m.points_detail || []).length) { box.hidden = true; return; }
+    box.hidden = false;
+    $("campaign-points-summary").textContent =
+      `${m.points_usable} usable · ${m.points_missing_or_invalid} missing/invalid · ${m.points_deferred} deferred by the plan · of ${m.points_total} points total`;
+    const list = $("campaign-points-list"); list.textContent = "";
+    const byStatus = { USABLE: [], MISSING: [], INVALID: [], DEFERRED: [] };
+    for (const p of m.points_detail) (byStatus[p.status] || []).push(p.point_index);
+    const line = (label, cls, indices) => {
+      if (!indices.length) return;
+      const row = document.createElement("div"); row.className = "obs-check-row " + cls;
+      const shown = indices.slice(0, 40).join(", ") + (indices.length > 40 ? `, … (${indices.length - 40} more)` : "");
+      row.textContent = `${label} (${indices.length}): points ${shown}`;
+      list.appendChild(row);
+    };
+    line("USABLE", "status-pass", byStatus.USABLE);
+    line("MISSING", "status-block", byStatus.MISSING);
+    line("INVALID HDF5", "status-block", byStatus.INVALID);
+    line("DEFERRED (plan excluded)", "status-warning", byStatus.DEFERRED);
   }
 
   // ------------------------------------------------------------------ 3) profile + compatibility
@@ -293,7 +358,19 @@
 
   function renderPlan(facts) {
     U.setBadge($("plan-badge"), facts.blocked ? "BLOCKED" : "READY");
-    $("plan-summary").textContent = `config_hash: ${facts.config_hash}\nestimated output: ~${facts.estimated_output_mb} MB\n`
+    // Explicit, before RUN is enabled: how many points this PLAN will actually process - from the same real
+    // usable/expected/deferred/missing classification the selector and metadata preview show (lastMetadata),
+    // not just a bare accepted-point count, so an operator never sees RUN enabled without knowing the scope.
+    let willProcess;
+    if (mode === "campaign" && lastMetadata) {
+      const m = lastMetadata;
+      willProcess = `will process ${m.points_usable} of ${m.points_expected} expected point(s)`
+        + (m.points_deferred ? ` (${m.points_deferred} deferred by the plan itself, not attempted)` : "")
+        + (m.points_missing_or_invalid ? ` (${m.points_missing_or_invalid} missing/invalid, will be skipped or marked failed per point)` : "");
+    } else {
+      willProcess = "will process 1 point (this single capture)";
+    }
+    $("plan-summary").textContent = `${willProcess}\nconfig_hash: ${facts.config_hash}\nestimated output: ~${facts.estimated_output_mb} MB\n`
       + (facts.compatibility ? `compatibility: ${facts.compatibility.status} — ${facts.compatibility.reason}\n` : "");
     const list = $("plan-checks"); list.textContent = "";
     for (const c of facts.checks || []) {

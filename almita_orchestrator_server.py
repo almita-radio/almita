@@ -250,6 +250,8 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_list_captures()})
             if path == "/api/ops/reduce/inspect_capture":
                 return self._ops_reduce_inspect_capture()
+            if path == "/api/ops/reduce/campaigns":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_list_campaigns()})
             if path == "/api/ops/reduce/inspect_campaign":
                 return self._ops_reduce_inspect_campaign()
             if path == "/api/ops/reduce/compatibility":

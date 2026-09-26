@@ -1107,6 +1107,210 @@ def reduce_list_captures(limit: int = 80) -> List[Dict[str, Any]]:
     return sorted(rows, key=lambda r: -r["mtime"])[:limit]
 
 
+_CAMPAIGN_DIR_TS_RE = re.compile(r"(\d{8}-\d{2}:\d{2}:\d{2})$")
+
+
+def _campaign_session_label(camp: Path, session_id: Optional[str]) -> str:
+    """A real date/session identifier for the operator to tell campaigns apart - OBSERVE's own session_id
+    (from grid_metadata.json) when present, else the timestamp OBSERVE always suffixes onto the directory
+    name itself (<name>-<YYYYMMDD>-<HH:MM:SS>), else (only for a directory that somehow has neither) the
+    directory's own mtime, clearly labeled as a fallback rather than presented as a real session id."""
+    if session_id:
+        return str(session_id)
+    m = _CAMPAIGN_DIR_TS_RE.search(camp.name)
+    if m:
+        return m.group(1)
+    return datetime.fromtimestamp(camp.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC (mtime - no session id found)")
+
+
+_REDUCE_CAMPAIGN_CACHE_PATH = ROOT / "data" / "runtime" / "reduce_campaign_readiness_cache.json"
+
+
+def _campaign_readiness_signature(camp: Path) -> Dict[str, Any]:
+    """Cheap (stat-only, no HDF5 opened) proxy for "has this campaign's real data changed since it was last
+    classified". A finished OBSERVE campaign's HDF5s are write-once (capture.py never edits a completed
+    file), so once a campaign stops changing, re-validating every one of its files on every single page load
+    is pure waste - _reduce_campaign_readiness() opens every declared-success point's real HDF5
+    (sdr_capture.validate_hdf5_capture()), which is correct but measured at ~50s across this Pi's ~90 real
+    campaign directories; this signature lets reduce_list_campaigns() skip that work entirely for any
+    campaign whose files have not changed since it was last computed. Never a full content hash (that would
+    reintroduce the same cost this exists to avoid) - mosaic.csv's own (size, mtime_ns) plus a count and
+    total size of every file under data/iq/ is enough to detect a campaign still being captured, replayed,
+    or having files added/removed/replaced."""
+    mosaic_csv = camp / "mosaic.csv"
+    try:
+        cst = mosaic_csv.stat()
+    except OSError:
+        return {}
+    iq_root = camp / "data" / "iq"
+    n_files, total_size = 0, 0
+    if iq_root.is_dir():
+        for f in iq_root.rglob("*"):
+            if f.is_file():
+                n_files += 1
+                try:
+                    total_size += f.stat().st_size
+                except OSError:
+                    pass
+    return {"mosaic_size": cst.st_size, "mosaic_mtime_ns": cst.st_mtime_ns, "iq_file_count": n_files, "iq_total_size": total_size}
+
+
+def _load_campaign_readiness_cache() -> Dict[str, Any]:
+    try:
+        return json.loads(_REDUCE_CAMPAIGN_CACHE_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_campaign_readiness_cache(cache: Dict[str, Any]) -> None:
+    try:
+        _REDUCE_CAMPAIGN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(_REDUCE_CAMPAIGN_CACHE_PATH, cache)
+    except OSError:
+        pass  # the cache is purely a speed optimization - never let a write failure break the listing itself
+
+
+def _reduce_campaign_readiness_cached(camp: Path, cache: Dict[str, Any]) -> Dict[str, Any]:
+    """_reduce_campaign_readiness(), but reusing a cached result when the campaign's own signature (see
+    _campaign_readiness_signature()) has not changed since it was last computed - mutates `cache` in place
+    (the caller persists it once, after the whole listing loop, not per-campaign)."""
+    key = str(camp.relative_to(ROOT)) if _within(camp, ROOT) else str(camp)
+    sig = _campaign_readiness_signature(camp)
+    cached = cache.get(key)
+    if cached is not None and cached.get("signature") == sig:
+        return cached["readiness"]
+    readiness = _reduce_campaign_readiness(camp)
+    cache[key] = {"signature": sig, "readiness": readiness}
+    return readiness
+
+
+def _reduce_campaign_readiness(camp: Path) -> Dict[str, Any]:
+    """The real per-point classification behind REDUCE's campaign selector and inspector - never just a
+    status-column tally. Three real, independent things are cross-checked for every point in mosaic.csv
+    (the plan's own manifest), exactly as asked:
+      1. manifest: reduce_engine.ingest.discover_campaign()'s own declared-status + accepted/rejected split
+         (the SAME thing run_preflight()'s "has_accepted_points" check relies on - never a second,
+         diverging definition of "accepted").
+      2. paths: a point is only a candidate at all if discover_campaign() resolved a real, non-.part file
+         for it (its own by-stem indexer already only looks at .h5/.hdf5 files, so a .part is never even a
+         candidate).
+      3. valid captures: every candidate is independently re-opened with sdr_capture.validate_hdf5_capture()
+         - the SAME frozen validator capture.py's own atomic writer and observation_orchestrator.py's
+         generate_final_report() use (metadata/shape only, never reads the full IQ array) - to catch a file
+         that mosaic.csv declares "success" and that exists, but is itself truncated/corrupt/incoherent.
+    A point mosaic.csv's own visibility_deferred column marks True (observation_orchestrator.py's real,
+    existing semantics: the plan itself determined this point was not visible at its scheduled capture time)
+    is excluded from the "expected" denominator entirely - a campaign is not INCOMPLETE for a point its own
+    plan decided not to capture, so completeness is judged against points_expected = points_total -
+    points_deferred, never against the raw row count or a bare status counter.
+    """
+    import csv as csv_module
+
+    from reduce_engine.ingest import discover_campaign
+    from sdr_capture import validate_hdf5_capture
+
+    manifest = discover_campaign(camp)
+    deferred_by_point: Dict[int, bool] = {}
+    mosaic_csv = camp / "mosaic.csv"
+    try:
+        with mosaic_csv.open(newline="") as handle:
+            for row in csv_module.DictReader(handle):
+                try:
+                    idx = int(row["point_number"])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                deferred_by_point[idx] = row.get("visibility_deferred") == "True"
+    except OSError:
+        pass
+
+    points: List[Dict[str, Any]] = []
+    for pt in manifest.points:
+        deferred = deferred_by_point.get(pt.point_index, False)
+        entry: Dict[str, Any] = {
+            "point_index": pt.point_index, "deferred": deferred,
+            "capture_status_declared": pt.capture_status_declared,
+            "resolved_path": str(pt.resolved_path.relative_to(ROOT)) if pt.resolved_path is not None and _within(pt.resolved_path, ROOT) else None,
+        }
+        if deferred:
+            entry["status"] = "DEFERRED"
+            entry["reason"] = "not visible at its scheduled capture time - excluded by the plan itself, not missing data"
+        elif not pt.accepted:
+            entry["status"] = "MISSING"
+            entry["reason"] = pt.reject_reason
+        elif pt.resolved_path is None or pt.resolved_path.name.endswith(".part"):
+            entry["status"] = "MISSING"
+            entry["reason"] = "no complete (non-.part) HDF5 file resolved"
+        else:
+            try:
+                validate_hdf5_capture(pt.resolved_path)
+                entry["status"] = "USABLE"
+                entry["reason"] = None
+            except Exception as exc:  # noqa: BLE001 - any h5py/validation failure means genuinely not usable
+                entry["status"] = "INVALID"
+                entry["reason"] = f"HDF5 failed validation: {exc}"
+        points.append(entry)
+
+    total = len(points)
+    deferred_n = sum(1 for p in points if p["status"] == "DEFERRED")
+    usable_n = sum(1 for p in points if p["status"] == "USABLE")
+    expected_n = total - deferred_n
+    missing_or_invalid_n = sum(1 for p in points if p["status"] in ("MISSING", "INVALID"))
+    if usable_n == 0:
+        completeness = "SIN_DATOS"
+    elif expected_n > 0 and usable_n >= expected_n:
+        completeness = "COMPLETA"
+    else:
+        completeness = "PARCIAL"
+
+    return {
+        "campaign_dir": str(camp.relative_to(ROOT)) if _within(camp, ROOT) else str(camp),
+        "campaign_id": manifest.campaign_id, "session_id": manifest.session_id,
+        "session_label": _campaign_session_label(camp, manifest.session_id),
+        "points_total": total, "points_expected": expected_n, "points_deferred": deferred_n,
+        "points_usable": usable_n, "points_missing_or_invalid": missing_or_invalid_n,
+        "completeness": completeness, "points": points,
+    }
+
+
+def reduce_list_campaigns(limit: int = 60, scan_budget: int = 200) -> Dict[str, Any]:
+    """CAMPAIGN/SESSION selector for REDUCE: only campaigns with at least one USABLE capture (the same real
+    classification _reduce_campaign_readiness() computes - see its own docstring) appear in the main list.
+    A plan that never captured anything usable (0 accepted, or every declared-success file turning out
+    invalid) would otherwise let an operator PLAN/RUN REDUCE against zero real data - exactly the
+    400-points/0-accepted confusion this was built to fix. Nothing is deleted, moved, or modified: a
+    zero-usable campaign is still discovered and returned under "no_data", for diagnosis, never silently
+    dropped from the filesystem or from this function's own result - only kept out of the MAIN list."""
+    root = SERVE_ROOTS["mosaic"]
+    if not root.is_dir():
+        return {"campaigns": [], "no_data": []}
+    candidates = sorted(
+        (p for p in root.iterdir() if p.is_dir() and (p / "mosaic.csv").is_file()),
+        key=lambda p: -p.stat().st_mtime,
+    )
+    usable_rows: List[Dict[str, Any]] = []
+    no_data_rows: List[Dict[str, Any]] = []
+    cache = _load_campaign_readiness_cache()
+    for p in candidates[:scan_budget]:
+        if len(usable_rows) >= limit and len(no_data_rows) >= limit:
+            break
+        try:
+            r = _reduce_campaign_readiness_cached(p, cache)
+            row = {
+                "campaign_dir": r["campaign_dir"], "name": p.name, "session_label": r["session_label"],
+                "points_usable": r["points_usable"], "points_expected": r["points_expected"],
+                "points_total": r["points_total"], "points_deferred": r["points_deferred"],
+                "completeness": r["completeness"], "mtime": p.stat().st_mtime,
+            }
+        except (OSError, ValueError, KeyError) as exc:
+            row = {"campaign_dir": str(p.relative_to(ROOT)), "name": p.name, "session_label": _campaign_session_label(p, None),
+                  "points_usable": 0, "points_expected": None, "points_total": None, "points_deferred": None,
+                  "completeness": "ERROR", "error": str(exc), "mtime": p.stat().st_mtime}
+        (usable_rows if row["points_usable"] else no_data_rows).append(row)
+    _save_campaign_readiness_cache(cache)
+    return {"campaigns": usable_rows[:limit], "no_data": no_data_rows[:limit],
+           "scanned": min(len(candidates), scan_budget), "discovered": len(candidates)}
+
+
 def reduce_inspect_capture(rel_path: str) -> Dict[str, Any]:
     """Real, read-only metadata preview of ONE HDF5 capture - reuses reduce_single_capture.py's own function,
     never a second implementation of the attrs read."""
@@ -1117,25 +1321,37 @@ def reduce_inspect_capture(rel_path: str) -> Dict[str, Any]:
 
 def reduce_inspect_campaign(rel_path: str) -> Dict[str, Any]:
     """Real, read-only campaign discovery - reuses reduce_engine.ingest.discover_campaign() (the SAME function
-    almita_reduce.py's own `inspect` subcommand calls), never re-derived here."""
+    almita_reduce.py's own `inspect` subcommand calls) AND _reduce_campaign_readiness() (the same real,
+    cross-checked usable/deferred/invalid classification the campaign selector itself uses), never a second,
+    diverging definition of "has data" between the list and this per-campaign detail view."""
     camp = _path_in({"campaign_dir": rel_path}, "campaign_dir", SERVE_ROOTS["mosaic"])
     from reduce_engine.ingest import discover_campaign
     manifest = discover_campaign(camp)
-    accepted = manifest.accepted_points()
-    sample = accepted[0] if accepted else None
+    cache = _load_campaign_readiness_cache()
+    readiness = _reduce_campaign_readiness_cached(camp, cache)
+    _save_campaign_readiness_cache(cache)
+    usable_points = [p for p in readiness["points"] if p["status"] == "USABLE"]
+    sample = usable_points[0] if usable_points else None
     sample_metadata = None
-    if sample is not None and sample.resolved_path is not None:
+    if sample is not None and sample["resolved_path"]:
         import reduce_single_capture
         try:
-            sample_metadata = reduce_single_capture.inspect_capture_metadata(sample.resolved_path)
+            sample_metadata = reduce_single_capture.inspect_capture_metadata(ROOT / sample["resolved_path"])
         except (OSError, ValueError) as exc:
             sample_metadata = {"error": str(exc)}
+    accepted = manifest.accepted_points()  # kept for compatibility with existing callers/tests
     return {
         "campaign_id": manifest.campaign_id, "root": str(manifest.root.relative_to(ROOT)) if _within(manifest.root, ROOT) else str(manifest.root),
-        "session_id": manifest.session_id, "grid": manifest.grid, "observer": manifest.observer.get("observer", {}),
+        "session_id": manifest.session_id, "session_label": readiness["session_label"],
+        "grid": manifest.grid, "observer": manifest.observer.get("observer", {}),
         "points_discovered": len(manifest.points), "points_accepted": len(accepted),
         "points_rejected": [{"point_index": pt.point_index, "reason": pt.reject_reason} for pt in manifest.points if not pt.accepted],
-        "sample_point_index": sample.point_index if sample else None,
+        # The real, cross-checked classification (manifest + paths + independently-validated HDF5 content):
+        "points_total": readiness["points_total"], "points_expected": readiness["points_expected"],
+        "points_usable": readiness["points_usable"], "points_deferred": readiness["points_deferred"],
+        "points_missing_or_invalid": readiness["points_missing_or_invalid"],
+        "completeness": readiness["completeness"], "points_detail": readiness["points"],
+        "sample_point_index": sample["point_index"] if sample else None,
         "sample_point_metadata": sample_metadata,
     }
 
