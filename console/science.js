@@ -29,6 +29,7 @@
       beam: $("in-beam-mode").value, beam_fwhm_deg: $("in-beam-mode").value === "fwhm" ? Number($("in-beam-fwhm").value) : null,
       support_radius_deg: numOrNull("in-support-radius"), smoothing_fwhm_b_deg: numOrNull("in-smoothing-b"),
       smoothing_fwhm_c_deg: numOrNull("in-smoothing-c"),
+      interp_factor_b: Number($("in-interp-factor-b").value), interp_factor_c: Number($("in-interp-factor-c").value),
       quality_policy: $("in-quality-policy").value || null,
       min_spectral_coverage_fraction: Number($("in-min-coverage").value),
       color_vmin: $("in-color-override").checked ? Number($("in-color-vmin").value) : null,
@@ -166,6 +167,7 @@
   $("in-beam-mode").addEventListener("change", () => { $("row-beam-fwhm").hidden = $("in-beam-mode").value !== "fwhm"; invalidateDownstream(); });
   $("in-color-override").addEventListener("change", () => { $("row-color-override").hidden = !$("in-color-override").checked; invalidateDownstream(); });
   for (const id of ["in-vmin", "in-vmax", "in-beam-fwhm", "in-support-radius", "in-smoothing-b", "in-smoothing-c",
+    "in-interp-factor-b", "in-interp-factor-c",
     "in-quality-policy", "in-min-coverage", "in-color-vmin", "in-color-vmax"]) {
     $(id).addEventListener("change", invalidateDownstream);
   }
@@ -192,6 +194,8 @@
     if (p.support_radius_deg != null) body.support_radius_deg = p.support_radius_deg;
     if (p.smoothing_fwhm_b_deg != null) body.smoothing_fwhm_b_deg = p.smoothing_fwhm_b_deg;
     if (p.smoothing_fwhm_c_deg != null) body.smoothing_fwhm_c_deg = p.smoothing_fwhm_c_deg;
+    if (p.interp_factor_b) body.interp_factor_b = p.interp_factor_b;
+    if (p.interp_factor_c) body.interp_factor_c = p.interp_factor_c;
     if (p.quality_policy) body.quality_policy = p.quality_policy;
     if (p.color_vmin != null && p.color_vmax != null) { body.color_vmin = p.color_vmin; body.color_vmax = p.color_vmax; }
     return body;
@@ -218,7 +222,8 @@
     $("plan-summary").textContent =
       `will process ${n} ${facts.config ? facts.config.calibration_level_filter : ""} point(s): ${JSON.stringify(facts.will_process_points || [])}\n`
       + `calibration_level_counts (full session): ${JSON.stringify(facts.calibration_level_counts || {})}\n`
-      + `grid: ${facts.grid ? `${facts.grid.ny}x${facts.grid.nx} px, ${facts.grid.pixel_scale_deg.toFixed(4)} deg/px` : "—"}\n`
+      + `grid dims: A=${facts.n_rows}x${facts.n_cols}`
+      + (facts.grid_b ? `  B=${facts.grid_b.ny}x${facts.grid_b.nx}  C=${facts.grid_c.ny}x${facts.grid_c.nx}` : "  B/C=—") + "\n"
       + `support radius (B & C, shared): ${facts.spatial_params ? facts.spatial_params.support_radius_deg.toFixed(4) : "—"} deg   `
       + `smoothing B/C: ${facts.spatial_params ? `${facts.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${facts.spatial_params.smoothing_fwhm_c_deg.toFixed(4)}` : "—"} deg\n`
       + `real instrument beam (reported only): ${facts.real_instrument_beam_fwhm_deg} deg   velocity channels: ${facts.n_velocity_channels}\n`
@@ -275,8 +280,6 @@
 
   // ------------------------------------------------------------------ 6) RESULTS
   let lastManifest = null, lastBoard = null, lastSelectedCell = null;
-  const BOARD_KEYS = ["a", "b", "c"];
-  const BOARD_LABELS = { a: "A: MEASURED", b: "B: LIGHT SMOOTHING", c: "C: HEAVIER SMOOTHING" };
 
   async function renderResults(job) {
     const facts = job.facts || {};
@@ -288,35 +291,37 @@
     if (!mr.ok) { showError(`could not read the SCIENCE manifest: ${U.errorText(mr.error)}`); return; }
     const manifest = mr.data;
     lastManifest = manifest;
+    const dims = manifest.grid_dims || {};
 
     $("results-summary").textContent =
       `campaign: ${manifest.campaign_id}   reduce_session: ${manifest.reduce_session_id}   `
       + `calibration_level_filter: ${manifest.calibration_level_filter}   data_completeness: ${manifest.data_completeness}\n`
       + `points used: ${manifest.n_points_used} of ${manifest.n_points_filtered_in} filtered-in points\n`
       + `velocity window (LSRK): [${(manifest.velocity_window_m_s[0] / 1000).toFixed(1)}, ${(manifest.velocity_window_m_s[1] / 1000).toFixed(1)}] km/s\n`
-      + `color limits: [${manifest.color_vmin.toFixed(4)}, ${manifest.color_vmax.toFixed(4)}] (${manifest.color_limits_basis})\n`
-      + `board: ${manifest.grid.ny}x${manifest.grid.nx} cells, spacing ${manifest.spatial_params.mosaic_spacing_deg.toFixed(4)} deg   `
+      + `color limits (shared by A/B/C): [${manifest.color_vmin.toFixed(4)}, ${manifest.color_vmax.toFixed(4)}] (${manifest.color_limits_basis})\n`
+      + `grid dims: A=${dims.a ? dims.a.join("x") : "—"} → B=${dims.b ? dims.b.join("x") : "—"} `
+      + `(${manifest.config.interp_factor_b}x) → C=${dims.c ? dims.c.join("x") : "—"} (${manifest.config.interp_factor_c}x) `
+      + `— same footprint, increasing resolution\n`
       + `support radius (B & C, shared): ${manifest.spatial_params.support_radius_deg.toFixed(4)} deg   `
       + `smoothing B/C: ${manifest.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${manifest.spatial_params.smoothing_fwhm_c_deg.toFixed(4)} deg   `
       + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
-      + `B−C common support: ${manifest.bc_diagnostic.n_support_common}/${manifest.bc_diagnostic.n_pixels_total} cells `
-      + `(diff mean=${manifest.bc_diagnostic.b_minus_c_common_support.mean != null ? manifest.bc_diagnostic.b_minus_c_common_support.mean.toFixed(4) : "—"}, `
-      + `std=${manifest.bc_diagnostic.b_minus_c_common_support.std != null ? manifest.bc_diagnostic.b_minus_c_common_support.std.toFixed(4) : "—"})\n`
       + `quality (map B): ${manifest.quality_b.state} — ${(manifest.quality_b.reasons || []).join("; ")}`
       + (manifest.used_point_set_note ? `\nNOTE: ${manifest.used_point_set_note}` : "");
     $("results-hi-caveat").textContent = "INSTRUMENTAL/" + manifest.calibration_level_filter + " result — "
       + "relative_intensity_dimensionless only. No HI detection, Kelvin, Jy, N_HI or absolute flux claim is made here "
       + "(indoor/UNCALIBRATED runs carry real instrumental residual - never a celestial signal).";
     $("results-thermal").textContent = `Thermal drift: ${manifest.thermal_drift.status} — ${manifest.thermal_drift.note}`;
+    $("caption-a").textContent = `A — MEASURED (${dims.a ? dims.a.join("x") : "?"}, no interpolation)`;
+    $("caption-b").textContent = `B — INTERPOLATED, light (${dims.b ? dims.b.join("x") : "?"})`;
+    $("caption-c").textContent = `C — INTERPOLATED, heavier (${dims.c ? dims.c.join("x") : "?"})`;
 
     const od = job.output_dir;
+    $("img-map-b").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_smooth.png")}`;
+    $("img-map-c").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_c_heavy.png")}`;
     $("img-map-coverage").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_coverage.png")}`;
     const hasSnr = (manifest.exports || {}).map_snr;
     $("fig-snr").hidden = !hasSnr;
     if (hasSnr) $("img-map-snr").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_snr.png")}`;
-    const hasBcDiff = (manifest.exports || {}).map_b_minus_c;
-    $("fig-bc-diff").hidden = !hasBcDiff;
-    if (hasBcDiff) $("img-map-bc-diff").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_minus_c.png")}`;
     const hasCombined = (manifest.exports || {}).map_abc_combined;
     if (hasCombined) {
       const combinedUrl = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_abc_combined.png")}`;
@@ -337,16 +342,19 @@
     const br = await U.api(`/api/ops/science/map?dir=${encodeURIComponent(od)}&name=board`, { timeoutMs: 15000 });
     if (br.ok) {
       lastBoard = br.data.data; lastSelectedCell = null;
-      drawAllBoards();
-      colorConsistencyCheck(lastBoard);
+      drawBoardA();
+      renderColorLegend("legend-a", lastBoard);
+      renderColorLegend("legend-b", lastBoard);
+      renderColorLegend("legend-c", lastBoard);
     }
   }
 
-  // ------------------------------------------------------------------ A/B/C boards (ONE payload, ONE colour
-  // function server-side - see science_web_bridge.board_json_payload/viridis_hex - this file never recomputes
-  // a colour, it only paints the hex string the server already decided)
-  function drawBoard(key) {
-    const canvas = $("board-canvas-" + key);
+  // ------------------------------------------------------------------ map A: the ONLY interactive panel.
+  // B and C are plain <img> exports (see renderResults) - a new interpolated pixel is never a stand-in for a
+  // real sample, so it gets no click handler and no per-cell payload at all (board.json now describes A only
+  // - see science_web_bridge.board_json_payload's own docstring).
+  function drawBoardA() {
+    const canvas = $("board-canvas-a");
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
     const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square board
@@ -361,8 +369,7 @@
       // SAME orientation as the exported PNGs: RA increases to the left (col index n_cols-1 drawn leftmost),
       // row 0 (southernmost) drawn at the bottom (origin="lower") - see build_mosaic_grid/render_all_maps.
       const px = (nCols - 1 - cell.col) * cw, py = (nRows - 1 - cell.row) * ch;
-      const d = cell[key];
-      if (d.valid) { ctx.fillStyle = d.color; ctx.fillRect(px, py, cw, ch); }
+      if (cell.valid) { ctx.fillStyle = cell.color; ctx.fillRect(px, py, cw, ch); }
       ctx.strokeStyle = "#33414a"; ctx.lineWidth = 1; ctx.strokeRect(px, py, cw, ch);
       canvas.__cells.push({ px, py, cw, ch, cell });
     }
@@ -371,7 +378,6 @@
       if (hit) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.strokeRect(hit.px + 1.5, hit.py + 1.5, hit.cw - 3, hit.ch - 3); }
     }
   }
-  function drawAllBoards() { for (const k of BOARD_KEYS) drawBoard(k); }
 
   function cellAtEvent(canvas, ev) {
     const rect = canvas.getBoundingClientRect();
@@ -382,36 +388,22 @@
     }
     return null;
   }
-  for (const k of BOARD_KEYS) {
-    $("board-canvas-" + k).addEventListener("click", (ev) => {
-      const cell = cellAtEvent($("board-canvas-" + k), ev);
-      if (!cell) return;
-      lastSelectedCell = { row: cell.row, col: cell.col };
-      drawAllBoards();
-      showCellDetail(cell);
-    });
-  }
-
-  function fmtCellValue(d) {
-    if (!d.valid) return "no value";
-    return `${d.value.toFixed(4)}${d.uncertainty != null ? ` ± ${d.uncertainty.toFixed(4)}` : ""}`;
-  }
-  function fmtContributors(list) {
-    if (!list || !list.length) return "";
-    const shown = list.slice(0, 5).map((c) => `pt${c.point_index}(w=${c.weight.toFixed(3)})`).join(", ");
-    return `  — contributors: ${shown}${list.length > 5 ? ", …" : ""}`;
-  }
+  $("board-canvas-a").addEventListener("click", (ev) => {
+    const cell = cellAtEvent($("board-canvas-a"), ev);
+    if (!cell) return;
+    // unambiguous identification: exactly one real cell (or none) is ever hit, never an overlapping marker.
+    lastSelectedCell = { row: cell.row, col: cell.col };
+    drawBoardA();
+    showCellDetail(cell);
+  });
 
   async function showCellDetail(cell) {
     const lines = [
       `cell row ${cell.row + 1} col ${cell.col + 1}   RA=${cell.ra_deg.toFixed(4)}°  Dec=${cell.dec_degrees.toFixed(4)}°`,
       cell.point_index != null
         ? `real point ${cell.point_index}   status=${cell.point_status}${cell.point_reason ? ` (${cell.point_reason})` : ""}`
-        : "no pointing at this mosaic position — A shows nothing here; any B/C value is a pure spatial "
-          + "interpolation with no observation of its own.",
-      `A (measured): ${fmtCellValue(cell.a)}`,
-      `B (light smoothing): ${fmtCellValue(cell.b)}${fmtContributors(cell.b.contributors)}`,
-      `C (heavier smoothing): ${fmtCellValue(cell.c)}${fmtContributors(cell.c.contributors)}`,
+        : "no pointing at this mosaic position — nothing was measured here.",
+      cell.valid ? `measured value: ${cell.value.toFixed(4)} ± ${cell.uncertainty.toFixed(4)}` : "no measured value",
     ];
     $("cell-detail").textContent = lines.join("\n");
     if (cell.point_index == null) { $("point-spectrum-view").hidden = true; return; }
@@ -426,17 +418,24 @@
     }
   }
 
-  // Real, visible cross-check that A/B/C and the interactive board share ONE colour (server-computed,
-  // viridis_hex()) - never a second, JS-side palette (the OLD point-picker used its own hsl() scale, which is
-  // exactly what Felipe flagged as inconsistent).
-  function colorConsistencyCheck(board) {
-    const samples = [];
-    for (const key of BOARD_KEYS) {
-      const cell = board.cells.find((c) => c[key].valid);
-      if (cell) samples.push(`${BOARD_LABELS[key]} row${cell.row + 1}col${cell.col + 1} value=${cell[key].value.toFixed(3)} color=${cell[key].color}`);
+  // ONE shared HTML colour legend, next to EACH of the three panels (request: "una barra de color visible
+  // junto a cada imagen... alinea las barras sin alterar el tamano de las imagenes") - built from the SAME
+  // color_vmin/color_vmax/color_stops the server computed with viridis_hex() (the identical function baked
+  // into every PNG export), so A's canvas and B/C's images never drift apart from their own legend or from
+  // each other; a plain CSS gradient div never resizes the image elements it sits beside.
+  function renderColorLegend(elId, board) {
+    const el = $(elId);
+    const stops = board.color_stops || [];
+    const grad = el.querySelector(".legend-gradient");
+    const [maxLbl, midLbl, minLbl] = el.querySelectorAll(".legend-labels span");
+    if (stops.length) {
+      const stepPct = 100 / (stops.length - 1);
+      grad.style.background = `linear-gradient(to top, ${stops.map((c, i) => `${c} ${(i * stepPct).toFixed(2)}%`).join(", ")})`;
     }
-    $("color-check-summary").textContent = "color check (ONE server-side viridis_hex(), shared by every PNG "
-      + "export and this board - never recomputed here): " + samples.join("  |  ");
+    maxLbl.textContent = board.color_vmax.toFixed(1);
+    midLbl.textContent = ((board.color_vmax + board.color_vmin) / 2).toFixed(1);
+    minLbl.textContent = board.color_vmin.toFixed(1);
+    el.title = board.color_units || "";
   }
 
   function drawPointSpectrum(arrays, window_m_s) {

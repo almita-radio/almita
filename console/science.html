@@ -69,6 +69,13 @@
           <input type="number" id="in-smoothing-b" step="0.05" min="0.001" placeholder="auto"></div>
         <div class="obs-row"><label for="in-smoothing-c">MAP C (heavier) smoothing kernel FWHM (deg)</label>
           <input type="number" id="in-smoothing-c" step="0.05" min="0.001" placeholder="auto"></div>
+        <div class="obs-summary">Map B/C raster DENSITY (independent of smoothing): each real board cell is
+          replaced by this many x this many new pixels — C must be denser than B, so the resolution increase
+          A → B → C stays visible on screen, not just in the smoothing amount.</div>
+        <div class="obs-row"><label for="in-interp-factor-b">MAP B pixels per real cell (per axis)</label>
+          <input type="number" id="in-interp-factor-b" value="3" step="1" min="2"></div>
+        <div class="obs-row"><label for="in-interp-factor-c">MAP C pixels per real cell (per axis)</label>
+          <input type="number" id="in-interp-factor-c" value="6" step="1" min="2"></div>
         <div class="obs-row"><label for="in-quality-policy">QUALITY POLICY</label>
           <select id="in-quality-policy"><option value="">(default: STANDARD)</option><option>STRICT</option><option selected>STANDARD</option><option>PERMISSIVE</option></select></div>
         <div class="obs-row"><label for="in-min-coverage">MIN SPECTRAL COVERAGE FRACTION</label><input type="number" id="in-min-coverage" value="0.5" step="0.05" min="0" max="1"></div>
@@ -98,37 +105,71 @@
     </section>
 
     <section class="panel" id="results-panel" hidden aria-labelledby="h-results">
-      <header><h2 id="h-results">6 · A / B / C — SAME BOARD, SAME CELLS, SAME SCALE</h2></header>
+      <header><h2 id="h-results">6 · A → B → C — SAME FOOTPRINT, SAME SCALE, INCREASING RESOLUTION</h2></header>
       <div class="obs-summary" id="results-summary"></div>
       <div class="obs-summary" id="results-hi-caveat" style="color:var(--warn)"></div>
       <div class="obs-summary" id="results-thermal"></div>
-      <div class="obs-summary" id="color-check-summary" style="font:11px/1.5 ui-monospace,monospace"></div>
 
       <div class="boards-grid">
-        <figure><figcaption>A — MEASURED (no spatial interpolation)</figcaption>
-          <canvas id="board-canvas-a" width="440" height="440"></canvas></figure>
-        <figure><figcaption>B — LIGHT SMOOTHING</figcaption>
-          <canvas id="board-canvas-b" width="440" height="440"></canvas></figure>
-        <figure><figcaption>C — HEAVIER SMOOTHING</figcaption>
-          <canvas id="board-canvas-c" width="440" height="440"></canvas></figure>
+        <figure class="board-panel" id="panel-a">
+          <figcaption id="caption-a">A — MEASURED (no spatial interpolation)</figcaption>
+          <div class="board-row">
+            <canvas id="board-canvas-a" width="440" height="440"></canvas>
+            <div class="board-legend" id="legend-a"><div class="legend-gradient"></div>
+              <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
+          </div>
+          <div class="obs-summary">Click a real cell to inspect its own measurement and spectrum. This is the
+            ONLY panel where a click opens a spectrum — a new pixel in B/C was never observed.</div>
+          <details><summary>¿Qué muestra esta imagen?</summary>
+            <p>Esta imagen contiene únicamente las lecturas reales del mosaico: una celda por posición
+            observada por el instrumento. Cada color representa la medición real de esa posición — no hay
+            ningún valor estimado, promediado o inventado entre celdas. Una celda sin color no fue medida.</p></details>
+        </figure>
+        <figure class="board-panel" id="panel-b">
+          <figcaption id="caption-b">B — INTERPOLATED (light)</figcaption>
+          <div class="board-row">
+            <img id="img-map-b" alt="map B (interpolated, light)">
+            <div class="board-legend" id="legend-b"><div class="legend-gradient"></div>
+              <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
+          </div>
+          <div class="obs-summary">Not clickable — every pixel here (real position or not) is a smoothed
+            estimate, never a stand-in for an individual measurement.</div>
+          <details><summary>¿Qué muestra esta imagen?</summary>
+            <p>Esta imagen interpola espacialmente entre las lecturas reales para mostrar una grilla más densa
+            que la original, usando un promedio ponderado por distancia (con un desvanecimiento suave tipo
+            gaussiano) entre las mediciones cercanas. Los píxeles nuevos, ubicados entre las posiciones
+            realmente observadas, son ESTIMACIONES matemáticas, no mediciones nuevas: interpolar no puede
+            recuperar detalle físico que el instrumento no llegó a medir, solo ofrece una lectura visual más
+            continua de los mismos datos reales.</p></details>
+        </figure>
+        <figure class="board-panel" id="panel-c">
+          <figcaption id="caption-c">C — INTERPOLATED (heavier)</figcaption>
+          <div class="board-row">
+            <img id="img-map-c" alt="map C (interpolated, heavier)">
+            <div class="board-legend" id="legend-c"><div class="legend-gradient"></div>
+              <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
+          </div>
+          <div class="obs-summary">Not clickable — same reason as B, at an even denser raster and a wider
+            smoothing radius.</div>
+          <details><summary>¿Qué muestra esta imagen?</summary>
+            <p>Esta versión usa una grilla aún más densa y un radio de suavizado mayor que el panel central,
+            por lo que la superficie se ve más continua. Sigue sin haber mediciones nuevas: todos los valores
+            fuera de las celdas reales de A son estimaciones de interpolación, nunca observaciones del
+            instrumento, y no existe un espectro real para ningún píxel de esta imagen.</p></details>
+        </figure>
       </div>
-      <div class="obs-summary">Click any cell in ANY of the three boards to inspect it - the SAME cell (same real
-        RA/Dec) highlights in all three at once. A shows only its own real measurement; B/C also show A's own value
-        there, the real points that fed the smoothed value and their weights, and open the real spectrum of that
-        cell's own point when it has one - never a fabricated spectrum for an interpolated cell.</div>
-      <div id="cell-detail" class="obs-summary">select a cell above</div>
+      <div id="cell-detail" class="obs-summary">select a real cell in panel A above</div>
       <div id="point-spectrum-view" hidden>
         <canvas id="point-spectrum-canvas" width="900" height="240" style="width:100%;background:#0d1317"></canvas>
       </div>
 
-      <h3>SECONDARY DIAGNOSTICS (own scale — NOT the shared A/B/C scale)</h3>
+      <h3>SECONDARY DIAGNOSTICS</h3>
       <div class="maps-grid" id="secondary-maps-grid">
-        <figure id="fig-bc-diff" hidden><figcaption>B − C (per-cell difference, real numbers)</figcaption><img id="img-map-bc-diff" alt="B minus C difference map"></figure>
-        <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
-        <figure><figcaption>COVERAGE — same board, used vs excluded</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
+        <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B's own raster)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
+        <figure><figcaption>COVERAGE — real board, used vs excluded</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
       </div>
 
-      <h3>COMBINED A/B/C EXPORT (open large — same correspondence, presentation-ready)</h3>
+      <h3>COMBINED A/B/C EXPORT (open large — same footprint/scale, presentation-ready)</h3>
       <a id="link-abc-combined" target="_blank" rel="noopener">
         <img id="img-abc-combined" alt="A/B/C combined" style="width:100%;max-width:1100px;border:1px solid var(--line);background:#fff">
       </a>
@@ -145,10 +186,18 @@
     .maps-grid figure{margin:0;flex:1 1 300px;max-width:420px}
     .maps-grid img{width:100%;height:auto;border:1px solid var(--line);background:#fff}
     .maps-grid figcaption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:4px;letter-spacing:.05em}
-    .boards-grid{display:flex;flex-wrap:wrap;gap:12px;margin:10px 0}
-    .boards-grid figure{margin:0;flex:1 1 320px;max-width:440px}
-    .boards-grid canvas{width:100%;aspect-ratio:1/1;background:#0d1317;border:1px solid var(--line);cursor:crosshair}
-    .boards-grid figcaption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:4px;letter-spacing:.05em}
+    .boards-grid{display:flex;flex-wrap:wrap;gap:16px;margin:10px 0;align-items:flex-start}
+    .board-panel{margin:0;flex:1 1 320px;max-width:440px}
+    .board-panel figcaption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:4px;letter-spacing:.05em}
+    .board-panel details{margin-top:6px;font-size:11px}
+    .board-panel details summary{cursor:pointer;color:var(--accent, #65b7d8)}
+    .board-panel details p{color:var(--muted);line-height:1.5;margin:6px 0 0}
+    .board-row{display:flex;gap:8px;align-items:stretch}
+    .board-row canvas,.board-row img{width:100%;aspect-ratio:1/1;background:#0d1317;border:1px solid var(--line);object-fit:contain}
+    #board-canvas-a{cursor:crosshair}
+    .board-legend{display:flex;gap:4px;width:34px;flex:0 0 34px}
+    .legend-gradient{width:14px;border:1px solid var(--line);border-radius:2px}
+    .legend-labels{display:flex;flex-direction:column;justify-content:space-between;font:9px/1.1 ui-monospace,monospace;color:var(--muted);white-space:nowrap}
   </style>
   <script src="common.js"></script>
   <script src="science.js"></script>

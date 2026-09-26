@@ -664,6 +664,17 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             argv += ["--smoothing-fwhm-b-deg", str(smoothing_b)]
         if smoothing_c is not None:
             argv += ["--smoothing-fwhm-c-deg", str(smoothing_c)]
+        # Raster DENSITY for the interpolated panels (independent of smoothing amount) - see
+        # science_web_bridge.build_fine_grid: each real board cell becomes this many x this many new pixels.
+        # C must be denser than B so the resolution increase A -> B -> C stays visible on screen.
+        interp_b = _float(p, "interp_factor_b", 2, 50, None)
+        interp_c = _float(p, "interp_factor_c", 2, 50, None)
+        if interp_b is not None and interp_c is not None and interp_c <= interp_b:
+            raise ValueError("interp_factor_c must be > interp_factor_b (C must be visually denser than B)")
+        if interp_b is not None:
+            argv += ["--interp-factor-b", str(int(interp_b))]
+        if interp_c is not None:
+            argv += ["--interp-factor-c", str(int(interp_c))]
         if p.get("quality_policy"):
             if p["quality_policy"] not in ("STRICT", "STANDARD", "PERMISSIVE"):
                 raise ValueError("quality_policy must be STRICT, STANDARD or PERMISSIVE")
@@ -682,6 +693,8 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
                "velocity_window_min_m_s": vmin, "velocity_window_max_m_s": vmax,
                "support_radius_deg": support_radius, "smoothing_fwhm_b_deg": smoothing_b,
                "smoothing_fwhm_c_deg": smoothing_c,
+               "interp_factor_b": int(interp_b) if interp_b is not None else None,
+               "interp_factor_c": int(interp_c) if interp_c is not None else None,
                "quality_policy": p.get("quality_policy"), "min_spectral_coverage_fraction": min_cov,
                "color_vmin": None if cvmin in (None, "") else float(cvmin),
                "color_vmax": None if cvmax in (None, "") else float(cvmax)}

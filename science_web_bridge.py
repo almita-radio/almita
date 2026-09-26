@@ -15,32 +15,36 @@ never a duplicate of its math:
      ScienceInput to ONE calibration level before any gridding, so a "RELATIVE" map is only ever built
      from RELATIVE points and an "UNCALIBRATED" (instrumental) map only from UNCALIBRATED ones - never
      both on the same color scale.
-  2. THREE comparable products, all on the SAME mosaic-cell board - one ScienceGrid whose pixel centers
-     coincide with the campaign's own real pointing lattice (build_mosaic_grid(): rows/cols derived from the
-     real point positions and their median spacing, never a hardcoded shape or a fine sub-cell raster), so
-     A/B/C are genuinely the same NxM checkerboard - identical extent, orientation, cell size and cell-to-
-     sky-position mapping, not circles in one and a differently-shaped pixel grid in the others:
+  2. THREE comparable products with a DELIBERATE, visible resolution progression left to right - map A is
+     the real N x M board (build_mosaic_grid(): rows/cols derived from the campaign's own point positions and
+     their median spacing, never a hardcoded shape), and maps B/C are genuinely FINER rasters
+     (build_fine_grid(): the SAME physical extent/center/orientation as the board, `interp_factor_b`/
+     `interp_factor_c` times denser per axis, interp_factor_c > interp_factor_b enforced) - real NEW pixel
+     positions between the measured cells, never the same N x M cells enlarged, blurred or repainted at a
+     different opacity (an earlier version of this module rendered B/C on the SAME board as A, which made
+     them look like a washed-out copy of A at the SAME resolution - corrected here):
        A  no spatial interpolation at all - each USED point's own window-integrated value placed in its OWN
-          cell, one reading = one cell = one color, sharp edges (imshow(interpolation="nearest")). Cells with
-          no real point are transparent - never zero, never interpolated. Reuses
+          board cell, one reading = one cell = one color, sharp edges (imshow(interpolation="nearest")).
+          Cells with no real point are transparent - never zero, never interpolated. The ONLY panel with a
+          per-cell identity a browser click can resolve to one real point's own spectrum. Reuses
           science_engine.integration.window_overlaps/bin_bounds and science_engine.resample directly - the
           identical bin-overlap integration formula integrated_map() uses, just evaluated per point instead
           of per output pixel.
-       B  science_engine.cube.build_cube() + science_engine.integration.integrated_map() evaluated directly
-          on the mosaic board's own cells (so "the cell average" IS a real weighted mean of nearby cells'
-          own A values, not a finer raster), weighted by a declared LIGHT presentation-smoothing kernel
-          (NOT the instrument beam).
-       C  the SAME call again, a declared HEAVIER presentation-smoothing kernel - genuinely more blended
-          within the SAME hard support radius as B (see _reconcile_used_point_sets: their used-point sets
-          are identical BY CONSTRUCTION, never reconciled after the fact) and the SAME cell structure as A
-          (no invented cells, no support-radius-driven shape change).
+       B  science_engine.cube.build_cube() + science_engine.integration.integrated_map() evaluated on a
+          raster `interp_factor_b` times denser than the board - most output pixels sit BETWEEN measured
+          positions and are genuine interpolation estimates, weighted by a declared LIGHT presentation-
+          smoothing kernel (NOT the instrument beam). No per-pixel click/spectrum here: a new pixel was
+          never observed by the instrument.
+       C  the SAME call again on an even denser raster (`interp_factor_c` > `interp_factor_b`), a declared
+          HEAVIER presentation-smoothing kernel - genuinely more blended, at genuinely higher pixel density,
+          within the SAME hard support radius as B (see _reconcile_used_point_sets) and the SAME physical
+          footprint as A and B (no invented sky coverage, no support-radius-driven shape change).
      The real, reported instrument beam (beam_fwhm_deg) is unchanged between B and C and recorded honestly
      in the manifest, but is no longer the kernel doing either map's weighting. A/B/C share one color scale
      (robust 2nd/98th percentile of map A's own measured per-point values - "measured points", not a
      smoothed derivative of them) applied through ONE shared colour function (viridis_hex()) used identically
-     for every PNG/SVG/PDF export AND the browser's own interactive board - never a second, JS-side palette.
-     A fourth export, B-C (own scale), reports the real per-pixel difference and spatial-variance/gradient
-     numbers between B and C - never an assertion of "more smoothing" from the kernel parameter alone.
+     for every PNG/SVG/PDF export AND the browser's own interactive board.json - never a second, JS-side
+     palette.
   3. Presentation-ready combined exports (PNG at slide resolution, SVG, PDF) with the title, calibration
      label, beam/cutoff/window parameters, color limits and any caveat baked into the image itself - not
      only shown in the HTML.
@@ -65,7 +69,7 @@ from typing import Any, Optional
 import numpy as np
 
 SCHEMA_VERSION = "1.0"
-PIPELINE_VERSION = "science-web-v1.2"
+PIPELINE_VERSION = "science-web-v1.3"
 CALIBRATION_LEVELS = ("RELATIVE", "UNCALIBRATED")
 
 
@@ -105,6 +109,12 @@ class MapConfig:
     # and honestly reported below, never used as a gridding kernel from here on - see build_all_products()).
     smoothing_fwhm_b_deg: Optional[float] = None     # None -> auto (light: ~ median nearest-neighbour spacing)
     smoothing_fwhm_c_deg: Optional[float] = None     # None -> auto (heavier: 3x the B kernel)
+    # Interpolated panels B/C are rendered on a FINER raster than the real N x M board (real pixels BETWEEN
+    # the measured positions, not the same cells redrawn bigger/blurrier - see build_fine_grid()). Each factor
+    # is how many raster pixels replace one real board cell per axis; C must be denser than B so the visual
+    # progression (A: N x M -> B: denser -> C: densest) is unambiguous.
+    interp_factor_b: int = 3
+    interp_factor_c: int = 6
     quality_policy: str = "STANDARD"
     # Matches science_engine.config.ScienceConfig's own default (+/-100 km/s) - a wider +/-300 km/s window was
     # this bridge's OWN unjustified widening (found during this task's magnitude investigation: it roughly
@@ -131,6 +141,11 @@ class MapConfig:
         if self.smoothing_fwhm_b_deg is not None and self.smoothing_fwhm_c_deg is not None \
                 and self.smoothing_fwhm_c_deg <= self.smoothing_fwhm_b_deg:
             raise ValueError("smoothing_fwhm_c_deg must be > smoothing_fwhm_b_deg (C is the MORE smoothed map)")
+        if self.interp_factor_b < 2 or self.interp_factor_c < 2:
+            raise ValueError("interp_factor_b/interp_factor_c must each be >= 2 - B and C must be genuinely "
+                             "finer rasters than the real board, not the same cells redrawn")
+        if self.interp_factor_c <= self.interp_factor_b:
+            raise ValueError("interp_factor_c must be > interp_factor_b (C must be visually denser than B)")
         if (self.color_vmin is None) != (self.color_vmax is None):
             raise ValueError("color_vmin/color_vmax must both be set or both left auto")
         if self.color_vmin is not None and not (np.isfinite(self.color_vmin) and np.isfinite(self.color_vmax)
@@ -213,16 +228,14 @@ def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
 
 
 def _reconcile_used_point_sets(used_b: set[int], used_c: set[int], support_radius_deg: float) -> set[int]:
-    """B and C are built with the SAME support_radius_deg (see build_all_products) - the ONLY way
-    build_cube() ever excludes a point that isn't already excluded for a beam-independent reason
-    (no velocity, fails quality policy, insufficient coverage) is OUTSIDE_BEAM_SUPPORT_OF_GRID, whose
-    radius is exactly `beam.cutoff_n_fwhm * beam.fwhm_deg` (science_engine.beam.beam_weight) - identical
-    for B and C here. So used_b == used_c is a STRUCTURAL guarantee, not a coincidence to reconcile after
-    the fact (the previous behaviour - intersect, then note the discrepancy - is exactly what request #3
-    called insufficient: it silently redefined "used" instead of proving the sets could not diverge).
-    A mismatch here means that guarantee was violated (a real bug, e.g. by two different support radii
-    reaching build_cube by mistake) - this BLOCKS the comparison outright rather than reconciling it,
-    per the explicit instruction; see test_science_web_bridge.py's adversarial test."""
+    """B and C are built with the SAME support_radius_deg and the SAME physical grid extent/center (see
+    build_all_products/build_fine_grid) - only their pixel DENSITY differs. A point within support_radius_deg
+    of the shared physical area is within support radius of some pixel in EITHER grid (a finer grid only adds
+    pixel centers inside the same area, it never shrinks it), so used_b == used_c is expected by construction,
+    not a coincidence to reconcile after the fact (verified in test_science_web_bridge.py on the real 6x6
+    mosaic at the shipped interp factors). A mismatch here means that expectation was violated (a real bug,
+    e.g. mismatched grid extents reaching build_cube by mistake) - this BLOCKS the comparison outright rather
+    than silently reconciling it with an intersection."""
     if used_b != used_c:
         only_b, only_c = sorted(used_b - used_c), sorted(used_c - used_b)
         raise ValueError(
@@ -325,6 +338,24 @@ def build_mosaic_grid(filtered_input, spacing_deg: float):
                        width_deg=n_cols * spacing_deg, height_deg=n_rows * spacing_deg,
                        pixel_scale_deg=spacing_deg, nx=n_cols, ny=n_rows)
     return grid, point_cell, n_rows, n_cols
+
+
+def build_fine_grid(board_grid, factor: int):
+    """A ScienceGrid covering the EXACT SAME physical extent, center and orientation as `board_grid` (the
+    real N x M mosaic board build_mosaic_grid() returned), sampled `factor` times more densely per axis -
+    genuinely NEW pixel positions BETWEEN the real measured cells, never the same cells enlarged, blurred or
+    repainted at a different opacity. Used only for the interpolated B/C panels (request: "deben aparecer
+    píxeles nuevos entre las posiciones medidas"). build_cube()/integrated_map() (frozen) do 100% of the
+    actual weighting/integration math at these new pixel centers - exactly the same call as for the real
+    board, just evaluated at more locations; this function only decides WHERE those locations sit."""
+    from science_engine.models import ScienceGrid
+    if factor < 2:
+        raise ValueError(f"build_fine_grid factor must be >= 2 (got {factor}) - it must add real pixels "
+                         f"between the measured cells, not reproduce the same board")
+    return ScienceGrid(frame="icrs", center_ra_deg=board_grid.center_ra_deg,
+                       center_dec_deg=board_grid.center_dec_deg, width_deg=board_grid.width_deg,
+                       height_deg=board_grid.height_deg, pixel_scale_deg=board_grid.pixel_scale_deg / factor,
+                       nx=board_grid.nx * factor, ny=board_grid.ny * factor)
 
 
 _VIRIDIS = None  # lazy: matplotlib import is not needed for any non-rendering path (CLI plan/inspect, tests)
@@ -555,23 +586,6 @@ def _map_a_grid(point_rows: list[dict[str, Any]], point_cell: dict[int, tuple[in
     return value, uncertainty, valid, cell_point_index
 
 
-def _cell_contributors(filtered_input, grid, beam) -> dict[tuple[int, int], list[dict[str, Any]]]:
-    """For every cell, which real points have nonzero geometric weight into it under `beam` (the declared
-    presentation-smoothing kernel) and how much - reuses the SAME frozen spatial_weight_for_point()
-    build_cube() itself calls, just kept per-point instead of accumulated, purely for reporting/UI (never fed
-    back into the physics - the actual integration still runs through build_cube()/integrated_map())."""
-    from science_engine.gridding import spatial_weight_for_point
-    contributors: dict[tuple[int, int], list[dict[str, Any]]] = {}
-    for p in filtered_input.points:
-        w = spatial_weight_for_point(grid, p.ra_deg, p.dec_degrees, beam)
-        rows, cols = np.nonzero(w > 0)
-        for r, c in zip(rows.tolist(), cols.tolist()):
-            contributors.setdefault((r, c), []).append({"point_index": p.point_index, "weight": float(w[r, c])})
-    for key in contributors:
-        contributors[key].sort(key=lambda d: -d["weight"])
-    return contributors
-
-
 def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     import gc
 
@@ -584,18 +598,23 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     support_radius_deg = spatial["support_radius_deg"]
     smoothing_b, smoothing_c = spatial["smoothing_fwhm_b_deg"], spatial["smoothing_fwhm_c_deg"]
 
-    # The BOARD: one ScienceGrid cell per real pointing lattice position - never a fine sub-cell raster and
-    # never sized from the reported instrument beam (cfg.beam_fwhm_deg), which is what produced a 65x65 deg,
-    # 14x14px grid for a real ~6x5 deg, 36-point (6x6) mosaic on a real deployed run (beam_fwhm_deg=20 from
-    # observer_config.json vs ~1 deg real point spacing - see auto_spatial_params's docstring). beam_fwhm_deg
-    # stays reported honestly in the manifest; it drives neither the board's shape nor either map's weighting.
-    grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered_input, spatial["mosaic_spacing_deg"])
+    # The BOARD (map A): one ScienceGrid cell per real pointing lattice position - never a fine sub-cell
+    # raster and never sized from the reported instrument beam (cfg.beam_fwhm_deg), which is what produced a
+    # 65x65 deg, 14x14px grid for a real ~6x5 deg, 36-point (6x6) mosaic on a real deployed run (beam_fwhm_deg
+    # =20 from observer_config.json vs ~1 deg real point spacing - see auto_spatial_params's docstring).
+    board_grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered_input, spatial["mosaic_spacing_deg"])
 
-    # B and C: SAME support_radius_deg (cutoff_n_fwhm x fwhm_deg is fixed to support_radius_deg for both -
-    # see _reconcile_used_point_sets), DIFFERENT smoothing_fwhm (how quickly weight falls off within that
-    # fixed radius) - the two controls request #2 asked to be separated, instead of one beam_cutoff_n_fwhm
-    # that changed both at once on a single (possibly mis-scaled) beam. Evaluated directly on the board's
-    # own 36 cells, so "B's cell value" is a real weighted mean of nearby CELLS (not a finer raster).
+    # B and C: interpolated panels on a FINER raster than the board - genuinely NEW pixel positions between
+    # the 36 real measurements (request: "deben aparecer píxeles nuevos entre las posiciones medidas"; the
+    # earlier design evaluated B/C on the SAME 6x6 board as A, which just repainted the 36 cells with a
+    # blend - visually indistinguishable in resolution from A). SAME physical extent/center as board_grid
+    # (build_fine_grid) so the three panels stay directly comparable; SAME support_radius_deg (cutoff_n_fwhm x
+    # fwhm_deg fixed to support_radius_deg for both - see _reconcile_used_point_sets), DIFFERENT smoothing_
+    # fwhm (how quickly weight falls off within that fixed radius) - the two controls kept separate, per this
+    # module's own beam_fwhm_deg-vs-point-spacing history (see auto_spatial_params). interp_factor_c >
+    # interp_factor_b (enforced by MapConfig) makes C's raster strictly denser than B's.
+    grid_b = build_fine_grid(board_grid, cfg.interp_factor_b)
+    grid_c = build_fine_grid(board_grid, cfg.interp_factor_c)
     sc_b = _kernel_science_config(cfg, smoothing_b, support_radius_deg / smoothing_b,
                                   "presentation smoothing kernel B (light) - NOT the instrument beam")
     sc_c = _kernel_science_config(cfg, smoothing_c, support_radius_deg / smoothing_c,
@@ -604,33 +623,34 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     beam_c = build_beam_model(sc_c)
     velocity_axis = canonical_velocity_axis(filtered_input)
 
-    mem = memory_check(grid, int(velocity_axis.shape[0]), len(filtered_input.points))
-    if not mem["ok"]:
-        raise ValueError(f"BLOCKED before allocating: {mem['detail']}")
-
     # B and C are each a full (Nv, Ny, Nx) cube - measured to OOM-kill this Pi (exit -9) when both were held
-    # in memory at once (a real bug found and fixed during this task's own verification: science_engine's
-    # own preflight only ever budgets for ONE cube, since run_science_session() itself only ever builds one).
-    # Each cube is reduced to its 2D integrated map (and the small facts this module needs) and freed before
-    # the next is built - one cube in memory at a time, never two. The board is small (NxM real pointings,
-    # not a fine raster), so this is now a tiny fraction of the memory the old fine-raster grid needed.
-    cube_b = build_cube(filtered_input, grid, beam_b, sc_b)
+    # in memory at once (a real bug found and fixed earlier in this module's history: science_engine's own
+    # preflight only ever budgets for ONE cube, since run_science_session() itself only ever builds one).
+    # C's grid is the larger of the two, so each is checked against its OWN estimate right before it is
+    # built - never assume B's (smaller) estimate also covers C.
+    mem_b = memory_check(grid_b, int(velocity_axis.shape[0]), len(filtered_input.points))
+    if not mem_b["ok"]:
+        raise ValueError(f"BLOCKED before allocating map B ({cfg.interp_factor_b}x raster): {mem_b['detail']}")
+    cube_b = build_cube(filtered_input, grid_b, beam_b, sc_b)
     map_b = integrated_map(cube_b, sc_b)
     quality_b = assess_science_quality(filtered_input, cube_b, sc_b, map_b)
     used_b = set(cube_b.build_info["used_point_indices"])
     del cube_b
     gc.collect()
 
-    cube_c = build_cube(filtered_input, grid, beam_c, sc_c)
+    mem_c = memory_check(grid_c, int(velocity_axis.shape[0]), len(filtered_input.points))
+    if not mem_c["ok"]:
+        raise ValueError(f"BLOCKED before allocating map C ({cfg.interp_factor_c}x raster): {mem_c['detail']}")
+    cube_c = build_cube(filtered_input, grid_c, beam_c, sc_c)
     map_c = integrated_map(cube_c, sc_c)
     used_c = set(cube_c.build_info["used_point_indices"])
     del cube_c
     gc.collect()
 
     used_common = _reconcile_used_point_sets(used_b, used_c, support_radius_deg)
-    note = (f"B and C share support_radius_deg={support_radius_deg:.6g} deg by construction (grid, points and "
-           f"cutoff radius are identical) - their used-point sets are guaranteed identical, verified: "
-           f"{len(used_common)} point(s), never reconciled after the fact")
+    note = (f"B and C share support_radius_deg={support_radius_deg:.6g} deg and the SAME physical extent as "
+           f"the real board (only their raster density differs) - their used-point sets matched exactly, "
+           f"verified: {len(used_common)} point(s), never reconciled after the fact")
 
     point_rows = per_point_integrated_values(filtered_input, sc_b, velocity_axis)
     for row in point_rows:
@@ -641,99 +661,60 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     vmin, vmax, vmin_vmax_basis = robust_color_limits(point_rows, cfg.color_vmin, cfg.color_vmax)
     map_a_value, map_a_uncertainty, map_a_valid, map_a_point_index = _map_a_grid(point_rows, point_cell,
                                                                                  n_rows, n_cols)
-    contributors_b = _cell_contributors(filtered_input, grid, beam_b)
-    contributors_c = _cell_contributors(filtered_input, grid, beam_c)
 
     return {
-        "sc_b": sc_b, "sc_c": sc_c, "beam_b": beam_b, "beam_c": beam_c, "grid": grid, "spatial_params": spatial,
+        "sc_b": sc_b, "sc_c": sc_c, "beam_b": beam_b, "beam_c": beam_c,
+        "board_grid": board_grid, "grid_b": grid_b, "grid_c": grid_c, "spatial_params": spatial,
         "n_rows": n_rows, "n_cols": n_cols, "point_cell": point_cell,
         "velocity_axis": velocity_axis, "map_b": map_b, "map_c": map_c,
         "map_a_value": map_a_value, "map_a_uncertainty": map_a_uncertainty, "map_a_valid": map_a_valid,
         "map_a_point_index": map_a_point_index,
-        "contributors_b": contributors_b, "contributors_c": contributors_c,
         "quality_b": quality_b, "used_point_set": sorted(used_common), "used_point_set_note": note,
         "point_rows": point_rows, "color_vmin": vmin, "color_vmax": vmax, "color_limits_basis": vmin_vmax_basis,
     }
 
 
 def board_json_payload(built: dict[str, Any]) -> dict[str, Any]:
-    """The ONE per-cell JSON payload driving the browser's interactive A/B/C board - point/value/uncertainty/
-    contributors for every cell of all three maps, plus a `color` hex string computed by the SAME
-    viridis_hex() the PNG/SVG/PDF exports use (via the same matplotlib Colormap object), so the browser never
-    recomputes a colour - it paints exactly what the server already decided. This is what makes "el mismo
-    valor numerico debe tener el mismo color en todas las vistas" hold by construction, not convention."""
+    """The per-cell JSON payload driving the browser's ONLY interactive panel - map A, the real N x M board
+    of MEASURED readings (one point = one cell). B and C are continuous interpolated rasters at a genuinely
+    finer resolution (see build_fine_grid) with no per-cell/per-point identity and no click interaction (a
+    new pixel between measured positions is never a stand-in for a real sample) - they are plain PNG images,
+    not JSON-driven boards; see render_all_maps(). `color` is computed by the SAME viridis_hex() every PNG/
+    SVG/PDF export uses (the identical matplotlib Colormap object on the same normalised value), so this
+    board's colours and the B/C images always share one scale - the browser never recomputes a colour.
+    `color_stops` is that same function sampled evenly across [color_vmin, color_vmax], for drawing an HTML
+    legend next to each of the three panels (request: "una barra de color visible junto a cada imagen")."""
     from science_engine.grid import pixel_centers_deg
     n_rows, n_cols = built["n_rows"], built["n_cols"]
     vmin, vmax = built["color_vmin"], built["color_vmax"]
-    grid = built["grid"]
+    grid = built["board_grid"]
     cell_ra, cell_dec = pixel_centers_deg(grid)
     cell_point = {rc: idx for idx, rc in built["point_cell"].items()}
     point_by_index = {r["point_index"]: r for r in built["point_rows"]}
-    map_b, map_c = built["map_b"], built["map_c"]
-
-    def _cell(value_arr, valid_arr, unc_arr, r: int, c: int) -> dict[str, Any]:
-        valid = bool(valid_arr[r, c])
-        value = float(value_arr[r, c]) if valid else None
-        unc = float(unc_arr[r, c]) if (valid and unc_arr is not None and np.isfinite(unc_arr[r, c])) else None
-        return {"valid": valid, "value": value, "uncertainty": unc, "color": viridis_hex(value, vmin, vmax)}
 
     cells = []
     for r in range(n_rows):
         for c in range(n_cols):
             pt_idx = cell_point.get((r, c))
             point_row = point_by_index.get(pt_idx) if pt_idx is not None else None
-            a = _cell(built["map_a_value"], built["map_a_valid"], built["map_a_uncertainty"], r, c)
-            b = _cell(map_b.value, map_b.valid, map_b.uncertainty, r, c)
-            c_ = _cell(map_c.value, map_c.valid, map_c.uncertainty, r, c)
-            b["contributors"] = built["contributors_b"].get((r, c), [])
-            c_["contributors"] = built["contributors_c"].get((r, c), [])
+            valid = bool(built["map_a_valid"][r, c])
+            value = float(built["map_a_value"][r, c]) if valid else None
+            unc = (float(built["map_a_uncertainty"][r, c])
+                  if valid and np.isfinite(built["map_a_uncertainty"][r, c]) else None)
             cells.append({
                 "row": r, "col": c, "point_index": pt_idx,
                 "ra_deg": float(cell_ra[r, c]), "dec_degrees": float(cell_dec[r, c]),
                 "point_status": point_row["status"] if point_row else None,
                 "point_reason": point_row["reason"] if point_row else None,
                 "point_timestamp_start_utc": point_row["timestamp_start_utc"] if point_row else None,
-                "a": a, "b": b, "c": c_,
+                "valid": valid, "value": value, "uncertainty": unc,
+                "color": viridis_hex(value, vmin, vmax),
             })
+    n_stops = 9
+    stops = [viridis_hex(vmin + t * (vmax - vmin), vmin, vmax) for t in np.linspace(0.0, 1.0, n_stops)]
     return {"n_rows": n_rows, "n_cols": n_cols, "mosaic_spacing_deg": built["spatial_params"]["mosaic_spacing_deg"],
-           "grid": grid.to_dict(), "color_vmin": vmin, "color_vmax": vmax, "colormap": "viridis", "cells": cells}
-
-
-def bc_diagnostic(built: dict[str, Any]) -> dict[str, Any]:
-    """Real per-array numbers of what actually differs between map B and map C (request #1): support (which
-    pixels have any weight), the per-pixel B-C difference restricted to their common support, each map's own
-    spatial variance, and each map's mean |gradient| - never an assertion of "more smoothing" from the
-    cutoff/kernel parameter alone."""
-    map_b, map_c = built["map_b"], built["map_c"]
-    vb, vc = map_b.value, map_c.value
-    valb, valc = map_b.valid, map_c.valid
-    common = valb & valc
-    diff = np.where(common, vb - vc, np.nan)
-    gy_b, gx_b = np.gradient(np.where(valb, vb, np.nan))
-    gy_c, gx_c = np.gradient(np.where(valc, vc, np.nan))
-
-    def _mean(a: np.ndarray) -> Optional[float]:
-        finite = a[np.isfinite(a)]
-        return float(np.mean(finite)) if finite.size else None
-
-    def _std_over(mask: np.ndarray, val: np.ndarray) -> Optional[float]:
-        sel = val[mask]
-        return float(np.std(sel)) if sel.size else None
-
-    has_diff = bool(np.any(np.isfinite(diff)))
-    return {
-        "n_pixels_total": int(valb.size),
-        "n_support_b": int(valb.sum()), "n_support_c": int(valc.sum()), "n_support_common": int(common.sum()),
-        "n_support_only_b": int((valb & ~valc).sum()), "n_support_only_c": int((valc & ~valb).sum()),
-        "b_minus_c_common_support": {
-            "mean": (float(np.nanmean(diff)) if has_diff else None),
-            "std": (float(np.nanstd(diff)) if has_diff else None),
-            "min": (float(np.nanmin(diff)) if has_diff else None),
-            "max": (float(np.nanmax(diff)) if has_diff else None),
-        },
-        "b_value_std_over_support": _std_over(valb, vb), "c_value_std_over_support": _std_over(valc, vc),
-        "b_mean_abs_gradient": _mean(np.hypot(gx_b, gy_b)), "c_mean_abs_gradient": _mean(np.hypot(gx_c, gy_c)),
-    }
+           "grid": grid.to_dict(), "color_vmin": vmin, "color_vmax": vmax, "colormap": "viridis",
+           "color_units": "relative_intensity_dimensionless x m/s", "color_stops": stops, "cells": cells}
 
 
 # ------------------------------------------------------------------ rendering (matplotlib, lazy import)
@@ -748,53 +729,60 @@ def _title_block(cfg: MapConfig, campaign_id: str, reduce_session_id: str, panel
 
 def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, reduce_session_id: str,
                     out_dir: Path) -> dict[str, list[str]]:
-    """Renders A, B, C as the SAME NxM mosaic board - identical extent, orientation, cell size and cell-to-
-    sky mapping (request: "el mismo tablero de 6x6 cuadros... idénticos límites... No uses círculos en uno y
-    una malla de píxeles distinta en los otros"). Every cell is drawn with interpolation="nearest" (sharp
-    edges - matplotlib never blends a cell into its neighbour) and thin discrete gridlines mark cell
-    boundaries without covering the fill colour. Every export (PNG/SVG/PDF) carries the same
-    title/units/calibration/window/caveats baked in - not only shown in the browser.
+    """Renders A (the real N x M board, sharp per-cell) and B/C (genuinely finer interpolated rasters - see
+    build_fine_grid) at STRICTLY increasing pixel density left to right - real NEW pixel positions between
+    the measured cells, never the same N x M cells enlarged/blurred/repainted at a different opacity (a
+    prior version of this module did exactly that and was corrected here). All three share the SAME
+    physical extent/orientation and the SAME color scale (vmin/vmax from A's own measured values) so the
+    increase in visual detail is never a colour-scale trick. Every export bakes in its own effective grid
+    dimensions in the title, plus calibration/window/caveats - not only shown in the browser. New pixels in
+    B/C are estimates BETWEEN measured positions - the caption states plainly that interpolation never
+    recovers detail the instrument did not measure, and that only panel A's real cells have a spectrum.
 
-    Layout: the title uses fig.suptitle() (spans the FULL figure width, never clipped by the narrower
-    axes a colorbar leaves behind) and every figure reserves FIXED top/bottom margins via
-    subplots_adjust() (tight_layout() does not know about a separately-placed fig.text() caption)."""
+    Layout: the title uses fig.suptitle() (spans the FULL figure width, never clipped by the narrower axes
+    a colorbar leaves behind) and every figure reserves FIXED top/bottom margins via subplots_adjust()
+    (tight_layout() does not know about a separately-placed fig.text() caption)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import ListedColormap
     import matplotlib.patches as mpatches
 
-    grid = built["grid"]
+    board = built["board_grid"]
     n_rows, n_cols = built["n_rows"], built["n_cols"]
     spatial = built["spatial_params"]
     support_radius_deg = spatial["support_radius_deg"]
     vmin, vmax = built["color_vmin"], built["color_vmax"]
     cmap = plt.get_cmap("viridis").with_extremes(bad=(0, 0, 0, 0))
-    half_w, half_h = grid.width_deg / 2, grid.height_deg / 2   # the board's OWN extent - no margin, no
-    extent = (half_w, -half_w, -half_h, half_h)                # separate "auto-zoom" needed any more
+    # SAME physical extent for A, B and C (build_fine_grid guarantees B/C match the board exactly) - request
+    # #3: "los tres paneles deben ocupar exactamente el mismo ancho y alto... misma extension espacial".
+    half_w, half_h = board.width_deg / 2, board.height_deg / 2
+    extent = (half_w, -half_w, -half_h, half_h)
     x_edges = np.linspace(-half_w, half_w, n_cols + 1)
     y_edges = np.linspace(-half_h, half_h, n_rows + 1)
     x_centers, y_centers = (x_edges[:-1] + x_edges[1:]) / 2, (y_edges[:-1] + y_edges[1:]) / 2
     GRIDLINE = "#33414a"
 
     written: dict[str, list[str]] = {}
+    hi_caveat = ("INSTRUMENTAL/" + cfg.calibration_level_filter + " result - relative_intensity_dimensionless "
+                "only. No HI detection, Kelvin, Jy, N_HI or absolute flux claimed.")
 
-    def _grid_and_ticks(ax) -> None:
+    def _cell_ticks(ax) -> None:
         for e in x_edges:
             ax.axvline(e, color=GRIDLINE, linewidth=0.6, zorder=5)
         for e in y_edges:
             ax.axhline(e, color=GRIDLINE, linewidth=0.6, zorder=5)
         ax.set_xticks(x_centers); ax.set_xticklabels([str(i + 1) for i in range(n_cols)], fontsize=7)
         ax.set_yticks(y_centers); ax.set_yticklabels([str(i + 1) for i in range(n_rows)], fontsize=7)
+
+    def _extent_and_aspect(ax) -> None:
         ax.set_xlim(half_w, -half_w)   # RA increases to the LEFT, conventional sky orientation
         ax.set_ylim(-half_h, half_h)
         ax.set_aspect("equal")
 
     def _finish(fig, ax, title: str, name: str, extra_caption: str, exts=("png", "svg", "pdf")) -> None:
-        ax.set_xlabel(f"mosaic column (1-{n_cols}) - spacing {spatial['mosaic_spacing_deg']:.3f} deg, "
-                     f"RA offset from center RA={grid.center_ra_deg:.4f} deg", fontsize=7.5)
-        ax.set_ylabel(f"mosaic row (1-{n_rows}) - Dec offset from center Dec={grid.center_dec_deg:.4f} deg",
-                     fontsize=7.5)
+        ax.set_xlabel(f"RA offset from center RA={board.center_ra_deg:.4f} deg", fontsize=7.5)
+        ax.set_ylabel(f"Dec offset from center Dec={board.center_dec_deg:.4f} deg", fontsize=7.5)
         fig.suptitle(title, fontsize=8.5, y=0.985)
         fig.text(0.5, 0.01, extra_caption, ha="center", va="bottom", fontsize=6.5, wrap=True)
         fig.subplots_adjust(top=0.80, bottom=0.22, left=0.13, right=0.99)
@@ -810,78 +798,89 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         plt.close(fig)
         written[name] = paths
 
-    def _board_fig(value: np.ndarray, valid: np.ndarray):
+    # ---- A: the real N x M board - one cell = one real reading, sharp edges, cell-index ticks/gridlines,
+    # the ONLY panel with a spectrum-able cell. ----
+    n_measured = int(built["map_a_valid"].sum())
+    fig, ax = plt.subplots(figsize=(6.6, 6.0))
+    masked_a = np.ma.masked_where(~built["map_a_valid"], built["map_a_value"])
+    im = ax.imshow(masked_a, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest", extent=extent)
+    _cell_ticks(ax); _extent_and_aspect(ax)
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("integrated relative_intensity_dimensionless x m/s")
+    _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
+                                  f"A: MEASURED READINGS - {n_rows}x{n_cols} grid (no interpolation)"),
+           "map_a_no_interp",
+           f"{n_rows}x{n_cols} = {n_rows * n_cols} cells, one per real pointing (spacing "
+           f"{spatial['mosaic_spacing_deg']:.3f} deg). {n_measured}/{n_rows * n_cols} cells carry a real "
+           f"measurement (one point = one cell = one color, sharp edges); an unmeasured cell is left "
+           f"transparent - never zero, never interpolated. This is the ONLY panel where a cell can be "
+           f"clicked to inspect its own real spectrum. {hi_caveat}")
+
+    # ---- B / C: genuinely finer interpolated rasters - real NEW pixel positions between the measured cells,
+    # never the same {n_rows}x{n_cols} cells redrawn bigger/blurrier. Same physical footprint/scale as A;
+    # strictly increasing density C > B > A (enforced by MapConfig.interp_factor_c > interp_factor_b). ----
+    for key, label, kernel_fwhm, science_map, factor in (
+        ("map_b_smooth", "B: INTERPOLATED (light)", spatial["smoothing_fwhm_b_deg"], built["map_b"], cfg.interp_factor_b),
+        ("map_c_heavy", "C: INTERPOLATED (heavier)", spatial["smoothing_fwhm_c_deg"], built["map_c"], cfg.interp_factor_c),
+    ):
+        ny_fine, nx_fine = science_map.value.shape
         fig, ax = plt.subplots(figsize=(6.6, 6.0))
-        masked = np.ma.masked_where(~valid, value)
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                       interpolation="nearest", extent=extent)
-        _grid_and_ticks(ax)
+        masked = np.ma.masked_where(~science_map.valid, science_map.value)
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest", extent=extent)
+        _extent_and_aspect(ax)   # no cell gridlines/ticks here - this is a continuous raster, not a per-cell board
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("integrated relative_intensity_dimensionless x m/s")
-        return fig, ax, im
-
-    hi_caveat = ("INSTRUMENTAL/" + cfg.calibration_level_filter + " result - relative_intensity_dimensionless "
-                "only. No HI detection, Kelvin, Jy, N_HI or absolute flux claimed.")
-
-    # ---- A: measured readings, one cell = one reading, no smoothing ----
-    n_measured = int(built["map_a_valid"].sum())
-    fig, ax, _ = _board_fig(built["map_a_value"], built["map_a_valid"])
-    _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id, "A: MEASURED READINGS (no spatial interpolation)"),
-           "map_a_no_interp",
-           f"{n_rows}x{n_cols} mosaic board, real cell spacing {spatial['mosaic_spacing_deg']:.3f} deg. "
-           f"{n_measured}/{n_rows * n_cols} cells carry a real measurement (one point = one cell = one color, "
-           f"sharp edges); an unmeasured cell is left transparent - never zero, never interpolated. "
-           f"{hi_caveat}")
-
-    # ---- B / C: SAME board and cells as A, weighted mean of nearby CELLS' own A values ----
-    # Both share support_radius_deg (identical cutoff radius = identical legitimate coverage, see
-    # _reconcile_used_point_sets); only the presentation-smoothing kernel width differs (smoothing_fwhm_b_deg
-    # vs smoothing_fwhm_c_deg) - the two controls request #2 asked kept separate. The real instrument beam
-    # (cfg.beam_fwhm_deg) is reported below, unchanged between B and C, but is NOT the kernel doing this
-    # weighting (see build_all_products/auto_spatial_params for why: it was ~20x this campaign's own point
-    # spacing on a real deployed run).
-    for key, label, kernel_fwhm, science_map in (
-        ("map_b_smooth", "B: LIGHT SMOOTHING", spatial["smoothing_fwhm_b_deg"], built["map_b"]),
-        ("map_c_heavy", "C: HEAVIER SMOOTHING", spatial["smoothing_fwhm_c_deg"], built["map_c"]),
-    ):
-        fig, ax, _ = _board_fig(science_map.value, science_map.valid)
-        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id, label), key,
-               f"SAME {n_rows}x{n_cols} board and cells as A - method: inverse-variance x Gaussian-kernel "
-               f"weighted mean of nearby cells' own A values (science_engine.gridding), kernel FWHM="
+        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
+                                      f"{label} - {ny_fine}x{nx_fine} grid ({factor}x the {n_rows}x{n_cols} board)"),
+               key,
+               f"{ny_fine}x{nx_fine} = {ny_fine * nx_fine} raster pixels (vs {n_rows}x{n_cols}="
+               f"{n_rows * n_cols} real measurements) over the SAME physical footprint as A - most pixels "
+               f"sit BETWEEN measured positions and are ESTIMATES from an inverse-variance x Gaussian-kernel "
+               f"weighted mean of nearby real readings (science_engine.gridding), kernel FWHM="
                f"{kernel_fwhm:.4g} deg (declared presentation smoothing, NOT the instrument beam) - real "
                f"instrument beam FWHM={cfg.beam_fwhm_deg:.4g} deg ({cfg.beam_status}, unchanged B/C, reported "
-               f"only). Spatial SUPPORT (radius a cell may draw from) is the SAME {support_radius_deg:.4g} deg "
-               f"for B and C - {len(built['used_point_set'])} point(s) used identically in both (see "
-               f"used_point_set_note). Color limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}). "
-               f"{hi_caveat}")
+               f"only). Spatial SUPPORT radius is the SAME {support_radius_deg:.4g} deg for B and C - "
+               f"{len(built['used_point_set'])} point(s) used identically in both. Interpolation ESTIMATES "
+               f"values between measurements; it never recovers detail the instrument did not measure, and "
+               f"no real spectrum exists for a pixel here - only the {n_rows}x{n_cols} real cells in panel A "
+               f"have one. Color limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}). {hi_caveat}")
 
-    # ---- A + B + C combined, side by side, same axes/ticks/colorbar (request: "verse juntos... abrirse
-    # grandes sin perder la correspondencia de las celdas") ----
-    fig, axes = plt.subplots(1, 3, figsize=(16.0, 5.8), sharex=True, sharey=True)
+    # ---- A + B + C combined: same physical box and colour scale, each panel's own resolution declared,
+    # increasing left to right (request: "verse juntos... poder abrirse grandes") ----
+    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.8))
     im = None
-    for ax, (label, value, valid) in zip(axes, [
-        ("A: MEASURED", built["map_a_value"], built["map_a_valid"]),
-        ("B: LIGHT SMOOTHING", built["map_b"].value, built["map_b"].valid),
-        ("C: HEAVIER SMOOTHING", built["map_c"].value, built["map_c"].valid),
-    ]):
+    b_shape = built["map_b"].value.shape
+    c_shape = built["map_c"].value.shape
+    panels = [
+        (f"A: MEASURED ({n_rows}x{n_cols})", built["map_a_value"], built["map_a_valid"], True),
+        (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]})", built["map_b"].value, built["map_b"].valid, False),
+        (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]})", built["map_c"].value, built["map_c"].valid, False),
+    ]
+    for ax, (label, value, valid, is_board) in zip(axes, panels):
         masked = np.ma.masked_where(~valid, value)
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                       interpolation="nearest", extent=extent)
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest", extent=extent)
         ax.set_title(label, fontsize=9)
-        _grid_and_ticks(ax)
+        _extent_and_aspect(ax)
+        if is_board:
+            for e in x_edges:
+                ax.axvline(e, color=GRIDLINE, linewidth=0.5, zorder=5)
+            for e in y_edges:
+                ax.axhline(e, color=GRIDLINE, linewidth=0.5, zorder=5)
     # subplots_adjust MUST run before colorbar(ax=...): colorbar carves its own axes out of the CURRENT
     # positions of the axes it's given - calling subplots_adjust afterward moves the 3 main axes but leaves
-    # the colorbar's already-fixed axes behind, which was measured to overlap panel C's own colorbar-space.
+    # the colorbar's already-fixed axes behind, which was measured to overlap the rightmost panel's own
+    # colorbar space.
     fig.subplots_adjust(top=0.80, bottom=0.20, left=0.04, right=0.90)
     cbar = fig.colorbar(im, ax=list(axes), shrink=0.85)
     cbar.set_label("integrated relative_intensity_dimensionless x m/s")
-    fig.suptitle(_title_block(cfg, campaign_id, reduce_session_id, "A / B / C - same board, same cells, same scale"),
+    fig.suptitle(_title_block(cfg, campaign_id, reduce_session_id,
+                              "A / B / C - same footprint and scale, increasing raster resolution"),
                 fontsize=9, y=0.99)
     fig.text(0.5, 0.01,
-            f"{n_rows}x{n_cols} board, cell spacing {spatial['mosaic_spacing_deg']:.3f} deg, support radius "
-            f"{support_radius_deg:.4g} deg (shared B/C), smoothing kernel: B={spatial['smoothing_fwhm_b_deg']:.3f} "
-            f"deg, C={spatial['smoothing_fwhm_c_deg']:.3f} deg, {len(built['used_point_set'])} point(s) used "
-            f"identically in B and C. {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
+            f"Same physical footprint and color scale in all three; only pixel density increases left to "
+            f"right ({n_rows}x{n_cols} -> {b_shape[0]}x{b_shape[1]} -> {c_shape[0]}x{c_shape[1]}). B/C pixels "
+            f"between real positions are interpolation ESTIMATES, never new measurements - no spectrum exists "
+            f"for them. {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
     paths = []
     for ext in ("png", "svg", "pdf"):
         p = out_dir / f"map_abc_combined.{ext}"
@@ -890,31 +889,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     plt.close(fig)
     written["map_abc_combined"] = paths
 
-    # ---- B minus C (request #1): a real per-cell difference image, own non-degenerate scale - never assert
-    # "more smoothing" from the cutoff parameter alone. ----
-    diag = bc_diagnostic(built)
-    common = built["map_b"].valid & built["map_c"].valid
-    diff = np.ma.masked_where(~common, built["map_b"].value - built["map_c"].value)
-    if common.any():
-        abs_max = float(np.nanmax(np.abs(diff))) or 1e-30
-        fig, ax = plt.subplots(figsize=(6.6, 6.0))
-        im = ax.imshow(diff, origin="lower", cmap=plt.get_cmap("RdBu_r").with_extremes(bad=(0, 0, 0, 0)),
-                       vmin=-abs_max, vmax=abs_max, interpolation="nearest", extent=extent)
-        _grid_and_ticks(ax)
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.set_label("B minus C (relative_intensity_dimensionless x m/s)")
-        d = diag["b_minus_c_common_support"]
-        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
-                                      "B minus C (per-cell, common support only) - own scale, NOT shared with A/B/C"),
-               "map_b_minus_c",
-               f"common support: {diag['n_support_common']}/{diag['n_pixels_total']} cells (B-only "
-               f"{diag['n_support_only_b']}, C-only {diag['n_support_only_c']}). diff mean={d['mean']:.4g} "
-               f"std={d['std']:.4g} min={d['min']:.4g} max={d['max']:.4g}. spatial std: B="
-               f"{diag['b_value_std_over_support']:.4g} C={diag['c_value_std_over_support']:.4g}; mean |gradient|: "
-               f"B={diag['b_mean_abs_gradient']:.4g} C={diag['c_mean_abs_gradient']:.4g} (lower = flatter).",
-               exts=("png", "svg"))
-
-    # ---- uncertainty / SNR (from map B's own propagated sigma - the smooth map's real uncertainty) ----
+    # ---- uncertainty / SNR (from map B's own propagated sigma, at B's own raster resolution) ----
     unc = built["map_b"].uncertainty
     if unc is not None and np.any(np.isfinite(unc)):
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -923,7 +898,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         fig, ax = plt.subplots(figsize=(6.6, 6.0))
         im = ax.imshow(masked_snr, origin="lower", cmap=plt.get_cmap("magma").with_extremes(bad=(0, 0, 0, 0)),
                        interpolation="nearest", extent=extent)
-        _grid_and_ticks(ax)
+        _extent_and_aspect(ax)
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("SNR (dimensionless)")
         window_km_s = (cfg.velocity_window_max_m_s - cfg.velocity_window_min_m_s) / 1000.0
@@ -933,7 +908,8 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             f"noise) across those channels inflates this SNR well beyond what independent-noise statistics "
             f"would justify. High SNR here is NOT evidence of a real spectral feature and must never be read "
             f"as detection significance." if window_km_s > 150 else "")
-        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id, "SNR = |integrated value| / propagated 1-sigma (map B)"),
+        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
+                                      f"SNR = |integrated value| / propagated 1-sigma (map B, {unc.shape[0]}x{unc.shape[1]})"),
                "map_snr",
                "1-sigma uncertainty propagated from REDUCE per-channel sigma assuming independent channels "
                "(see science_engine.integration docstring) - a statistical, not systematic, error bar."
@@ -943,7 +919,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     else:
         quality_kind = "no propagable uncertainty available"
 
-    # ---- coverage: SAME board, categorical (no point planned there / used / excluded) ----
+    # ---- coverage: the real N x M board, categorical (no point planned there / used / excluded) ----
     point_cell = built["point_cell"]
     code = np.zeros((n_rows, n_cols), dtype=int)   # 0 = no point at all for this mosaic position
     for row in built["point_rows"]:
@@ -952,17 +928,19 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     fig, ax = plt.subplots(figsize=(6.6, 6.0))
     cov_cmap = ListedColormap(["#0d1317", "#2e8b3d", "#b23b3b"])
     ax.imshow(code, origin="lower", cmap=cov_cmap, vmin=0, vmax=2, interpolation="nearest", extent=extent)
-    _grid_and_ticks(ax)
+    _cell_ticks(ax); _extent_and_aspect(ax)
     ax.legend(handles=[mpatches.Patch(color="#2e8b3d", label="used in A/B/C"),
                        mpatches.Patch(color="#b23b3b", label="excluded (real reason in points.csv)"),
                        mpatches.Patch(color="#0d1317", label="no pointing at this mosaic position")],
              loc="upper right", fontsize=6.5)
-    _finish(fig, ax, f"{campaign_id} / {reduce_session_id} - coverage: measured cells used vs excluded",
+    _finish(fig, ax, f"{campaign_id} / {reduce_session_id} - coverage: measured cells used vs excluded "
+                    f"({n_rows}x{n_cols})",
            "map_coverage",
-           "SAME board and cells as A/B/C. green = used; red = a real point exists but was excluded (see "
-           "points.csv/manifest for its own reason); dark = no pointing at all at this mosaic position.",
+           f"SAME {n_rows}x{n_cols} board and cells as A. green = used; red = a real point exists but was "
+           f"excluded (see points.csv/manifest for its own reason); dark = no pointing at all at this mosaic "
+           f"position.",
            exts=("png", "svg"))
-    return written, quality_kind, diag
+    return written, quality_kind
 
 
 # ------------------------------------------------------------------ persistence (this bridge's OWN, non-frozen)
@@ -997,11 +975,15 @@ def cmd_plan(args) -> int:
     filtered, counts, _ = load_filtered_input(cfg.reduce_session_dir, cfg.calibration_level_filter)
     from science_engine.cube import canonical_velocity_axis
     spatial = auto_spatial_params(filtered, cfg)
+    grid_b = grid_c = None
     try:
-        grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered, spatial["mosaic_spacing_deg"])
-        mosaic_ok, mosaic_detail = True, f"{n_rows}x{n_cols} board, {len(point_cell)} point(s) placed"
+        board, point_cell, n_rows, n_cols = build_mosaic_grid(filtered, spatial["mosaic_spacing_deg"])
+        mosaic_ok = True
+        mosaic_detail = f"{n_rows}x{n_cols} board, {len(point_cell)} point(s) placed"
+        grid_b = build_fine_grid(board, cfg.interp_factor_b)
+        grid_c = build_fine_grid(board, cfg.interp_factor_c)
     except MosaicShapeError as exc:
-        grid, n_rows, n_cols = None, None, None
+        board, n_rows, n_cols = None, None, None
         mosaic_ok, mosaic_detail = False, str(exc)
     velocity_axis = canonical_velocity_axis(filtered)
     from science_engine.integration import window_overlaps
@@ -1016,11 +998,19 @@ def cmd_plan(args) -> int:
         {"name": "mosaic_board_buildable", "ok": mosaic_ok, "detail": mosaic_detail},
     ]
     if mosaic_ok:
-        checks.append(memory_check(grid, int(velocity_axis.shape[0]), len(filtered.points)))
+        # RUN allocates a cube for grid_b THEN (separately) grid_c - grid_c is the larger of the two, so both
+        # are checked here, not just the (much smaller) board.
+        mem_b = memory_check(grid_b, int(velocity_axis.shape[0]), len(filtered.points))
+        mem_b["name"] = "memory_estimate_within_budget_map_b"
+        mem_c = memory_check(grid_c, int(velocity_axis.shape[0]), len(filtered.points))
+        mem_c["name"] = "memory_estimate_within_budget_map_c"
+        checks.append(mem_b); checks.append(mem_c)
     blocked = any(not c["ok"] for c in checks)
     payload = {
         "config": cfg.to_dict(), "config_hash": cfg.config_hash(), "calibration_level_counts": counts,
-        "grid": grid.to_dict() if grid else None, "n_rows": n_rows, "n_cols": n_cols,
+        "board_grid": board.to_dict() if board else None,
+        "grid_b": grid_b.to_dict() if grid_b else None, "grid_c": grid_c.to_dict() if grid_c else None,
+        "n_rows": n_rows, "n_cols": n_cols,
         "spatial_params": spatial, "real_instrument_beam_fwhm_deg": cfg.beam_fwhm_deg,
         "n_velocity_channels": int(velocity_axis.shape[0]),
         "checks": checks, "blocked": blocked,
@@ -1031,6 +1021,9 @@ def cmd_plan(args) -> int:
         f"board: {mosaic_detail}  support_radius={spatial['support_radius_deg']:.4g} deg  "
         f"smoothing B/C={spatial['smoothing_fwhm_b_deg']:.4g}/{spatial['smoothing_fwhm_c_deg']:.4g} deg  "
         f"(real instrument beam={cfg.beam_fwhm_deg:.4g} deg, reported only, not used for gridding)",
+        f"grid dims: A={n_rows}x{n_cols}"
+        + (f"  B={grid_b.ny}x{grid_b.nx} ({cfg.interp_factor_b}x)  C={grid_c.ny}x{grid_c.nx} "
+           f"({cfg.interp_factor_c}x)" if mosaic_ok else "  B/C: n/a (board not buildable)"),
         f"will process {len(filtered.points)} point(s): {payload['will_process_points']}",
         *[f"[{'PASS' if c['ok'] else 'BLOCKED'}] {c['name']}: {c['detail']}" for c in checks],
     ])
@@ -1051,7 +1044,7 @@ def cmd_run(args) -> int:
     maps_dir = out_dir / "maps"
     maps_dir.mkdir()
 
-    exports, unc_kind, bc_diag = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
+    exports, unc_kind = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
 
     # tabular per-point export for reproducibility (section: "exporta valores tabulares de puntos")
     import csv
@@ -1085,7 +1078,12 @@ def cmd_run(args) -> int:
                                         "kernel for either map (see spatial_params/smoothing_kernel_b/c)"},
         "spatial_params": built["spatial_params"],
         "smoothing_kernel_b": built["beam_b"].to_dict(), "smoothing_kernel_c": built["beam_c"].to_dict(),
-        "grid": built["grid"].to_dict(),
+        # THREE grids now, not one: the real N x M board (map A) and the two genuinely finer interpolated
+        # rasters (map B/C) - same physical extent/center as the board, denser pixels only.
+        "board_grid": built["board_grid"].to_dict(), "grid_b": built["grid_b"].to_dict(),
+        "grid_c": built["grid_c"].to_dict(),
+        "grid_dims": {"a": [built["n_rows"], built["n_cols"]], "b": list(built["map_b"].value.shape),
+                     "c": list(built["map_c"].value.shape)},
         "velocity_window_m_s": [cfg.velocity_window_min_m_s, cfg.velocity_window_max_m_s],
         "n_velocity_channels": int(built["velocity_axis"].shape[0]),
         "color_vmin": built["color_vmin"], "color_vmax": built["color_vmax"],
@@ -1093,7 +1091,6 @@ def cmd_run(args) -> int:
         "used_point_set": built["used_point_set"], "used_point_set_note": built["used_point_set_note"],
         "n_points_filtered_in": len(filtered.points), "n_points_used": len(built["used_point_set"]),
         "quality_b": built["quality_b"].to_dict(), "uncertainty_kind": unc_kind,
-        "bc_diagnostic": bc_diag,
         "thermal_drift": thermal,
         "exports": exports, "points_csv": "points.csv",
         "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),
@@ -1175,7 +1172,9 @@ def _config_from_args(args) -> MapConfig:
     for cli_name, cfg_name in (
         ("mosaic_spacing_deg", "mosaic_spacing_deg"),
         ("support_radius_deg", "support_radius_deg"), ("smoothing_fwhm_b_deg", "smoothing_fwhm_b_deg"),
-        ("smoothing_fwhm_c_deg", "smoothing_fwhm_c_deg"), ("quality_policy", "quality_policy"),
+        ("smoothing_fwhm_c_deg", "smoothing_fwhm_c_deg"),
+        ("interp_factor_b", "interp_factor_b"), ("interp_factor_c", "interp_factor_c"),
+        ("quality_policy", "quality_policy"),
         ("velocity_window_min_m_s", "velocity_window_min_m_s"), ("velocity_window_max_m_s", "velocity_window_max_m_s"),
         ("min_spectral_coverage_fraction", "min_spectral_coverage_fraction"), ("color_vmin", "color_vmin"),
         ("color_vmax", "color_vmax"),
@@ -1198,6 +1197,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--support-radius-deg", type=float, default=None)
         p.add_argument("--smoothing-fwhm-b-deg", type=float, default=None)
         p.add_argument("--smoothing-fwhm-c-deg", type=float, default=None)
+        p.add_argument("--interp-factor-b", type=int, default=None)
+        p.add_argument("--interp-factor-c", type=int, default=None)
         p.add_argument("--quality-policy", choices=("STRICT", "STANDARD", "PERMISSIVE"), default=None)
         p.add_argument("--velocity-window-min-m-s", type=float, default=None)
         p.add_argument("--velocity-window-max-m-s", type=float, default=None)
