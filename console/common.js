@@ -185,7 +185,7 @@
   // ------------------------------------------------------------------ shared page chrome (header, health strip, footer)
   const NAV = [
     { key: "PIPELINE", href: "/pipeline.html" }, { key: "OBSERVE", href: "/observe.html" }, { key: "ALIGN", href: "/align.html" }, { key: "CALIBRATE", href: "/calibrate.html" },
-    { key: "STATUS", href: "/status.html" },
+    { key: "REDUCE", href: "/reduce.html" }, { key: "STATUS", href: "/status.html" },
   ];
   function consoleBase() { return `${location.protocol}//${location.hostname}:8088`; }
   U.consoleBase = consoleBase;
