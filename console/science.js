@@ -274,7 +274,9 @@
   }
 
   // ------------------------------------------------------------------ 6) RESULTS
-  let lastManifest = null, lastMapAPoints = null, lastGrid = null;
+  let lastManifest = null, lastBoard = null, lastSelectedCell = null;
+  const BOARD_KEYS = ["a", "b", "c"];
+  const BOARD_LABELS = { a: "A: MEASURED", b: "B: LIGHT SMOOTHING", c: "C: HEAVIER SMOOTHING" };
 
   async function renderResults(job) {
     const facts = job.facts || {};
@@ -286,7 +288,6 @@
     if (!mr.ok) { showError(`could not read the SCIENCE manifest: ${U.errorText(mr.error)}`); return; }
     const manifest = mr.data;
     lastManifest = manifest;
-    lastGrid = manifest.grid;
 
     $("results-summary").textContent =
       `campaign: ${manifest.campaign_id}   reduce_session: ${manifest.reduce_session_id}   `
@@ -294,22 +295,21 @@
       + `points used: ${manifest.n_points_used} of ${manifest.n_points_filtered_in} filtered-in points\n`
       + `velocity window (LSRK): [${(manifest.velocity_window_m_s[0] / 1000).toFixed(1)}, ${(manifest.velocity_window_m_s[1] / 1000).toFixed(1)}] km/s\n`
       + `color limits: [${manifest.color_vmin.toFixed(4)}, ${manifest.color_vmax.toFixed(4)}] (${manifest.color_limits_basis})\n`
+      + `board: ${manifest.grid.ny}x${manifest.grid.nx} cells, spacing ${manifest.spatial_params.mosaic_spacing_deg.toFixed(4)} deg   `
       + `support radius (B & C, shared): ${manifest.spatial_params.support_radius_deg.toFixed(4)} deg   `
       + `smoothing B/C: ${manifest.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${manifest.spatial_params.smoothing_fwhm_c_deg.toFixed(4)} deg   `
       + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
-      + `B−C common support: ${manifest.bc_diagnostic.n_support_common}/${manifest.bc_diagnostic.n_pixels_total} px `
+      + `B−C common support: ${manifest.bc_diagnostic.n_support_common}/${manifest.bc_diagnostic.n_pixels_total} cells `
       + `(diff mean=${manifest.bc_diagnostic.b_minus_c_common_support.mean != null ? manifest.bc_diagnostic.b_minus_c_common_support.mean.toFixed(4) : "—"}, `
       + `std=${manifest.bc_diagnostic.b_minus_c_common_support.std != null ? manifest.bc_diagnostic.b_minus_c_common_support.std.toFixed(4) : "—"})\n`
       + `quality (map B): ${manifest.quality_b.state} — ${(manifest.quality_b.reasons || []).join("; ")}`
       + (manifest.used_point_set_note ? `\nNOTE: ${manifest.used_point_set_note}` : "");
-    $("results-hi-caveat").textContent = "INSTRUMENTAL/RELATIVE result — relative_intensity_dimensionless only. "
-      + "No celestial HI detection, Kelvin, Jy, N_HI or absolute flux claim is made here.";
+    $("results-hi-caveat").textContent = "INSTRUMENTAL/" + manifest.calibration_level_filter + " result — "
+      + "relative_intensity_dimensionless only. No HI detection, Kelvin, Jy, N_HI or absolute flux claim is made here "
+      + "(indoor/UNCALIBRATED runs carry real instrumental residual - never a celestial signal).";
     $("results-thermal").textContent = `Thermal drift: ${manifest.thermal_drift.status} — ${manifest.thermal_drift.note}`;
 
     const od = job.output_dir;
-    $("img-map-a").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_a_no_interp.png")}`;
-    $("img-map-b").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_smooth.png")}`;
-    $("img-map-c").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_c_heavy.png")}`;
     $("img-map-coverage").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_coverage.png")}`;
     const hasSnr = (manifest.exports || {}).map_snr;
     $("fig-snr").hidden = !hasSnr;
@@ -317,9 +317,14 @@
     const hasBcDiff = (manifest.exports || {}).map_b_minus_c;
     $("fig-bc-diff").hidden = !hasBcDiff;
     if (hasBcDiff) $("img-map-bc-diff").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_minus_c.png")}`;
+    const hasCombined = (manifest.exports || {}).map_abc_combined;
+    if (hasCombined) {
+      const combinedUrl = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_abc_combined.png")}`;
+      $("img-abc-combined").src = combinedUrl; $("link-abc-combined").href = combinedUrl;
+    }
 
     const artifacts = $("results-artifacts"); artifacts.textContent = "";
-    const files = ["manifest.json", "config.json", "provenance.json", "points.csv"];
+    const files = ["manifest.json", "config.json", "provenance.json", "points.csv", "maps/board.json"];
     for (const [name, exts] of Object.entries(manifest.exports || {})) {
       for (const fn of exts) files.push(`maps/${fn}`);
     }
@@ -329,98 +334,109 @@
       artifacts.appendChild(a);
     }
 
-    const ar = await U.api(`/api/ops/science/map?dir=${encodeURIComponent(od)}&name=map_a_no_interp`, { timeoutMs: 15000 });
-    if (ar.ok) { lastMapAPoints = ar.data.data.points; drawPointPicker(); }
+    const br = await U.api(`/api/ops/science/map?dir=${encodeURIComponent(od)}&name=board`, { timeoutMs: 15000 });
+    if (br.ok) {
+      lastBoard = br.data.data; lastSelectedCell = null;
+      drawAllBoards();
+      colorConsistencyCheck(lastBoard);
+    }
   }
 
-  // ------------------------------------------------------------------ point picker (same positions as map A)
-  function tangentOffsetDeg(raDeg, decDeg, centerRaDeg, centerDecDeg) {
-    let dRa = (raDeg - centerRaDeg + 180) % 360; if (dRa < 0) dRa += 360; dRa -= 180;
-    const cosDec = Math.cos(centerDecDeg * Math.PI / 180);
-    return [dRa * cosDec, decDeg - centerDecDeg];
-  }
-
-  function drawPointPicker() {
-    const canvas = $("point-picker-canvas");
+  // ------------------------------------------------------------------ A/B/C boards (ONE payload, ONE colour
+  // function server-side - see science_web_bridge.board_json_payload/viridis_hex - this file never recomputes
+  // a colour, it only paints the hex string the server already decided)
+  function drawBoard(key) {
+    const canvas = $("board-canvas-" + key);
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
-    const cssW = canvas.clientWidth || 560, cssH = 480;
+    const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square board
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
-    if (!lastGrid || !lastMapAPoints) return;
-    // Auto-zoom (request #5) to the REAL mosaic footprint, not the grid's own extent - the grid carries a
-    // support-radius margin on every side (needed for legitimate beam support out to its edge) that made real
-    // points occupy a small square of a much larger, mostly-empty picker on a real run. Mirrors the same
-    // zoom science_web_bridge.py's render_all_maps() applies to the static PNGs.
-    const offsets = lastMapAPoints.map((r) => tangentOffsetDeg(r.ra_deg, r.dec_degrees, lastGrid.center_ra_deg, lastGrid.center_dec_deg));
-    const supportRadius = (lastManifest.spatial_params && lastManifest.spatial_params.support_radius_deg) || lastGrid.pixel_scale_deg * 2;
-    const zoomPad = supportRadius * 1.15;
-    const dataHalfW = offsets.length ? Math.max(...offsets.map(([x]) => Math.abs(x))) + zoomPad : lastGrid.width_deg / 2;
-    const dataHalfH = offsets.length ? Math.max(...offsets.map(([, y]) => Math.abs(y))) + zoomPad : lastGrid.height_deg / 2;
-    const halfW = Math.min(dataHalfW, lastGrid.width_deg / 2), halfH = Math.min(dataHalfH, lastGrid.height_deg / 2);
-    const pad = 20;
-    const sx = (x) => cssW - pad - ((x + halfW) / (2 * halfW)) * (cssW - 2 * pad);  // RA increases to the left
-    const sy = (y) => cssH - pad - ((y + halfH) / (2 * halfH)) * (cssH - 2 * pad);
-    ctx.strokeStyle = "#2b3942"; ctx.strokeRect(pad, pad, cssW - 2 * pad, cssH - 2 * pad);
-    const vmin = lastManifest.color_vmin, vmax = lastManifest.color_vmax;
-    canvas.__markers = [];
-    for (const r of lastMapAPoints) {
-      const [x, y] = tangentOffsetDeg(r.ra_deg, r.dec_degrees, lastGrid.center_ra_deg, lastGrid.center_dec_deg);
-      const px = sx(x), py = sy(y);
-      const used = r.status === "USED";
-      ctx.beginPath(); ctx.arc(px, py, 7, 0, 2 * Math.PI);
-      if (used) {
-        const t = Math.max(0, Math.min(1, (r.value - vmin) / Math.max(vmax - vmin, 1e-30)));
-        ctx.fillStyle = `hsl(${(1 - t) * 260}, 70%, 50%)`;
-      } else {
-        ctx.fillStyle = "#3a3a3a";
-      }
-      ctx.fill(); ctx.strokeStyle = "#e5e5e5"; ctx.lineWidth = 1; ctx.stroke();
-      canvas.__markers.push({ px, py, row: r });
+    ctx.fillStyle = "#0d1317"; ctx.fillRect(0, 0, cssW, cssH);
+    if (!lastBoard) return;
+    const { n_rows: nRows, n_cols: nCols } = lastBoard;
+    const cw = cssW / nCols, ch = cssH / nRows;
+    canvas.__cells = [];
+    for (const cell of lastBoard.cells) {
+      // SAME orientation as the exported PNGs: RA increases to the left (col index n_cols-1 drawn leftmost),
+      // row 0 (southernmost) drawn at the bottom (origin="lower") - see build_mosaic_grid/render_all_maps.
+      const px = (nCols - 1 - cell.col) * cw, py = (nRows - 1 - cell.row) * ch;
+      const d = cell[key];
+      if (d.valid) { ctx.fillStyle = d.color; ctx.fillRect(px, py, cw, ch); }
+      ctx.strokeStyle = "#33414a"; ctx.lineWidth = 1; ctx.strokeRect(px, py, cw, ch);
+      canvas.__cells.push({ px, py, cw, ch, cell });
+    }
+    if (lastSelectedCell) {
+      const hit = canvas.__cells.find((c) => c.cell.row === lastSelectedCell.row && c.cell.col === lastSelectedCell.col);
+      if (hit) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.strokeRect(hit.px + 1.5, hit.py + 1.5, hit.cw - 3, hit.ch - 3); }
     }
   }
+  function drawAllBoards() { for (const k of BOARD_KEYS) drawBoard(k); }
 
-  $("point-picker-canvas").addEventListener("click", async (ev) => {
-    const canvas = $("point-picker-canvas");
-    const markers = canvas.__markers || [];
-    if (!markers.length) return;
+  function cellAtEvent(canvas, ev) {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.clientWidth ? canvas.clientWidth / rect.width : 1;
-    const cx = (ev.clientX - rect.left) * scaleX, cy = (ev.clientY - rect.top) * scaleX;
-    let best = null, bestD = Infinity;
-    for (const m of markers) {
-      const d = Math.hypot(m.px - cx, m.py - cy);
-      if (d < bestD) { bestD = d; best = m; }
+    const scale = canvas.clientWidth ? canvas.clientWidth / rect.width : 1;
+    const x = (ev.clientX - rect.left) * scale, y = (ev.clientY - rect.top) * scale;
+    for (const c of canvas.__cells || []) {
+      if (x >= c.px && x < c.px + c.cw && y >= c.py && y < c.py + c.ch) return c.cell;
     }
-    if (!best || bestD > 18) {
-      $("point-detail").textContent = "no measured point that close — this position (if inside B/C) is a pure "
-        + "spatial interpolation with no observation of its own at this exact spot.";
-      $("point-spectrum-view").hidden = true;
-      return;
-    }
-    await showPointDetail(best.row);
-  });
+    return null;
+  }
+  for (const k of BOARD_KEYS) {
+    $("board-canvas-" + k).addEventListener("click", (ev) => {
+      const cell = cellAtEvent($("board-canvas-" + k), ev);
+      if (!cell) return;
+      lastSelectedCell = { row: cell.row, col: cell.col };
+      drawAllBoards();
+      showCellDetail(cell);
+    });
+  }
 
-  async function showPointDetail(row) {
+  function fmtCellValue(d) {
+    if (!d.valid) return "no value";
+    return `${d.value.toFixed(4)}${d.uncertainty != null ? ` ± ${d.uncertainty.toFixed(4)}` : ""}`;
+  }
+  function fmtContributors(list) {
+    if (!list || !list.length) return "";
+    const shown = list.slice(0, 5).map((c) => `pt${c.point_index}(w=${c.weight.toFixed(3)})`).join(", ");
+    return `  — contributors: ${shown}${list.length > 5 ? ", …" : ""}`;
+  }
+
+  async function showCellDetail(cell) {
     const lines = [
-      `point ${row.point_index}   RA=${row.ra_deg.toFixed(4)}°  Dec=${row.dec_degrees.toFixed(4)}°`,
-      `calibration_level: ${row.calibration_level}   REDUCE quality: ${row.reduce_quality_state}`,
-      `status: ${row.status}${row.reason ? `  (${row.reason})` : ""}`,
-      row.status === "USED" ? `mapped value (integrated relative_intensity × m/s): ${row.value.toFixed(4)} ± ${row.uncertainty.toFixed(4)}` : "no mapped value (excluded)",
-      row.spectral_coverage != null ? `spectral coverage of the requested window: ${(row.spectral_coverage * 100).toFixed(1)}%` : "",
-      `capture start (UTC): ${row.timestamp_start_utc || "—"}`,
+      `cell row ${cell.row + 1} col ${cell.col + 1}   RA=${cell.ra_deg.toFixed(4)}°  Dec=${cell.dec_degrees.toFixed(4)}°`,
+      cell.point_index != null
+        ? `real point ${cell.point_index}   status=${cell.point_status}${cell.point_reason ? ` (${cell.point_reason})` : ""}`
+        : "no pointing at this mosaic position — A shows nothing here; any B/C value is a pure spatial "
+          + "interpolation with no observation of its own.",
+      `A (measured): ${fmtCellValue(cell.a)}`,
+      `B (light smoothing): ${fmtCellValue(cell.b)}${fmtContributors(cell.b.contributors)}`,
+      `C (heavier smoothing): ${fmtCellValue(cell.c)}${fmtContributors(cell.c.contributors)}`,
     ];
-    $("point-detail").textContent = lines.filter(Boolean).join("\n");
+    $("cell-detail").textContent = lines.join("\n");
+    if (cell.point_index == null) { $("point-spectrum-view").hidden = true; return; }
     try {
-      const r = await U.api(`/api/ops/reduce/point?session_dir=${encodeURIComponent(lastManifest.reduce_session_dir)}&point_index=${row.point_index}`, { timeoutMs: 15000 });
+      const r = await U.api(`/api/ops/reduce/point?session_dir=${encodeURIComponent(lastManifest.reduce_session_dir)}&point_index=${cell.point_index}`, { timeoutMs: 15000 });
       if (!r.ok) throw new Error(U.errorText(r.error));
       $("point-spectrum-view").hidden = false;
       drawPointSpectrum(r.data.data.arrays, lastManifest.velocity_window_m_s);
     } catch (err) {
       $("point-spectrum-view").hidden = true;
-      $("point-detail").textContent += `\n(spectrum unavailable: ${msg(err)})`;
+      $("cell-detail").textContent += `\n(spectrum unavailable: ${msg(err)})`;
     }
+  }
+
+  // Real, visible cross-check that A/B/C and the interactive board share ONE colour (server-computed,
+  // viridis_hex()) - never a second, JS-side palette (the OLD point-picker used its own hsl() scale, which is
+  // exactly what Felipe flagged as inconsistent).
+  function colorConsistencyCheck(board) {
+    const samples = [];
+    for (const key of BOARD_KEYS) {
+      const cell = board.cells.find((c) => c[key].valid);
+      if (cell) samples.push(`${BOARD_LABELS[key]} row${cell.row + 1}col${cell.col + 1} value=${cell[key].value.toFixed(3)} color=${cell[key].color}`);
+    }
+    $("color-check-summary").textContent = "color check (ONE server-side viridis_hex(), shared by every PNG "
+      + "export and this board - never recomputed here): " + samples.join("  |  ");
   }
 
   function drawPointSpectrum(arrays, window_m_s) {

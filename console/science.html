@@ -98,30 +98,40 @@
     </section>
 
     <section class="panel" id="results-panel" hidden aria-labelledby="h-results">
-      <header><h2 id="h-results">6 · THREE HEATMAPS</h2></header>
+      <header><h2 id="h-results">6 · A / B / C — SAME BOARD, SAME CELLS, SAME SCALE</h2></header>
       <div class="obs-summary" id="results-summary"></div>
       <div class="obs-summary" id="results-hi-caveat" style="color:var(--warn)"></div>
       <div class="obs-summary" id="results-thermal"></div>
-      <div class="maps-grid">
-        <figure><figcaption>A — NO SPATIAL INTERPOLATION</figcaption><img id="img-map-a" alt="map A"></figure>
-        <figure><figcaption>B — SMOOTH INTERPOLATION</figcaption><img id="img-map-b" alt="map B"></figure>
-        <figure><figcaption>C — HEAVIER INTERPOLATION</figcaption><img id="img-map-c" alt="map C"></figure>
-      </div>
-      <div class="maps-grid" id="secondary-maps-grid">
-        <figure id="fig-bc-diff" hidden><figcaption>B − C (per-pixel, own scale — NOT the A/B/C shared scale)</figcaption><img id="img-map-bc-diff" alt="B minus C difference map"></figure>
-        <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
-        <figure><figcaption>COVERAGE — used vs excluded points</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
-      </div>
+      <div class="obs-summary" id="color-check-summary" style="font:11px/1.5 ui-monospace,monospace"></div>
 
-      <h3>INSPECT A MEASURED POINT</h3>
-      <div class="obs-summary">Click the nearest marker below to inspect that real measurement (same positions as map A).
-        Clicking empty space means no real measurement is that close — B/C's value there is an interpolation with no
-        observation of its own.</div>
-      <canvas id="point-picker-canvas" width="560" height="480" style="width:100%;max-width:560px;background:#0d1317;cursor:crosshair"></canvas>
-      <div id="point-detail" class="obs-summary">select a point above</div>
+      <div class="boards-grid">
+        <figure><figcaption>A — MEASURED (no spatial interpolation)</figcaption>
+          <canvas id="board-canvas-a" width="440" height="440"></canvas></figure>
+        <figure><figcaption>B — LIGHT SMOOTHING</figcaption>
+          <canvas id="board-canvas-b" width="440" height="440"></canvas></figure>
+        <figure><figcaption>C — HEAVIER SMOOTHING</figcaption>
+          <canvas id="board-canvas-c" width="440" height="440"></canvas></figure>
+      </div>
+      <div class="obs-summary">Click any cell in ANY of the three boards to inspect it - the SAME cell (same real
+        RA/Dec) highlights in all three at once. A shows only its own real measurement; B/C also show A's own value
+        there, the real points that fed the smoothed value and their weights, and open the real spectrum of that
+        cell's own point when it has one - never a fabricated spectrum for an interpolated cell.</div>
+      <div id="cell-detail" class="obs-summary">select a cell above</div>
       <div id="point-spectrum-view" hidden>
         <canvas id="point-spectrum-canvas" width="900" height="240" style="width:100%;background:#0d1317"></canvas>
       </div>
+
+      <h3>SECONDARY DIAGNOSTICS (own scale — NOT the shared A/B/C scale)</h3>
+      <div class="maps-grid" id="secondary-maps-grid">
+        <figure id="fig-bc-diff" hidden><figcaption>B − C (per-cell difference, real numbers)</figcaption><img id="img-map-bc-diff" alt="B minus C difference map"></figure>
+        <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
+        <figure><figcaption>COVERAGE — same board, used vs excluded</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
+      </div>
+
+      <h3>COMBINED A/B/C EXPORT (open large — same correspondence, presentation-ready)</h3>
+      <a id="link-abc-combined" target="_blank" rel="noopener">
+        <img id="img-abc-combined" alt="A/B/C combined" style="width:100%;max-width:1100px;border:1px solid var(--line);background:#fff">
+      </a>
 
       <h3>DOWNLOADS</h3>
       <div class="obs-checks" id="results-artifacts"></div>
@@ -135,6 +145,10 @@
     .maps-grid figure{margin:0;flex:1 1 300px;max-width:420px}
     .maps-grid img{width:100%;height:auto;border:1px solid var(--line);background:#fff}
     .maps-grid figcaption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:4px;letter-spacing:.05em}
+    .boards-grid{display:flex;flex-wrap:wrap;gap:12px;margin:10px 0}
+    .boards-grid figure{margin:0;flex:1 1 320px;max-width:440px}
+    .boards-grid canvas{width:100%;aspect-ratio:1/1;background:#0d1317;border:1px solid var(--line);cursor:crosshair}
+    .boards-grid figcaption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:4px;letter-spacing:.05em}
   </style>
   <script src="common.js"></script>
   <script src="science.js"></script>

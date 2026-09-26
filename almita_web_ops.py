@@ -1809,8 +1809,9 @@ def science_map_data(rel_science_web_dir: str, map_name: str) -> Dict[str, Any]:
     """Real, read-only map array (value/valid/uncertainty/metadata) from a completed SCIENCE WEB session -
     for the in-browser canvas view and point picking. The PNG/SVG/PDF exports remain the presentation
     artifact; this is only the same numbers, as JSON, for interactivity."""
-    if map_name not in ("map_a_no_interp", "map_b_smooth", "map_c_heavy"):
-        raise ValueError("map_name must be one of map_a_no_interp, map_b_smooth, map_c_heavy")
+    if map_name != "board":
+        raise ValueError("map_name must be 'board' (the single per-cell A/B/C payload - see "
+                         "science_web_bridge.board_json_payload)")
     session_dir = _path_in({"d": rel_science_web_dir}, "d", SERVE_ROOTS["science"])
     path = session_dir / "maps" / f"{map_name}.json"
     if not path.is_file():

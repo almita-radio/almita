@@ -13,8 +13,9 @@ from science_engine.models import BeamModel, ScienceGrid
 from science_engine.simulation import build_synthetic_science_input, rectangular_grid_specs
 from science_engine.spatial import angular_separation_deg
 
-from science_web_bridge import (MapConfig, _reconcile_used_point_sets, auto_spatial_params,
-                                bc_diagnostic, build_all_products, render_all_maps)
+from science_web_bridge import (MapConfig, MosaicShapeError, _reconcile_used_point_sets, auto_spatial_params,
+                                bc_diagnostic, board_json_payload, build_all_products, build_mosaic_grid,
+                                render_all_maps, viridis_hex)
 
 
 def mosaic_input(n=6, spacing=1.0, **kw):
@@ -145,24 +146,157 @@ def test_build_all_products_b_and_c_genuinely_differ_not_just_in_cutoff_label():
     assert diag["c_mean_abs_gradient"] < diag["b_mean_abs_gradient"]        # C is genuinely flatter (heavier)
 
 
-def test_footprint_radius_scales_with_point_spacing_not_beam_fwhm():
+def test_map_a_values_match_per_point_integrated_values_exactly():
+    """Explicit verification request: "los 36 valores de A coinciden con points.csv y no cambiaron por
+    razones de presentación" - map_a_value/uncertainty are placed FROM per_point_integrated_values()'s own
+    output, never recomputed/rounded/re-derived for display."""
     si = mosaic_input(n=6, spacing=1.0)
-    small = auto_spatial_params(si, cfg_with(beam_fwhm_deg=1.5))["footprint_radius_deg"]
-    huge = auto_spatial_params(si, cfg_with(beam_fwhm_deg=20.0))["footprint_radius_deg"]
-    assert small == pytest.approx(huge)
-    assert small < 0.5   # << the old beam_fwhm_deg/2 = 10 deg default that made 36 footprints fully overlap
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    n_checked = 0
+    for row in built["point_rows"]:
+        if row["status"] != "USED":
+            continue
+        r, c = built["point_cell"][row["point_index"]]
+        assert built["map_a_value"][r, c] == row["value"]
+        assert built["map_a_uncertainty"][r, c] == row["uncertainty"]
+        n_checked += 1
+    assert n_checked == 36
+
+
+# ---------------------------------------------------------------- build_mosaic_grid: the SAME NxM board for
+# A/B/C (request: "el mismo tablero de 6x6 cuadros... idénticos límites... posición de cada celda").
+
+def test_build_mosaic_grid_recovers_a_clean_6x6_lattice():
+    si = mosaic_input(n=6, spacing=1.0)
+    grid, point_cell, n_rows, n_cols = build_mosaic_grid(si, 1.0)
+    assert (n_rows, n_cols) == (6, 6)
+    assert len(point_cell) == 36
+    assert len(set(point_cell.values())) == 36   # no two points share a cell
+    assert grid.nx == 6 and grid.ny == 6
+    assert grid.width_deg == pytest.approx(6.0) and grid.height_deg == pytest.approx(6.0)
+
+
+def test_build_mosaic_grid_survives_realistic_row_to_row_projection_drift():
+    """Regression test for a REAL bug this task found on the real 36-point run: each row's tangent-plane RA
+    spacing measurably drifted ~6% row-to-row (an expected effect of one global cos(dec) projection applied
+    to rows at slightly different real declinations - see build_mosaic_grid's own docstring), which made a
+    naive round(x/spacing) collide two real points into the same nominal cell (`3 cell(s) claimed by more
+    than one point` on the real deployed run). Reproduced synthetically here with the same magnitude of
+    drift, and confirmed the gap-based clustering (_cluster_1d) still recovers a clean 6x6 board."""
+    from science_engine.simulation import SyntheticPointSpec
+    center_dec = -33.4
+    specs = []
+    idx = 1
+    for row in range(6):
+        dec = center_dec + (row - 2.5) * 1.0
+        row_spacing = 1.03 - row * 0.012   # ~6% drift end to end, matching the real measured pattern
+        for col in range(6):
+            dra_deg = (col - 2.5) * row_spacing / np.cos(np.radians(dec))
+            specs.append(SyntheticPointSpec(point_index=idx, ra_hours=(321.6 + dra_deg) / 15.0,
+                                            dec_degrees=dec, calibration_level="UNCALIBRATED"))
+            idx += 1
+    si = build_synthetic_science_input(specs, noise_sigma=0.02)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    assert built["n_rows"] == 6 and built["n_cols"] == 6
+    assert len(built["point_cell"]) == 36
+    assert len(set(built["point_cell"].values())) == 36
+
+
+def test_build_mosaic_grid_raises_on_a_genuine_cell_collision():
+    """Adversarial: two points closer together than half the declared spacing must never be silently placed
+    in the same cell (one overwriting the other) - build_mosaic_grid fails loudly instead."""
+    from science_engine.simulation import SyntheticPointSpec
+    specs = rectangular_grid_specs(12.0, -30.0, 3, 3, spacing_deg=1.0, calibration_level="UNCALIBRATED")
+    specs.append(SyntheticPointSpec(point_index=100, ra_hours=specs[0].ra_hours + 0.0005,
+                                    dec_degrees=specs[0].dec_degrees + 0.05, calibration_level="UNCALIBRATED"))
+    si = build_synthetic_science_input(specs, noise_sigma=0.0)
+    with pytest.raises(MosaicShapeError, match="do not form a clean rectangular lattice"):
+        build_mosaic_grid(si, 1.0)
+
+
+def test_partial_campaign_leaves_the_gap_transparent_never_fabricated():
+    """Request: "una celda faltante en campaña parcial no se hace pasar por observación" - a real 35/36
+    partial run must still recover the full 6x6 board (from the other 35 points) with the missing cell
+    left invalid/NaN in map A, never zero, never silently filled."""
+    specs = [s for s in rectangular_grid_specs(12.0, -30.0, 6, 6, spacing_deg=1.0,
+                                               calibration_level="UNCALIBRATED") if s.point_index != 18]
+    si = build_synthetic_science_input(specs, noise_sigma=0.02)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    assert built["n_rows"] == 6 and built["n_cols"] == 6
+    all_possible = {(r, c) for r in range(6) for c in range(6)}
+    missing = all_possible - set(built["point_cell"].values())
+    assert len(missing) == 1
+    r, c = next(iter(missing))
+    assert not built["map_a_valid"][r, c]
+    assert np.isnan(built["map_a_value"][r, c])
+
+
+# ---------------------------------------------------------------- color consistency (request: "el mismo valor
+# numerico debe tener el mismo color en todas las vistas... comprobación automática con valores concretos").
+
+def test_viridis_hex_matches_the_exact_colormap_object_the_png_exports_use():
+    """viridis_hex() is not an approximation of the PNG/SVG/PDF renderer's colour - render_all_maps() colours
+    every board with plt.get_cmap("viridis") too, so both call the IDENTICAL matplotlib colormap on the same
+    normalised value. Checked here against several concrete values across the scale."""
+    import matplotlib.pyplot as plt
+    cmap = plt.get_cmap("viridis")
+    vmin, vmax = -81581.966, -77870.681   # the real flagged run's own color limits
+    for value in (vmin, -80000.123, -79000.5, -78500.0, vmax):
+        t = (value - vmin) / (vmax - vmin)
+        r, g, b, _ = cmap(t)
+        expected = "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
+        assert viridis_hex(value, vmin, vmax) == expected
+
+
+def test_viridis_hex_never_fabricates_a_color_for_invalid_values():
+    assert viridis_hex(None, 0.0, 10.0) is None
+    assert viridis_hex(float("nan"), 0.0, 10.0) is None
+    assert viridis_hex(float("inf"), 0.0, 10.0) is None
+
+
+def test_equal_values_get_identical_colors_every_time():
+    assert viridis_hex(-79000.0, -81000.0, -78000.0) == viridis_hex(-79000.0, -81000.0, -78000.0)
+
+
+def test_board_json_payload_colors_match_viridis_hex_for_every_cell():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    payload = board_json_payload(built)
+    vmin, vmax = payload["color_vmin"], payload["color_vmax"]
+    n_valid = 0
+    for cell in payload["cells"]:
+        for key in ("a", "b", "c"):
+            d = cell[key]
+            if d["valid"]:
+                assert d["color"] == viridis_hex(d["value"], vmin, vmax)
+                n_valid += 1
+            else:
+                assert d["color"] is None
+    assert n_valid > 0
+
+
+def test_board_json_payload_cells_share_exact_grid_geometry_as_a_b_c():
+    """Request: "celda (fila,columna) tiene la misma RA/Dec en las tres" - board.json's per-cell RA/Dec IS
+    the same grid pixel_centers_deg() build_cube()/integrated_map() computed A/B/C from - one geometry."""
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    payload = board_json_payload(built)
+    assert len(payload["cells"]) == built["n_rows"] * built["n_cols"]
+    assert payload["grid"] == built["grid"].to_dict()
 
 
 # ---------------------------------------------------------------- rendering smoke test (files, not just existence
-# of a status code) - includes the new B-C difference export.
+# of a status code) - includes the new B-C difference and combined A/B/C exports.
 
-def test_render_all_maps_writes_the_bc_difference_export(tmp_path):
+def test_render_all_maps_writes_the_bc_difference_and_combined_exports(tmp_path):
     si = mosaic_input(n=6, spacing=1.0)
     cfg = cfg_with(beam_fwhm_deg=20.0)
     built = build_all_products(si, cfg)
     exports, quality_kind, diag = render_all_maps(built, cfg, si.campaign_id, si.reduce_session_id, tmp_path)
-    assert "map_b_minus_c" in exports
+    assert "map_b_minus_c" in exports and "map_abc_combined" in exports
     for ext in ("png", "svg"):
         assert (tmp_path / f"map_b_minus_c.{ext}").is_file()
+    for ext in ("png", "svg", "pdf"):
+        assert (tmp_path / f"map_abc_combined.{ext}").is_file()
     assert (tmp_path / "map_a_no_interp.png").is_file()
     assert diag["n_support_only_b"] == 0 and diag["n_support_only_c"] == 0
