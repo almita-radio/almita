@@ -641,14 +641,29 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             argv += ["--beam-fwhm-deg", str(v)]
         else:
             raise ValueError("beam must be observer_config or fwhm")
-        vmin = _float(p, "velocity_window_min_m_s", -2_000_000, 2_000_000, -300_000.0)
-        vmax = _float(p, "velocity_window_max_m_s", -2_000_000, 2_000_000, 300_000.0)
+        # Matches science_web_bridge.MapConfig's own corrected default (+/-100 km/s, same as the frozen
+        # science_engine.config.ScienceConfig default) - a +/-300 km/s default here was this web-ops layer's
+        # OWN unjustified widening (found during the magnitude investigation: it triples the integrated value
+        # for no declared reason), corrected together with the bridge's default.
+        vmin = _float(p, "velocity_window_min_m_s", -2_000_000, 2_000_000, -100_000.0)
+        vmax = _float(p, "velocity_window_max_m_s", -2_000_000, 2_000_000, 100_000.0)
         argv += ["--velocity-window-min-m-s", str(vmin), "--velocity-window-max-m-s", str(vmax)]
-        cutoff_b = _float(p, "beam_cutoff_b_n_fwhm", 0.1, 50, 2.0)
-        cutoff_c = _float(p, "beam_cutoff_c_n_fwhm", 0.1, 50, 5.0)
-        if cutoff_c <= cutoff_b:
-            raise ValueError("beam_cutoff_c_n_fwhm must be > beam_cutoff_b_n_fwhm (C is the more-smoothed map)")
-        argv += ["--beam-cutoff-b-n-fwhm", str(cutoff_b), "--beam-cutoff-c-n-fwhm", str(cutoff_c)]
+        # Spatial SUPPORT (shared, hard radius) and presentation SMOOTHING (B light / C heavier) are now
+        # separate, operator-declarable controls - see science_web_bridge.MapConfig/auto_spatial_params for
+        # why (beam_cutoff_{b,c}_n_fwhm on the real, possibly mis-scaled instrument beam used to control
+        # BOTH at once). None/blank on any of the three leaves it on the bridge's own real-data-derived
+        # auto default (median nearest-neighbour point spacing).
+        support_radius = _float(p, "support_radius_deg", 0.001, 200, None)
+        smoothing_b = _float(p, "smoothing_fwhm_b_deg", 0.001, 200, None)
+        smoothing_c = _float(p, "smoothing_fwhm_c_deg", 0.001, 200, None)
+        if smoothing_b is not None and smoothing_c is not None and smoothing_c <= smoothing_b:
+            raise ValueError("smoothing_fwhm_c_deg must be > smoothing_fwhm_b_deg (C is the more-smoothed map)")
+        if support_radius is not None:
+            argv += ["--support-radius-deg", str(support_radius)]
+        if smoothing_b is not None:
+            argv += ["--smoothing-fwhm-b-deg", str(smoothing_b)]
+        if smoothing_c is not None:
+            argv += ["--smoothing-fwhm-c-deg", str(smoothing_c)]
         if p.get("quality_policy"):
             if p["quality_policy"] not in ("STRICT", "STANDARD", "PERMISSIVE"):
                 raise ValueError("quality_policy must be STRICT, STANDARD or PERMISSIVE")
@@ -665,7 +680,8 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         meta = {"reduce_session_dir": str(red.relative_to(ROOT)), "calibration_level_filter": calib, "beam": beam,
                "beam_fwhm_deg": p.get("beam_fwhm_deg") if beam == "fwhm" else None,
                "velocity_window_min_m_s": vmin, "velocity_window_max_m_s": vmax,
-               "beam_cutoff_b_n_fwhm": cutoff_b, "beam_cutoff_c_n_fwhm": cutoff_c,
+               "support_radius_deg": support_radius, "smoothing_fwhm_b_deg": smoothing_b,
+               "smoothing_fwhm_c_deg": smoothing_c,
                "quality_policy": p.get("quality_policy"), "min_spectral_coverage_fraction": min_cov,
                "color_vmin": None if cvmin in (None, "") else float(cvmin),
                "color_vmax": None if cvmax in (None, "") else float(cvmax)}

@@ -51,15 +51,24 @@
         </div>
       </div>
       <div class="obs-summary" id="calib-single-note" hidden></div>
-      <div class="obs-row"><label for="in-vmin">VELOCITY WINDOW MIN (km/s, LSRK)</label><input type="number" id="in-vmin" value="-300" step="1"></div>
-      <div class="obs-row"><label for="in-vmax">VELOCITY WINDOW MAX (km/s, LSRK)</label><input type="number" id="in-vmax" value="300" step="1"></div>
-      <div class="obs-row"><label for="in-beam-mode">BEAM FWHM</label>
+      <div class="obs-row"><label for="in-vmin">VELOCITY WINDOW MIN (km/s, LSRK)</label><input type="number" id="in-vmin" value="-100" step="1"></div>
+      <div class="obs-row"><label for="in-vmax">VELOCITY WINDOW MAX (km/s, LSRK)</label><input type="number" id="in-vmax" value="100" step="1"></div>
+      <div class="obs-row"><label for="in-beam-mode">REAL INSTRUMENT BEAM FWHM (reported only — no longer used to size the grid or to grid B/C, see below)</label>
         <select id="in-beam-mode"><option value="observer_config">from observer_config.json</option><option value="fwhm">enter manually</option></select></div>
       <div class="obs-row" id="row-beam-fwhm" hidden><label for="in-beam-fwhm">BEAM FWHM (deg)</label><input type="number" id="in-beam-fwhm" value="1.5" step="0.1" min="0.01"></div>
       <details>
         <summary>Advanced map parameters (declared, reproducible — persisted in the manifest)</summary>
-        <div class="obs-row"><label for="in-cutoff-b">MAP B (smooth) beam cutoff (× FWHM)</label><input type="number" id="in-cutoff-b" value="2.0" step="0.5" min="0.1"></div>
-        <div class="obs-row"><label for="in-cutoff-c">MAP C (heavier) beam cutoff (× FWHM)</label><input type="number" id="in-cutoff-c" value="5.0" step="0.5" min="0.2"></div>
+        <div class="obs-summary">Spatial SUPPORT (where a value may legitimately be drawn) and presentation SMOOTHING
+          (how much blend is applied within that support) are separate controls — B and C always share the SAME
+          support radius (their used-point sets are then identical by construction), and differ only in how much
+          they smooth within it. Leave any of the three blank for a real, data-derived default (from this
+          campaign's own median point spacing).</div>
+        <div class="obs-row"><label for="in-support-radius">SUPPORT RADIUS (deg) — shared by B and C</label>
+          <input type="number" id="in-support-radius" step="0.05" min="0.001" placeholder="auto"></div>
+        <div class="obs-row"><label for="in-smoothing-b">MAP B (light) smoothing kernel FWHM (deg)</label>
+          <input type="number" id="in-smoothing-b" step="0.05" min="0.001" placeholder="auto"></div>
+        <div class="obs-row"><label for="in-smoothing-c">MAP C (heavier) smoothing kernel FWHM (deg)</label>
+          <input type="number" id="in-smoothing-c" step="0.05" min="0.001" placeholder="auto"></div>
         <div class="obs-row"><label for="in-quality-policy">QUALITY POLICY</label>
           <select id="in-quality-policy"><option value="">(default: STANDARD)</option><option>STRICT</option><option selected>STANDARD</option><option>PERMISSIVE</option></select></div>
         <div class="obs-row"><label for="in-min-coverage">MIN SPECTRAL COVERAGE FRACTION</label><input type="number" id="in-min-coverage" value="0.5" step="0.05" min="0" max="1"></div>
@@ -99,6 +108,7 @@
         <figure><figcaption>C — HEAVIER INTERPOLATION</figcaption><img id="img-map-c" alt="map C"></figure>
       </div>
       <div class="maps-grid" id="secondary-maps-grid">
+        <figure id="fig-bc-diff" hidden><figcaption>B − C (per-pixel, own scale — NOT the A/B/C shared scale)</figcaption><img id="img-map-bc-diff" alt="B minus C difference map"></figure>
         <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
         <figure><figcaption>COVERAGE — used vs excluded points</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
       </div>

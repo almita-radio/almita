@@ -15,21 +15,28 @@ never a duplicate of its math:
      ScienceInput to ONE calibration level before any gridding, so a "RELATIVE" map is only ever built
      from RELATIVE points and an "UNCALIBRATED" (instrumental) map only from UNCALIBRATED ones - never
      both on the same color scale.
-  2. THREE comparable products from one filtered input and one real beam:
+  2. THREE comparable products from one filtered input, with spatial SUPPORT (where a value may legitimately
+     be drawn at all) and presentation SMOOTHING (how much blend is applied within that support) as two
+     separate, declared controls - never one beam_cutoff_n_fwhm on the real instrument beam conflating both
+     (a real deployed run exposed why: a beam FWHM many beam-widths wider than the campaign's own point
+     spacing made both maps nearly flat and only differ at a few grid corners - see auto_spatial_params()):
        A  no spatial interpolation at all - each USED point's own window-integrated value, plotted as a
-          filled footprint (radius = beam_fwhm_deg/2) at its own tangent-plane position. Reuses
-          science_engine.integration.window_overlaps/bin_bounds and science_engine.resample directly -
-          the identical bin-overlap integration formula integrated_map() uses, just evaluated per point
-          instead of per output pixel.
-       B  science_engine.cube.build_cube() + science_engine.integration.integrated_map(), a real,
-          conservative beam_cutoff_n_fwhm (points beyond this many beam-widths never contribute).
-       C  the SAME build_cube()+integrated_map() call again, SAME beam FWHM (the real, reported
-          instrument beam never changes between B and C), a LARGER beam_cutoff_n_fwhm - visibly more
-          smoothed because contributions reach further, a real declared, reproducible parameter change,
-          never a palette trick.
-     A/B/C share one ScienceGrid (grid geometry depends only on beam.fwhm_deg and pixel scale - never
-     on cutoff - see science_engine.grid.build_grid) and one color scale (robust 2nd/98th percentile of
-     map A's own measured per-point values - "measured points", not a smoothed derivative of them).
+          filled footprint (radius ~ 0.45x median nearest-neighbour point spacing) at its own tangent-plane
+          position. Reuses science_engine.integration.window_overlaps/bin_bounds and science_engine.resample
+          directly - the identical bin-overlap integration formula integrated_map() uses, just evaluated per
+          point instead of per output pixel.
+       B  science_engine.cube.build_cube() + science_engine.integration.integrated_map(), weighted by a
+          declared LIGHT presentation-smoothing kernel (NOT the instrument beam).
+       C  the SAME call again, a declared HEAVIER presentation-smoothing kernel - genuinely more blended
+          within the SAME hard support radius as B (see _reconcile_used_point_sets: their used-point sets
+          are identical BY CONSTRUCTION, never reconciled after the fact).
+     The real, reported instrument beam (beam_fwhm_deg) is unchanged between B and C and recorded honestly
+     in the manifest, but is no longer the kernel doing either map's weighting. A/B/C share one ScienceGrid
+     (sized from the support radius, never from beam_fwhm_deg - see build_grid) and one color scale (robust
+     2nd/98th percentile of map A's own measured per-point values - "measured points", not a smoothed
+     derivative of them). A fourth export, B-C (own scale), reports the real per-pixel difference and
+     spatial-variance/gradient numbers between B and C - never an assertion of "more smoothing" from the
+     kernel parameter alone.
   3. Presentation-ready combined exports (PNG at slide resolution, SVG, PDF) with the title, calibration
      label, beam/cutoff/window parameters, color limits and any caveat baked into the image itself - not
      only shown in the HTML.
@@ -54,7 +61,7 @@ from typing import Any, Optional
 import numpy as np
 
 SCHEMA_VERSION = "1.0"
-PIPELINE_VERSION = "science-web-v1.0"
+PIPELINE_VERSION = "science-web-v1.1"
 CALIBRATION_LEVELS = ("RELATIVE", "UNCALIBRATED")
 
 
@@ -77,28 +84,49 @@ class MapConfig:
     beam_source_path: Optional[str] = None
     beam_source_field: Optional[str] = None
     beam_source_sha256: Optional[str] = None
-    pixel_scale_deg: Optional[float] = None
-    pixels_per_beam: float = 4.0
-    extent_margin_beams: float = 1.5
-    beam_cutoff_b_n_fwhm: float = 2.0               # map B: conservative smoothing
-    beam_cutoff_c_n_fwhm: float = 5.0                # map C: heavier smoothing - same beam, wider reach only
+    pixel_scale_deg: Optional[float] = None          # None -> derived from support_radius_deg / pixels_per_support_radius
+    # --- spatial SUPPORT (where it is legitimate to draw a value at all) - ONE radius, shared by B and C.
+    # This used to be `beam_cutoff_{b,c}_n_fwhm x beam_fwhm_deg`: two DIFFERENT absolute radii on the SAME
+    # (often mis-scaled - see beam_fwhm_deg's own docstring) beam, which is what let B and C disagree on
+    # which points they used (a real bug fixed in this task - see _reconcile_used_point_sets()). Support is
+    # now a single, physically-grounded number (None -> auto from the campaign's OWN point spacing - see
+    # `auto_spatial_params()`), applied identically to B and C so their used-point sets are IDENTICAL BY
+    # CONSTRUCTION, never reconciled after the fact.
+    support_radius_deg: Optional[float] = None
+    pixels_per_support_radius: float = 6.0           # grid resolution, tied to the support radius - not to beam_fwhm_deg
+    extent_margin_support_radii: float = 1.5         # grid extent margin, tied to the support radius - not to beam_fwhm_deg
+    # --- presentation SMOOTHING (how much blend is applied for display, WITHIN that fixed support). A
+    # declared Gaussian kernel width, independent of the reported instrument beam (beam_fwhm_deg, kept fixed
+    # and honestly reported below, never used as a gridding kernel from here on - see build_all_products()).
+    smoothing_fwhm_b_deg: Optional[float] = None     # None -> auto (light: ~ median nearest-neighbour spacing)
+    smoothing_fwhm_c_deg: Optional[float] = None     # None -> auto (heavier: 3x the B kernel)
     quality_policy: str = "STANDARD"
-    velocity_window_min_m_s: float = -300_000.0
-    velocity_window_max_m_s: float = 300_000.0
+    # Matches science_engine.config.ScienceConfig's own default (+/-100 km/s) - a wider +/-300 km/s window was
+    # this bridge's OWN unjustified widening (found during this task's magnitude investigation: it roughly
+    # triples the integrated value for no declared reason) and is corrected here, not inherited.
+    velocity_window_min_m_s: float = -100_000.0
+    velocity_window_max_m_s: float = 100_000.0
     min_spectral_coverage_fraction: float = 0.5
     uncertainty_floor_relative: float = 1e-6
     sigma_local_floor_fraction: float = 0.1
     sigma_local_window_channels: int = 129
     color_vmin: Optional[float] = None              # None -> robust auto from map A's measured points
     color_vmax: Optional[float] = None
-    footprint_radius_deg: Optional[float] = None     # None -> beam_fwhm_deg / 2
+    footprint_radius_deg: Optional[float] = None     # None -> auto (see auto_spatial_params()) - was beam_fwhm_deg/2
 
     def __post_init__(self):
         if self.calibration_level_filter not in CALIBRATION_LEVELS:
             raise ValueError(f"calibration_level_filter must be one of {CALIBRATION_LEVELS}, "
                              f"got {self.calibration_level_filter!r} - a map is never built from a mix")
-        if self.beam_cutoff_c_n_fwhm <= self.beam_cutoff_b_n_fwhm:
-            raise ValueError("beam_cutoff_c_n_fwhm must be > beam_cutoff_b_n_fwhm (C is the MORE smoothed map)")
+        if self.support_radius_deg is not None and not (np.isfinite(self.support_radius_deg) and self.support_radius_deg > 0):
+            raise ValueError("support_radius_deg must be finite and > 0")
+        for name in ("smoothing_fwhm_b_deg", "smoothing_fwhm_c_deg"):
+            v = getattr(self, name)
+            if v is not None and not (np.isfinite(v) and v > 0):
+                raise ValueError(f"{name} must be finite and > 0")
+        if self.smoothing_fwhm_b_deg is not None and self.smoothing_fwhm_c_deg is not None \
+                and self.smoothing_fwhm_c_deg <= self.smoothing_fwhm_b_deg:
+            raise ValueError("smoothing_fwhm_c_deg must be > smoothing_fwhm_b_deg (C is the MORE smoothed map)")
         if (self.color_vmin is None) != (self.color_vmax is None):
             raise ValueError("color_vmin/color_vmax must both be set or both left auto")
         if self.color_vmin is not None and not (np.isfinite(self.color_vmin) and np.isfinite(self.color_vmax)
@@ -113,14 +141,18 @@ class MapConfig:
         return hashlib.sha256(payload).hexdigest()
 
 
-def _science_config_for(cfg: MapConfig, cutoff_n_fwhm: float):
+def _kernel_science_config(cfg: MapConfig, kernel_fwhm_deg: float, cutoff_n_fwhm: float, kernel_label: str,
+                           pixels_per_kernel: float, extent_margin_kernels: float):
+    """A ScienceConfig whose `beam_fwhm_deg`/`beam_cutoff_n_fwhm` are a DECLARED kernel (a grid-sizing
+    radius, or a presentation-smoothing width) - never science_web_bridge's own honestly-reported real
+    instrument beam (cfg.beam_fwhm_deg/beam_source/beam_status, which is recorded separately in the
+    manifest and never fed into build_grid()/build_cube() from here on - see build_all_products())."""
     from science_engine.config import ScienceConfig
     return ScienceConfig(
         reduce_session_dir=cfg.reduce_session_dir, pixel_scale_deg=cfg.pixel_scale_deg,
-        pixels_per_beam=cfg.pixels_per_beam, extent_margin_beams=cfg.extent_margin_beams,
-        beam_fwhm_deg=cfg.beam_fwhm_deg, beam_source=cfg.beam_source, beam_status=cfg.beam_status,
-        beam_source_path=cfg.beam_source_path, beam_source_field=cfg.beam_source_field,
-        beam_source_sha256=cfg.beam_source_sha256, beam_cutoff_n_fwhm=cutoff_n_fwhm,
+        pixels_per_beam=pixels_per_kernel, extent_margin_beams=extent_margin_kernels,
+        beam_fwhm_deg=kernel_fwhm_deg, beam_source=kernel_label, beam_status="CONFIGURED_OPERATIONAL",
+        beam_cutoff_n_fwhm=cutoff_n_fwhm,
         quality_policy=cfg.quality_policy, velocity_window_min_m_s=cfg.velocity_window_min_m_s,
         velocity_window_max_m_s=cfg.velocity_window_max_m_s,
         min_spectral_coverage_fraction=cfg.min_spectral_coverage_fraction,
@@ -128,6 +160,68 @@ def _science_config_for(cfg: MapConfig, cutoff_n_fwhm: float):
         sigma_local_floor_fraction=cfg.sigma_local_floor_fraction,
         sigma_local_window_channels=cfg.sigma_local_window_channels,
     )
+
+
+def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
+    """Resolves support_radius_deg / smoothing_fwhm_{b,c}_deg / footprint_radius_deg when left None, from
+    THIS campaign's OWN point spacing (median nearest-neighbour angular separation among the points being
+    mapped) - never from beam_fwhm_deg. Using the reported beam FWHM to size these was the root cause a
+    real deployed run exposed: science_engine.models.BeamModel's own docstring documents a live "14.0/20.0/
+    1.5 discrepancy" across beam-FWHM sources this repo carries, and a real UNCALIBRATED run's beam
+    (20 deg, from observer_config.json) was ~20x the real ~1 deg point spacing of its own 36-point mosaic -
+    producing a grid whose margin alone (1.5 x 20 deg per side) dwarfed the real ~6x5 deg field, a
+    beam-weighted map that barely varies across it (barely any of the Gaussian's fall-off is sampled), and
+    a footprint radius (beam_fwhm/2 = 10 deg) many times larger than the ~1 deg point spacing. None of that
+    is reproduced here: every one of these numbers is now tied to where real measurements actually are.
+    """
+    from science_engine.spatial import angular_separation_deg
+    points = filtered_input.points
+    if len(points) < 2:
+        nn_median = cfg.beam_fwhm_deg   # nothing to space out - no better number available than the beam scale
+    else:
+        ra = np.array([p.ra_deg for p in points])
+        dec = np.array([p.dec_degrees for p in points])
+        nn = np.empty(len(points))
+        for i in range(len(points)):
+            d = angular_separation_deg(np.full(len(points), ra[i]), np.full(len(points), dec[i]), ra, dec)
+            d[i] = np.inf
+            nn[i] = d.min()
+        finite = nn[np.isfinite(nn)]
+        nn_median = float(np.median(finite)) if finite.size else cfg.beam_fwhm_deg
+
+    support_radius_deg = cfg.support_radius_deg if cfg.support_radius_deg is not None else 1.25 * nn_median
+    smoothing_b = cfg.smoothing_fwhm_b_deg if cfg.smoothing_fwhm_b_deg is not None else nn_median
+    smoothing_c = cfg.smoothing_fwhm_c_deg if cfg.smoothing_fwhm_c_deg is not None else 3.0 * smoothing_b
+    footprint_r = cfg.footprint_radius_deg if cfg.footprint_radius_deg is not None else 0.45 * nn_median
+    if smoothing_c <= smoothing_b:
+        raise ValueError(f"resolved smoothing_fwhm_c_deg ({smoothing_c}) must be > smoothing_fwhm_b_deg "
+                         f"({smoothing_b}) - C must be the MORE smoothed map; pass both explicitly if the "
+                         f"auto default (3x B) does not hold given a manually-set B or C")
+    return {"nearest_neighbor_spacing_deg": nn_median, "support_radius_deg": support_radius_deg,
+           "smoothing_fwhm_b_deg": smoothing_b, "smoothing_fwhm_c_deg": smoothing_c,
+           "footprint_radius_deg": footprint_r}
+
+
+def _reconcile_used_point_sets(used_b: set[int], used_c: set[int], support_radius_deg: float) -> set[int]:
+    """B and C are built with the SAME support_radius_deg (see build_all_products) - the ONLY way
+    build_cube() ever excludes a point that isn't already excluded for a beam-independent reason
+    (no velocity, fails quality policy, insufficient coverage) is OUTSIDE_BEAM_SUPPORT_OF_GRID, whose
+    radius is exactly `beam.cutoff_n_fwhm * beam.fwhm_deg` (science_engine.beam.beam_weight) - identical
+    for B and C here. So used_b == used_c is a STRUCTURAL guarantee, not a coincidence to reconcile after
+    the fact (the previous behaviour - intersect, then note the discrepancy - is exactly what request #3
+    called insufficient: it silently redefined "used" instead of proving the sets could not diverge).
+    A mismatch here means that guarantee was violated (a real bug, e.g. by two different support radii
+    reaching build_cube by mistake) - this BLOCKS the comparison outright rather than reconciling it,
+    per the explicit instruction; see test_science_web_bridge.py's adversarial test."""
+    if used_b != used_c:
+        only_b, only_c = sorted(used_b - used_c), sorted(used_c - used_b)
+        raise ValueError(
+            "BLOCKED: map B and map C used DIFFERENT point sets despite sharing support_radius_deg="
+            f"{support_radius_deg:.6g} (should be structurally impossible - see _reconcile_used_point_sets's "
+            f"docstring). only in B: {only_b}; only in C: {only_c}. This is a real bug, not a cosmetic "
+            "mismatch - the comparison is blocked rather than silently using an intersection."
+        )
+    return set(used_b)
 
 
 # ------------------------------------------------------------------ ingest + calibration-level filter
@@ -324,11 +418,34 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     from science_engine.integration import integrated_map
     from science_engine.quality import assess_science_quality
 
-    sc_b = _science_config_for(cfg, cfg.beam_cutoff_b_n_fwhm)
-    sc_c = _science_config_for(cfg, cfg.beam_cutoff_c_n_fwhm)
+    spatial = auto_spatial_params(filtered_input, cfg)
+    support_radius_deg = spatial["support_radius_deg"]
+    smoothing_b, smoothing_c = spatial["smoothing_fwhm_b_deg"], spatial["smoothing_fwhm_c_deg"]
+
+    # Grid geometry is sized from the SUPPORT radius (where a value may legitimately be drawn at all) -
+    # never from the reported instrument beam (cfg.beam_fwhm_deg), which is what produced a 65x65 deg grid
+    # for a real ~6x5 deg, 36-point mosaic (beam_fwhm_deg=20 from observer_config.json vs ~1 deg real point
+    # spacing - see auto_spatial_params's docstring). beam_fwhm_deg stays reported honestly in the manifest;
+    # it no longer drives grid size, pixel scale, or either map's weighting.
+    sizing_sc = _kernel_science_config(cfg, support_radius_deg, 1.0,
+                                       "support radius (grid sizing only - not a smoothing kernel, not the "
+                                       "instrument beam)", cfg.pixels_per_support_radius,
+                                       cfg.extent_margin_support_radii)
+    sizing_beam = build_beam_model(sizing_sc)
+    grid = build_grid(filtered_input, sizing_beam, sizing_sc)
+
+    # B and C: SAME support_radius_deg (cutoff_n_fwhm x fwhm_deg is fixed to support_radius_deg for both -
+    # see _reconcile_used_point_sets), DIFFERENT smoothing_fwhm (how quickly weight falls off within that
+    # fixed radius) - the two controls request #2 asked to be separated, instead of one beam_cutoff_n_fwhm
+    # that changed both at once on a single (possibly mis-scaled) beam.
+    sc_b = _kernel_science_config(cfg, smoothing_b, support_radius_deg / smoothing_b,
+                                  "presentation smoothing kernel B (light) - NOT the instrument beam",
+                                  cfg.pixels_per_support_radius, cfg.extent_margin_support_radii)
+    sc_c = _kernel_science_config(cfg, smoothing_c, support_radius_deg / smoothing_c,
+                                  "presentation smoothing kernel C (heavier) - NOT the instrument beam",
+                                  cfg.pixels_per_support_radius, cfg.extent_margin_support_radii)
     beam_b = build_beam_model(sc_b)
-    beam_c = build_beam_model(sc_c)   # same fwhm/source/status as beam_b - only cutoff differs
-    grid = build_grid(filtered_input, beam_b, sc_b)   # grid geometry depends on fwhm, never on cutoff - shared with C
+    beam_c = build_beam_model(sc_c)
     velocity_axis = canonical_velocity_axis(filtered_input)
 
     mem = memory_check(grid, int(velocity_axis.shape[0]), len(filtered_input.points))
@@ -353,14 +470,10 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     del cube_c
     gc.collect()
 
-    used_common = used_b & used_c
-    if used_b != used_c:
-        # A wider cutoff can only ever ADD support, never remove it - if this ever fires, treat the
-        # intersection as authoritative and say so plainly, rather than let A/B/C silently disagree.
-        note = (f"beam-support point set differs between cutoff_b ({sorted(used_b)}) and cutoff_c "
-               f"({sorted(used_c)}) - using the intersection ({sorted(used_common)}) for all three maps")
-    else:
-        note = None
+    used_common = _reconcile_used_point_sets(used_b, used_c, support_radius_deg)
+    note = (f"B and C share support_radius_deg={support_radius_deg:.6g} deg by construction (grid, points and "
+           f"cutoff radius are identical) - their used-point sets are guaranteed identical, verified: "
+           f"{len(used_common)} point(s), never reconciled after the fact")
 
     point_rows = per_point_integrated_values(filtered_input, sc_b, velocity_axis)
     for row in point_rows:
@@ -371,10 +484,47 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     vmin, vmax, vmin_vmax_basis = robust_color_limits(point_rows, cfg.color_vmin, cfg.color_vmax)
 
     return {
-        "sc_b": sc_b, "sc_c": sc_c, "beam_b": beam_b, "beam_c": beam_c, "grid": grid,
+        "sc_b": sc_b, "sc_c": sc_c, "beam_b": beam_b, "beam_c": beam_c, "grid": grid, "spatial_params": spatial,
         "velocity_axis": velocity_axis, "map_b": map_b, "map_c": map_c,
         "quality_b": quality_b, "used_point_set": sorted(used_common), "used_point_set_note": note,
         "point_rows": point_rows, "color_vmin": vmin, "color_vmax": vmax, "color_limits_basis": vmin_vmax_basis,
+    }
+
+
+def bc_diagnostic(built: dict[str, Any]) -> dict[str, Any]:
+    """Real per-array numbers of what actually differs between map B and map C (request #1): support (which
+    pixels have any weight), the per-pixel B-C difference restricted to their common support, each map's own
+    spatial variance, and each map's mean |gradient| - never an assertion of "more smoothing" from the
+    cutoff/kernel parameter alone."""
+    map_b, map_c = built["map_b"], built["map_c"]
+    vb, vc = map_b.value, map_c.value
+    valb, valc = map_b.valid, map_c.valid
+    common = valb & valc
+    diff = np.where(common, vb - vc, np.nan)
+    gy_b, gx_b = np.gradient(np.where(valb, vb, np.nan))
+    gy_c, gx_c = np.gradient(np.where(valc, vc, np.nan))
+
+    def _mean(a: np.ndarray) -> Optional[float]:
+        finite = a[np.isfinite(a)]
+        return float(np.mean(finite)) if finite.size else None
+
+    def _std_over(mask: np.ndarray, val: np.ndarray) -> Optional[float]:
+        sel = val[mask]
+        return float(np.std(sel)) if sel.size else None
+
+    has_diff = bool(np.any(np.isfinite(diff)))
+    return {
+        "n_pixels_total": int(valb.size),
+        "n_support_b": int(valb.sum()), "n_support_c": int(valc.sum()), "n_support_common": int(common.sum()),
+        "n_support_only_b": int((valb & ~valc).sum()), "n_support_only_c": int((valc & ~valb).sum()),
+        "b_minus_c_common_support": {
+            "mean": (float(np.nanmean(diff)) if has_diff else None),
+            "std": (float(np.nanstd(diff)) if has_diff else None),
+            "min": (float(np.nanmin(diff)) if has_diff else None),
+            "max": (float(np.nanmax(diff)) if has_diff else None),
+        },
+        "b_value_std_over_support": _std_over(valb, vb), "c_value_std_over_support": _std_over(valc, vc),
+        "b_mean_abs_gradient": _mean(np.hypot(gx_b, gy_b)), "c_mean_abs_gradient": _mean(np.hypot(gx_c, gy_c)),
     }
 
 
@@ -407,15 +557,31 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     from science_engine.spatial import tangent_plane_offsets_deg
 
     grid = built["grid"]
+    spatial = built["spatial_params"]
+    support_radius_deg = spatial["support_radius_deg"]
     vmin, vmax = built["color_vmin"], built["color_vmax"]
     cmap = plt.get_cmap("viridis").with_extremes(bad=(0, 0, 0, 0))
-    half_w, half_h = grid.width_deg / 2, grid.height_deg / 2
+    grid_half_w, grid_half_h = grid.width_deg / 2, grid.height_deg / 2
     used_rows = [r for r in built["point_rows"] if r["status"] == "USED"]
     xs = [tangent_plane_offsets_deg(r["ra_deg"], r["dec_degrees"], grid.center_ra_deg, grid.center_dec_deg)[0]
          for r in used_rows]
     ys = [tangent_plane_offsets_deg(r["ra_deg"], r["dec_degrees"], grid.center_ra_deg, grid.center_dec_deg)[1]
          for r in used_rows]
-    footprint_r = cfg.footprint_radius_deg if cfg.footprint_radius_deg is not None else cfg.beam_fwhm_deg / 2.0
+    footprint_r = spatial["footprint_radius_deg"]
+
+    # ---- auto-zoom (request #5): frame every panel on the REAL mosaic footprint, not the grid's own extent
+    # - the grid extends support_radius_deg x extent_margin_support_radii of margin beyond the points on every
+    # side (needed for legitimate beam support out to the edge), which made real points occupy a small square
+    # of a much larger, mostly-empty plot on a real run (grid was 65x65 deg for a ~6x5 deg, 36-point mosaic).
+    # Computed from ALL points (used + excluded), so no excluded point falls outside the coverage panel.
+    all_xy = [tangent_plane_offsets_deg(r["ra_deg"], r["dec_degrees"], grid.center_ra_deg, grid.center_dec_deg)
+             for r in built["point_rows"]]
+    if all_xy:
+        pad = max(support_radius_deg, footprint_r) * 1.15
+        half_w = min(max(max(abs(x) for x, _ in all_xy) + pad, 1e-6), grid_half_w)
+        half_h = min(max(max(abs(y) for _, y in all_xy) + pad, 1e-6), grid_half_h)
+    else:
+        half_w, half_h = grid_half_w, grid_half_h
 
     written: dict[str, list[str]] = {}
 
@@ -441,10 +607,17 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         written[name] = paths
 
     # ---- A: no interpolation - footprints at measured positions only ----
+    # footprint_r is now tied to real point spacing (~0.45x median nearest-neighbour separation), not
+    # beam_fwhm_deg/2 - on a real 36-point, ~1 deg-spaced run, beam_fwhm_deg/2 (10 deg) made every footprint
+    # cover nearly the whole field ("36 huellas muy superpuestas" - request #5); circles are also semi
+    # transparent with a thin white edge so overlapping ones stay visually separable, and each point's own
+    # index is annotated so an operator can tell which marker is which without relying on the interactive
+    # picker alone.
     fig, ax = plt.subplots(figsize=(7.2, 6.0))
     for r, x, y in zip(used_rows, xs, ys):
         ax.add_patch(Circle((x, y), footprint_r, facecolor=cmap((r["value"] - vmin) / max(vmax - vmin, 1e-30)),
-                            edgecolor="black", linewidth=0.3))
+                            edgecolor="white", linewidth=0.5, alpha=0.72))
+        ax.annotate(str(r["point_index"]), (x, y), ha="center", va="center", fontsize=4.5, color="white")
     if used_rows:
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin, vmax))
         sm.set_array([])
@@ -452,25 +625,61 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         cbar.set_label("integrated relative_intensity_dimensionless × m/s")
     _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id, "A: NO SPATIAL INTERPOLATION (measured footprints)"),
            "map_a_no_interp",
-           f"{len(used_rows)} measured point(s) shown as their own footprint (radius={footprint_r:.3f} deg); "
-           f"unmeasured sky left transparent — no value is invented between points.")
+           f"{len(used_rows)} measured point(s) shown as their own footprint (radius={footprint_r:.3f} deg, "
+           f"~0.45x median nearest-neighbour spacing of {spatial['nearest_neighbor_spacing_deg']:.3f} deg); "
+           f"semi-transparent so overlaps stay visible; each label is that point's own index. Unmeasured sky "
+           f"left transparent — no value is invented between points. Click a marker below to inspect its own "
+           f"real spectrum.")
 
     # ---- B / C: beam-gridded, shared scale, measured locations overlaid ----
-    for key, label, sc, cutoff in (("map_b_smooth", "B: SMOOTH INTERPOLATION", built["sc_b"], cfg.beam_cutoff_b_n_fwhm),
-                                   ("map_c_heavy", "C: HEAVIER INTERPOLATION", built["sc_c"], cfg.beam_cutoff_c_n_fwhm)):
+    # Both share support_radius_deg (identical cutoff radius = identical legitimate coverage, see
+    # _reconcile_used_point_sets); only the presentation-smoothing kernel width differs (smoothing_fwhm_b_deg
+    # vs smoothing_fwhm_c_deg) - the two controls request #2 asked kept separate. The real instrument beam
+    # (cfg.beam_fwhm_deg) is reported below, unchanged between B and C, but is NOT the kernel doing this
+    # weighting from here on (see build_all_products/auto_spatial_params for why: it was ~20x this campaign's
+    # own point spacing on a real deployed run).
+    for key, label, kernel_fwhm in (("map_b_smooth", "B: LIGHT SMOOTHING", spatial["smoothing_fwhm_b_deg"]),
+                                    ("map_c_heavy", "C: HEAVIER SMOOTHING", spatial["smoothing_fwhm_c_deg"])):
         science_map = built["map_b"] if key == "map_b_smooth" else built["map_c"]
         masked = np.ma.masked_where(~science_map.valid, science_map.value)
         fig, ax = plt.subplots(figsize=(7.2, 6.0))
         im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                       extent=(half_w, -half_w, -half_h, half_h))
+                       extent=(grid_half_w, -grid_half_w, -grid_half_h, grid_half_h))
         ax.scatter(xs, ys, s=10, facecolor="none", edgecolor="white", linewidth=0.6, label="measured point")
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("integrated relative_intensity_dimensionless × m/s")
         _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id, label), key,
-               f"method: Gaussian beam-weighted gridding (science_engine.gridding), beam FWHM="
-               f"{cfg.beam_fwhm_deg:.4g} deg ({sc.beam_status}), cutoff={cutoff:.2g}×FWHM — pixels beyond "
-               f"that many beam-widths from every point get zero weight. White circles = real measured "
-               f"positions. Color limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).")
+               f"method: Gaussian-weighted gridding (science_engine.gridding), presentation-smoothing kernel "
+               f"FWHM={kernel_fwhm:.4g} deg (declared, NOT the instrument beam) — real instrument beam "
+               f"FWHM={cfg.beam_fwhm_deg:.4g} deg ({cfg.beam_status}, unchanged between B/C, reported not used "
+               f"for weighting). Spatial SUPPORT (where a value may be drawn at all) is the SAME "
+               f"{support_radius_deg:.4g} deg radius for B and C — {len(built['used_point_set'])} point(s) used "
+               f"identically in both (see used_point_set_note). White circles = real measured positions. "
+               f"Color limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).")
+
+    # ---- B minus C (request #1): a real per-pixel difference image, own non-degenerate scale - never assert
+    # "more smoothing" from the cutoff parameter alone.
+    diag = bc_diagnostic(built)
+    common = built["map_b"].valid & built["map_c"].valid
+    diff = np.ma.masked_where(~common, built["map_b"].value - built["map_c"].value)
+    if common.any():
+        abs_max = float(np.nanmax(np.abs(diff))) or 1e-30
+        fig, ax = plt.subplots(figsize=(7.2, 6.0))
+        im = ax.imshow(diff, origin="lower", cmap=plt.get_cmap("RdBu_r").with_extremes(bad=(0, 0, 0, 0)),
+                       vmin=-abs_max, vmax=abs_max, extent=(grid_half_w, -grid_half_w, -grid_half_h, grid_half_h))
+        ax.scatter(xs, ys, s=10, facecolor="none", edgecolor="black", linewidth=0.6)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label("B − C (relative_intensity_dimensionless × m/s)")
+        d = diag["b_minus_c_common_support"]
+        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
+                                      "B − C (per-pixel, common support only) — own scale, NOT shared with A/B/C"),
+               "map_b_minus_c",
+               f"common support: {diag['n_support_common']}/{diag['n_pixels_total']} px (B-only "
+               f"{diag['n_support_only_b']}, C-only {diag['n_support_only_c']}). diff mean={d['mean']:.4g} "
+               f"std={d['std']:.4g} min={d['min']:.4g} max={d['max']:.4g}. spatial std: B="
+               f"{diag['b_value_std_over_support']:.4g} C={diag['c_value_std_over_support']:.4g}; mean |gradient|: "
+               f"B={diag['b_mean_abs_gradient']:.4g} C={diag['c_mean_abs_gradient']:.4g} (lower = flatter).",
+               exts=("png", "svg"))
 
     # ---- uncertainty / SNR (from map B's own propagated sigma - the smooth map's real uncertainty) ----
     unc = built["map_b"].uncertainty
@@ -480,13 +689,21 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         masked_snr = np.ma.masked_where(~built["map_b"].valid, snr)
         fig, ax = plt.subplots(figsize=(7.2, 6.0))
         im = ax.imshow(masked_snr, origin="lower", cmap=plt.get_cmap("magma").with_extremes(bad=(0, 0, 0, 0)),
-                       extent=(half_w, -half_w, -half_h, half_h))
+                       extent=(grid_half_w, -grid_half_w, -grid_half_h, grid_half_h))
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("SNR (dimensionless)")
+        window_km_s = (cfg.velocity_window_max_m_s - cfg.velocity_window_min_m_s) / 1000.0
+        wide_window_caveat = (
+            f" CAVEAT: the {window_km_s:.0f} km/s window sums many channels; the 1-sigma formula above ASSUMES "
+            f"independent channels, so any broadband, correlated residual (baseline/continuum-like, not random "
+            f"noise) across those channels inflates this SNR well beyond what independent-noise statistics "
+            f"would justify. High SNR here is NOT evidence of a real spectral feature and must never be read "
+            f"as detection significance." if window_km_s > 150 else "")
         _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id, "SNR = |integrated value| / propagated 1σ (map B)"),
                "map_snr",
                "1-sigma uncertainty propagated from REDUCE per-channel sigma assuming independent channels "
-               "(see science_engine.integration docstring) - a statistical, not systematic, error bar.",
+               "(see science_engine.integration docstring) - a statistical, not systematic, error bar."
+               + wide_window_caveat,
                exts=("png", "svg"))
         quality_kind = "uncertainty/SNR (propagated statistical 1-sigma)"
     else:
@@ -505,7 +722,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
            "map_coverage",
            "green = used in maps A/B/C; red = excluded (see points.csv/manifest for each point's real reason).",
            exts=("png", "svg"))
-    return written, quality_kind
+    return written, quality_kind, diag
 
 
 # ------------------------------------------------------------------ persistence (this bridge's OWN, non-frozen)
@@ -540,8 +757,12 @@ def cmd_plan(args) -> int:
     filtered, counts, _ = load_filtered_input(cfg.reduce_session_dir, cfg.calibration_level_filter)
     from science_engine.cube import canonical_velocity_axis
     from science_engine.grid import build_beam_model, build_grid
-    beam = build_beam_model(_science_config_for(cfg, cfg.beam_cutoff_b_n_fwhm))
-    grid = build_grid(filtered, beam, _science_config_for(cfg, cfg.beam_cutoff_b_n_fwhm))
+    spatial = auto_spatial_params(filtered, cfg)
+    sizing_sc = _kernel_science_config(cfg, spatial["support_radius_deg"], 1.0,
+                                       "support radius (grid sizing only)", cfg.pixels_per_support_radius,
+                                       cfg.extent_margin_support_radii)
+    sizing_beam = build_beam_model(sizing_sc)
+    grid = build_grid(filtered, sizing_beam, sizing_sc)
     velocity_axis = canonical_velocity_axis(filtered)
     from science_engine.integration import window_overlaps
     overlap = window_overlaps(velocity_axis, cfg.velocity_window_min_m_s, cfg.velocity_window_max_m_s)
@@ -558,13 +779,16 @@ def cmd_plan(args) -> int:
     blocked = any(not c["ok"] for c in checks)
     payload = {
         "config": cfg.to_dict(), "config_hash": cfg.config_hash(), "calibration_level_counts": counts,
-        "grid": grid.to_dict(), "beam": beam.to_dict(), "n_velocity_channels": int(velocity_axis.shape[0]),
+        "grid": grid.to_dict(), "spatial_params": spatial, "real_instrument_beam_fwhm_deg": cfg.beam_fwhm_deg,
+        "n_velocity_channels": int(velocity_axis.shape[0]),
         "checks": checks, "blocked": blocked,
         "will_process_points": [p.point_index for p in filtered.points],
     }
     _print(payload, args.json, [
         f"calibration_level_filter: {cfg.calibration_level_filter}  counts: {counts}",
-        f"grid: {grid.ny}x{grid.nx} px  beam fwhm={beam.fwhm_deg} deg ({beam.status})",
+        f"grid: {grid.ny}x{grid.nx} px  support_radius={spatial['support_radius_deg']:.4g} deg  "
+        f"smoothing B/C={spatial['smoothing_fwhm_b_deg']:.4g}/{spatial['smoothing_fwhm_c_deg']:.4g} deg  "
+        f"(real instrument beam={cfg.beam_fwhm_deg:.4g} deg, reported only, not used for gridding)",
         f"will process {len(filtered.points)} point(s): {payload['will_process_points']}",
         *[f"[{'PASS' if c['ok'] else 'BLOCKED'}] {c['name']}: {c['detail']}" for c in checks],
     ])
@@ -585,7 +809,7 @@ def cmd_run(args) -> int:
     maps_dir = out_dir / "maps"
     maps_dir.mkdir()
 
-    exports, unc_kind = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
+    exports, unc_kind, bc_diag = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
 
     # tabular per-point export for reproducibility (section: "exporta valores tabulares de puntos")
     import csv
@@ -616,7 +840,7 @@ def cmd_run(args) -> int:
     _map_json("map_c_heavy", built["map_c"])
     _atomic_write_json(maps_dir / "map_a_no_interp.json", {
         "kind": "no_interpolation_footprints", "units": built["map_b"].units,
-        "footprint_radius_deg": cfg.footprint_radius_deg or cfg.beam_fwhm_deg / 2.0,
+        "footprint_radius_deg": built["spatial_params"]["footprint_radius_deg"],
         "grid_center_ra_deg": built["grid"].center_ra_deg, "grid_center_dec_deg": built["grid"].center_dec_deg,
         "points": built["point_rows"],
     })
@@ -631,7 +855,12 @@ def cmd_run(args) -> int:
         "input_reduce_manifest_sha256": manifest_hash, "data_completeness": completeness,
         "calibration_level_filter": cfg.calibration_level_filter, "calibration_level_counts_full_session": counts,
         "config": cfg.to_dict(), "config_hash": cfg.config_hash(),
-        "beam_b": built["beam_b"].to_dict(), "beam_c": built["beam_c"].to_dict(), "grid": built["grid"].to_dict(),
+        "real_instrument_beam": {"fwhm_deg": cfg.beam_fwhm_deg, "source": cfg.beam_source, "status": cfg.beam_status,
+                                 "note": "reported honestly, unchanged between B/C - NOT used as the gridding "
+                                        "kernel for either map (see spatial_params/smoothing_kernel_b/c)"},
+        "spatial_params": built["spatial_params"],
+        "smoothing_kernel_b": built["beam_b"].to_dict(), "smoothing_kernel_c": built["beam_c"].to_dict(),
+        "grid": built["grid"].to_dict(),
         "velocity_window_m_s": [cfg.velocity_window_min_m_s, cfg.velocity_window_max_m_s],
         "n_velocity_channels": int(built["velocity_axis"].shape[0]),
         "color_vmin": built["color_vmin"], "color_vmax": built["color_vmax"],
@@ -639,6 +868,7 @@ def cmd_run(args) -> int:
         "used_point_set": built["used_point_set"], "used_point_set_note": built["used_point_set_note"],
         "n_points_filtered_in": len(filtered.points), "n_points_used": len(built["used_point_set"]),
         "quality_b": built["quality_b"].to_dict(), "uncertainty_kind": unc_kind,
+        "bc_diagnostic": bc_diag,
         "thermal_drift": thermal,
         "exports": exports, "points_csv": "points.csv",
         "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),
@@ -718,9 +948,10 @@ def _config_from_args(args) -> MapConfig:
     kwargs: dict[str, Any] = dict(reduce_session_dir=args.reduce_session_dir,
                                   calibration_level_filter=args.calibration_level_filter, **beam_kwargs)
     for cli_name, cfg_name in (
-        ("pixel_scale_deg", "pixel_scale_deg"), ("pixels_per_beam", "pixels_per_beam"),
-        ("extent_margin_beams", "extent_margin_beams"), ("beam_cutoff_b_n_fwhm", "beam_cutoff_b_n_fwhm"),
-        ("beam_cutoff_c_n_fwhm", "beam_cutoff_c_n_fwhm"), ("quality_policy", "quality_policy"),
+        ("pixel_scale_deg", "pixel_scale_deg"), ("pixels_per_support_radius", "pixels_per_support_radius"),
+        ("extent_margin_support_radii", "extent_margin_support_radii"),
+        ("support_radius_deg", "support_radius_deg"), ("smoothing_fwhm_b_deg", "smoothing_fwhm_b_deg"),
+        ("smoothing_fwhm_c_deg", "smoothing_fwhm_c_deg"), ("quality_policy", "quality_policy"),
         ("velocity_window_min_m_s", "velocity_window_min_m_s"), ("velocity_window_max_m_s", "velocity_window_max_m_s"),
         ("min_spectral_coverage_fraction", "min_spectral_coverage_fraction"), ("color_vmin", "color_vmin"),
         ("color_vmax", "color_vmax"), ("footprint_radius_deg", "footprint_radius_deg"),
@@ -740,10 +971,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--beam-fwhm-deg", type=float, default=None)
         p.add_argument("--beam-from-observer-config", nargs="?", const="observer_config.json", default=None)
         p.add_argument("--pixel-scale-deg", type=float, default=None)
-        p.add_argument("--pixels-per-beam", type=float, default=None)
-        p.add_argument("--extent-margin-beams", type=float, default=None)
-        p.add_argument("--beam-cutoff-b-n-fwhm", type=float, default=None)
-        p.add_argument("--beam-cutoff-c-n-fwhm", type=float, default=None)
+        p.add_argument("--pixels-per-support-radius", type=float, default=None)
+        p.add_argument("--extent-margin-support-radii", type=float, default=None)
+        p.add_argument("--support-radius-deg", type=float, default=None)
+        p.add_argument("--smoothing-fwhm-b-deg", type=float, default=None)
+        p.add_argument("--smoothing-fwhm-c-deg", type=float, default=None)
         p.add_argument("--quality-policy", choices=("STRICT", "STANDARD", "PERMISSIVE"), default=None)
         p.add_argument("--velocity-window-min-m-s", type=float, default=None)
         p.add_argument("--velocity-window-max-m-s", type=float, default=None)

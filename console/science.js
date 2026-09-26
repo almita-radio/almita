@@ -21,12 +21,14 @@
   let lastRunOutputDir = null;
   let selectionSeq = 0;              // guards against a late HTTP response overwriting a newer selection
 
+  function numOrNull(id) { const v = $(id).value; return v === "" ? null : Number(v); }
   function currentParams() {
     return {
       reduce_session_dir: selectedSession, calibration_level_filter: selectedCalibLevel,
       velocity_window_min_m_s: kms($("in-vmin").value), velocity_window_max_m_s: kms($("in-vmax").value),
       beam: $("in-beam-mode").value, beam_fwhm_deg: $("in-beam-mode").value === "fwhm" ? Number($("in-beam-fwhm").value) : null,
-      beam_cutoff_b_n_fwhm: Number($("in-cutoff-b").value), beam_cutoff_c_n_fwhm: Number($("in-cutoff-c").value),
+      support_radius_deg: numOrNull("in-support-radius"), smoothing_fwhm_b_deg: numOrNull("in-smoothing-b"),
+      smoothing_fwhm_c_deg: numOrNull("in-smoothing-c"),
       quality_policy: $("in-quality-policy").value || null,
       min_spectral_coverage_fraction: Number($("in-min-coverage").value),
       color_vmin: $("in-color-override").checked ? Number($("in-color-vmin").value) : null,
@@ -163,8 +165,8 @@
   }
   $("in-beam-mode").addEventListener("change", () => { $("row-beam-fwhm").hidden = $("in-beam-mode").value !== "fwhm"; invalidateDownstream(); });
   $("in-color-override").addEventListener("change", () => { $("row-color-override").hidden = !$("in-color-override").checked; invalidateDownstream(); });
-  for (const id of ["in-vmin", "in-vmax", "in-beam-fwhm", "in-cutoff-b", "in-cutoff-c", "in-quality-policy",
-    "in-min-coverage", "in-color-vmin", "in-color-vmax"]) {
+  for (const id of ["in-vmin", "in-vmax", "in-beam-fwhm", "in-support-radius", "in-smoothing-b", "in-smoothing-c",
+    "in-quality-policy", "in-min-coverage", "in-color-vmin", "in-color-vmax"]) {
     $(id).addEventListener("change", invalidateDownstream);
   }
 
@@ -185,9 +187,11 @@
     const p = currentParams();
     const body = { reduce_session_dir: p.reduce_session_dir, calibration_level_filter: p.calibration_level_filter,
       beam: p.beam, velocity_window_min_m_s: p.velocity_window_min_m_s, velocity_window_max_m_s: p.velocity_window_max_m_s,
-      beam_cutoff_b_n_fwhm: p.beam_cutoff_b_n_fwhm, beam_cutoff_c_n_fwhm: p.beam_cutoff_c_n_fwhm,
       min_spectral_coverage_fraction: p.min_spectral_coverage_fraction };
     if (p.beam === "fwhm") body.beam_fwhm_deg = p.beam_fwhm_deg;
+    if (p.support_radius_deg != null) body.support_radius_deg = p.support_radius_deg;
+    if (p.smoothing_fwhm_b_deg != null) body.smoothing_fwhm_b_deg = p.smoothing_fwhm_b_deg;
+    if (p.smoothing_fwhm_c_deg != null) body.smoothing_fwhm_c_deg = p.smoothing_fwhm_c_deg;
     if (p.quality_policy) body.quality_policy = p.quality_policy;
     if (p.color_vmin != null && p.color_vmax != null) { body.color_vmin = p.color_vmin; body.color_vmax = p.color_vmax; }
     return body;
@@ -215,7 +219,9 @@
       `will process ${n} ${facts.config ? facts.config.calibration_level_filter : ""} point(s): ${JSON.stringify(facts.will_process_points || [])}\n`
       + `calibration_level_counts (full session): ${JSON.stringify(facts.calibration_level_counts || {})}\n`
       + `grid: ${facts.grid ? `${facts.grid.ny}x${facts.grid.nx} px, ${facts.grid.pixel_scale_deg.toFixed(4)} deg/px` : "—"}\n`
-      + `beam: ${facts.beam ? `${facts.beam.fwhm_deg} deg (${facts.beam.status})` : "—"}   velocity channels: ${facts.n_velocity_channels}\n`
+      + `support radius (B & C, shared): ${facts.spatial_params ? facts.spatial_params.support_radius_deg.toFixed(4) : "—"} deg   `
+      + `smoothing B/C: ${facts.spatial_params ? `${facts.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${facts.spatial_params.smoothing_fwhm_c_deg.toFixed(4)}` : "—"} deg\n`
+      + `real instrument beam (reported only): ${facts.real_instrument_beam_fwhm_deg} deg   velocity channels: ${facts.n_velocity_channels}\n`
       + `config_hash: ${facts.config_hash}`;
     const list = $("plan-checks"); list.textContent = "";
     for (const c of facts.checks || []) {
@@ -288,6 +294,12 @@
       + `points used: ${manifest.n_points_used} of ${manifest.n_points_filtered_in} filtered-in points\n`
       + `velocity window (LSRK): [${(manifest.velocity_window_m_s[0] / 1000).toFixed(1)}, ${(manifest.velocity_window_m_s[1] / 1000).toFixed(1)}] km/s\n`
       + `color limits: [${manifest.color_vmin.toFixed(4)}, ${manifest.color_vmax.toFixed(4)}] (${manifest.color_limits_basis})\n`
+      + `support radius (B & C, shared): ${manifest.spatial_params.support_radius_deg.toFixed(4)} deg   `
+      + `smoothing B/C: ${manifest.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${manifest.spatial_params.smoothing_fwhm_c_deg.toFixed(4)} deg   `
+      + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
+      + `B−C common support: ${manifest.bc_diagnostic.n_support_common}/${manifest.bc_diagnostic.n_pixels_total} px `
+      + `(diff mean=${manifest.bc_diagnostic.b_minus_c_common_support.mean != null ? manifest.bc_diagnostic.b_minus_c_common_support.mean.toFixed(4) : "—"}, `
+      + `std=${manifest.bc_diagnostic.b_minus_c_common_support.std != null ? manifest.bc_diagnostic.b_minus_c_common_support.std.toFixed(4) : "—"})\n`
       + `quality (map B): ${manifest.quality_b.state} — ${(manifest.quality_b.reasons || []).join("; ")}`
       + (manifest.used_point_set_note ? `\nNOTE: ${manifest.used_point_set_note}` : "");
     $("results-hi-caveat").textContent = "INSTRUMENTAL/RELATIVE result — relative_intensity_dimensionless only. "
@@ -302,6 +314,9 @@
     const hasSnr = (manifest.exports || {}).map_snr;
     $("fig-snr").hidden = !hasSnr;
     if (hasSnr) $("img-map-snr").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_snr.png")}`;
+    const hasBcDiff = (manifest.exports || {}).map_b_minus_c;
+    $("fig-bc-diff").hidden = !hasBcDiff;
+    if (hasBcDiff) $("img-map-bc-diff").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_minus_c.png")}`;
 
     const artifacts = $("results-artifacts"); artifacts.textContent = "";
     const files = ["manifest.json", "config.json", "provenance.json", "points.csv"];
@@ -334,7 +349,16 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
     if (!lastGrid || !lastMapAPoints) return;
-    const halfW = lastGrid.width_deg / 2, halfH = lastGrid.height_deg / 2;
+    // Auto-zoom (request #5) to the REAL mosaic footprint, not the grid's own extent - the grid carries a
+    // support-radius margin on every side (needed for legitimate beam support out to its edge) that made real
+    // points occupy a small square of a much larger, mostly-empty picker on a real run. Mirrors the same
+    // zoom science_web_bridge.py's render_all_maps() applies to the static PNGs.
+    const offsets = lastMapAPoints.map((r) => tangentOffsetDeg(r.ra_deg, r.dec_degrees, lastGrid.center_ra_deg, lastGrid.center_dec_deg));
+    const supportRadius = (lastManifest.spatial_params && lastManifest.spatial_params.support_radius_deg) || lastGrid.pixel_scale_deg * 2;
+    const zoomPad = supportRadius * 1.15;
+    const dataHalfW = offsets.length ? Math.max(...offsets.map(([x]) => Math.abs(x))) + zoomPad : lastGrid.width_deg / 2;
+    const dataHalfH = offsets.length ? Math.max(...offsets.map(([, y]) => Math.abs(y))) + zoomPad : lastGrid.height_deg / 2;
+    const halfW = Math.min(dataHalfW, lastGrid.width_deg / 2), halfH = Math.min(dataHalfH, lastGrid.height_deg / 2);
     const pad = 20;
     const sx = (x) => cssW - pad - ((x + halfW) / (2 * halfW)) * (cssW - 2 * pad);  // RA increases to the left
     const sy = (y) => cssH - pad - ((y + halfH) / (2 * halfH)) * (cssH - 2 * pad);
