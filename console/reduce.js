@@ -24,6 +24,10 @@
                                       // not just a representative sample) - drives the confirmation checkbox and
                                       // the RUN gate the server independently re-checks (_require_uncalibrated_confirmation)
   let lastSingleCaptureCompat = null; // capture mode + a profile: the one point's {status, reason} - shown again in RESULTS
+  let selectionSeq = 0;               // bumped on every input/profile change - guards against a late HTTP response
+                                      // (from an input/profile that is no longer selected) overwriting current state.
+                                      // Every async metadata/compatibility fetch captures its own seq and discards
+                                      // its result if selectionSeq has moved on by the time it resolves.
 
   function currentParams() {
     return {
@@ -40,6 +44,7 @@
     lastCalibrationPreview = null;
     $("campaign-calibration-preview").hidden = true;
     $("in-confirm-uncalibrated").checked = false;
+    $("campaign-calibration-confirm-row").hidden = true;
     $("campaign-points-breakdown").hidden = true;
     $("plan-panel").hidden = selectedInput === "";
     $("plan-summary").textContent = ""; $("plan-checks").textContent = ""; $("job-reduce-plan").textContent = "";
@@ -131,6 +136,7 @@
   }
 
   async function onInputChanged() {
+    const mySeq = ++selectionSeq;       // supersedes any fetch still in flight for a previous input/mode
     invalidateDownstream();
     if (!selectedInput) { $("metadata-panel").hidden = true; $("profile-panel").hidden = true; return; }
     $("metadata-panel").hidden = false; $("profile-panel").hidden = false;
@@ -138,15 +144,18 @@
     try {
       const endpoint = mode === "capture" ? "/api/ops/reduce/inspect_capture" : "/api/ops/reduce/inspect_campaign";
       const r = await U.api(`${endpoint}?path=${encodeURIComponent(selectedInput)}`, { timeoutMs: 20000 });
+      if (mySeq !== selectionSeq) return;   // a newer selection has already superseded this one - discard, don't render
       if (!r.ok) throw new Error(U.errorText(r.error));
       lastMetadata = r.data.data;
       renderMetadata();
       showError("");
     } catch (err) {
+      if (mySeq !== selectionSeq) return;
       U.setBadge($("metadata-badge"), "ERROR");
       showError(`metadata preview failed: ${msg(err)}`);
     }
-    await refreshCompatibility();
+    if (mySeq !== selectionSeq) return;
+    await refreshCompatibility(mySeq);
   }
 
   function msg(err) { return (err && err.message) || String(err); }
@@ -233,7 +242,12 @@
   }
 
   // ------------------------------------------------------------------ 3) profile + compatibility
-  $("in-profile").addEventListener("change", () => { selectedProfile = $("in-profile").value; invalidateDownstream(); refreshCompatibility(); });
+  $("in-profile").addEventListener("change", () => {
+    selectedProfile = $("in-profile").value;
+    const mySeq = ++selectionSeq;   // supersedes any compatibility fetch still in flight for the previous profile
+    invalidateDownstream();
+    refreshCompatibility(mySeq);
+  });
   $("in-velocity-frame").addEventListener("change", invalidateDownstream);
 
   function setBanner(banner, status, text) {
@@ -244,7 +258,8 @@
     banner.style.borderColor = ok ? "#1e5c3d" : (status === "UNKNOWN" ? "" : "#7a2a2a");
   }
 
-  async function refreshCompatibility() {
+  async function refreshCompatibility(mySeq) {
+    if (mySeq === undefined) mySeq = ++selectionSeq;   // called directly (not via onInputChanged/profile listener)
     selectedProfile = $("in-profile").value;
     const banner = $("compat-banner"), detail = $("compat-detail");
     const preview = $("campaign-calibration-preview");
@@ -254,21 +269,25 @@
     lastSingleCaptureCompat = null;
     if (!selectedInput) { banner.hidden = true; detail.textContent = ""; return; }
     if (!selectedProfile) {
-      banner.hidden = false; banner.textContent = "UNCALIBRATED (no profile selected)";
+      // No profile selected: show this, and only this - never a compatibility count, a per-point reason
+      // against some other profile, or the confirmation checkbox (preview stays hidden, set above).
+      banner.hidden = false; banner.textContent = "NO PROFILE — will reduce UNCALIBRATED";
       banner.style.background = ""; banner.style.color = "var(--muted)"; banner.style.borderColor = "";
       detail.textContent = "REDUCE will run without a relative-calibration profile — a real, supported mode (reduce_engine.calibration.apply_calibration accepts profile=None). Results are labeled calibration_level=UNCALIBRATED.";
       return;
     }
-    if (mode === "campaign") { await refreshCampaignCalibrationPreview(); return; }
+    if (mode === "campaign") { await refreshCampaignCalibrationPreview(mySeq); return; }
     banner.hidden = false; banner.textContent = "CHECKING…"; detail.textContent = "";
     try {
       const r = await U.api(`/api/ops/reduce/compatibility?capture=${encodeURIComponent(selectedInput)}&profile=${encodeURIComponent(selectedProfile)}`, { timeoutMs: 20000 });
+      if (mySeq !== selectionSeq) return;   // input/profile changed again while this was in flight - discard
       if (!r.ok) throw new Error(U.errorText(r.error));
       const c = r.data.data;
       lastSingleCaptureCompat = { status: c.status, reason: c.reason };
       setBanner(banner, c.status, c.status);
       detail.textContent = c.reason;
     } catch (err) {
+      if (mySeq !== selectionSeq) return;
       banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "#2a1414"; banner.style.color = "var(--error)";
       detail.textContent = msg(err);
     }
@@ -277,12 +296,16 @@
   // Every accepted point in the campaign, checked individually - not a representative sample. Drives the
   // typed-confirmation gate the server independently re-checks at RUN (_require_uncalibrated_confirmation) -
   // showing anything less than this before RUN would not match what actually gates RUN.
-  async function refreshCampaignCalibrationPreview() {
+  async function refreshCampaignCalibrationPreview(mySeq) {
     const banner = $("compat-banner"), detail = $("compat-detail");
     const preview = $("campaign-calibration-preview");
+    // Capture the campaign+profile this specific request is FOR, so that even if selectionSeq somehow still
+    // matched (it shouldn't - every change bumps it), the response is never applied against a mismatched pair.
+    const forInput = selectedInput, forProfile = selectedProfile;
     banner.hidden = false; banner.textContent = "CHECKING EVERY POINT…"; detail.textContent = "";
     try {
-      const r = await U.api(`/api/ops/reduce/campaign_calibration_preview?campaign_dir=${encodeURIComponent(selectedInput)}&profile=${encodeURIComponent(selectedProfile)}`, { timeoutMs: 30000 });
+      const r = await U.api(`/api/ops/reduce/campaign_calibration_preview?campaign_dir=${encodeURIComponent(forInput)}&profile=${encodeURIComponent(forProfile)}`, { timeoutMs: 30000 });
+      if (mySeq !== selectionSeq || forInput !== selectedInput || forProfile !== selectedProfile) return;   // stale
       if (!r.ok) throw new Error(U.errorText(r.error));
       const d = r.data.data;
       lastCalibrationPreview = d;
@@ -307,6 +330,7 @@
       if (d.points.length > 30) { const row = document.createElement("div"); row.className = "muted"; row.textContent = `… and ${d.points.length - 30} more points`; list.appendChild(row); }
       $("campaign-calibration-confirm-row").hidden = d.all_compatible;
     } catch (err) {
+      if (mySeq !== selectionSeq || forInput !== selectedInput || forProfile !== selectedProfile) return;   // stale
       banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "#2a1414"; banner.style.color = "var(--error)";
       detail.textContent = msg(err);
       lastCalibrationPreview = null;
