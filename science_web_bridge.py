@@ -547,6 +547,58 @@ def robust_color_limits(point_rows: list[dict[str, Any]], override_vmin, overrid
     return lo, hi, "2nd/98th percentile of measured (map A) point values"
 
 
+def noise_dominance_summary(point_rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Real statistics answering "is there any real spatial signal here beyond pure per-point noise, at the
+    finest sampled scale" - a real deployed run's B/C showed circular halos traced back to individual noisy
+    points (see render_all_maps's own per-pixel n_pointings hatching), but a MULTI-point local cluster of
+    same-signed noise can ALSO look like a coherent blob under smoothing even with no single dominant point
+    (n_pointings alone does not catch this). This compares each USED point's value to its own real nearest
+    neighbour's value: if the median |difference| is close to what INDEPENDENT per-point noise alone would
+    predict (sqrt(2) x median reported uncertainty) AND neighbouring points' values are essentially
+    uncorrelated, the field is statistically indistinguishable from noise at the point-spacing scale - ANY
+    multi-pixel feature B/C shows may be a chance grouping of that noise, not detected structure. Uses only
+    already-computed per-point values/uncertainties (per_point_integrated_values's own output) and the
+    frozen angular_separation_deg for real distances - never re-derives the integration itself."""
+    from science_engine.spatial import angular_separation_deg
+    used = [r for r in point_rows if r["status"] == "USED" and r["value"] is not None]
+    if len(used) < 3:
+        return None
+    ra = np.array([r["ra_deg"] for r in used])
+    dec = np.array([r["dec_degrees"] for r in used])
+    val = np.array([r["value"] for r in used])
+    unc = np.array([r["uncertainty"] for r in used])
+    n = len(used)
+    nn_diff = np.empty(n)
+    nn_val_neighbor = np.empty(n)
+    for i in range(n):
+        d = angular_separation_deg(np.full(n, ra[i]), np.full(n, dec[i]), ra, dec)
+        d[i] = np.inf
+        j = int(np.argmin(d))
+        nn_diff[i] = val[i] - val[j]
+        nn_val_neighbor[i] = val[j]
+    median_abs_diff = float(np.median(np.abs(nn_diff)))
+    median_unc = float(np.median(unc))
+    expected_if_independent = float(np.sqrt(2) * median_unc)
+    correlation = float(np.corrcoef(val, nn_val_neighbor)[0, 1]) if np.std(val) > 0 and np.std(nn_val_neighbor) > 0 else None
+    ratio = (median_abs_diff / expected_if_independent) if expected_if_independent > 0 else None
+    # The correlation is the theoretically correct discriminator here, not the ratio: real spatial structure
+    # that varies SLOWLY relative to the noise floor would still show a nearest-neighbour DIFFERENCE close to
+    # pure-noise size (ratio~1) - a slow real gradient does not by itself make neighbours differ by more than
+    # their own noise. What it DOES do is make neighbouring points' values genuinely correlated (they share
+    # part of the same underlying true value), which independent per-point noise never does. ratio is still
+    # reported (a real, useful number - e.g. ratio >> 1 with |r| small would flag occasional large excursions
+    # beyond ordinary per-point noise, such as RFI spikes, worth a separate look) but does not gate the verdict.
+    consistent_with_noise = bool(correlation is not None and abs(correlation) < 0.3)
+    return {
+        "n_points": n, "value_std": float(np.std(val)), "median_uncertainty": median_unc,
+        "median_nearest_neighbor_abs_value_diff": median_abs_diff,
+        "expected_abs_diff_if_independent_noise": expected_if_independent,
+        "ratio_observed_to_expected_noise": ratio,
+        "nearest_neighbor_value_correlation": correlation,
+        "consistent_with_pure_noise_at_point_spacing": consistent_with_noise,
+    }
+
+
 # ------------------------------------------------------------------ B/C: the frozen beam-gridding, called twice
 def memory_check(grid, n_velocity_channels: int, n_points: int) -> dict[str, Any]:
     """Reuses science_engine.validation's own measured (not guessed) per-voxel byte budget and
@@ -661,6 +713,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     vmin, vmax, vmin_vmax_basis = robust_color_limits(point_rows, cfg.color_vmin, cfg.color_vmax)
     map_a_value, map_a_uncertainty, map_a_valid, map_a_point_index = _map_a_grid(point_rows, point_cell,
                                                                                  n_rows, n_cols)
+    noise_dominance = noise_dominance_summary(point_rows)
 
     return {
         "sc_b": sc_b, "sc_c": sc_c, "beam_b": beam_b, "beam_c": beam_c,
@@ -671,6 +724,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
         "map_a_point_index": map_a_point_index,
         "quality_b": quality_b, "used_point_set": sorted(used_common), "used_point_set_note": note,
         "point_rows": point_rows, "color_vmin": vmin, "color_vmax": vmax, "color_limits_basis": vmin_vmax_basis,
+        "noise_dominance": noise_dominance,
     }
 
 
@@ -715,6 +769,25 @@ def board_json_payload(built: dict[str, Any]) -> dict[str, Any]:
     return {"n_rows": n_rows, "n_cols": n_cols, "mosaic_spacing_deg": built["spatial_params"]["mosaic_spacing_deg"],
            "grid": grid.to_dict(), "color_vmin": vmin, "color_vmax": vmax, "colormap": "viridis",
            "color_units": "relative_intensity_dimensionless x m/s", "color_stops": stops, "cells": cells}
+
+
+def spatial_confidence_summary(built: dict[str, Any]) -> dict[str, Any]:
+    """Real numbers behind the honest coverage cue on B/C (hatched/dimmed pixels - see render_all_maps's
+    _mark_low_confidence): how many of each map's valid pixels are backed by only ONE real nearby point
+    (n_pointings <= 1 - the frozen GriddingAccumulator's own count, never re-derived). A high fraction here
+    means most of that map's visual detail is individual points' own measurement noise, not corroborated
+    spatial structure - reported plainly in the manifest, not just baked into an image caption."""
+    out: dict[str, Any] = {}
+    for key, sm in (("b", built["map_b"]), ("c", built["map_c"])):
+        valid = sm.valid
+        n_valid = int(valid.sum())
+        n_single = int((valid & (sm.n_pointings <= 1)).sum())
+        out[key] = {
+            "n_valid_pixels": n_valid, "n_single_point_pixels": n_single,
+            "single_point_fraction": (n_single / n_valid) if n_valid else None,
+            "max_n_pointings": int(sm.n_pointings[valid].max()) if n_valid else None,
+        }
+    return out
 
 
 # ------------------------------------------------------------------ rendering (matplotlib, lazy import)
@@ -766,6 +839,16 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     written: dict[str, list[str]] = {}
     hi_caveat = ("INSTRUMENTAL/" + cfg.calibration_level_filter + " result - relative_intensity_dimensionless "
                 "only. No HI detection, Kelvin, Jy, N_HI or absolute flux claimed.")
+    nd = built.get("noise_dominance")
+    noise_caveat = ""
+    if nd and nd["consistent_with_pure_noise_at_point_spacing"]:
+        noise_caveat = (
+            f" NOISE CHECK: neighbouring real points differ by a median of {nd['median_nearest_neighbor_abs_value_diff']:.4g} "
+            f"(x{nd['ratio_observed_to_expected_noise']:.2g} what independent per-point noise alone predicts: "
+            f"sqrt(2) x median sigma = {nd['expected_abs_diff_if_independent_noise']:.4g}), and neighbouring values "
+            f"are essentially uncorrelated (r={nd['nearest_neighbor_value_correlation']:.2f}) - consistent with pure "
+            f"per-point noise at this spacing. ANY multi-pixel bump/dip B/C shows may be a chance grouping of that "
+            f"noise, not detected spatial structure.")
 
     def _cell_ticks(ax) -> None:
         for e in x_edges:
@@ -780,12 +863,51 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         ax.set_ylim(-half_h, half_h)
         ax.set_aspect("equal")
 
+    def _local_pixel_centers(grid):
+        """(X, Y) meshgrids of each pixel's own local tangent-plane offset (degrees), SAME linspace
+        convention pixel_centers_deg() uses (and therefore the SAME positions build_cube() actually
+        weighted from) - used to align a contourf/hatch overlay exactly on top of the imshow array it
+        annotates, pixel for pixel."""
+        xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
+        ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
+        xc, yc = (xs[:-1] + xs[1:]) / 2, (ys[:-1] + ys[1:]) / 2
+        return np.meshgrid(xc, yc)
+
+    def _mark_low_confidence(ax, grid, science_map) -> np.ndarray:
+        """Honest coverage cue for an INTERPOLATED panel (request: real circular halos were traced to
+        individual points' own noise dominating their neighbourhood - see this function's caller and the
+        task's own diagnosis) - hatches every pixel whose value is NOT corroborated by more than one real
+        nearby measurement (n_pointings <= 1, the frozen GriddingAccumulator's own count of pointings with
+        nonzero weight - reused exactly as science_engine.integration.integrated_map() already computes it,
+        never re-derived). A hatched pixel's bump/dip may be that ONE point's own measurement noise, not
+        real spatial structure - this is disclosed, never blurred away or hidden. Returns the mask (for the
+        caption's own real count)."""
+        low_conf = science_map.valid & (science_map.n_pointings <= 1)
+        if low_conf.any():
+            xg, yg = _local_pixel_centers(grid)
+            cs = ax.contourf(xg, yg, low_conf.astype(float), levels=[0.5, 1.5], colors="none", hatches=["////"])
+            # matplotlib >=3.10 returns contourf's hatched region as ONE artist (no .collections list any
+            # more); matplotlib <3.10 returns a QuadContourSet whose hatching lives on .collections. Handle
+            # both without depending on a specific version.
+            artists = getattr(cs, "collections", None) or [cs]
+            for artist in artists:
+                artist.set_edgecolor((1, 1, 1, 0.55))
+                artist.set_linewidth(0.0)
+        return low_conf
+
     def _finish(fig, ax, title: str, name: str, extra_caption: str, exts=("png", "svg", "pdf")) -> None:
         ax.set_xlabel(f"RA offset from center RA={board.center_ra_deg:.4f} deg", fontsize=7.5)
         ax.set_ylabel(f"Dec offset from center Dec={board.center_dec_deg:.4f} deg", fontsize=7.5)
         fig.suptitle(title, fontsize=8.5, y=0.985)
         fig.text(0.5, 0.01, extra_caption, ha="center", va="bottom", fontsize=6.5, wrap=True)
-        fig.subplots_adjust(top=0.80, bottom=0.22, left=0.13, right=0.99)
+        # Bottom margin scales with the caption's OWN length (adding the noise-check/coverage-density
+        # paragraphs made some captions wrap to several more lines than a short one) - a fixed margin was
+        # measured to let a long caption's top line collide with the x-axis label; this stays robust to
+        # caption length instead of a new hand-tuned constant per addition.
+        chars_per_line = 145   # approx at fontsize=6.5 across this figure's width
+        n_lines = max(1, -(-len(extra_caption) // chars_per_line))
+        bottom = min(0.20 + 0.018 * n_lines, 0.45)
+        fig.subplots_adjust(top=0.80, bottom=bottom, left=0.13, right=0.99)
         paths = []
         for ext in exts:
             p = out_dir / f"{name}.{ext}"
@@ -819,17 +941,28 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     # ---- B / C: genuinely finer interpolated rasters - real NEW pixel positions between the measured cells,
     # never the same {n_rows}x{n_cols} cells redrawn bigger/blurrier. Same physical footprint/scale as A;
     # strictly increasing density C > B > A (enforced by MapConfig.interp_factor_c > interp_factor_b). ----
-    for key, label, kernel_fwhm, science_map, factor in (
-        ("map_b_smooth", "B: INTERPOLATED (light)", spatial["smoothing_fwhm_b_deg"], built["map_b"], cfg.interp_factor_b),
-        ("map_c_heavy", "C: INTERPOLATED (heavier)", spatial["smoothing_fwhm_c_deg"], built["map_c"], cfg.interp_factor_c),
+    for key, label, kernel_fwhm, science_map, factor, grid_bc in (
+        ("map_b_smooth", "B: INTERPOLATED (light)", spatial["smoothing_fwhm_b_deg"], built["map_b"],
+         cfg.interp_factor_b, built["grid_b"]),
+        ("map_c_heavy", "C: INTERPOLATED (heavier)", spatial["smoothing_fwhm_c_deg"], built["map_c"],
+         cfg.interp_factor_c, built["grid_c"]),
     ):
         ny_fine, nx_fine = science_map.value.shape
         fig, ax = plt.subplots(figsize=(6.6, 6.0))
         masked = np.ma.masked_where(~science_map.valid, science_map.value)
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest", extent=extent)
+        # A pixel dominated by exactly one nearby real point (no corroborating second measurement) is
+        # rendered DIMMER, not blurred - its own VALUE is untouched (still the real weighted-mean output of
+        # build_cube()/integrated_map()), only its visual prominence is honestly reduced so an isolated
+        # point's own noise excursion does not read as confirmed structure. See _mark_low_confidence().
+        low_conf = science_map.valid & (science_map.n_pointings <= 1)
+        alpha = np.where(low_conf, 0.45, 1.0)
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest",
+                       extent=extent, alpha=alpha)
+        _mark_low_confidence(ax, grid_bc, science_map)
         _extent_and_aspect(ax)   # no cell gridlines/ticks here - this is a continuous raster, not a per-cell board
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("integrated relative_intensity_dimensionless x m/s")
+        n_low_conf = int(low_conf.sum())
         _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
                                       f"{label} - {ny_fine}x{nx_fine} grid ({factor}x the {n_rows}x{n_cols} board)"),
                key,
@@ -843,7 +976,10 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
                f"{len(built['used_point_set'])} point(s) used identically in both. Interpolation ESTIMATES "
                f"values between measurements; it never recovers detail the instrument did not measure, and "
                f"no real spectrum exists for a pixel here - only the {n_rows}x{n_cols} real cells in panel A "
-               f"have one. Color limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}). {hi_caveat}")
+               f"have one. HATCHED/DIMMED pixels ({n_low_conf}/{int(science_map.valid.sum())} valid px) are "
+               f"backed by only ONE nearby real point (no corroborating second measurement) - a bump/dip "
+               f"there may be that single point's own measurement noise, not real spatial structure. Color "
+               f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat} {hi_caveat}")
 
     # ---- A + B + C combined: same physical box and colour scale, each panel's own resolution declared,
     # increasing left to right (request: "verse juntos... poder abrirse grandes") ----
@@ -852,13 +988,22 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     b_shape = built["map_b"].value.shape
     c_shape = built["map_c"].value.shape
     panels = [
-        (f"A: MEASURED ({n_rows}x{n_cols})", built["map_a_value"], built["map_a_valid"], True),
-        (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]})", built["map_b"].value, built["map_b"].valid, False),
-        (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]})", built["map_c"].value, built["map_c"].valid, False),
+        (f"A: MEASURED ({n_rows}x{n_cols})", built["map_a_value"], built["map_a_valid"], True, None, None),
+        (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]})", built["map_b"].value, built["map_b"].valid, False,
+         built["map_b"], built["grid_b"]),
+        (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]})", built["map_c"].value, built["map_c"].valid, False,
+         built["map_c"], built["grid_c"]),
     ]
-    for ax, (label, value, valid, is_board) in zip(axes, panels):
+    for ax, (label, value, valid, is_board, science_map, grid_bc) in zip(axes, panels):
         masked = np.ma.masked_where(~valid, value)
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest", extent=extent)
+        alpha = 1.0
+        if not is_board:
+            low_conf = science_map.valid & (science_map.n_pointings <= 1)
+            alpha = np.where(low_conf, 0.45, 1.0)
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest",
+                       extent=extent, alpha=alpha)
+        if not is_board:
+            _mark_low_confidence(ax, grid_bc, science_map)
         ax.set_title(label, fontsize=9)
         _extent_and_aspect(ax)
         if is_board:
@@ -880,7 +1025,9 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             f"Same physical footprint and color scale in all three; only pixel density increases left to "
             f"right ({n_rows}x{n_cols} -> {b_shape[0]}x{b_shape[1]} -> {c_shape[0]}x{c_shape[1]}). B/C pixels "
             f"between real positions are interpolation ESTIMATES, never new measurements - no spectrum exists "
-            f"for them. {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
+            f"for them. Hatched/dimmed B/C areas are backed by only ONE nearby real point - a bump/dip there "
+            f"may be that point's own measurement noise, not real structure (see map_coverage_density)."
+            f"{noise_caveat} {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
     paths = []
     for ext in ("png", "svg", "pdf"):
         p = out_dir / f"map_abc_combined.{ext}"
@@ -918,6 +1065,34 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         quality_kind = "uncertainty/SNR (propagated statistical 1-sigma)"
     else:
         quality_kind = "no propagable uncertainty available"
+
+    # ---- coverage DENSITY (request: "agrega una indicacion visual... de la cobertura y la incertidumbre
+    # espacial") - map B's own n_pointings (science_engine.gridding's own count of real pointings with
+    # nonzero weight at each pixel, already computed by integrated_map() - never re-derived here). This is
+    # the real, quantitative origin of the hatching on B/C: wherever this map reads 1, that pixel's B/C
+    # value is that ONE point's own reading, not a genuine multi-point average. Same support_radius_deg for
+    # B and C, so this pattern applies equivalently to C (a finer raster just samples the same underlying
+    # coverage more densely - see the caption). ----
+    n_pt = built["map_b"].n_pointings.astype(float)
+    n_pt_masked = np.ma.masked_where(~built["map_b"].valid, n_pt)
+    fig, ax = plt.subplots(figsize=(6.6, 6.0))
+    n_pt_cmap = plt.get_cmap("cividis").with_extremes(bad=(0, 0, 0, 0))
+    im = ax.imshow(n_pt_masked, origin="lower", cmap=n_pt_cmap, vmin=1, vmax=max(3, int(np.nanmax(n_pt_masked)) if n_pt_masked.count() else 3),
+                   interpolation="nearest", extent=extent)
+    _extent_and_aspect(ax)
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("real points with nonzero weight at this pixel (n_pointings)")
+    n1 = int((built["map_b"].valid & (built["map_b"].n_pointings <= 1)).sum())
+    _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
+                                  f"COVERAGE DENSITY - how many real points back each B pixel ({n_pt.shape[0]}x{n_pt.shape[1]})"),
+           "map_coverage_density",
+           f"n_pointings = 1 (darkest) means that pixel's B/C value comes from a SINGLE nearby real "
+           f"measurement - no second point to cross-check it against, so its own noise reads directly as a "
+           f"local bump/dip (the hatched/dimmed areas on B/C). {n1}/{int(built['map_b'].valid.sum())} valid "
+           f"pixels here are single-point-only. Same support_radius_deg for B and C, so this coverage pattern "
+           f"applies to both - a finer raster (C) only samples it more densely, it does not add real "
+           f"corroborating measurements. {hi_caveat}",
+           exts=("png", "svg"))
 
     # ---- coverage: the real N x M board, categorical (no point planned there / used / excluded) ----
     point_cell = built["point_cell"]
@@ -1045,6 +1220,7 @@ def cmd_run(args) -> int:
     maps_dir.mkdir()
 
     exports, unc_kind = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
+    spatial_confidence = spatial_confidence_summary(built)
 
     # tabular per-point export for reproducibility (section: "exporta valores tabulares de puntos")
     import csv
@@ -1091,6 +1267,7 @@ def cmd_run(args) -> int:
         "used_point_set": built["used_point_set"], "used_point_set_note": built["used_point_set_note"],
         "n_points_filtered_in": len(filtered.points), "n_points_used": len(built["used_point_set"]),
         "quality_b": built["quality_b"].to_dict(), "uncertainty_kind": unc_kind,
+        "spatial_confidence": spatial_confidence, "noise_dominance": built["noise_dominance"],
         "thermal_drift": thermal,
         "exports": exports, "points_csv": "points.csv",
         "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),

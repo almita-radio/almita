@@ -140,7 +140,10 @@
             gaussiano) entre las mediciones cercanas. Los píxeles nuevos, ubicados entre las posiciones
             realmente observadas, son ESTIMACIONES matemáticas, no mediciones nuevas: interpolar no puede
             recuperar detalle físico que el instrumento no llegó a medir, solo ofrece una lectura visual más
-            continua de los mismos datos reales.</p></details>
+            continua de los mismos datos reales. Las zonas atenuadas/rayadas están respaldadas por UN SOLO
+            punto real cercano (sin una segunda medición que lo confirme): un bulto o hueco allí puede ser
+            solo el ruido propio de esa medición, no una estructura espacial real — ver el panel de
+            "densidad de cobertura" más abajo.</p></details>
         </figure>
         <figure class="board-panel" id="panel-c">
           <figcaption id="caption-c">C — INTERPOLATED (heavier)</figcaption>
@@ -155,7 +158,10 @@
             <p>Esta versión usa una grilla aún más densa y un radio de suavizado mayor que el panel central,
             por lo que la superficie se ve más continua. Sigue sin haber mediciones nuevas: todos los valores
             fuera de las celdas reales de A son estimaciones de interpolación, nunca observaciones del
-            instrumento, y no existe un espectro real para ningún píxel de esta imagen.</p></details>
+            instrumento, y no existe un espectro real para ningún píxel de esta imagen. El mismo radio de
+            soporte espacial que en B determina qué puntos pueden influir en cada píxel, así que las mismas
+            zonas atenuadas/rayadas (respaldadas por un solo punto real) aparecen aquí también — una grilla
+            más fina no agrega mediciones nuevas que las corroboren.</p></details>
         </figure>
       </div>
       <div id="cell-detail" class="obs-summary">select a real cell in panel A above</div>
@@ -166,6 +172,7 @@
       <h3>SECONDARY DIAGNOSTICS</h3>
       <div class="maps-grid" id="secondary-maps-grid">
         <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B's own raster)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
+        <figure id="fig-coverage-density" hidden><figcaption>COVERAGE DENSITY — real points backing each B/C pixel</figcaption><img id="img-map-coverage-density" alt="coverage density map"></figure>
         <figure><figcaption>COVERAGE — real board, used vs excluded</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
       </div>
 

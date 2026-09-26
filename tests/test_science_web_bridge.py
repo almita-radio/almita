@@ -21,7 +21,8 @@ from science_engine.spatial import angular_separation_deg
 
 from science_web_bridge import (MapConfig, MosaicShapeError, _reconcile_used_point_sets, auto_spatial_params,
                                 board_json_payload, build_all_products, build_fine_grid, build_mosaic_grid,
-                                render_all_maps, viridis_hex)
+                                noise_dominance_summary, render_all_maps, spatial_confidence_summary,
+                                viridis_hex)
 
 
 def mosaic_input(n=6, spacing=1.0, **kw):
@@ -347,3 +348,148 @@ def test_render_all_maps_writes_progressively_denser_exports(tmp_path):
     assert built["map_a_value"].shape == (6, 6)
     assert built["map_b"].value.shape == (18, 18)
     assert built["map_c"].value.shape == (36, 36)
+
+
+# ---------------------------------------------------------------- round 3: circular halos traced to
+# individual points' own noise dominating their neighbourhood under Gaussian-weighted interpolation - an
+# honest coverage/confidence cue (n_pointings, already computed by the frozen integrated_map(), never
+# re-derived), never a blur, per the explicit "no ocultes el problema con un blur" instruction.
+
+def test_spatial_confidence_flags_single_point_pixels_when_support_smaller_than_spacing():
+    """With a support radius smaller than the point spacing, a pixel right next to one point and far from
+    any other must be backed by exactly that ONE point (n_pointings==1) - the real mechanism behind a
+    circular halo: that pixel's value is entirely one point's own reading, un-corroborated."""
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0, support_radius_deg=0.3,
+                                            smoothing_fwhm_b_deg=0.3, smoothing_fwhm_c_deg=0.6))
+    conf = spatial_confidence_summary(built)
+    for key in ("b", "c"):
+        assert conf[key]["n_single_point_pixels"] > 0
+        assert 0 < conf[key]["single_point_fraction"] <= 1.0
+        assert conf[key]["max_n_pointings"] >= 1
+
+
+def test_spatial_confidence_summary_shape():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    conf = spatial_confidence_summary(built)
+    assert set(conf.keys()) == {"b", "c"}
+    for key in ("b", "c"):
+        for field in ("n_valid_pixels", "n_single_point_pixels", "single_point_fraction", "max_n_pointings"):
+            assert field in conf[key]
+
+
+def test_outlier_point_creates_a_locally_dominant_blob_that_persists_at_higher_resolution():
+    """Direct, controlled reproduction of the real diagnosis (REDUCE-20260919-234712-712870, point 30 at
+    RA=356.02 Dec=-36.08, raw value -998.4): a single point with an extreme value creates a local bump
+    centered on ITS OWN cell in the interpolated maps - and that centering survives a real increase in
+    raster density with the SAME method (Gaussian-weighted averaging, same support/smoothing), proving the
+    blob is a property of the data + method, not a resolution/rendering artifact."""
+    specs = rectangular_grid_specs(12.0, -30.0, 6, 6, spacing_deg=1.0, calibration_level="UNCALIBRATED")
+    outlier_idx = 18
+    outlier_spec = next(s for s in specs if s.point_index == outlier_idx)
+    outlier_ra_deg = outlier_spec.ra_hours * 15.0
+
+    def amp(ra_deg, dec_deg):
+        return 40.0 if abs(ra_deg - outlier_ra_deg) < 1e-6 and abs(dec_deg - outlier_spec.dec_degrees) < 1e-6 else 0.0
+
+    # a tiny but nonzero noise_sigma - science_engine's own bin_validity() correctly treats an EXACTLY zero
+    # reported uncertainty as invalid data (sigma<=0 is never valid), not a usable "noiseless" measurement.
+    si = build_synthetic_science_input(specs, noise_sigma=1e-4, line_amplitude_fn=amp)
+    board_r, board_c = build_mosaic_grid(si, 1.0)[1][outlier_idx]
+
+    for factor_c in (6, 18):   # same method, increasingly dense raster - the same 6x6 board's own spacing
+        built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0, interp_factor_b=3, interp_factor_c=factor_c))
+        map_c = built["map_c"]
+        finite = np.where(map_c.valid, map_c.value, -np.inf)
+        r_peak, c_peak = np.unravel_index(np.nanargmax(finite), map_c.value.shape)
+        assert (r_peak // factor_c, c_peak // factor_c) == (board_r, board_c), (
+            f"at {factor_c}x, the peak pixel's board cell moved away from the real outlier point's own cell")
+
+
+def test_render_all_maps_confidence_overlay_never_mutates_the_underlying_values(tmp_path):
+    """The honest coverage cue is presentation-only (dimming/hatching in the saved image) - it must never
+    touch the real, already-computed map_b/map_c arrays render_all_maps was given."""
+    si = mosaic_input(n=6, spacing=1.0)
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    built = build_all_products(si, cfg)
+    b_before = built["map_b"].value.copy()
+    c_before = built["map_c"].value.copy()
+    b_np_before = built["map_b"].n_pointings.copy()
+    render_all_maps(built, cfg, si.campaign_id, si.reduce_session_id, tmp_path)
+    assert np.array_equal(built["map_b"].value, b_before, equal_nan=True)
+    assert np.array_equal(built["map_c"].value, c_before, equal_nan=True)
+    assert np.array_equal(built["map_b"].n_pointings, b_np_before)
+
+
+def test_render_all_maps_writes_coverage_density_export(tmp_path):
+    si = mosaic_input(n=6, spacing=1.0)
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    built = build_all_products(si, cfg)
+    exports, _ = render_all_maps(built, cfg, si.campaign_id, si.reduce_session_id, tmp_path)
+    assert "map_coverage_density" in exports
+    for ext in ("png", "svg"):
+        assert (tmp_path / f"map_coverage_density.{ext}").is_file()
+
+
+# ---------------------------------------------------------------- noise_dominance_summary: the direct,
+# quantitative version of the same diagnosis - reproduces the real numbers found on
+# REDUCE-20260919-234712-712870 (median |nearest-neighbour diff| ~281 vs sqrt(2)*median(unc) ~236,
+# correlation ~-0.09) in controlled, synthetic form.
+
+def test_noise_dominance_flags_pure_noise_as_consistent():
+    """36 points, real per-point noise, NO spatial signal (line_amplitude_fn left at its zero default) -
+    must be reported as statistically consistent with pure noise at the point spacing."""
+    si = mosaic_input(n=6, spacing=1.0)
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    from science_web_bridge import per_point_integrated_values
+    from science_engine.cube import canonical_velocity_axis
+    velocity_axis = canonical_velocity_axis(si)
+    spatial = auto_spatial_params(si, cfg)
+    from science_web_bridge import _kernel_science_config
+    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_b_deg"],
+                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_b_deg"], "k")
+    point_rows = per_point_integrated_values(si, sc, velocity_axis)
+    summary = noise_dominance_summary(point_rows)
+    assert summary is not None
+    assert summary["n_points"] == 36
+    assert summary["consistent_with_pure_noise_at_point_spacing"] is True
+    assert 0.3 < summary["ratio_observed_to_expected_noise"] < 3.0
+    assert abs(summary["nearest_neighbor_value_correlation"]) < 0.5
+
+
+def test_noise_dominance_flags_a_real_smooth_gradient_as_not_pure_noise():
+    """The SAME point layout, but with a real, smooth (no noise) spatial signal that varies gently across
+    the field - must NOT be flagged as noise: neighbouring points should correlate strongly and differ far
+    less than independent noise alone would predict, since the injected sigma is tiny and the true signal
+    dominates every point's own value."""
+    specs = rectangular_grid_specs(12.0, -30.0, 6, 6, spacing_deg=1.0, calibration_level="UNCALIBRATED")
+
+    def smooth_amp(ra_deg, dec_deg):
+        return 10.0 + 2.0 * (dec_deg - specs[0].dec_degrees)   # a gentle, real linear gradient across the field
+
+    si = build_synthetic_science_input(specs, noise_sigma=1e-4, line_amplitude_fn=smooth_amp)
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    from science_web_bridge import _kernel_science_config, per_point_integrated_values
+    from science_engine.cube import canonical_velocity_axis
+    velocity_axis = canonical_velocity_axis(si)
+    spatial = auto_spatial_params(si, cfg)
+    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_b_deg"],
+                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_b_deg"], "k")
+    point_rows = per_point_integrated_values(si, sc, velocity_axis)
+    summary = noise_dominance_summary(point_rows)
+    assert summary is not None
+    assert summary["consistent_with_pure_noise_at_point_spacing"] is False
+    assert summary["nearest_neighbor_value_correlation"] > 0.3
+
+
+def test_noise_dominance_summary_returns_none_with_too_few_points():
+    assert noise_dominance_summary([{"status": "USED", "value": 1.0, "uncertainty": 0.1,
+                                     "ra_deg": 0.0, "dec_degrees": 0.0}]) is None
+
+
+def test_build_all_products_exposes_noise_dominance():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    assert built["noise_dominance"] is not None
+    assert "consistent_with_pure_noise_at_point_spacing" in built["noise_dominance"]

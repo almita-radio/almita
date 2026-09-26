@@ -305,6 +305,16 @@
       + `support radius (B & C, shared): ${manifest.spatial_params.support_radius_deg.toFixed(4)} deg   `
       + `smoothing B/C: ${manifest.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${manifest.spatial_params.smoothing_fwhm_c_deg.toFixed(4)} deg   `
       + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
+      + `single-point-only pixels (no corroborating 2nd measurement): B=${(manifest.spatial_confidence.b.single_point_fraction * 100).toFixed(0)}%   `
+      + `C=${(manifest.spatial_confidence.c.single_point_fraction * 100).toFixed(0)}% of valid pixels — see COVERAGE DENSITY below\n`
+      + (manifest.noise_dominance ? (
+          `nearest-neighbour value check: median |Δ|=${manifest.noise_dominance.median_nearest_neighbor_abs_value_diff.toFixed(4)} `
+          + `(x${manifest.noise_dominance.ratio_observed_to_expected_noise.toFixed(2)} vs sqrt(2)×median σ=${manifest.noise_dominance.expected_abs_diff_if_independent_noise.toFixed(4)}), `
+          + `correlation r=${manifest.noise_dominance.nearest_neighbor_value_correlation.toFixed(2)}`
+          + (manifest.noise_dominance.consistent_with_pure_noise_at_point_spacing
+            ? "  → CONSISTENT WITH PURE NOISE at this point spacing: any multi-pixel bump/dip in B/C may be chance noise, not real structure\n"
+            : "  → neighbours correlate more than pure noise would predict\n")
+        ) : "")
       + `quality (map B): ${manifest.quality_b.state} — ${(manifest.quality_b.reasons || []).join("; ")}`
       + (manifest.used_point_set_note ? `\nNOTE: ${manifest.used_point_set_note}` : "");
     $("results-hi-caveat").textContent = "INSTRUMENTAL/" + manifest.calibration_level_filter + " result — "
@@ -322,6 +332,9 @@
     const hasSnr = (manifest.exports || {}).map_snr;
     $("fig-snr").hidden = !hasSnr;
     if (hasSnr) $("img-map-snr").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_snr.png")}`;
+    const hasCovDensity = (manifest.exports || {}).map_coverage_density;
+    $("fig-coverage-density").hidden = !hasCovDensity;
+    if (hasCovDensity) $("img-map-coverage-density").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_coverage_density.png")}`;
     const hasCombined = (manifest.exports || {}).map_abc_combined;
     if (hasCombined) {
       const combinedUrl = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_abc_combined.png")}`;
