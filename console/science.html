@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Science</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header id="almita-header"><h1>ALMITA SCIENCE</h1></header>
+
+  <main id="app">
+    <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.06em">
+      LEVEL 1 (REDUCE) → LEVEL 2 (SCIENCE HEATMAPS) · science_engine (frozen) + science_web_bridge.py ·
+      offline, filesystem only · relative_intensity_dimensionless only — never Kelvin/Jy/N_HI/absolute flux
+    </div>
+
+    <section class="panel" id="input-panel" aria-labelledby="h-input">
+      <header><h2 id="h-input">1 · CHOOSE A REDUCE RESULT</h2></header>
+      <div class="obs-actions"><button type="button" id="btn-refresh-inputs">REFRESH LIST</button></div>
+      <div class="obs-row"><label for="in-session">REDUCE SESSION (a campaign may have several — each own reduction is listed)</label>
+        <select id="in-session"><option value="">(choose)</option></select></div>
+      <details id="session-no-data-details" hidden>
+        <summary>REDUCE sessions with 0 usable points (<span id="session-no-data-count">0</span>) — diagnostic only</summary>
+        <div class="twrap"><table class="status-table" id="session-no-data-table">
+          <thead><tr><th>campaign</th><th>session</th><th>status</th><th>points completed</th></tr></thead>
+          <tbody></tbody></table></div>
+      </details>
+      <div class="obs-summary" id="input-note"></div>
+    </section>
+
+    <section class="panel" id="coverage-panel" hidden aria-labelledby="h-coverage">
+      <header><h2 id="h-coverage">2 · COVERAGE</h2><span id="coverage-badge" class="badge">—</span></header>
+      <div class="cards" id="coverage-cards"></div>
+      <div id="coverage-problems" hidden>
+        <h3>SCIENCE CONTRACT / INGEST PROBLEMS</h3>
+        <div class="obs-checks" id="coverage-problems-list"></div>
+      </div>
+      <div id="coverage-lsrk-missing" hidden>
+        <h3>POINTS WITHOUT A COMPUTED LSRK AXIS</h3>
+        <div class="obs-summary" id="coverage-lsrk-missing-list"></div>
+      </div>
+    </section>
+
+    <section class="panel" id="config-panel" hidden aria-labelledby="h-config">
+      <header><h2 id="h-config">3 · MAGNITUDE, CALIBRATION LEVEL &amp; VELOCITY WINDOW</h2></header>
+      <div class="obs-summary">Primary magnitude: <b>integrated relative intensity</b> over the velocity window below
+        (science_engine.integration.integrated_map) — units relative_intensity_dimensionless × m/s. Dimensionless
+        fractional excess; no Kelvin, Jy, brightness temperature, N_HI or absolute flux is derived here.</div>
+      <div class="obs-row" id="row-calib-filter" hidden>
+        <label>CALIBRATION LEVEL (this session has both — pick ONE; never mixed on one color scale)</label>
+        <div class="obs-actions">
+          <button type="button" class="mode-btn" id="btn-calib-relative" data-level="RELATIVE">RELATIVE (calibrated)</button>
+          <button type="button" class="mode-btn" id="btn-calib-uncalibrated" data-level="UNCALIBRATED">UNCALIBRATED (instrumental)</button>
+        </div>
+      </div>
+      <div class="obs-summary" id="calib-single-note" hidden></div>
+      <div class="obs-row"><label for="in-vmin">VELOCITY WINDOW MIN (km/s, LSRK)</label><input type="number" id="in-vmin" value="-300" step="1"></div>
+      <div class="obs-row"><label for="in-vmax">VELOCITY WINDOW MAX (km/s, LSRK)</label><input type="number" id="in-vmax" value="300" step="1"></div>
+      <div class="obs-row"><label for="in-beam-mode">BEAM FWHM</label>
+        <select id="in-beam-mode"><option value="observer_config">from observer_config.json</option><option value="fwhm">enter manually</option></select></div>
+      <div class="obs-row" id="row-beam-fwhm" hidden><label for="in-beam-fwhm">BEAM FWHM (deg)</label><input type="number" id="in-beam-fwhm" value="1.5" step="0.1" min="0.01"></div>
+      <details>
+        <summary>Advanced map parameters (declared, reproducible — persisted in the manifest)</summary>
+        <div class="obs-row"><label for="in-cutoff-b">MAP B (smooth) beam cutoff (× FWHM)</label><input type="number" id="in-cutoff-b" value="2.0" step="0.5" min="0.1"></div>
+        <div class="obs-row"><label for="in-cutoff-c">MAP C (heavier) beam cutoff (× FWHM)</label><input type="number" id="in-cutoff-c" value="5.0" step="0.5" min="0.2"></div>
+        <div class="obs-row"><label for="in-quality-policy">QUALITY POLICY</label>
+          <select id="in-quality-policy"><option value="">(default: STANDARD)</option><option>STRICT</option><option selected>STANDARD</option><option>PERMISSIVE</option></select></div>
+        <div class="obs-row"><label for="in-min-coverage">MIN SPECTRAL COVERAGE FRACTION</label><input type="number" id="in-min-coverage" value="0.5" step="0.05" min="0" max="1"></div>
+        <div class="obs-row"><label><input type="checkbox" id="in-color-override"> override color limits (applies identically to A/B/C)</label></div>
+        <div class="obs-row" id="row-color-override" hidden>
+          <label for="in-color-vmin">COLOR MIN</label><input type="number" id="in-color-vmin" step="any">
+          <label for="in-color-vmax">COLOR MAX</label><input type="number" id="in-color-vmax" step="any">
+        </div>
+      </details>
+    </section>
+
+    <section class="panel" id="plan-panel" hidden aria-labelledby="h-plan">
+      <header><h2 id="h-plan">4 · PLAN</h2><span id="plan-badge" class="badge">—</span></header>
+      <div class="obs-actions"><button type="button" id="btn-plan">PLAN</button></div>
+      <pre class="obs-summary" id="plan-summary"></pre>
+      <div class="obs-checks" id="plan-checks"></div>
+      <div id="job-science-plan"></div>
+    </section>
+
+    <section class="panel" id="run-panel" hidden aria-labelledby="h-run">
+      <header><h2 id="h-run">5 · RUN</h2><span id="run-badge" class="badge">—</span></header>
+      <div class="obs-summary">Writes a new SCIENCE session under data/science/&lt;campaign&gt;/SCIENCE_WEB-&lt;timestamp&gt;/ —
+        never touches the REDUCE session, its HDF5s, or any calibration profile. No hardware, no mount, no SDR.</div>
+      <div class="obs-actions"><button type="button" id="btn-run" disabled>RUN</button></div>
+      <div class="reason" data-for="btn-run" role="status"></div>
+      <div id="job-science-run"></div>
+    </section>
+
+    <section class="panel" id="results-panel" hidden aria-labelledby="h-results">
+      <header><h2 id="h-results">6 · THREE HEATMAPS</h2></header>
+      <div class="obs-summary" id="results-summary"></div>
+      <div class="obs-summary" id="results-hi-caveat" style="color:var(--warn)"></div>
+      <div class="obs-summary" id="results-thermal"></div>
+      <div class="maps-grid">
+        <figure><figcaption>A — NO SPATIAL INTERPOLATION</figcaption><img id="img-map-a" alt="map A"></figure>
+        <figure><figcaption>B — SMOOTH INTERPOLATION</figcaption><img id="img-map-b" alt="map B"></figure>
+        <figure><figcaption>C — HEAVIER INTERPOLATION</figcaption><img id="img-map-c" alt="map C"></figure>
+      </div>
+      <div class="maps-grid" id="secondary-maps-grid">
+        <figure id="fig-snr" hidden><figcaption>UNCERTAINTY / SNR (map B)</figcaption><img id="img-map-snr" alt="SNR map"></figure>
+        <figure><figcaption>COVERAGE — used vs excluded points</figcaption><img id="img-map-coverage" alt="coverage map"></figure>
+      </div>
+
+      <h3>INSPECT A MEASURED POINT</h3>
+      <div class="obs-summary">Click the nearest marker below to inspect that real measurement (same positions as map A).
+        Clicking empty space means no real measurement is that close — B/C's value there is an interpolation with no
+        observation of its own.</div>
+      <canvas id="point-picker-canvas" width="560" height="480" style="width:100%;max-width:560px;background:#0d1317;cursor:crosshair"></canvas>
+      <div id="point-detail" class="obs-summary">select a point above</div>
+      <div id="point-spectrum-view" hidden>
+        <canvas id="point-spectrum-canvas" width="900" height="240" style="width:100%;background:#0d1317"></canvas>
+      </div>
+
+      <h3>DOWNLOADS</h3>
+      <div class="obs-checks" id="results-artifacts"></div>
+    </section>
+
+    <div id="error-banner" class="banner connection" hidden role="alert"></div>
+  </main>
+  <footer id="almita-footer"></footer>
+  <style>
+    .maps-grid{display:flex;flex-wrap:wrap;gap:12px;margin:10px 0}
+    .maps-grid figure{margin:0;flex:1 1 300px;max-width:420px}
+    .maps-grid img{width:100%;height:auto;border:1px solid var(--line);background:#fff}
+    .maps-grid figcaption{font:11px/1.4 ui-monospace,monospace;color:var(--muted);margin-bottom:4px;letter-spacing:.05em}
+  </style>
+  <script src="common.js"></script>
+  <script src="science.js"></script>
+</body></html>

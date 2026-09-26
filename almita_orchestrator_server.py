@@ -83,6 +83,10 @@ STATIC_FILES = {
     # the dedicated, full-featured page (the PIPELINE panel above stays as the quick/linear path).
     "/reduce.html": "reduce.html",
     "/reduce.js": "reduce.js",
+    # SCIENCE console: REDUCE session -> three comparable heatmaps (no-interp / smooth / heavier), coverage,
+    # per-point spectrum, downloads.
+    "/science.html": "science.html",
+    "/science.js": "science.js",
 }
 _STATIC_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")  # Fase 57: no path traversal via a session id
@@ -260,6 +264,12 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return self._ops_reduce_campaign_calibration_preview()
             if path == "/api/ops/reduce/point":
                 return self._ops_reduce_point()
+            if path == "/api/ops/science/reduce_sessions":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.science_list_reduce_sessions()})
+            if path == "/api/ops/science/inspect_reduce_session":
+                return self._ops_science_inspect_reduce_session()
+            if path == "/api/ops/science/map":
+                return self._ops_science_map()
             if path == "/api/ops/align/defaults":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.align_defaults()})
             if path == "/api/ops/align/sky":
@@ -535,6 +545,22 @@ class ObserveHandler(BaseHTTPRequestHandler):
         try:
             return _json_response(self, 200, {"ok": True, "data": almita_web_ops.reduce_point_result(session_dir, point_index)})
         except (ValueError, FileNotFoundError, KeyError, OSError) as exc:
+            return _error_response(self, 400, str(exc))
+
+    def _ops_science_inspect_reduce_session(self) -> None:
+        rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.science_inspect_reduce_session(rel)})
+        except (ValueError, FileNotFoundError) as exc:
+            return _error_response(self, 400, str(exc))
+
+    def _ops_science_map(self) -> None:
+        q = parse_qs(urlsplit(self.path).query)
+        d = (q.get("dir") or [""])[0]
+        name = (q.get("name") or [""])[0]
+        try:
+            return _json_response(self, 200, {"ok": True, "data": almita_web_ops.science_map_data(d, name)})
+        except (ValueError, FileNotFoundError) as exc:
             return _error_response(self, 400, str(exc))
 
     def _ops_file(self) -> None:

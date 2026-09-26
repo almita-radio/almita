@@ -37,7 +37,8 @@ PY = sys.executable
 DATA = ROOT / "data"
 SERVE_ROOTS = {"mosaic": DATA / "mosaic", "reduced": DATA / "reduced", "science": DATA / "science", "alignment": DATA / "alignment",
                "calibration": DATA / "calibration", "web_ops": OPS_DIR}
-SERVE_SUFFIXES = {".png": "image/png", ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain", ".log": "text/plain", ".md": "text/plain"}
+SERVE_SUFFIXES = {".png": "image/png", ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain", ".log": "text/plain", ".md": "text/plain",
+                  ".svg": "image/svg+xml", ".pdf": "application/pdf"}
 MAX_SERVE_BYTES = 25 * 1024 * 1024
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 DEVICE = "LX200 OnStep"
@@ -221,6 +222,13 @@ STAGES: Dict[str, Dict[str, Any]] = {
     "reduce_capture": {"physical": False, "resources": ("cpu",)},
     "science_plan": {"physical": False, "resources": ("cpu",)},
     "science": {"physical": False, "resources": ("cpu",)},
+    # SCIENCE web console: three comparable heatmaps (A/B/C) from one REDUCE session + one chosen
+    # calibration level - science_web_bridge.py (not frozen; reuses science_engine, frozen, for every real
+    # scientific computation). A separate stage from science_plan/science above (almita_science.py's own
+    # native LEVEL2 pipeline, unmodified) - this one adds the calibration-level split and the dual-cutoff
+    # A/B/C rendering the native CLI does not offer.
+    "science_heatmaps_plan": {"physical": False, "resources": ()},
+    "science_heatmaps": {"physical": False, "resources": ("cpu",)},
 }
 
 
@@ -310,6 +318,13 @@ def _reduce_input_signatures(meta: Dict[str, Any]) -> Dict[str, Any]:
     if meta.get("calibration_profile"):
         pp = (ROOT / meta["calibration_profile"]).resolve()
         sigs["profile"] = {"json": _file_signature(pp.with_suffix(".json")), "npz": _file_signature(pp.with_suffix(".npz"))}
+    if meta.get("reduce_session_dir"):
+        # A REDUCE session is immutable once written (reduce_engine.storage.ReduceSession never overwrites) -
+        # its manifest.json's own (size, mtime_ns) is enough to catch "this points somewhere different now"
+        # (a session deleted and recreated, or the operator pointing at a different session) without hashing
+        # every point's master_spectrum.h5.
+        rp = (ROOT / meta["reduce_session_dir"]).resolve() / "manifest.json"
+        sigs["reduce_manifest"] = _file_signature(rp)
     return sigs
 
 
@@ -324,7 +339,8 @@ def _require_fresh_plan(run_stage: str, run_meta: Dict[str, Any], p: Dict[str, A
     the browser's own JS staleness check (paramsEqual in reduce.js) enforced replanning - real, but
     bypassable by any direct HTTP call, and blind to a file being edited/replaced in place - which is exactly
     what this closes."""
-    plan_stage = {"reduce": "reduce_plan", "reduce_capture": "reduce_capture_plan"}[run_stage]
+    plan_stage = {"reduce": "reduce_plan", "reduce_capture": "reduce_capture_plan",
+                 "science_heatmaps": "science_heatmaps_plan"}[run_stage]
     job_id = p.get("plan_job_id")
     if not isinstance(job_id, str) or not job_id:
         raise ValueError("plan_job_id (string) is required: RUN must reference a PLAN job with these exact "
@@ -607,6 +623,56 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
                 raise ValueError("quality_policy must be STRICT, STANDARD or PERMISSIVE")
             argv += ["--quality-policy", p["quality_policy"]]
         return argv, {"reduce_session_dir": str(red.relative_to(ROOT)), "beam": beam}
+    if stage in ("science_heatmaps_plan", "science_heatmaps"):
+        red = _path_in(p, "reduce_session_dir", SERVE_ROOTS["reduced"])
+        calib = str(p.get("calibration_level_filter") or "")
+        if calib not in ("RELATIVE", "UNCALIBRATED"):
+            raise ValueError("calibration_level_filter must be RELATIVE or UNCALIBRATED - a map is never built "
+                             "from a mix of the two (pick one explicitly)")
+        argv = [PY, "science_web_bridge.py", "plan" if stage == "science_heatmaps_plan" else "run",
+               str(red.relative_to(ROOT)), "--calibration-level-filter", calib, "--json"]
+        beam = str(p.get("beam") or "observer_config")
+        if beam == "observer_config":
+            argv.append("--beam-from-observer-config")
+        elif beam == "fwhm":
+            v = _float(p, "beam_fwhm_deg", 0.1, 90)
+            if v is None:
+                raise ValueError("beam_fwhm_deg is required when beam = fwhm")
+            argv += ["--beam-fwhm-deg", str(v)]
+        else:
+            raise ValueError("beam must be observer_config or fwhm")
+        vmin = _float(p, "velocity_window_min_m_s", -2_000_000, 2_000_000, -300_000.0)
+        vmax = _float(p, "velocity_window_max_m_s", -2_000_000, 2_000_000, 300_000.0)
+        argv += ["--velocity-window-min-m-s", str(vmin), "--velocity-window-max-m-s", str(vmax)]
+        cutoff_b = _float(p, "beam_cutoff_b_n_fwhm", 0.1, 50, 2.0)
+        cutoff_c = _float(p, "beam_cutoff_c_n_fwhm", 0.1, 50, 5.0)
+        if cutoff_c <= cutoff_b:
+            raise ValueError("beam_cutoff_c_n_fwhm must be > beam_cutoff_b_n_fwhm (C is the more-smoothed map)")
+        argv += ["--beam-cutoff-b-n-fwhm", str(cutoff_b), "--beam-cutoff-c-n-fwhm", str(cutoff_c)]
+        if p.get("quality_policy"):
+            if p["quality_policy"] not in ("STRICT", "STANDARD", "PERMISSIVE"):
+                raise ValueError("quality_policy must be STRICT, STANDARD or PERMISSIVE")
+            argv += ["--quality-policy", p["quality_policy"]]
+        min_cov = _float(p, "min_spectral_coverage_fraction", 0.0, 1.0, None)
+        if min_cov is not None:
+            argv += ["--min-spectral-coverage-fraction", str(min_cov)]
+        cvmin = p.get("color_vmin")
+        cvmax = p.get("color_vmax")
+        if (cvmin in (None, "")) != (cvmax in (None, "")):
+            raise ValueError("color_vmin and color_vmax must both be set or both left auto")
+        if cvmin not in (None, ""):
+            argv += ["--color-vmin", str(_float(p, "color_vmin", -1e30, 1e30)), "--color-vmax", str(_float(p, "color_vmax", -1e30, 1e30))]
+        meta = {"reduce_session_dir": str(red.relative_to(ROOT)), "calibration_level_filter": calib, "beam": beam,
+               "beam_fwhm_deg": p.get("beam_fwhm_deg") if beam == "fwhm" else None,
+               "velocity_window_min_m_s": vmin, "velocity_window_max_m_s": vmax,
+               "beam_cutoff_b_n_fwhm": cutoff_b, "beam_cutoff_c_n_fwhm": cutoff_c,
+               "quality_policy": p.get("quality_policy"), "min_spectral_coverage_fraction": min_cov,
+               "color_vmin": None if cvmin in (None, "") else float(cvmin),
+               "color_vmax": None if cvmax in (None, "") else float(cvmax)}
+        if stage == "science_heatmaps":
+            argv += ["--output-root", str(SERVE_ROOTS["science"].relative_to(ROOT))]
+            _require_fresh_plan("science_heatmaps", meta, p)
+        return argv, meta
     raise ValueError(f"unknown stage {stage!r}")
 
 
@@ -1014,6 +1080,41 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 out["verdict"] = "PASS" if status in ("COMPLETED", "VALID") and out["facts"]["quality"] in (None, "GOOD") else "PARTIAL"
                 out["detail"] = f"{kind} {status} (real engine result)" + (f"; quality {out['facts']['quality']}" if out["facts"]["quality"] else "")
+    elif stage in ("science_heatmaps_plan", "science_heatmaps"):
+        # science_web_bridge.py is always invoked with --json - one real JSON blob on stdout, same contract
+        # as every other stage's --json output.
+        blob = None
+        m = re.search(r"\{.*\}", log, re.S)
+        if m:
+            try:
+                blob = json.loads(m.group(0))
+            except ValueError:
+                blob = None
+        is_plan = stage.endswith("_plan")
+        if blob is not None:
+            out["facts"] = blob
+            if is_plan:
+                # Persisted once by the runner right when this PLAN's subprocess finished (see _runner()) -
+                # a real snapshot, never recomputed on every poll (same reasoning as REDUCE's own PLAN gate).
+                out["facts"]["file_signatures"] = j.get("file_signatures")
+            if not is_plan and blob.get("output_dir"):
+                odp = ROOT / blob["output_dir"]
+                out["output_dir"] = str(odp.resolve().relative_to(ROOT)) if odp.exists() and _within(odp, ROOT) else None
+        if state == "EXITED":
+            if not blob:
+                out["detail"] = f"exit {rc}; no JSON result from science_web_bridge.py: {_tail(Path(j['log']), 5)}"
+            elif is_plan:
+                checks = blob.get("checks") or []
+                failing = [c["name"] for c in checks if not c.get("ok", True)]
+                out["verdict"] = "FAIL" if blob.get("blocked") else "PASS"
+                out["detail"] = (f"BLOCKED: {'; '.join(failing)}" if blob.get("blocked") else
+                                 f"PLAN OK - will process {len(blob.get('will_process_points') or [])} point(s) "
+                                 f"({blob.get('config', {}).get('calibration_level_filter')})")
+            else:
+                status = blob.get("status")
+                out["verdict"] = "PASS" if status == "COMPLETED" else "FAIL"
+                out["detail"] = (f"SCIENCE HEATMAPS {status} - {blob.get('n_points_used')} point(s) used, "
+                                 f"calibration_level_filter={blob.get('calibration_level_filter')}")
     if state == "EXITED" and j.get("stopped_by_operator"):
         if out["verdict"] == "PASS":
             out["verdict"] = "PARTIAL"
@@ -1615,7 +1716,7 @@ def _runner(job_path: str) -> int:
     log.write(f"[{_utc()}] exit code {rc}\n".encode())
     job = json.loads(p.read_text())
     job.update(exit_code=rc, ended_utc=_utc(), stopped_by_operator=state["stopped"])
-    if job.get("stage") in ("reduce_plan", "reduce_capture_plan") and rc == 0:
+    if job.get("stage") in ("reduce_plan", "reduce_capture_plan", "science_heatmaps_plan") and rc == 0:
         # Captured ONCE, right here, the moment PLAN's own subprocess actually finished reading these files -
         # a true snapshot, never recomputed later. classify() is a stateless log parser re-run on every poll;
         # computing "PLAN-time" signatures there would silently re-read the CURRENT disk instead (the bug this
@@ -1628,6 +1729,77 @@ def _runner(job_path: str) -> int:
             job["file_signatures"] = None
     _write_json(p, job)
     return 0
+
+
+# ------------------------------------------------------------------ SCIENCE: discovery + inspection (read-only)
+def science_list_reduce_sessions(limit: int = 60, scan_budget: int = 300) -> Dict[str, Any]:
+    """REDUCE sessions with at least one COMPLETED point (real, usable Level-1 data) appear in "sessions" -
+    a campaign that was only ever planned, or whose points all BLOCKED/FAILED, has nothing SCIENCE could
+    build and is listed under "no_data" instead, never silently hidden from disk or dropped from this
+    result. A campaign that was REDUCEd more than once (different profile, velocity frame, or config) gets
+    one row per REDUCE session - never collapsed to "the most recent", since a different reduction of the
+    same campaign is a materially different input. Cheap: every real REDUCE manifest.json already carries
+    its own calibration_level_counts/velocity_frame_counts/points_completed - no per-point file is opened
+    here (the heavier science-contract check happens once a specific session is chosen, in
+    science_inspect_reduce_session())."""
+    root = SERVE_ROOTS["reduced"]
+    if not root.is_dir():
+        return {"sessions": [], "no_data": []}
+    session_dirs: List[Path] = []
+    for campaign_dir in root.iterdir():
+        if not campaign_dir.is_dir():
+            continue
+        session_dirs.extend(p for p in campaign_dir.iterdir() if p.is_dir())
+    session_dirs.sort(key=lambda p: -p.stat().st_mtime)
+    rows_ok: List[Dict[str, Any]] = []
+    rows_bad: List[Dict[str, Any]] = []
+    for session_dir in session_dirs[:scan_budget]:
+        if len(rows_ok) >= limit and len(rows_bad) >= limit:
+            break
+        manifest_path = session_dir / "manifest.json"
+        rel = str(session_dir.relative_to(ROOT))
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, ValueError) as exc:
+            rows_bad.append({"reduce_session_dir": rel, "campaign_id": session_dir.parent.name,
+                             "reduce_session_id": session_dir.name, "status": "ERROR", "error": str(exc),
+                             "points_completed": 0, "calibration_level_counts": {}, "mtime": session_dir.stat().st_mtime})
+            continue
+        completed = int(manifest.get("points_completed") or 0)
+        row = {
+            "reduce_session_dir": rel, "campaign_id": manifest.get("campaign_id", session_dir.parent.name),
+            "reduce_session_id": manifest.get("reduce_session_id", session_dir.name), "status": manifest.get("status"),
+            "points_discovered": manifest.get("points_discovered"), "points_completed": completed,
+            "calibration_level_counts": manifest.get("calibration_level_counts") or {},
+            "velocity_frame_counts": manifest.get("velocity_frame_counts") or {},
+            "mtime": session_dir.stat().st_mtime,
+        }
+        (rows_ok if completed > 0 and manifest.get("status") in ("COMPLETED", "PARTIAL") else rows_bad).append(row)
+    return {"sessions": rows_ok[:limit], "no_data": rows_bad[:limit],
+           "scanned": min(len(session_dirs), scan_budget), "discovered": len(session_dirs)}
+
+
+def science_inspect_reduce_session(rel_path: str) -> Dict[str, Any]:
+    """Real coverage + calibration-level + LSRK-availability preview for ONE REDUCE session - reuses
+    science_web_bridge.inspect_reduce_session(), which itself reuses reduce_engine.science_contract."""
+    session_dir = _path_in({"reduce_session_dir": rel_path}, "reduce_session_dir", SERVE_ROOTS["reduced"])
+    import science_web_bridge
+    return science_web_bridge.inspect_reduce_session(str(session_dir))
+
+
+def science_map_data(rel_science_web_dir: str, map_name: str) -> Dict[str, Any]:
+    """Real, read-only map array (value/valid/uncertainty/metadata) from a completed SCIENCE WEB session -
+    for the in-browser canvas view and point picking. The PNG/SVG/PDF exports remain the presentation
+    artifact; this is only the same numbers, as JSON, for interactivity."""
+    if map_name not in ("map_a_no_interp", "map_b_smooth", "map_c_heavy"):
+        raise ValueError("map_name must be one of map_a_no_interp, map_b_smooth, map_c_heavy")
+    session_dir = _path_in({"d": rel_science_web_dir}, "d", SERVE_ROOTS["science"])
+    path = session_dir / "maps" / f"{map_name}.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"no {map_name}.json under {rel_science_web_dir}")
+    return json.loads(path.read_text())
 
 
 if __name__ == "__main__":
