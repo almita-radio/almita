@@ -1227,7 +1227,14 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         color_stops, already shared by A/B/C) - never a second, redundant colorbar baked into this image."""
         fig = plt.figure(figsize=(6.0, 6.0 * (grid_bc.height_deg / grid_bc.width_deg)))
         ax = fig.add_axes([0, 0, 1, 1])
-        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest",
+        # DISPLAY-only smoothing of the raster's own already-computed cell values (bilinear interpolation
+        # between adjacent VALUES, at render time) - never a recomputation. B/C are continuous estimated
+        # rasters (unlike A's real per-cell readings), so drawing each of their 18x18/36x36 cells as a hard
+        # nearest-neighbour square (request found this made the same smoothly-varying values look like
+        # concentric square blocks, most visibly around C's own darkest region) was a rendering choice, not a
+        # property of the data - confirmed by the sharp block edges themselves landing exactly on 1/18th or
+        # 1/36th of the image, matching the raster's OWN cell pitch, not any real square feature in the field.
+        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="bilinear",
                  extent=extent, alpha=alpha)
         _mark_low_confidence(ax, grid_bc, science_map)
         _extent_and_aspect(ax)
@@ -1254,7 +1261,9 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         # point's own noise excursion does not read as confirmed structure. See _mark_low_confidence().
         low_conf = science_map.valid & (science_map.n_pointings <= 1)
         alpha = np.where(low_conf, 0.45, 1.0)
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest",
+        # bilinear DISPLAY smoothing of the already-computed raster values - see _bare_export's own docstring;
+        # the underlying array (masked), the kernel and the values it holds are untouched.
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="bilinear",
                        extent=extent, alpha=alpha)
         _mark_low_confidence(ax, grid_bc, science_map)
         _extent_and_aspect(ax)   # no cell gridlines/ticks here - this is a continuous raster, not a per-cell board
@@ -1302,8 +1311,11 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         if not is_board:
             low_conf = science_map.valid & (science_map.n_pointings <= 1)
             alpha = np.where(low_conf, 0.45, 1.0)
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest",
-                       extent=extent, alpha=alpha)
+        # A stays sharp (real per-cell readings, one colour = one measurement); B/C get the same DISPLAY-only
+        # bilinear smoothing as their own standalone exports (see _bare_export's docstring) so the combined
+        # export doesn't show a blockier B/C than the separate downloads do.
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
+                       interpolation=("nearest" if is_board else "bilinear"), extent=extent, alpha=alpha)
         if not is_board:
             _mark_low_confidence(ax, grid_bc, science_map)
         ax.set_title(label, fontsize=9)
