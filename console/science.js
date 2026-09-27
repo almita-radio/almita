@@ -422,9 +422,15 @@
     const cw = cssW / nCols, ch = cssH / nRows;
     canvas.__cells = [];
     for (const cell of lastBoard.cells) {
-      // SAME orientation as the exported PNGs: RA increases to the left (col index n_cols-1 drawn leftmost),
-      // row 0 (southernmost) drawn at the bottom (origin="lower") - see build_mosaic_grid/render_all_maps.
-      const px = (nCols - 1 - cell.col) * cw, py = (nRows - 1 - cell.row) * ch;
+      // SAME orientation as the exported PNGs (render_all_maps' own imshow(extent=...)/set_xlim(half_w,
+      // -half_w)): column index increases LEFT-to-RIGHT on screen (col 0 leftmost), row 0 (southernmost)
+      // drawn at the bottom (origin="lower"). A real report (REDUCE-20260926-052228-531122, 6x6) found this
+      // canvas mirrored horizontally relative to the exported PNG - e.g. point 19 (RA=324.60 deg, the
+      // highest-RA/rightmost point in that mosaic) drew at this canvas's LEFT while the exported A/B/C/
+      // combined all drew it at their RIGHT; confirmed against board.json's own per-cell colours, not by eye.
+      // The bug was here (this used to read `(nCols - 1 - cell.col) * cw`, mirroring column order) - never in
+      // the exported PNGs, which are unchanged.
+      const px = cell.col * cw, py = (nRows - 1 - cell.row) * ch;
       if (cell.valid) { ctx.fillStyle = cell.color; ctx.fillRect(px, py, cw, ch); }
       ctx.strokeStyle = "#33414a"; ctx.lineWidth = 1; ctx.strokeRect(px, py, cw, ch);
       canvas.__cells.push({ px, py, cw, ch, cell });
