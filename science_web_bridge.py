@@ -1214,7 +1214,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
            f"transparent - never zero, never interpolated. This is the ONLY panel where a cell can be "
            f"clicked to inspect its own real spectrum. {hi_caveat}")
 
-    def _bare_export(name: str, science_map, grid_bc, masked, alpha) -> None:
+    def _bare_export(name: str, science_map, grid_bc, masked, alpha, interp: str) -> None:
         """A chrome-free rendering of an interpolated panel for ON-SCREEN display only: just the map pixels
         (with the SAME dimming/hatching honesty cue), no title, colorbar, axis ticks/labels or caption baked
         in, cropped tight to the data extent with a transparent background - matching panel A's own canvas,
@@ -1224,17 +1224,13 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         same CSS box). The full presentation PNG/SVG/PDF (with title/colorbar/caption) is UNCHANGED and
         still written under `name` for download - this is an ADDITIONAL, separate file `{name}_bare.png`.
         The ONE visible colour scale next to each panel is the browser's own HTML legend (board_json_payload's
-        color_stops, already shared by A/B/C) - never a second, redundant colorbar baked into this image."""
+        color_stops, already shared by A/B/C) - never a second, redundant colorbar baked into this image.
+        `interp` is a DISPLAY-only choice of how imshow blends the raster's own already-computed cell values
+        at render time (never a recomputation) - see the caller's own comment for why B and C now use
+        DIFFERENT interpolation (B stayed "nearest" per explicit request; only C uses "bilinear")."""
         fig = plt.figure(figsize=(6.0, 6.0 * (grid_bc.height_deg / grid_bc.width_deg)))
         ax = fig.add_axes([0, 0, 1, 1])
-        # DISPLAY-only smoothing of the raster's own already-computed cell values (bilinear interpolation
-        # between adjacent VALUES, at render time) - never a recomputation. B/C are continuous estimated
-        # rasters (unlike A's real per-cell readings), so drawing each of their 18x18/36x36 cells as a hard
-        # nearest-neighbour square (request found this made the same smoothly-varying values look like
-        # concentric square blocks, most visibly around C's own darkest region) was a rendering choice, not a
-        # property of the data - confirmed by the sharp block edges themselves landing exactly on 1/18th or
-        # 1/36th of the image, matching the raster's OWN cell pitch, not any real square feature in the field.
-        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="bilinear",
+        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
                  extent=extent, alpha=alpha)
         _mark_low_confidence(ax, grid_bc, science_map)
         _extent_and_aspect(ax)
@@ -1248,9 +1244,16 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     # never the same {n_rows}x{n_cols} cells redrawn bigger/blurrier. Same physical footprint/scale as A, and
     # now the SAME kernel too (see MapConfig.smoothing_fwhm_deg) - strictly increasing RASTER DENSITY is the
     # only remaining difference between B and C (enforced by MapConfig.interp_factor_c > interp_factor_b). ----
-    for key, label, science_map, factor, grid_bc in (
-        ("map_b_smooth", "B: INTERPOLATED", built["map_b"], cfg.interp_factor_b, built["grid_b"]),
-        ("map_c_heavy", "C: INTERPOLATED (finer raster)", built["map_c"], cfg.interp_factor_c, built["grid_c"]),
+    # DISPLAY interpolation (imshow's own resampling of the already-computed array, never a recomputation) is
+    # now DIFFERENT for B and C by explicit request: an earlier round made both bilinear, which made the two
+    # panels look "casi iguales" (nearly identical) since B (18x18) and C (36x36) already carry the same
+    # kernel/support - bilinear on both erased the one visible cue (raster density) that told them apart. B
+    # goes back to "nearest" (18x18's own blockiness "estaba bien" per that request); only C keeps "bilinear",
+    # so the two remain visibly distinct while B/C's own VALUES, kernel and color scale stay identical to
+    # each other, exactly as before.
+    for key, label, science_map, factor, grid_bc, interp in (
+        ("map_b_smooth", "B: INTERPOLATED", built["map_b"], cfg.interp_factor_b, built["grid_b"], "nearest"),
+        ("map_c_heavy", "C: INTERPOLATED (finer raster)", built["map_c"], cfg.interp_factor_c, built["grid_c"], "bilinear"),
     ):
         ny_fine, nx_fine = science_map.value.shape
         fig, ax = plt.subplots(figsize=(6.6, 6.0))
@@ -1261,9 +1264,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         # point's own noise excursion does not read as confirmed structure. See _mark_low_confidence().
         low_conf = science_map.valid & (science_map.n_pointings <= 1)
         alpha = np.where(low_conf, 0.45, 1.0)
-        # bilinear DISPLAY smoothing of the already-computed raster values - see _bare_export's own docstring;
-        # the underlying array (masked), the kernel and the values it holds are untouched.
-        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="bilinear",
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
                        extent=extent, alpha=alpha)
         _mark_low_confidence(ax, grid_bc, science_map)
         _extent_and_aspect(ax)   # no cell gridlines/ticks here - this is a continuous raster, not a per-cell board
@@ -1280,7 +1281,10 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
                f"{smoothing_fwhm_deg:.4g} deg (declared presentation smoothing, NOT the instrument beam) - "
                f"IDENTICAL for B and C (an earlier light/heavy split was dropped: leave-one-out "
                f"cross-validation found it made no measurable difference to predictive skill - see the LOO "
-               f"check below). The ONLY difference between B and C is this raster's density. Real instrument "
+               f"check below). B and C's own computed VALUES differ only by this raster's density; this "
+               f"image additionally draws them with {interp} pixel interpolation (a DISPLAY choice - B stays "
+               f"blocky/exact-cell 'nearest', C is smoothed to 'bilinear' between the SAME cell values, so "
+               f"the two remain visually distinct) - never a change to what was computed. Real instrument "
                f"beam FWHM={cfg.beam_fwhm_deg:.4g} deg ({cfg.beam_status}, reported only, never used for "
                f"gridding). Spatial SUPPORT radius is the SAME {support_radius_deg:.4g} deg for B and C - "
                f"{len(built['used_point_set'])} point(s) used identically in both. Interpolation ESTIMATES "
@@ -1290,7 +1294,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
                f"backed by only ONE nearby real point (no corroborating second measurement) - a bump/dip "
                f"there may be that single point's own measurement noise, not real spatial structure. Color "
                f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat}{bc_caveat}{loo_caveat} {hi_caveat}")
-        _bare_export(key, science_map, grid_bc, masked, alpha)
+        _bare_export(key, science_map, grid_bc, masked, alpha, interp)
 
     # ---- A + B + C combined: same physical box and colour scale, each panel's own resolution declared,
     # increasing left to right (request: "verse juntos... poder abrirse grandes") ----
@@ -1299,23 +1303,24 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     b_shape = built["map_b"].value.shape
     c_shape = built["map_c"].value.shape
     panels = [
-        (f"A: MEASURED ({n_rows}x{n_cols})", built["map_a_value"], built["map_a_valid"], True, None, None),
+        (f"A: MEASURED ({n_rows}x{n_cols})", built["map_a_value"], built["map_a_valid"], True, None, None, "nearest"),
         (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]})", built["map_b"].value, built["map_b"].valid, False,
-         built["map_b"], built["grid_b"]),
+         built["map_b"], built["grid_b"], "nearest"),
         (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]})", built["map_c"].value, built["map_c"].valid, False,
-         built["map_c"], built["grid_c"]),
+         built["map_c"], built["grid_c"], "bilinear"),
     ]
-    for ax, (label, value, valid, is_board, science_map, grid_bc) in zip(axes, panels):
+    for ax, (label, value, valid, is_board, science_map, grid_bc, interp) in zip(axes, panels):
         masked = np.ma.masked_where(~valid, value)
         alpha = 1.0
         if not is_board:
             low_conf = science_map.valid & (science_map.n_pointings <= 1)
             alpha = np.where(low_conf, 0.45, 1.0)
-        # A stays sharp (real per-cell readings, one colour = one measurement); B/C get the same DISPLAY-only
-        # bilinear smoothing as their own standalone exports (see _bare_export's docstring) so the combined
-        # export doesn't show a blockier B/C than the separate downloads do.
+        # A and B both stay exact-cell "nearest" (A: real per-cell readings; B: kept blocky per explicit
+        # request, to stay visually distinct from C); only C gets the DISPLAY-only "bilinear" smoothing of
+        # its own already-computed cell values (see the B/C loop's own comment above) - so the combined
+        # export matches the same per-panel choice as the separate downloads/on-screen images.
         im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                       interpolation=("nearest" if is_board else "bilinear"), extent=extent, alpha=alpha)
+                       interpolation=interp, extent=extent, alpha=alpha)
         if not is_board:
             _mark_low_confidence(ax, grid_bc, science_map)
         ax.set_title(label, fontsize=9)
