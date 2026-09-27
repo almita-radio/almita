@@ -27,8 +27,7 @@
       reduce_session_dir: selectedSession, calibration_level_filter: selectedCalibLevel,
       velocity_window_min_m_s: kms($("in-vmin").value), velocity_window_max_m_s: kms($("in-vmax").value),
       beam: $("in-beam-mode").value, beam_fwhm_deg: $("in-beam-mode").value === "fwhm" ? Number($("in-beam-fwhm").value) : null,
-      support_radius_deg: numOrNull("in-support-radius"), smoothing_fwhm_b_deg: numOrNull("in-smoothing-b"),
-      smoothing_fwhm_c_deg: numOrNull("in-smoothing-c"),
+      support_radius_deg: numOrNull("in-support-radius"), smoothing_fwhm_deg: numOrNull("in-smoothing"),
       interp_factor_b: Number($("in-interp-factor-b").value), interp_factor_c: Number($("in-interp-factor-c").value),
       quality_policy: $("in-quality-policy").value || null,
       min_spectral_coverage_fraction: Number($("in-min-coverage").value),
@@ -166,7 +165,7 @@
   }
   $("in-beam-mode").addEventListener("change", () => { $("row-beam-fwhm").hidden = $("in-beam-mode").value !== "fwhm"; invalidateDownstream(); });
   $("in-color-override").addEventListener("change", () => { $("row-color-override").hidden = !$("in-color-override").checked; invalidateDownstream(); });
-  for (const id of ["in-vmin", "in-vmax", "in-beam-fwhm", "in-support-radius", "in-smoothing-b", "in-smoothing-c",
+  for (const id of ["in-vmin", "in-vmax", "in-beam-fwhm", "in-support-radius", "in-smoothing",
     "in-interp-factor-b", "in-interp-factor-c",
     "in-quality-policy", "in-min-coverage", "in-color-vmin", "in-color-vmax"]) {
     $(id).addEventListener("change", invalidateDownstream);
@@ -192,8 +191,7 @@
       min_spectral_coverage_fraction: p.min_spectral_coverage_fraction };
     if (p.beam === "fwhm") body.beam_fwhm_deg = p.beam_fwhm_deg;
     if (p.support_radius_deg != null) body.support_radius_deg = p.support_radius_deg;
-    if (p.smoothing_fwhm_b_deg != null) body.smoothing_fwhm_b_deg = p.smoothing_fwhm_b_deg;
-    if (p.smoothing_fwhm_c_deg != null) body.smoothing_fwhm_c_deg = p.smoothing_fwhm_c_deg;
+    if (p.smoothing_fwhm_deg != null) body.smoothing_fwhm_deg = p.smoothing_fwhm_deg;
     if (p.interp_factor_b) body.interp_factor_b = p.interp_factor_b;
     if (p.interp_factor_c) body.interp_factor_c = p.interp_factor_c;
     if (p.quality_policy) body.quality_policy = p.quality_policy;
@@ -225,7 +223,7 @@
       + `grid dims: A=${facts.n_rows}x${facts.n_cols}`
       + (facts.grid_b ? `  B=${facts.grid_b.ny}x${facts.grid_b.nx}  C=${facts.grid_c.ny}x${facts.grid_c.nx}` : "  B/C=—") + "\n"
       + `support radius (B & C, shared): ${facts.spatial_params ? facts.spatial_params.support_radius_deg.toFixed(4) : "—"} deg   `
-      + `smoothing B/C: ${facts.spatial_params ? `${facts.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${facts.spatial_params.smoothing_fwhm_c_deg.toFixed(4)}` : "—"} deg\n`
+      + `smoothing kernel (B & C, shared): ${facts.spatial_params ? facts.spatial_params.smoothing_fwhm_deg.toFixed(4) : "—"} deg\n`
       + `real instrument beam (reported only): ${facts.real_instrument_beam_fwhm_deg} deg   velocity channels: ${facts.n_velocity_channels}\n`
       + `config_hash: ${facts.config_hash}`;
     const list = $("plan-checks"); list.textContent = "";
@@ -303,7 +301,8 @@
       + `(${manifest.config.interp_factor_b}x) → C=${dims.c ? dims.c.join("x") : "—"} (${manifest.config.interp_factor_c}x) `
       + `— same footprint, increasing resolution\n`
       + `support radius (B & C, shared): ${manifest.spatial_params.support_radius_deg.toFixed(4)} deg   `
-      + `smoothing B/C: ${manifest.spatial_params.smoothing_fwhm_b_deg.toFixed(4)}/${manifest.spatial_params.smoothing_fwhm_c_deg.toFixed(4)} deg   `
+      + `smoothing kernel (B & C, shared): ${manifest.spatial_params.smoothing_fwhm_deg.toFixed(4)} deg — `
+      + `the ONLY difference between B and C is raster density\n`
       + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
       + `single-point-only pixels (no corroborating 2nd measurement): B=${(manifest.spatial_confidence.b.single_point_fraction * 100).toFixed(0)}%   `
       + `C=${(manifest.spatial_confidence.c.single_point_fraction * 100).toFixed(0)}% of valid pixels — see COVERAGE DENSITY below\n`
@@ -315,6 +314,15 @@
             ? "  → CONSISTENT WITH PURE NOISE at this point spacing: any multi-pixel bump/dip in B/C may be chance noise, not real structure\n"
             : "  → neighbours correlate more than pure noise would predict\n")
         ) : "")
+      + (manifest.loo_cross_validation && manifest.loo_cross_validation.predicted_vs_measured_correlation != null ? (
+          `LEAVE-ONE-OUT CHECK: predicting each of ${manifest.loo_cross_validation.n_predictable} real point(s) from `
+          + `ONLY its neighbours (same kernel as B/C) correlates with its own measured value at `
+          + `r=${manifest.loo_cross_validation.predicted_vs_measured_correlation.toFixed(2)}, RMS held-out error=`
+          + `${manifest.loo_cross_validation.rms.toFixed(4)} vs field std=${manifest.loo_cross_validation.field_value_std.toFixed(4)}`
+          + (manifest.loo_cross_validation.rms_worse_than_predicting_the_field_mean
+            ? "  → WORSE than just guessing the field's mean: no verified predictive skill at this point density\n"
+            : "  → better than guessing the field's mean\n")
+        ) : "")
       + `quality (map B): ${manifest.quality_b.state} — ${(manifest.quality_b.reasons || []).join("; ")}`
       + (manifest.used_point_set_note ? `\nNOTE: ${manifest.used_point_set_note}` : "");
     $("results-hi-caveat").textContent = "INSTRUMENTAL/" + manifest.calibration_level_filter + " result — "
@@ -322,12 +330,15 @@
       + "(indoor/UNCALIBRATED runs carry real instrumental residual - never a celestial signal).";
     $("results-thermal").textContent = `Thermal drift: ${manifest.thermal_drift.status} — ${manifest.thermal_drift.note}`;
     $("caption-a").textContent = `A — MEASURED (${dims.a ? dims.a.join("x") : "?"}, no interpolation)`;
-    $("caption-b").textContent = `B — INTERPOLATED, light (${dims.b ? dims.b.join("x") : "?"})`;
-    $("caption-c").textContent = `C — INTERPOLATED, heavier (${dims.c ? dims.c.join("x") : "?"})`;
+    $("caption-b").textContent = `B — INTERPOLATED (${dims.b ? dims.b.join("x") : "?"})`;
+    $("caption-c").textContent = `C — INTERPOLATED, finer raster (${dims.c ? dims.c.join("x") : "?"}, same kernel as B)`;
 
     const od = job.output_dir;
-    $("img-map-b").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_smooth.png")}`;
-    $("img-map-c").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_c_heavy.png")}`;
+    // ON-SCREEN images are the chrome-free "_bare" exports (no title/colorbar/caption baked in - see
+    // render_all_maps._bare_export) so B/C display at the SAME visible size as A's own canvas, next to the
+    // SAME external HTML legend below. The full titled/colorbar'd PNGs remain available under DOWNLOADS.
+    $("img-map-b").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_smooth_bare.png")}`;
+    $("img-map-c").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_c_heavy_bare.png")}`;
     $("img-map-coverage").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_coverage.png")}`;
     const hasSnr = (manifest.exports || {}).map_snr;
     $("fig-snr").hidden = !hasSnr;

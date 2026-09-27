@@ -648,22 +648,20 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         vmin = _float(p, "velocity_window_min_m_s", -2_000_000, 2_000_000, -100_000.0)
         vmax = _float(p, "velocity_window_max_m_s", -2_000_000, 2_000_000, 100_000.0)
         argv += ["--velocity-window-min-m-s", str(vmin), "--velocity-window-max-m-s", str(vmax)]
-        # Spatial SUPPORT (shared, hard radius) and presentation SMOOTHING (B light / C heavier) are now
+        # Spatial SUPPORT (shared, hard radius) and presentation SMOOTHING (ONE kernel, shared by B and C) are
         # separate, operator-declarable controls - see science_web_bridge.MapConfig/auto_spatial_params for
-        # why (beam_cutoff_{b,c}_n_fwhm on the real, possibly mis-scaled instrument beam used to control
-        # BOTH at once). None/blank on any of the three leaves it on the bridge's own real-data-derived
-        # auto default (median nearest-neighbour point spacing).
+        # why (beam_cutoff_{b,c}_n_fwhm on the real, possibly mis-scaled instrument beam used to control both
+        # at once). B and C used to take two DIFFERENT smoothing widths (light/heavier); leave-one-out
+        # cross-validation on a real flagged session (REDUCE-20260919-234712-712870) found that made no
+        # measurable difference to predictive skill, so this endpoint now exposes ONE shared kernel too - see
+        # MapConfig.smoothing_fwhm_deg's own docstring. None/blank on either control leaves it on the
+        # bridge's own real-data-derived auto default (median nearest-neighbour point spacing).
         support_radius = _float(p, "support_radius_deg", 0.001, 200, None)
-        smoothing_b = _float(p, "smoothing_fwhm_b_deg", 0.001, 200, None)
-        smoothing_c = _float(p, "smoothing_fwhm_c_deg", 0.001, 200, None)
-        if smoothing_b is not None and smoothing_c is not None and smoothing_c <= smoothing_b:
-            raise ValueError("smoothing_fwhm_c_deg must be > smoothing_fwhm_b_deg (C is the more-smoothed map)")
+        smoothing = _float(p, "smoothing_fwhm_deg", 0.001, 200, None)
         if support_radius is not None:
             argv += ["--support-radius-deg", str(support_radius)]
-        if smoothing_b is not None:
-            argv += ["--smoothing-fwhm-b-deg", str(smoothing_b)]
-        if smoothing_c is not None:
-            argv += ["--smoothing-fwhm-c-deg", str(smoothing_c)]
+        if smoothing is not None:
+            argv += ["--smoothing-fwhm-deg", str(smoothing)]
         # Raster DENSITY for the interpolated panels (independent of smoothing amount) - see
         # science_web_bridge.build_fine_grid: each real board cell becomes this many x this many new pixels.
         # C must be denser than B so the resolution increase A -> B -> C stays visible on screen.
@@ -691,8 +689,7 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         meta = {"reduce_session_dir": str(red.relative_to(ROOT)), "calibration_level_filter": calib, "beam": beam,
                "beam_fwhm_deg": p.get("beam_fwhm_deg") if beam == "fwhm" else None,
                "velocity_window_min_m_s": vmin, "velocity_window_max_m_s": vmax,
-               "support_radius_deg": support_radius, "smoothing_fwhm_b_deg": smoothing_b,
-               "smoothing_fwhm_c_deg": smoothing_c,
+               "support_radius_deg": support_radius, "smoothing_fwhm_deg": smoothing,
                "interp_factor_b": int(interp_b) if interp_b is not None else None,
                "interp_factor_c": int(interp_c) if interp_c is not None else None,
                "quality_policy": p.get("quality_policy"), "min_spectral_coverage_fraction": min_cov,

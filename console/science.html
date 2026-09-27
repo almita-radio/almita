@@ -59,19 +59,20 @@
       <details>
         <summary>Advanced map parameters (declared, reproducible — persisted in the manifest)</summary>
         <div class="obs-summary">Spatial SUPPORT (where a value may legitimately be drawn) and presentation SMOOTHING
-          (how much blend is applied within that support) are separate controls — B and C always share the SAME
-          support radius (their used-point sets are then identical by construction), and differ only in how much
-          they smooth within it. Leave any of the three blank for a real, data-derived default (from this
-          campaign's own median point spacing).</div>
+          (how much blend is applied within that support) are separate controls — B and C share the SAME support
+          radius AND the SAME smoothing kernel (their used-point sets are then identical by construction, and a
+          resolution increase from B to C is never confounded with a change in how much they smooth — an earlier
+          light/heavier split between B and C was dropped after leave-one-out cross-validation on real data
+          showed it made no measurable difference to predictive skill; see the results panel's own LEAVE-ONE-OUT
+          CHECK). Leave either blank for a real, data-derived default (from this campaign's own median point
+          spacing).</div>
         <div class="obs-row"><label for="in-support-radius">SUPPORT RADIUS (deg) — shared by B and C</label>
           <input type="number" id="in-support-radius" step="0.05" min="0.001" placeholder="auto"></div>
-        <div class="obs-row"><label for="in-smoothing-b">MAP B (light) smoothing kernel FWHM (deg)</label>
-          <input type="number" id="in-smoothing-b" step="0.05" min="0.001" placeholder="auto"></div>
-        <div class="obs-row"><label for="in-smoothing-c">MAP C (heavier) smoothing kernel FWHM (deg)</label>
-          <input type="number" id="in-smoothing-c" step="0.05" min="0.001" placeholder="auto"></div>
+        <div class="obs-row"><label for="in-smoothing">SMOOTHING kernel FWHM (deg) — shared by B and C</label>
+          <input type="number" id="in-smoothing" step="0.05" min="0.001" placeholder="auto"></div>
         <div class="obs-summary">Map B/C raster DENSITY (independent of smoothing): each real board cell is
           replaced by this many x this many new pixels — C must be denser than B, so the resolution increase
-          A → B → C stays visible on screen, not just in the smoothing amount.</div>
+          A → B → C is a genuine, isolated increase in sampling density, not a change in smoothing too.</div>
         <div class="obs-row"><label for="in-interp-factor-b">MAP B pixels per real cell (per axis)</label>
           <input type="number" id="in-interp-factor-b" value="3" step="1" min="2"></div>
         <div class="obs-row"><label for="in-interp-factor-c">MAP C pixels per real cell (per axis)</label>
@@ -126,14 +127,15 @@
             ningún valor estimado, promediado o inventado entre celdas. Una celda sin color no fue medida.</p></details>
         </figure>
         <figure class="board-panel" id="panel-b">
-          <figcaption id="caption-b">B — INTERPOLATED (light)</figcaption>
+          <figcaption id="caption-b">B — INTERPOLATED</figcaption>
           <div class="board-row">
-            <img id="img-map-b" alt="map B (interpolated, light)">
+            <img id="img-map-b" alt="map B (interpolated)">
             <div class="board-legend" id="legend-b"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
           <div class="obs-summary">Not clickable — every pixel here (real position or not) is a smoothed
-            estimate, never a stand-in for an individual measurement.</div>
+            estimate, never a stand-in for an individual measurement. See the LEAVE-ONE-OUT CHECK above: a
+            multi-pixel bump/dip here is not automatically a verified detection.</div>
           <details><summary>¿Qué muestra esta imagen?</summary>
             <p>Esta imagen interpola espacialmente entre las lecturas reales para mostrar una grilla más densa
             que la original, usando un promedio ponderado por distancia (con un desvanecimiento suave tipo
@@ -143,21 +145,25 @@
             continua de los mismos datos reales. Las zonas atenuadas/rayadas están respaldadas por UN SOLO
             punto real cercano (sin una segunda medición que lo confirme): un bulto o hueco allí puede ser
             solo el ruido propio de esa medición, no una estructura espacial real — ver el panel de
-            "densidad de cobertura" más abajo.</p></details>
+            "densidad de cobertura" más abajo. La validación cruzada "deja uno fuera" (arriba, en el resumen)
+            comprueba directamente si este método logra predecir un punto real a partir de sus vecinos.</p></details>
         </figure>
         <figure class="board-panel" id="panel-c">
-          <figcaption id="caption-c">C — INTERPOLATED (heavier)</figcaption>
+          <figcaption id="caption-c">C — INTERPOLATED, finer raster</figcaption>
           <div class="board-row">
-            <img id="img-map-c" alt="map C (interpolated, heavier)">
+            <img id="img-map-c" alt="map C (interpolated, finer raster)">
             <div class="board-legend" id="legend-c"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
-          <div class="obs-summary">Not clickable — same reason as B, at an even denser raster and a wider
-            smoothing radius.</div>
+          <div class="obs-summary">Not clickable — same reason as B. Uses the IDENTICAL smoothing kernel and
+            support radius as B; the only difference is a denser raster.</div>
           <details><summary>¿Qué muestra esta imagen?</summary>
-            <p>Esta versión usa una grilla aún más densa y un radio de suavizado mayor que el panel central,
-            por lo que la superficie se ve más continua. Sigue sin haber mediciones nuevas: todos los valores
-            fuera de las celdas reales de A son estimaciones de interpolación, nunca observaciones del
+            <p>Esta versión usa una grilla aún más densa que el panel central, pero el MISMO kernel de suavizado
+            y el mismo radio de soporte — la única diferencia con B es cuántos píxeles se dibujan sobre el
+            mismo campo estimado (una versión anterior usaba además un suavizado más fuerte en C, lo que
+            mezclaba dos cambios a la vez; se retiró tras comprobar, con validación cruzada "deja uno fuera"
+            sobre datos reales, que no mejoraba la predicción). Sigue sin haber mediciones nuevas: todos los
+            valores fuera de las celdas reales de A son estimaciones de interpolación, nunca observaciones del
             instrumento, y no existe un espectro real para ningún píxel de esta imagen. El mismo radio de
             soporte espacial que en B determina qué puntos pueden influir en cada píxel, así que las mismas
             zonas atenuadas/rayadas (respaldadas por un solo punto real) aparecen aquí también — una grilla

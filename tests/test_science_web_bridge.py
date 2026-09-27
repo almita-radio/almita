@@ -21,8 +21,8 @@ from science_engine.spatial import angular_separation_deg
 
 from science_web_bridge import (MapConfig, MosaicShapeError, _reconcile_used_point_sets, auto_spatial_params,
                                 board_json_payload, build_all_products, build_fine_grid, build_mosaic_grid,
-                                noise_dominance_summary, render_all_maps, spatial_confidence_summary,
-                                viridis_hex)
+                                loo_cross_validation_summary, noise_dominance_summary, render_all_maps,
+                                spatial_confidence_summary, viridis_hex)
 
 
 def mosaic_input(n=6, spacing=1.0, **kw):
@@ -49,9 +49,9 @@ def test_default_velocity_window_matches_frozen_engine_default():
     assert cfg.velocity_window_max_m_s == engine_default.velocity_window_max_m_s == 100_000.0
 
 
-def test_smoothing_c_must_exceed_smoothing_b_when_both_given():
-    with pytest.raises(ValueError, match="smoothing_fwhm_c_deg"):
-        cfg_with(smoothing_fwhm_b_deg=2.0, smoothing_fwhm_c_deg=1.0)
+def test_smoothing_fwhm_must_be_positive():
+    with pytest.raises(ValueError, match="smoothing_fwhm_deg"):
+        cfg_with(smoothing_fwhm_deg=-1.0)
 
 
 def test_support_radius_must_be_positive():
@@ -80,16 +80,17 @@ def test_auto_spatial_params_independent_of_beam_fwhm():
     small_beam = auto_spatial_params(si, cfg_with(beam_fwhm_deg=1.5))
     huge_beam = auto_spatial_params(si, cfg_with(beam_fwhm_deg=20.0))   # the real run's observer_config value
     assert small_beam["support_radius_deg"] == pytest.approx(huge_beam["support_radius_deg"])
-    assert small_beam["smoothing_fwhm_b_deg"] == pytest.approx(huge_beam["smoothing_fwhm_b_deg"])
-    assert small_beam["smoothing_fwhm_c_deg"] == pytest.approx(huge_beam["smoothing_fwhm_c_deg"])
+    assert small_beam["smoothing_fwhm_deg"] == pytest.approx(huge_beam["smoothing_fwhm_deg"])
     assert small_beam["nearest_neighbor_spacing_deg"] == pytest.approx(1.0, abs=0.02)
-    assert small_beam["smoothing_fwhm_c_deg"] > small_beam["smoothing_fwhm_b_deg"]
 
 
-def test_auto_spatial_params_c_gt_b_even_with_manual_b_only():
+def test_auto_spatial_params_smoothing_fwhm_manual_override_is_honoured():
+    """B and C now share ONE smoothing_fwhm_deg (see MapConfig's own docstring for why the earlier
+    light/heavier split was dropped - LOO-CV found it made no measurable difference) - an explicit override
+    must be used as-is, never silently widened for one of the two maps."""
     si = mosaic_input(n=6, spacing=1.0)
-    resolved = auto_spatial_params(si, cfg_with(smoothing_fwhm_b_deg=0.5))
-    assert resolved["smoothing_fwhm_c_deg"] > resolved["smoothing_fwhm_b_deg"] == 0.5
+    resolved = auto_spatial_params(si, cfg_with(smoothing_fwhm_deg=0.5))
+    assert resolved["smoothing_fwhm_deg"] == 0.5
 
 
 # ---------------------------------------------------------------- _reconcile_used_point_sets: structural
@@ -350,6 +351,38 @@ def test_render_all_maps_writes_progressively_denser_exports(tmp_path):
     assert built["map_c"].value.shape == (36, 36)
 
 
+def test_render_all_maps_writes_bare_chrome_free_images_for_b_and_c(tmp_path):
+    """Request: "A llena su panel, pero B y C aparecen como graficos pequenos dentro de grandes cajas" -
+    the on-screen images for B/C must be plain, chrome-free renderings (no title/colorbar/caption baked in,
+    same footprint as A) so the browser can size all three panels identically; the full titled/colorbar'd
+    exports must still be written unchanged for download."""
+    si = mosaic_input(n=6, spacing=1.0)
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    built = build_all_products(si, cfg)
+    exports, _ = render_all_maps(built, cfg, si.campaign_id, si.reduce_session_id, tmp_path)
+    for name in ("map_b_smooth", "map_c_heavy"):
+        assert f"{name}_bare" in exports
+        bare_path = tmp_path / exports[f"{name}_bare"][0]
+        assert bare_path.is_file()
+        full_path = tmp_path / f"{name}.png"
+        assert full_path.is_file()
+        # chrome-free image must be smaller (no title/colorbar/margins) than the full presentation PNG
+        assert bare_path.stat().st_size < full_path.stat().st_size
+
+
+# ---------------------------------------------------------------- one shared kernel for B and C (dropped the
+# earlier light/heavier split - see MapConfig.smoothing_fwhm_deg's own docstring for the LOO-CV finding that
+# justified it): B and C now differ ONLY in raster density.
+
+def test_build_all_products_uses_one_shared_kernel_for_b_and_c():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    assert "sc" in built and "beam" in built
+    assert "sc_b" not in built and "sc_c" not in built and "beam_b" not in built and "beam_c" not in built
+    assert set(built["spatial_params"].keys()) >= {"support_radius_deg", "smoothing_fwhm_deg"}
+    assert "smoothing_fwhm_b_deg" not in built["spatial_params"]
+
+
 # ---------------------------------------------------------------- round 3: circular halos traced to
 # individual points' own noise dominating their neighbourhood under Gaussian-weighted interpolation - an
 # honest coverage/confidence cue (n_pointings, already computed by the frozen integrated_map(), never
@@ -361,7 +394,7 @@ def test_spatial_confidence_flags_single_point_pixels_when_support_smaller_than_
     circular halo: that pixel's value is entirely one point's own reading, un-corroborated."""
     si = mosaic_input(n=6, spacing=1.0)
     built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0, support_radius_deg=0.3,
-                                            smoothing_fwhm_b_deg=0.3, smoothing_fwhm_c_deg=0.6))
+                                            smoothing_fwhm_deg=0.3))
     conf = spatial_confidence_summary(built)
     for key in ("b", "c"):
         assert conf[key]["n_single_point_pixels"] > 0
@@ -447,8 +480,8 @@ def test_noise_dominance_flags_pure_noise_as_consistent():
     velocity_axis = canonical_velocity_axis(si)
     spatial = auto_spatial_params(si, cfg)
     from science_web_bridge import _kernel_science_config
-    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_b_deg"],
-                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_b_deg"], "k")
+    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_deg"],
+                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_deg"], "k")
     point_rows = per_point_integrated_values(si, sc, velocity_axis)
     summary = noise_dominance_summary(point_rows)
     assert summary is not None
@@ -474,8 +507,8 @@ def test_noise_dominance_flags_a_real_smooth_gradient_as_not_pure_noise():
     from science_engine.cube import canonical_velocity_axis
     velocity_axis = canonical_velocity_axis(si)
     spatial = auto_spatial_params(si, cfg)
-    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_b_deg"],
-                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_b_deg"], "k")
+    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_deg"],
+                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_deg"], "k")
     point_rows = per_point_integrated_values(si, sc, velocity_axis)
     summary = noise_dominance_summary(point_rows)
     assert summary is not None
@@ -493,3 +526,80 @@ def test_build_all_products_exposes_noise_dominance():
     built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
     assert built["noise_dominance"] is not None
     assert "consistent_with_pure_noise_at_point_spacing" in built["noise_dominance"]
+
+
+# ---------------------------------------------------------------- loo_cross_validation_summary: the direct,
+# real leave-one-out validation request #3 asked for - "retira por turnos mediciones reales, predicelas
+# usando las demas y compara prediccion contra valor medido". Reproduces (in controlled, synthetic form) the
+# real result on REDUCE-20260919-234712-712870: predicted-vs-measured correlation ~0 for pure noise, RMS
+# comparable to or worse than the field's own std - and shows the SAME check correctly recognises a real
+# smooth signal as predictable, so it is not just "always says no".
+
+def test_loo_cross_validation_returns_none_with_too_few_points():
+    from science_engine.cube import canonical_velocity_axis
+    from science_web_bridge import per_point_integrated_values
+    si = mosaic_input(n=2, spacing=1.0)   # 4 points - below the function's own 5-point floor
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    spatial = auto_spatial_params(si, cfg)
+    velocity_axis = canonical_velocity_axis(si)
+    from science_web_bridge import _kernel_science_config
+    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_deg"],
+                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_deg"], "k")
+    point_rows = per_point_integrated_values(si, sc, velocity_axis)
+    assert loo_cross_validation_summary(si, cfg, spatial, point_rows) is None
+
+
+def test_loo_cross_validation_flags_pure_noise_as_unpredictable():
+    """36 real points, real per-point noise, NO spatial signal - a held-out point's neighbours must NOT
+    meaningfully predict it: |correlation| small and RMS at least comparable to the field's own std (not
+    dramatically better, the way a real detected structure would give)."""
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    loo = built["loo_cross_validation"]
+    assert loo is not None and loo["n_predictable"] >= 3
+    assert loo["predicted_vs_measured_correlation"] is None or abs(loo["predicted_vs_measured_correlation"]) < 0.6
+    assert loo["rms"] > 0.5 * loo["field_value_std"]
+
+
+def test_loo_cross_validation_flags_a_real_smooth_gradient_as_predictable():
+    """The SAME point layout with a real, smooth (near-noiseless) spatial gradient injected - a held-out
+    point's neighbours SHOULD predict it well here: high correlation, RMS well below the field's own std.
+    This is the discriminating case that shows the check is not simply always negative."""
+    specs = rectangular_grid_specs(12.0, -30.0, 6, 6, spacing_deg=1.0, calibration_level="UNCALIBRATED")
+
+    def smooth_amp(ra_deg, dec_deg):
+        return 10.0 + 2.0 * (dec_deg - specs[0].dec_degrees)
+
+    si = build_synthetic_science_input(specs, noise_sigma=1e-4, line_amplitude_fn=smooth_amp)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    loo = built["loo_cross_validation"]
+    assert loo is not None and loo["n_predictable"] >= 3
+    assert loo["predicted_vs_measured_correlation"] > 0.8
+    assert loo["rms"] < 0.5 * loo["field_value_std"]
+    assert loo["rms_worse_than_predicting_the_field_mean"] is False
+
+
+def test_loo_cross_validation_subsamples_when_more_points_than_max():
+    from science_engine.cube import canonical_velocity_axis
+    from science_web_bridge import _kernel_science_config, per_point_integrated_values
+    si = mosaic_input(n=9, spacing=1.0)   # 81 points
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    spatial = auto_spatial_params(si, cfg)
+    velocity_axis = canonical_velocity_axis(si)
+    sc = _kernel_science_config(cfg, spatial["smoothing_fwhm_deg"],
+                               spatial["support_radius_deg"] / spatial["smoothing_fwhm_deg"], "k")
+    point_rows = per_point_integrated_values(si, sc, velocity_axis)
+    loo = loo_cross_validation_summary(si, cfg, spatial, point_rows, max_points=10)
+    assert loo is not None
+    assert loo["subsampled"] is True
+    assert loo["n_points_evaluated"] == 10
+
+
+def test_build_all_products_exposes_loo_cross_validation():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    loo = built["loo_cross_validation"]
+    assert loo is not None
+    for field in ("bias", "rms", "mae", "predicted_vs_measured_correlation", "field_value_std",
+                 "rms_worse_than_predicting_the_field_mean", "worst_5"):
+        assert field in loo

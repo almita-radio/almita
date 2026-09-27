@@ -32,19 +32,28 @@ never a duplicate of its math:
           of per output pixel.
        B  science_engine.cube.build_cube() + science_engine.integration.integrated_map() evaluated on a
           raster `interp_factor_b` times denser than the board - most output pixels sit BETWEEN measured
-          positions and are genuine interpolation estimates, weighted by a declared LIGHT presentation-
-          smoothing kernel (NOT the instrument beam). No per-pixel click/spectrum here: a new pixel was
-          never observed by the instrument.
-       C  the SAME call again on an even denser raster (`interp_factor_c` > `interp_factor_b`), a declared
-          HEAVIER presentation-smoothing kernel - genuinely more blended, at genuinely higher pixel density,
-          within the SAME hard support radius as B (see _reconcile_used_point_sets) and the SAME physical
-          footprint as A and B (no invented sky coverage, no support-radius-driven shape change).
+          positions and are genuine interpolation estimates, weighted by a declared presentation-smoothing
+          kernel (NOT the instrument beam). No per-pixel click/spectrum here: a new pixel was never observed
+          by the instrument.
+       C  the SAME call again on an even denser raster (`interp_factor_c` > `interp_factor_b`), the SAME
+          kernel and the SAME hard support radius as B (see _reconcile_used_point_sets) and the SAME physical
+          footprint as A and B (no invented sky coverage, no support-radius-driven shape change) - the ONLY
+          difference from B is raster density. B and C used to carry two DIFFERENT (light/heavier) kernels,
+          which confounded "denser raster" with "more blended" and made the two hard to compare honestly; a
+          real investigation into reported circular halos (REDUCE-20260919-234712-712870) found via
+          leave-one-out cross-validation (loo_cross_validation_summary()) that the two kernel widths were
+          statistically indistinguishable in held-out predictive skill, so there was no data-driven reason to
+          keep them different - see MapConfig.smoothing_fwhm_deg's own docstring for the numbers.
      The real, reported instrument beam (beam_fwhm_deg) is unchanged between B and C and recorded honestly
      in the manifest, but is no longer the kernel doing either map's weighting. A/B/C share one color scale
      (robust 2nd/98th percentile of map A's own measured per-point values - "measured points", not a
      smoothed derivative of them) applied through ONE shared colour function (viridis_hex()) used identically
      for every PNG/SVG/PDF export AND the browser's own interactive board.json - never a second, JS-side
-     palette.
+     palette. B/C's ON-SCREEN images are additionally rendered chrome-free (`_bare_export` in
+     render_all_maps() - no title/colorbar/caption baked in, just the map, cropped tight) so all three panels
+     display at the same visible size next to the SAME external HTML colour legend (board_json_payload's
+     color_stops) - the full titled/colorbar'd PNG/SVG/PDF exports remain unchanged as downloadable,
+     presentation-ready artifacts.
   3. Presentation-ready combined exports (PNG at slide resolution, SVG, PDF) with the title, calibration
      label, beam/cutoff/window parameters, color limits and any caveat baked into the image itself - not
      only shown in the HTML.
@@ -107,8 +116,20 @@ class MapConfig:
     # --- presentation SMOOTHING (how much blend is applied for display, WITHIN that fixed support). A
     # declared Gaussian kernel width, independent of the reported instrument beam (beam_fwhm_deg, kept fixed
     # and honestly reported below, never used as a gridding kernel from here on - see build_all_products()).
-    smoothing_fwhm_b_deg: Optional[float] = None     # None -> auto (light: ~ median nearest-neighbour spacing)
-    smoothing_fwhm_c_deg: Optional[float] = None     # None -> auto (heavier: 3x the B kernel)
+    # This USED to be two DIFFERENT widths (smoothing_fwhm_b_deg light / smoothing_fwhm_c_deg = 3x heavier),
+    # so B and C were never actually "the same field at two densities" - a real investigation into reported
+    # circular halos (REDUCE-20260919-234712-712870) found this was masking the real question ("does a denser
+    # raster alone introduce new structure?") behind a confound (kernel AND density both changing at once).
+    # Leave-one-out cross-validation on that session's own 100 real points (loo_cross_validation_summary())
+    # showed the light/heavy/1.5x kernels are statistically INDISTINGUISHABLE in held-out predictive skill
+    # (RMS 442.3/442.3/442.3, all far worse than simply predicting the field's own mean - see that function's
+    # docstring) - i.e. there was never a real reason for B and C to use different kernels; the two numbers
+    # were free parameters with no data-driven justification. ONE kernel now, shared by B and C - the ONLY
+    # remaining difference between them is raster density (interp_factor_b/interp_factor_c below), which a
+    # matched fixed-kernel control (same session, 30x30 vs 60x60) showed is a genuine, low-distortion
+    # refinement of the SAME field (r=0.946 between matched pixels) - unlike the OLD light-vs-heavy B/C pair,
+    # which only correlated at r=0.785 because it was comparing two different fields, not two densities.
+    smoothing_fwhm_deg: Optional[float] = None     # None -> auto (~ median nearest-neighbour point spacing)
     # Interpolated panels B/C are rendered on a FINER raster than the real N x M board (real pixels BETWEEN
     # the measured positions, not the same cells redrawn bigger/blurrier - see build_fine_grid()). Each factor
     # is how many raster pixels replace one real board cell per axis; C must be denser than B so the visual
@@ -134,13 +155,8 @@ class MapConfig:
                              f"got {self.calibration_level_filter!r} - a map is never built from a mix")
         if self.support_radius_deg is not None and not (np.isfinite(self.support_radius_deg) and self.support_radius_deg > 0):
             raise ValueError("support_radius_deg must be finite and > 0")
-        for name in ("smoothing_fwhm_b_deg", "smoothing_fwhm_c_deg"):
-            v = getattr(self, name)
-            if v is not None and not (np.isfinite(v) and v > 0):
-                raise ValueError(f"{name} must be finite and > 0")
-        if self.smoothing_fwhm_b_deg is not None and self.smoothing_fwhm_c_deg is not None \
-                and self.smoothing_fwhm_c_deg <= self.smoothing_fwhm_b_deg:
-            raise ValueError("smoothing_fwhm_c_deg must be > smoothing_fwhm_b_deg (C is the MORE smoothed map)")
+        if self.smoothing_fwhm_deg is not None and not (np.isfinite(self.smoothing_fwhm_deg) and self.smoothing_fwhm_deg > 0):
+            raise ValueError("smoothing_fwhm_deg must be finite and > 0")
         if self.interp_factor_b < 2 or self.interp_factor_c < 2:
             raise ValueError("interp_factor_b/interp_factor_c must each be >= 2 - B and C must be genuinely "
                              "finer rasters than the real board, not the same cells redrawn")
@@ -200,7 +216,7 @@ def _median_nearest_neighbor_spacing_deg(points) -> Optional[float]:
 
 
 def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
-    """Resolves mosaic_spacing_deg / support_radius_deg / smoothing_fwhm_{b,c}_deg when left None, from THIS
+    """Resolves mosaic_spacing_deg / support_radius_deg / smoothing_fwhm_deg when left None, from THIS
     campaign's OWN point spacing (median nearest-neighbour angular separation among the points being mapped)
     - never from beam_fwhm_deg. Using the reported beam FWHM to size these was the root cause a real deployed
     run exposed: science_engine.models.BeamModel's own docstring documents a live "14.0/20.0/1.5 discrepancy"
@@ -209,6 +225,12 @@ def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
     grid whose margin alone (1.5 x 20 deg per side) dwarfed the real ~6x5 deg field and a beam-weighted map
     that barely varied across it. None of that is reproduced here: every one of these numbers is now tied to
     where real measurements actually are.
+
+    ONE smoothing_fwhm_deg, not two: an earlier round of this task gave B and C separate light/heavy kernels,
+    which turned out to have no data-driven justification (see MapConfig.smoothing_fwhm_deg's own docstring
+    for the leave-one-out cross-validation that found them statistically indistinguishable) and confounded
+    "denser raster" with "differently smoothed" in a way that made B and C hard to compare honestly. B and C
+    now share this one kernel; only their raster density (interp_factor_b/interp_factor_c) differs.
     """
     nn_median = _median_nearest_neighbor_spacing_deg(filtered_input.points)
     if nn_median is None:
@@ -216,15 +238,9 @@ def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
 
     mosaic_spacing_deg = cfg.mosaic_spacing_deg if cfg.mosaic_spacing_deg is not None else nn_median
     support_radius_deg = cfg.support_radius_deg if cfg.support_radius_deg is not None else 1.25 * nn_median
-    smoothing_b = cfg.smoothing_fwhm_b_deg if cfg.smoothing_fwhm_b_deg is not None else nn_median
-    smoothing_c = cfg.smoothing_fwhm_c_deg if cfg.smoothing_fwhm_c_deg is not None else 3.0 * smoothing_b
-    if smoothing_c <= smoothing_b:
-        raise ValueError(f"resolved smoothing_fwhm_c_deg ({smoothing_c}) must be > smoothing_fwhm_b_deg "
-                         f"({smoothing_b}) - C must be the MORE smoothed map; pass both explicitly if the "
-                         f"auto default (3x B) does not hold given a manually-set B or C")
+    smoothing_fwhm_deg = cfg.smoothing_fwhm_deg if cfg.smoothing_fwhm_deg is not None else nn_median
     return {"nearest_neighbor_spacing_deg": nn_median, "mosaic_spacing_deg": mosaic_spacing_deg,
-           "support_radius_deg": support_radius_deg,
-           "smoothing_fwhm_b_deg": smoothing_b, "smoothing_fwhm_c_deg": smoothing_c}
+           "support_radius_deg": support_radius_deg, "smoothing_fwhm_deg": smoothing_fwhm_deg}
 
 
 def _reconcile_used_point_sets(used_b: set[int], used_c: set[int], support_radius_deg: float) -> set[int]:
@@ -599,6 +615,108 @@ def noise_dominance_summary(point_rows: list[dict[str, Any]]) -> Optional[dict[s
     }
 
 
+def loo_cross_validation_summary(filtered_input, cfg: MapConfig, spatial: dict[str, float],
+                                 point_rows: list[dict[str, Any]], max_points: int = 60,
+                                 rng_seed: int = 0) -> Optional[dict[str, Any]]:
+    """Leave-one-out cross-validation of the SAME spatial estimator B and C both use (support_radius_deg,
+    smoothing_fwhm_deg) - a direct, real test of "can this method actually predict an unmeasured position",
+    not an argument from plausibility (see noise_dominance_summary for the cheaper, weaker heuristic this
+    complements). For each USED point in turn: rebuilds a real ScienceInput WITHOUT that point, evaluates a
+    genuine 1x1-pixel ScienceGrid centered EXACTLY on its own real RA/Dec with build_cube()/integrated_map()
+    (frozen, unmodified - the identical call build_all_products() makes for the real board/B/C, just a single
+    output pixel instead of a raster), and compares the prediction to that point's own real per-point value
+    (per_point_integrated_values()'s output, which never used the held-out point either - not a leak).
+
+    Real result on REDUCE-20260919-234712-712870 (100 RELATIVE points, the session behind the reported
+    circular-halo screenshots): predicted-vs-measured correlation = 0.054 (essentially none) and RMS held-out
+    error (442) LARGER than the field's own point-to-point standard deviation (378) - i.e. at this point
+    density, this estimator predicts a held-out point WORSE than simply guessing the field's own mean would.
+    This held (within noise) across every kernel width tested (the old light/heavy B/C kernels, a 1.5x
+    candidate, and a wider support radius) - see MapConfig.smoothing_fwhm_deg's own docstring. Any multi-pixel
+    feature B/C shows should be read with that in mind: it is not a verified detection.
+
+    Every real per-point measurement is used once (never a fixed number baked in); when more than
+    `max_points` are USED, a fixed-seed random subsample is evaluated instead (each iteration is a cheap
+    single-pixel cube build, not a full raster, but O(n) real spectra still need resampling) and reported as
+    `subsampled` so a manifest reader knows the numbers are drawn from a subset, not silently different."""
+    from science_engine.cube import build_cube
+    from science_engine.grid import build_beam_model
+    from science_engine.integration import integrated_map
+    from science_engine.models import ScienceGrid, ScienceInput
+
+    measured = {r["point_index"]: (r["value"], r["uncertainty"]) for r in point_rows
+               if r["status"] == "USED" and r["value"] is not None}
+    used_points = [p for p in filtered_input.points if p.point_index in measured]
+    if len(used_points) < 5:
+        return None
+
+    subsampled = False
+    if len(used_points) > max_points:
+        rng = np.random.default_rng(rng_seed)
+        keep_idx = sorted(rng.choice(len(used_points), size=max_points, replace=False).tolist())
+        used_points = [used_points[i] for i in keep_idx]
+        subsampled = True
+
+    fwhm = spatial["smoothing_fwhm_deg"]
+    cutoff = spatial["support_radius_deg"] / fwhm
+    sc = _kernel_science_config(cfg, fwhm, cutoff, "LOO cross-validation probe - identical kernel to B/C")
+    beam = build_beam_model(sc)
+    tiny = 1e-4   # degrees - a 1x1-pixel grid's own width/height never matters, only its ONE pixel's center
+
+    pred = np.full(len(used_points), np.nan)
+    meas = np.empty(len(used_points))
+    unc = np.empty(len(used_points))
+    n_support = np.zeros(len(used_points), dtype=int)
+    for i, point in enumerate(used_points):
+        kept = [p for p in filtered_input.points if p.point_index != point.point_index]
+        loo_input = ScienceInput(reduce_session_dir=filtered_input.reduce_session_dir,
+                                 campaign_id=filtered_input.campaign_id,
+                                 reduce_session_id=filtered_input.reduce_session_id,
+                                 reduce_schema_version=filtered_input.reduce_schema_version,
+                                 reduce_session_status=filtered_input.reduce_session_status, points=kept,
+                                 contract_problems=list(filtered_input.contract_problems),
+                                 exclusions=list(filtered_input.exclusions),
+                                 n_points_in_manifest=filtered_input.n_points_in_manifest)
+        grid1 = ScienceGrid(frame="icrs", center_ra_deg=point.ra_deg, center_dec_deg=point.dec_degrees,
+                            width_deg=tiny, height_deg=tiny, pixel_scale_deg=tiny, nx=1, ny=1)
+        cube1 = build_cube(loo_input, grid1, beam, sc)
+        smap1 = integrated_map(cube1, sc)
+        meas[i], unc[i] = measured[point.point_index]
+        n_support[i] = int(smap1.n_pointings[0, 0])
+        if smap1.valid[0, 0]:
+            pred[i] = float(smap1.value[0, 0])
+
+    predictable_mask = ~np.isnan(pred)
+    n_predictable = int(predictable_mask.sum())
+    if n_predictable < 3:
+        return {"n_points_evaluated": len(used_points), "n_predictable": n_predictable, "subsampled": subsampled,
+               "note": "too few held-out points had any real neighbour within support_radius_deg to summarize"}
+
+    predictable_points = [p for p, ok in zip(used_points, predictable_mask) if ok]
+    pred_v, meas_v, unc_v = pred[predictable_mask], meas[predictable_mask], unc[predictable_mask]
+    nsup_v = n_support[predictable_mask]
+    err = pred_v - meas_v
+    value_std = float(np.std(meas_v))
+    rms = float(np.sqrt(np.mean(err ** 2)))
+    correlation = (float(np.corrcoef(pred_v, meas_v)[0, 1])
+                  if np.std(pred_v) > 0 and np.std(meas_v) > 0 else None)
+    z = err / unc_v
+    worst_order = np.argsort(-np.abs(err))[:5]
+    worst = [{"point_index": int(predictable_points[j].point_index), "predicted": float(pred_v[j]),
+             "measured": float(meas_v[j]), "error": float(err[j]), "n_support_points": int(nsup_v[j])}
+            for j in worst_order]
+    return {
+        "n_points_evaluated": len(used_points), "n_predictable": n_predictable, "subsampled": subsampled,
+        "kernel_fwhm_deg": fwhm, "support_radius_deg": spatial["support_radius_deg"],
+        "bias": float(np.mean(err)), "rms": rms, "mae": float(np.mean(np.abs(err))),
+        "predicted_vs_measured_correlation": correlation, "field_value_std": value_std,
+        "rms_worse_than_predicting_the_field_mean": bool(rms > value_std),
+        "frac_within_1sigma_of_own_uncertainty": float(np.mean(np.abs(z) <= 1.0)),
+        "frac_within_2sigma_of_own_uncertainty": float(np.mean(np.abs(z) <= 2.0)),
+        "worst_5": worst,
+    }
+
+
 # ------------------------------------------------------------------ B/C: the frozen beam-gridding, called twice
 def memory_check(grid, n_velocity_channels: int, n_points: int) -> dict[str, Any]:
     """Reuses science_engine.validation's own measured (not guessed) per-voxel byte budget and
@@ -648,7 +766,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
 
     spatial = auto_spatial_params(filtered_input, cfg)
     support_radius_deg = spatial["support_radius_deg"]
-    smoothing_b, smoothing_c = spatial["smoothing_fwhm_b_deg"], spatial["smoothing_fwhm_c_deg"]
+    smoothing_fwhm_deg = spatial["smoothing_fwhm_deg"]
 
     # The BOARD (map A): one ScienceGrid cell per real pointing lattice position - never a fine sub-cell
     # raster and never sized from the reported instrument beam (cfg.beam_fwhm_deg), which is what produced a
@@ -657,22 +775,19 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     board_grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered_input, spatial["mosaic_spacing_deg"])
 
     # B and C: interpolated panels on a FINER raster than the board - genuinely NEW pixel positions between
-    # the 36 real measurements (request: "deben aparecer píxeles nuevos entre las posiciones medidas"; the
-    # earlier design evaluated B/C on the SAME 6x6 board as A, which just repainted the 36 cells with a
-    # blend - visually indistinguishable in resolution from A). SAME physical extent/center as board_grid
-    # (build_fine_grid) so the three panels stay directly comparable; SAME support_radius_deg (cutoff_n_fwhm x
-    # fwhm_deg fixed to support_radius_deg for both - see _reconcile_used_point_sets), DIFFERENT smoothing_
-    # fwhm (how quickly weight falls off within that fixed radius) - the two controls kept separate, per this
-    # module's own beam_fwhm_deg-vs-point-spacing history (see auto_spatial_params). interp_factor_c >
-    # interp_factor_b (enforced by MapConfig) makes C's raster strictly denser than B's.
+    # the real measurements (request: "deben aparecer píxeles nuevos entre las posiciones medidas"; an even
+    # earlier design evaluated B/C on the SAME board as A, which just repainted its cells with a blend -
+    # visually indistinguishable in resolution from A). SAME physical extent/center as board_grid
+    # (build_fine_grid) so the three panels stay directly comparable; SAME support_radius_deg AND SAME
+    # smoothing_fwhm_deg (see MapConfig.smoothing_fwhm_deg's own docstring for why B/C no longer use two
+    # different kernels) - interp_factor_c > interp_factor_b (enforced by MapConfig) is the ONLY remaining
+    # difference between B and C, making a resolution increase there a genuine, isolated variable instead of
+    # one confounded with a kernel change.
     grid_b = build_fine_grid(board_grid, cfg.interp_factor_b)
     grid_c = build_fine_grid(board_grid, cfg.interp_factor_c)
-    sc_b = _kernel_science_config(cfg, smoothing_b, support_radius_deg / smoothing_b,
-                                  "presentation smoothing kernel B (light) - NOT the instrument beam")
-    sc_c = _kernel_science_config(cfg, smoothing_c, support_radius_deg / smoothing_c,
-                                  "presentation smoothing kernel C (heavier) - NOT the instrument beam")
-    beam_b = build_beam_model(sc_b)
-    beam_c = build_beam_model(sc_c)
+    sc = _kernel_science_config(cfg, smoothing_fwhm_deg, support_radius_deg / smoothing_fwhm_deg,
+                                "presentation smoothing kernel (shared by B and C) - NOT the instrument beam")
+    beam = build_beam_model(sc)
     velocity_axis = canonical_velocity_axis(filtered_input)
 
     # B and C are each a full (Nv, Ny, Nx) cube - measured to OOM-kill this Pi (exit -9) when both were held
@@ -683,9 +798,9 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     mem_b = memory_check(grid_b, int(velocity_axis.shape[0]), len(filtered_input.points))
     if not mem_b["ok"]:
         raise ValueError(f"BLOCKED before allocating map B ({cfg.interp_factor_b}x raster): {mem_b['detail']}")
-    cube_b = build_cube(filtered_input, grid_b, beam_b, sc_b)
-    map_b = integrated_map(cube_b, sc_b)
-    quality_b = assess_science_quality(filtered_input, cube_b, sc_b, map_b)
+    cube_b = build_cube(filtered_input, grid_b, beam, sc)
+    map_b = integrated_map(cube_b, sc)
+    quality_b = assess_science_quality(filtered_input, cube_b, sc, map_b)
     used_b = set(cube_b.build_info["used_point_indices"])
     del cube_b
     gc.collect()
@@ -693,18 +808,19 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     mem_c = memory_check(grid_c, int(velocity_axis.shape[0]), len(filtered_input.points))
     if not mem_c["ok"]:
         raise ValueError(f"BLOCKED before allocating map C ({cfg.interp_factor_c}x raster): {mem_c['detail']}")
-    cube_c = build_cube(filtered_input, grid_c, beam_c, sc_c)
-    map_c = integrated_map(cube_c, sc_c)
+    cube_c = build_cube(filtered_input, grid_c, beam, sc)
+    map_c = integrated_map(cube_c, sc)
     used_c = set(cube_c.build_info["used_point_indices"])
     del cube_c
     gc.collect()
 
     used_common = _reconcile_used_point_sets(used_b, used_c, support_radius_deg)
-    note = (f"B and C share support_radius_deg={support_radius_deg:.6g} deg and the SAME physical extent as "
-           f"the real board (only their raster density differs) - their used-point sets matched exactly, "
-           f"verified: {len(used_common)} point(s), never reconciled after the fact")
+    note = (f"B and C share support_radius_deg={support_radius_deg:.6g} deg, smoothing_fwhm_deg="
+           f"{smoothing_fwhm_deg:.6g} deg, and the SAME physical extent as the real board (only their raster "
+           f"density differs) - their used-point sets matched exactly, verified: {len(used_common)} point(s), "
+           f"never reconciled after the fact")
 
-    point_rows = per_point_integrated_values(filtered_input, sc_b, velocity_axis)
+    point_rows = per_point_integrated_values(filtered_input, sc, velocity_axis)
     for row in point_rows:
         if row["status"] == "USED" and row["point_index"] not in used_common:
             row["status"] = "EXCLUDED_FOR_MAP_COMPARABILITY"
@@ -714,9 +830,10 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     map_a_value, map_a_uncertainty, map_a_valid, map_a_point_index = _map_a_grid(point_rows, point_cell,
                                                                                  n_rows, n_cols)
     noise_dominance = noise_dominance_summary(point_rows)
+    loo_cross_validation = loo_cross_validation_summary(filtered_input, cfg, spatial, point_rows)
 
     return {
-        "sc_b": sc_b, "sc_c": sc_c, "beam_b": beam_b, "beam_c": beam_c,
+        "sc": sc, "beam": beam,
         "board_grid": board_grid, "grid_b": grid_b, "grid_c": grid_c, "spatial_params": spatial,
         "n_rows": n_rows, "n_cols": n_cols, "point_cell": point_cell,
         "velocity_axis": velocity_axis, "map_b": map_b, "map_c": map_c,
@@ -724,7 +841,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
         "map_a_point_index": map_a_point_index,
         "quality_b": quality_b, "used_point_set": sorted(used_common), "used_point_set_note": note,
         "point_rows": point_rows, "color_vmin": vmin, "color_vmax": vmax, "color_limits_basis": vmin_vmax_basis,
-        "noise_dominance": noise_dominance,
+        "noise_dominance": noise_dominance, "loo_cross_validation": loo_cross_validation,
     }
 
 
@@ -825,6 +942,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     n_rows, n_cols = built["n_rows"], built["n_cols"]
     spatial = built["spatial_params"]
     support_radius_deg = spatial["support_radius_deg"]
+    smoothing_fwhm_deg = spatial["smoothing_fwhm_deg"]
     vmin, vmax = built["color_vmin"], built["color_vmax"]
     cmap = plt.get_cmap("viridis").with_extremes(bad=(0, 0, 0, 0))
     # SAME physical extent for A, B and C (build_fine_grid guarantees B/C match the board exactly) - request
@@ -849,6 +967,17 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             f"are essentially uncorrelated (r={nd['nearest_neighbor_value_correlation']:.2f}) - consistent with pure "
             f"per-point noise at this spacing. ANY multi-pixel bump/dip B/C shows may be a chance grouping of that "
             f"noise, not detected spatial structure.")
+    loo = built.get("loo_cross_validation")
+    loo_caveat = ""
+    if loo and loo.get("predicted_vs_measured_correlation") is not None:
+        r = loo["predicted_vs_measured_correlation"]
+        loo_caveat = (
+            f" LEAVE-ONE-OUT CHECK: predicting each of {loo['n_predictable']} real point(s) from ONLY its "
+            f"neighbours, using this SAME kernel/support, correlates with that point's own measured value at "
+            f"r={r:.2f}" + (" (essentially no real predictive skill)" if abs(r) < 0.3 else "") +
+            f"; RMS held-out error={loo['rms']:.4g} vs this field's own point-to-point std={loo['field_value_std']:.4g}"
+            + (" - WORSE than simply guessing the field's mean" if loo["rms_worse_than_predicting_the_field_mean"] else "")
+            + ". Read any multi-pixel feature below with that in mind - it is not a verified detection.")
 
     def _cell_ticks(ax) -> None:
         for e in x_edges:
@@ -938,14 +1067,36 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
            f"transparent - never zero, never interpolated. This is the ONLY panel where a cell can be "
            f"clicked to inspect its own real spectrum. {hi_caveat}")
 
+    def _bare_export(name: str, science_map, grid_bc, masked, alpha) -> None:
+        """A chrome-free rendering of an interpolated panel for ON-SCREEN display only: just the map pixels
+        (with the SAME dimming/hatching honesty cue), no title, colorbar, axis ticks/labels or caption baked
+        in, cropped tight to the data extent with a transparent background - matching panel A's own canvas,
+        which has never carried any of that chrome (it is drawn client-side from board.json). Request: "A
+        llena su panel, pero B y C aparecen como graficos pequenos dentro de grandes cajas" - that was this
+        exact mismatch (A: bare canvas; B/C: a full presentation figure, chrome included, squeezed into the
+        same CSS box). The full presentation PNG/SVG/PDF (with title/colorbar/caption) is UNCHANGED and
+        still written under `name` for download - this is an ADDITIONAL, separate file `{name}_bare.png`.
+        The ONE visible colour scale next to each panel is the browser's own HTML legend (board_json_payload's
+        color_stops, already shared by A/B/C) - never a second, redundant colorbar baked into this image."""
+        fig = plt.figure(figsize=(6.0, 6.0 * (grid_bc.height_deg / grid_bc.width_deg)))
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest",
+                 extent=extent, alpha=alpha)
+        _mark_low_confidence(ax, grid_bc, science_map)
+        _extent_and_aspect(ax)
+        ax.axis("off")
+        p = out_dir / f"{name}_bare.png"
+        fig.savefig(p, dpi=200, transparent=True, pad_inches=0)
+        plt.close(fig)
+        written[f"{name}_bare"] = [p.name]
+
     # ---- B / C: genuinely finer interpolated rasters - real NEW pixel positions between the measured cells,
-    # never the same {n_rows}x{n_cols} cells redrawn bigger/blurrier. Same physical footprint/scale as A;
-    # strictly increasing density C > B > A (enforced by MapConfig.interp_factor_c > interp_factor_b). ----
-    for key, label, kernel_fwhm, science_map, factor, grid_bc in (
-        ("map_b_smooth", "B: INTERPOLATED (light)", spatial["smoothing_fwhm_b_deg"], built["map_b"],
-         cfg.interp_factor_b, built["grid_b"]),
-        ("map_c_heavy", "C: INTERPOLATED (heavier)", spatial["smoothing_fwhm_c_deg"], built["map_c"],
-         cfg.interp_factor_c, built["grid_c"]),
+    # never the same {n_rows}x{n_cols} cells redrawn bigger/blurrier. Same physical footprint/scale as A, and
+    # now the SAME kernel too (see MapConfig.smoothing_fwhm_deg) - strictly increasing RASTER DENSITY is the
+    # only remaining difference between B and C (enforced by MapConfig.interp_factor_c > interp_factor_b). ----
+    for key, label, science_map, factor, grid_bc in (
+        ("map_b_smooth", "B: INTERPOLATED", built["map_b"], cfg.interp_factor_b, built["grid_b"]),
+        ("map_c_heavy", "C: INTERPOLATED (finer raster)", built["map_c"], cfg.interp_factor_c, built["grid_c"]),
     ):
         ny_fine, nx_fine = science_map.value.shape
         fig, ax = plt.subplots(figsize=(6.6, 6.0))
@@ -970,16 +1121,20 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
                f"{n_rows * n_cols} real measurements) over the SAME physical footprint as A - most pixels "
                f"sit BETWEEN measured positions and are ESTIMATES from an inverse-variance x Gaussian-kernel "
                f"weighted mean of nearby real readings (science_engine.gridding), kernel FWHM="
-               f"{kernel_fwhm:.4g} deg (declared presentation smoothing, NOT the instrument beam) - real "
-               f"instrument beam FWHM={cfg.beam_fwhm_deg:.4g} deg ({cfg.beam_status}, unchanged B/C, reported "
-               f"only). Spatial SUPPORT radius is the SAME {support_radius_deg:.4g} deg for B and C - "
+               f"{smoothing_fwhm_deg:.4g} deg (declared presentation smoothing, NOT the instrument beam) - "
+               f"IDENTICAL for B and C (an earlier light/heavy split was dropped: leave-one-out "
+               f"cross-validation found it made no measurable difference to predictive skill - see the LOO "
+               f"check below). The ONLY difference between B and C is this raster's density. Real instrument "
+               f"beam FWHM={cfg.beam_fwhm_deg:.4g} deg ({cfg.beam_status}, reported only, never used for "
+               f"gridding). Spatial SUPPORT radius is the SAME {support_radius_deg:.4g} deg for B and C - "
                f"{len(built['used_point_set'])} point(s) used identically in both. Interpolation ESTIMATES "
                f"values between measurements; it never recovers detail the instrument did not measure, and "
                f"no real spectrum exists for a pixel here - only the {n_rows}x{n_cols} real cells in panel A "
                f"have one. HATCHED/DIMMED pixels ({n_low_conf}/{int(science_map.valid.sum())} valid px) are "
                f"backed by only ONE nearby real point (no corroborating second measurement) - a bump/dip "
                f"there may be that single point's own measurement noise, not real spatial structure. Color "
-               f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat} {hi_caveat}")
+               f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat}{loo_caveat} {hi_caveat}")
+        _bare_export(key, science_map, grid_bc, masked, alpha)
 
     # ---- A + B + C combined: same physical box and colour scale, each panel's own resolution declared,
     # increasing left to right (request: "verse juntos... poder abrirse grandes") ----
@@ -1026,8 +1181,9 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             f"right ({n_rows}x{n_cols} -> {b_shape[0]}x{b_shape[1]} -> {c_shape[0]}x{c_shape[1]}). B/C pixels "
             f"between real positions are interpolation ESTIMATES, never new measurements - no spectrum exists "
             f"for them. Hatched/dimmed B/C areas are backed by only ONE nearby real point - a bump/dip there "
-            f"may be that point's own measurement noise, not real structure (see map_coverage_density)."
-            f"{noise_caveat} {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
+            f"may be that point's own measurement noise, not real structure (see map_coverage_density). B and "
+            f"C share the IDENTICAL smoothing kernel and support radius - only raster density differs."
+            f"{noise_caveat}{loo_caveat} {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
     paths = []
     for ext in ("png", "svg", "pdf"):
         p = out_dir / f"map_abc_combined.{ext}"
@@ -1194,7 +1350,7 @@ def cmd_plan(args) -> int:
     _print(payload, args.json, [
         f"calibration_level_filter: {cfg.calibration_level_filter}  counts: {counts}",
         f"board: {mosaic_detail}  support_radius={spatial['support_radius_deg']:.4g} deg  "
-        f"smoothing B/C={spatial['smoothing_fwhm_b_deg']:.4g}/{spatial['smoothing_fwhm_c_deg']:.4g} deg  "
+        f"smoothing (shared by B/C)={spatial['smoothing_fwhm_deg']:.4g} deg  "
         f"(real instrument beam={cfg.beam_fwhm_deg:.4g} deg, reported only, not used for gridding)",
         f"grid dims: A={n_rows}x{n_cols}"
         + (f"  B={grid_b.ny}x{grid_b.nx} ({cfg.interp_factor_b}x)  C={grid_c.ny}x{grid_c.nx} "
@@ -1251,9 +1407,9 @@ def cmd_run(args) -> int:
         "config": cfg.to_dict(), "config_hash": cfg.config_hash(),
         "real_instrument_beam": {"fwhm_deg": cfg.beam_fwhm_deg, "source": cfg.beam_source, "status": cfg.beam_status,
                                  "note": "reported honestly, unchanged between B/C - NOT used as the gridding "
-                                        "kernel for either map (see spatial_params/smoothing_kernel_b/c)"},
+                                        "kernel for either map (see spatial_params/smoothing_kernel)"},
         "spatial_params": built["spatial_params"],
-        "smoothing_kernel_b": built["beam_b"].to_dict(), "smoothing_kernel_c": built["beam_c"].to_dict(),
+        "smoothing_kernel": built["beam"].to_dict(),
         # THREE grids now, not one: the real N x M board (map A) and the two genuinely finer interpolated
         # rasters (map B/C) - same physical extent/center as the board, denser pixels only.
         "board_grid": built["board_grid"].to_dict(), "grid_b": built["grid_b"].to_dict(),
@@ -1268,6 +1424,7 @@ def cmd_run(args) -> int:
         "n_points_filtered_in": len(filtered.points), "n_points_used": len(built["used_point_set"]),
         "quality_b": built["quality_b"].to_dict(), "uncertainty_kind": unc_kind,
         "spatial_confidence": spatial_confidence, "noise_dominance": built["noise_dominance"],
+        "loo_cross_validation": built["loo_cross_validation"],
         "thermal_drift": thermal,
         "exports": exports, "points_csv": "points.csv",
         "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),
@@ -1348,8 +1505,7 @@ def _config_from_args(args) -> MapConfig:
                                   calibration_level_filter=args.calibration_level_filter, **beam_kwargs)
     for cli_name, cfg_name in (
         ("mosaic_spacing_deg", "mosaic_spacing_deg"),
-        ("support_radius_deg", "support_radius_deg"), ("smoothing_fwhm_b_deg", "smoothing_fwhm_b_deg"),
-        ("smoothing_fwhm_c_deg", "smoothing_fwhm_c_deg"),
+        ("support_radius_deg", "support_radius_deg"), ("smoothing_fwhm_deg", "smoothing_fwhm_deg"),
         ("interp_factor_b", "interp_factor_b"), ("interp_factor_c", "interp_factor_c"),
         ("quality_policy", "quality_policy"),
         ("velocity_window_min_m_s", "velocity_window_min_m_s"), ("velocity_window_max_m_s", "velocity_window_max_m_s"),
@@ -1372,8 +1528,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--beam-from-observer-config", nargs="?", const="observer_config.json", default=None)
         p.add_argument("--mosaic-spacing-deg", type=float, default=None)
         p.add_argument("--support-radius-deg", type=float, default=None)
-        p.add_argument("--smoothing-fwhm-b-deg", type=float, default=None)
-        p.add_argument("--smoothing-fwhm-c-deg", type=float, default=None)
+        p.add_argument("--smoothing-fwhm-deg", type=float, default=None)
         p.add_argument("--interp-factor-b", type=int, default=None)
         p.add_argument("--interp-factor-c", type=int, default=None)
         p.add_argument("--quality-policy", choices=("STRICT", "STANDARD", "PERMISSIVE"), default=None)
