@@ -458,6 +458,110 @@ out.recovered = [$("error-banner").hidden, $("hdr-status").textContent];
     assert out["recovered"][0] is True and "LIVE" in out["recovered"][1]
 
 
+# ------------------------------------------------------------------ SCIENCE: regression for a real reported
+# failure - "PLAN failed: can't access property "toFixed", facts.spatial_params.smoothing_fwhm_b_deg is
+# undefined". science_web_bridge commit 782711b replaced spatial_params' two per-map kernels
+# (smoothing_fwhm_b_deg/smoothing_fwhm_c_deg) with ONE shared smoothing_fwhm_deg; a stale-loaded page still
+# running the OLD science.js (which read the removed field name straight off a FRESH, new-shape PLAN result)
+# crashed the whole PLAN view. science.js now goes through ONE formatter (formatSharedSmoothingFwhm) for
+# every spatial_params consumer, which never assumes a shape - these tests drive the REAL PLAN button against
+# a stubbed backend (no live server, no real REDUCE session) with each spatial_params shape PLAN can actually
+# meet, and assert the page never throws.
+
+def _science_facts(spatial_params):
+    """A minimal, real-shaped PLAN `facts` payload (see science_web_bridge.cmd_plan's own payload) - only
+    spatial_params varies between the tests below."""
+    return {
+        "config": {"calibration_level_filter": "RELATIVE", "interp_factor_b": 3, "interp_factor_c": 6},
+        "config_hash": "deadbeef", "calibration_level_counts": {"RELATIVE": 10},
+        "board_grid": {"nx": 10, "ny": 10}, "grid_b": {"ny": 30, "nx": 30}, "grid_c": {"ny": 60, "nx": 60},
+        "n_rows": 10, "n_cols": 10, "spatial_params": spatial_params,
+        "real_instrument_beam_fwhm_deg": 20.0, "n_velocity_channels": 8192,
+        "checks": [{"name": "has_filtered_points", "ok": True, "detail": "10 point(s)"}], "blocked": False,
+        "will_process_points": list(range(1, 11)),
+    }
+
+
+SCIENCE_ROUTES = r"""
+window.__routes["GET /api/ops/science/reduce_sessions"] = { body: { data: { sessions: [
+  { reduce_session_dir: "data/reduced/FAKE-CAMPAIGN/REDUCE-1", status: "COMPLETED", points_completed: 10, points_discovered: 10,
+    calibration_level_counts: { RELATIVE: 10 }, campaign_id: "FAKE-CAMPAIGN", reduce_session_id: "REDUCE-1" } ], no_data: [] } } };
+window.__routes["GET /api/ops/science/inspect_reduce_session"] = { body: { data: {
+  campaign_id: "FAKE-CAMPAIGN", reduce_session_id: "REDUCE-1", reduce_status: "COMPLETED",
+  points_planned: 10, points_reduced_completed: 10, points_reduced_blocked: 0, points_reduced_failed: 0,
+  n_points_ingestable: 10, science_contract_ok: true, science_contract_problems: [],
+  calibration_level_counts: { RELATIVE: 10 }, velocity_available_count: 10, velocity_missing_points: [],
+  ra_deg_range: [10.0, 20.0], dec_deg_range: [-40.0, -30.0] } } };
+window.__routes["POST /api/ops/start/science_heatmaps_plan"] = { body: { data: { job_id: "plan-job-1" } } };
+window.__routes["GET /api/ops/job/plan-job-1"] = { body: { data: {
+  job_id: "plan-job-1", state: "EXITED", verdict: "PASS", facts: %s } } };
+"""
+
+SCIENCE_DRIVER = r"""
+await until(() => $("in-session").options.length > 1, 4000);
+$("in-session").value = "data/reduced/FAKE-CAMPAIGN/REDUCE-1";
+$("in-session").dispatchEvent(new Event("change"));
+await until(() => !$("plan-panel").hidden, 4000);
+$("btn-plan").click();
+await until(() => $("plan-badge").textContent !== "—" || !$("error-banner").hidden, 4000);
+out.badge = $("plan-badge").textContent;
+out.summary = $("plan-summary").textContent;
+out.errorBanner = { hidden: $("error-banner").hidden, text: $("error-banner").textContent };
+"""
+
+
+def test_science_plan_renders_shared_smoothing_fwhm_without_crashing(tmp_path):
+    """Exact reproduction of the reported failure's PRECONDITION: a fresh PLAN result whose spatial_params
+    has the NEW shape (smoothing_fwhm_deg, no smoothing_fwhm_b_deg at all) - the old code crashed reading a
+    field that no longer exists; the fix must render the shared value plainly instead."""
+    facts = _science_facts({"nearest_neighbor_spacing_deg": 1.1098, "mosaic_spacing_deg": 1.1098,
+                            "support_radius_deg": 1.3873, "smoothing_fwhm_deg": 1.1098})
+    out = run_page(tmp_path, "science", SCIENCE_ROUTES % json.dumps(facts), SCIENCE_DRIVER, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []                      # no window "error"/"unhandledrejection" event fired
+    # the app's own click handler catches a thrown error and shows it via #error-banner (not an uncaught
+    # window error) - this is exactly how the real report surfaced: "PLAN failed: can't access property
+    # "toFixed", ...smoothing_fwhm_b_deg is undefined". Reproduced against the pre-fix science.js/html pair
+    # while writing this test: badge went READY, plan-summary stayed "", and the banner showed
+    # "PLAN failed: Cannot read properties of undefined (reading 'toFixed')" - so both are checked here.
+    assert out["errorBanner"]["hidden"] is True, out["errorBanner"]
+    assert "PLAN failed" not in out["errorBanner"]["text"]
+    assert out["badge"] == "READY"
+    assert "smoothing kernel (B & C): 1.1098 deg (shared by B & C)" in out["summary"]
+    assert "support radius (B & C, shared): 1.3873 deg" in out["summary"]
+
+
+def test_science_plan_renders_legacy_per_map_smoothing_fwhm_without_crashing(tmp_path):
+    """The OLD (pre-782711b) two-kernel shape - a manifest/config.json written before that change would still
+    have this shape on disk; PLAN itself never reads one back (it always computes fresh - see cmd_plan), but
+    the formatter must still degrade gracefully rather than assume the new field is always present."""
+    facts = _science_facts({"nearest_neighbor_spacing_deg": 1.1098, "mosaic_spacing_deg": 1.1098,
+                            "support_radius_deg": 1.3873, "smoothing_fwhm_b_deg": 1.1098, "smoothing_fwhm_c_deg": 3.3294})
+    out = run_page(tmp_path, "science", SCIENCE_ROUTES % json.dumps(facts), SCIENCE_DRIVER, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["errorBanner"]["hidden"] is True, out["errorBanner"]
+    assert out["badge"] == "READY"
+    assert "B=1.1098 / C=3.3294 deg" in out["summary"] and "legacy" in out["summary"]
+    assert "1.1098 deg (shared by B & C)" not in out["summary"]   # never conflate the two shapes
+
+
+def test_science_plan_handles_missing_spatial_params_without_crashing(tmp_path):
+    """Neither shape at all (or spatial_params missing entirely) - must degrade to an explicit placeholder,
+    never a fabricated number, and never throw."""
+    for spatial_params, expect in (({}, "smoothing kernel not reported in this result"),
+                                   (None, "no spatial_params in this result")):
+        facts = _science_facts(spatial_params)
+        if spatial_params is None:
+            del facts["spatial_params"]
+        out = run_page(tmp_path, "science", SCIENCE_ROUTES % json.dumps(facts), SCIENCE_DRIVER, budget=15000)
+        assert "driver_error" not in out, out.get("driver_error")
+        assert out["errors"] == []
+        assert out["errorBanner"]["hidden"] is True, out["errorBanner"]
+        assert out["badge"] == "READY"
+        assert expect in out["summary"], out["summary"]
+
+
 # ------------------------------------------------------------------ Field Console (8088): escaping, LINK state, empty data
 
 def _status(**over):

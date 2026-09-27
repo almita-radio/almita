@@ -38,6 +38,29 @@
   function kms(v) { return Math.round(Number(v) * 1000); }
   function paramsEqual(a, b) { return !!a && !!b && JSON.stringify(a) === JSON.stringify(b); }
 
+  // spatial_params' own smoothing-kernel field changed shape (science_web_bridge commit 782711b): B and C
+  // used to carry two DIFFERENT kernels (smoothing_fwhm_b_deg/smoothing_fwhm_c_deg) and now share ONE
+  // (smoothing_fwhm_deg) - a real, once-observed regression was a stale-loaded page still running JS from
+  // before that change, which read the old field name straight off a FRESH (new-shape) result and crashed
+  // the whole PLAN/RESULTS view on ".toFixed() of undefined". Every consumer of spatial_params now goes
+  // through this ONE formatter, which never assumes a shape: it shows the shared kernel when present, falls
+  // back to the legacy two-kernel display for an OLD-format payload (a manifest/config.json written before
+  // 782711b, on disk under data/science/.../SCIENCE_WEB-*/ from before this date - PLAN itself never reads
+  // one, it always computes fresh, but a stored one could still reach this formatter if some future feature
+  // displays it), and otherwise says plainly that the value is unavailable - never a fabricated number.
+  function formatSharedSmoothingFwhm(sp) {
+    if (!sp) return "— (no spatial_params in this result)";
+    if (Number.isFinite(sp.smoothing_fwhm_deg)) return `${sp.smoothing_fwhm_deg.toFixed(4)} deg (shared by B & C)`;
+    if (Number.isFinite(sp.smoothing_fwhm_b_deg) && Number.isFinite(sp.smoothing_fwhm_c_deg)) {
+      return `B=${sp.smoothing_fwhm_b_deg.toFixed(4)} / C=${sp.smoothing_fwhm_c_deg.toFixed(4)} deg `
+        + `(legacy result from before B/C shared one kernel — see science_web_bridge commit 782711b)`;
+    }
+    return "— (smoothing kernel not reported in this result)";
+  }
+  function formatSupportRadius(sp) {
+    return sp && Number.isFinite(sp.support_radius_deg) ? `${sp.support_radius_deg.toFixed(4)} deg` : "—";
+  }
+
   function invalidateDownstream() {
     lastPlanParams = null; lastPlanJobId = null; lastRunOutputDir = null;
     $("plan-panel").hidden = !(selectedSession && selectedCalibLevel);
@@ -222,8 +245,8 @@
       + `calibration_level_counts (full session): ${JSON.stringify(facts.calibration_level_counts || {})}\n`
       + `grid dims: A=${facts.n_rows}x${facts.n_cols}`
       + (facts.grid_b ? `  B=${facts.grid_b.ny}x${facts.grid_b.nx}  C=${facts.grid_c.ny}x${facts.grid_c.nx}` : "  B/C=—") + "\n"
-      + `support radius (B & C, shared): ${facts.spatial_params ? facts.spatial_params.support_radius_deg.toFixed(4) : "—"} deg   `
-      + `smoothing kernel (B & C, shared): ${facts.spatial_params ? facts.spatial_params.smoothing_fwhm_deg.toFixed(4) : "—"} deg\n`
+      + `support radius (B & C, shared): ${formatSupportRadius(facts.spatial_params)}   `
+      + `smoothing kernel (B & C): ${formatSharedSmoothingFwhm(facts.spatial_params)}\n`
       + `real instrument beam (reported only): ${facts.real_instrument_beam_fwhm_deg} deg   velocity channels: ${facts.n_velocity_channels}\n`
       + `config_hash: ${facts.config_hash}`;
     const list = $("plan-checks"); list.textContent = "";
@@ -300,9 +323,10 @@
       + `grid dims: A=${dims.a ? dims.a.join("x") : "—"} → B=${dims.b ? dims.b.join("x") : "—"} `
       + `(${manifest.config.interp_factor_b}x) → C=${dims.c ? dims.c.join("x") : "—"} (${manifest.config.interp_factor_c}x) `
       + `— same footprint, increasing resolution\n`
-      + `support radius (B & C, shared): ${manifest.spatial_params.support_radius_deg.toFixed(4)} deg   `
-      + `smoothing kernel (B & C, shared): ${manifest.spatial_params.smoothing_fwhm_deg.toFixed(4)} deg — `
-      + `the ONLY difference between B and C is raster density\n`
+      + `support radius (B & C, shared): ${formatSupportRadius(manifest.spatial_params)}   `
+      + `smoothing kernel (B & C): ${formatSharedSmoothingFwhm(manifest.spatial_params)}`
+      + (manifest.spatial_params && Number.isFinite(manifest.spatial_params.smoothing_fwhm_deg)
+        ? " — the ONLY difference between B and C is raster density\n" : "\n")
       + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
       + `single-point-only pixels (no corroborating 2nd measurement): B=${(manifest.spatial_confidence.b.single_point_fraction * 100).toFixed(0)}%   `
       + `C=${(manifest.spatial_confidence.c.single_point_fraction * 100).toFixed(0)}% of valid pixels — see COVERAGE DENSITY below\n`
