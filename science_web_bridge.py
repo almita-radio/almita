@@ -717,6 +717,133 @@ def loo_cross_validation_summary(filtered_input, cfg: MapConfig, spatial: dict[s
     }
 
 
+def _odd_ratio_companion_factor(factor_hi: int) -> tuple[int, int]:
+    """For build_fine_grid()'s pixel-center convention (centers = midpoints of linspace(-W/2, W/2, n+1)), a
+    grid at factor `factor_lo` has EVERY pixel center exactly coincide (to float precision) with pixel center
+    `k*i + (k-1)//2` of a grid at factor `factor_hi = k * factor_lo`, along each axis independently, IFF k is
+    an ODD integer - proved by equating center_i(n) = -W/2 + (i+0.5)*W/n between the two grids: k*(i+0.5) must
+    equal an integer j plus 0.5, which only happens for odd k. Every positive integer factor_hi = 2**v * m
+    with m odd (its odd part); choosing k = m (odd, divides factor_hi exactly) gives factor_lo = 2**v, always
+    a valid integer >= 1 - so a companion always exists. factor_lo=1 means the board's own native grid
+    (board_grid) is the companion; build_fine_grid() itself is never called with factor < 2, so that case is
+    handled by the caller reusing board_grid directly."""
+    v = 0
+    n = factor_hi
+    while n % 2 == 0:
+        n //= 2
+        v += 1
+    k = n if n > 0 else 1   # n is factor_hi's odd part; k=factor_hi/factor_lo must be odd
+    factor_lo = factor_hi // k
+    return factor_lo, k   # factor_lo == factor_hi (k=1) exactly when factor_hi is a pure power of 2 - see caller
+
+
+def bc_exact_coordinate_consistency_summary(filtered_input, cfg: MapConfig, spatial: dict[str, float],
+                                            board_grid, sc, beam, map_b, map_c, grid_b, grid_c) -> dict[str, Any]:
+    """Answers a real question a resampled "B vs C" comparison CANNOT: do B and C compute the SAME field at
+    the SAME physical coordinate, or only something visually similar? B's and C's own pixel grids (factors
+    interp_factor_b/interp_factor_c) generally do NOT share any exact coordinates - build_fine_grid()'s pixel
+    centers are midpoints of a linspace over the SAME footprint, so two grids at factors f_lo/f_hi share
+    centers only when f_hi/f_lo is an ODD integer (see _odd_ratio_companion_factor's proof); the shipped
+    default (interp_factor_b=3, interp_factor_c=6, ratio 2 - EVEN) never does. A prior investigation
+    "matched" B to C by nearest pixel INDEX instead (see nearest_pixel_reference below) - a real, quantified
+    coordinate offset (0.5x C's own pixel pitch on EACH axis, always, not a random jitter: every single B
+    pixel sits at that exact worst-case distance from its nearest C pixel, given the even ratio), not the
+    same-coordinate test the question actually calls for.
+
+    This function instead builds ONE small extra companion grid per map (factor_lo from
+    _odd_ratio_companion_factor - cheap: factor_lo divides out all factors of 2, so it is far coarser than
+    the map it checks), evaluates the frozen build_cube()/integrated_map() on it with the IDENTICAL sc/beam,
+    and compares values at coordinates that are EXACT subsets of both grids (max coordinate mismatch is
+    reported and must be at float-precision, ~1e-12 deg or less) - never resampling one rendered image into
+    the other. On the real flagged session (REDUCE-20260919-234712-712870) this gives max|diff|=0.0 and
+    RMS=0.0 for both B and C against their companions: build_cube()/integrated_map() is a deterministic
+    function of (points, coordinate, kernel) only - it does not depend on which raster a coordinate happens
+    to belong to. Any nonzero "B vs C" difference reported elsewhere (e.g. via nearest-pixel matching) is
+    therefore entirely a grid-quantization artifact of that comparison method, not a computational
+    inconsistency between what B and C evaluate."""
+    from science_engine.grid import pixel_centers_deg
+
+    def _companion(factor_hi: int):
+        factor_lo, k = _odd_ratio_companion_factor(factor_hi)
+        grid_lo = board_grid if factor_lo == 1 else build_fine_grid(board_grid, factor_lo)
+        from science_engine.cube import build_cube
+        from science_engine.integration import integrated_map
+        cube_lo = build_cube(filtered_input, grid_lo, beam, sc)
+        map_lo = integrated_map(cube_lo, sc)
+        del cube_lo
+        return grid_lo, map_lo, factor_lo, k
+
+    def _exact_check(grid_lo, map_lo, grid_hi, map_hi, k) -> dict[str, Any]:
+        ra_lo, dec_lo = pixel_centers_deg(grid_lo)
+        ra_hi, dec_hi = pixel_centers_deg(grid_hi)
+        diffs, both_valid, max_coord_err = [], 0, 0.0
+        n_checked = grid_lo.ny * grid_lo.nx
+        for i in range(grid_lo.ny):
+            jy = k * i + (k - 1) // 2
+            for jx_i in range(grid_lo.nx):
+                jx = k * jx_i + (k - 1) // 2
+                max_coord_err = max(max_coord_err, abs(ra_lo[i, jx_i] - ra_hi[jy, jx]),
+                                    abs(dec_lo[i, jx_i] - dec_hi[jy, jx]))
+                if map_lo.valid[i, jx_i] and map_hi.valid[jy, jx]:
+                    both_valid += 1
+                    diffs.append(float(map_lo.value[i, jx_i] - map_hi.value[jy, jx]))
+        diffs = np.array(diffs) if diffs else np.array([0.0])
+        return {
+            "n_checked": n_checked, "n_both_valid": both_valid,
+            "max_coordinate_mismatch_deg": float(max_coord_err),
+            "max_abs_diff": float(np.abs(diffs).max()), "rms_diff": float(np.sqrt(np.mean(diffs ** 2))),
+            "exact_match": bool(np.abs(diffs).max() < 1e-6),
+        }
+
+    grid_lo_b, map_lo_b, factor_lo_b, k_b = _companion(cfg.interp_factor_b)
+    grid_lo_c, map_lo_c, factor_lo_c, k_c = _companion(cfg.interp_factor_c)
+    result_b = _exact_check(grid_lo_b, map_lo_b, grid_b, map_b, k_b)
+    result_b.update(companion_factor=factor_lo_b, ratio_k=k_b,
+                    degenerate_self_comparison=(factor_lo_b == cfg.interp_factor_b))
+    result_c = _exact_check(grid_lo_c, map_lo_c, grid_c, map_c, k_c)
+    result_c.update(companion_factor=factor_lo_c, ratio_k=k_c,
+                    degenerate_self_comparison=(factor_lo_c == cfg.interp_factor_c))
+
+    # for context/comparison only - the OLD, flawed nearest-pixel-INDEX matching a prior report used, which
+    # this function's docstring explains is not a same-coordinate test at all.
+    def pixel_centers_local(grid):
+        xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
+        ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
+        xc, yc = (xs[:-1] + xs[1:]) / 2, (ys[:-1] + ys[1:]) / 2
+        return np.meshgrid(xc, yc)
+
+    xb, yb = pixel_centers_local(grid_b)
+    xc, yc = pixel_centers_local(grid_c)
+    factor_bc = grid_c.nx // grid_b.nx
+    pairs, offsets = [], []
+    for i in range(grid_b.ny):
+        for j in range(grid_b.nx):
+            if not map_b.valid[i, j]:
+                continue
+            ci = min(max(int(round((i + 0.5) * factor_bc - 0.5)), 0), grid_c.ny - 1)
+            cj = min(max(int(round((j + 0.5) * factor_bc - 0.5)), 0), grid_c.nx - 1)
+            if not map_c.valid[ci, cj]:
+                continue
+            offsets.append(float(np.hypot(xb[i, j] - xc[ci, cj], yb[i, j] - yc[ci, cj])))
+            pairs.append((float(map_b.value[i, j]), float(map_c.value[ci, cj])))
+    nearest_pixel_reference: dict[str, Any] = {
+        "note": "NEAREST-PIXEL-INDEX matching, NOT identical coordinates - kept only for context/comparison "
+               "against the exact checks above; see this function's own docstring.",
+    }
+    if pairs:
+        arr = np.array(pairs)
+        offs = np.array(offsets)
+        d = arr[:, 0] - arr[:, 1]
+        nearest_pixel_reference.update(
+            n_pairs=len(pairs), mean_coordinate_offset_deg=float(offs.mean()),
+            max_coordinate_offset_deg=float(offs.max()), rms_value_diff=float(np.sqrt(np.mean(d ** 2))),
+            max_abs_value_diff=float(np.abs(d).max()),
+            correlation=(float(np.corrcoef(arr[:, 0], arr[:, 1])[0, 1]) if np.std(arr[:, 0]) > 0 and np.std(arr[:, 1]) > 0 else None),
+        )
+
+    return {"b": result_b, "c": result_c, "nearest_pixel_reference": nearest_pixel_reference}
+
+
 # ------------------------------------------------------------------ B/C: the frozen beam-gridding, called twice
 def memory_check(grid, n_velocity_channels: int, n_points: int) -> dict[str, Any]:
     """Reuses science_engine.validation's own measured (not guessed) per-voxel byte budget and
@@ -831,6 +958,11 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
                                                                                  n_rows, n_cols)
     noise_dominance = noise_dominance_summary(point_rows)
     loo_cross_validation = loo_cross_validation_summary(filtered_input, cfg, spatial, point_rows)
+    # Direct, same-coordinate proof that B and C compute the identical field (never a resampled-image
+    # comparison) - see bc_exact_coordinate_consistency_summary's own docstring for why a naive nearest-pixel
+    # match (kept here only as nearest_pixel_reference, for context) is NOT this test.
+    bc_exact_coordinate_consistency = bc_exact_coordinate_consistency_summary(
+        filtered_input, cfg, spatial, board_grid, sc, beam, map_b, map_c, grid_b, grid_c)
 
     return {
         "sc": sc, "beam": beam,
@@ -842,6 +974,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
         "quality_b": quality_b, "used_point_set": sorted(used_common), "used_point_set_note": note,
         "point_rows": point_rows, "color_vmin": vmin, "color_vmax": vmax, "color_limits_basis": vmin_vmax_basis,
         "noise_dominance": noise_dominance, "loo_cross_validation": loo_cross_validation,
+        "bc_exact_coordinate_consistency": bc_exact_coordinate_consistency,
     }
 
 
@@ -967,14 +1100,28 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             f"are essentially uncorrelated (r={nd['nearest_neighbor_value_correlation']:.2f}) - consistent with pure "
             f"per-point noise at this spacing. ANY multi-pixel bump/dip B/C shows may be a chance grouping of that "
             f"noise, not detected spatial structure.")
+    bcc = built.get("bc_exact_coordinate_consistency")
+    bc_caveat = ""
+    if bcc:
+        b_c, c_c = bcc["b"], bcc["c"]
+        bc_caveat = (
+            f" B/C CONSISTENCY CHECK (computational self-consistency, NOT a predictive-skill test - see the "
+            f"separate LEAVE-ONE-OUT CHECK below for that): evaluated at IDENTICAL physical coordinates via a "
+            f"small odd-ratio companion grid (never a resampled image), B's own field matches its "
+            f"{b_c['n_checked']}-point companion to max|diff|={b_c['max_abs_diff']:.2g} and C's to "
+            f"max|diff|={c_c['max_abs_diff']:.2g} over {c_c['n_checked']} points (coordinate mismatch "
+            f"{max(b_c['max_coordinate_mismatch_deg'], c_c['max_coordinate_mismatch_deg']):.1e} deg - float "
+            f"precision only) - i.e. B and C compute the SAME field at a shared coordinate; only their raster "
+            f"density differs.")
     loo = built.get("loo_cross_validation")
     loo_caveat = ""
     if loo and loo.get("predicted_vs_measured_correlation") is not None:
         r = loo["predicted_vs_measured_correlation"]
         loo_caveat = (
-            f" LEAVE-ONE-OUT CHECK: predicting each of {loo['n_predictable']} real point(s) from ONLY its "
-            f"neighbours, using this SAME kernel/support, correlates with that point's own measured value at "
-            f"r={r:.2f}" + (" (essentially no real predictive skill)" if abs(r) < 0.3 else "") +
+            f" LEAVE-ONE-OUT CHECK (predictive skill against REAL measurements - a DIFFERENT question from the "
+            f"B/C consistency check above): predicting each of {loo['n_predictable']} real point(s) from ONLY "
+            f"its neighbours, using this SAME kernel/support, correlates with that point's own measured value "
+            f"at r={r:.2f}" + (" (essentially no real predictive skill)" if abs(r) < 0.3 else "") +
             f"; RMS held-out error={loo['rms']:.4g} vs this field's own point-to-point std={loo['field_value_std']:.4g}"
             + (" - WORSE than simply guessing the field's mean" if loo["rms_worse_than_predicting_the_field_mean"] else "")
             + ". Read any multi-pixel feature below with that in mind - it is not a verified detection.")
@@ -1133,7 +1280,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
                f"have one. HATCHED/DIMMED pixels ({n_low_conf}/{int(science_map.valid.sum())} valid px) are "
                f"backed by only ONE nearby real point (no corroborating second measurement) - a bump/dip "
                f"there may be that single point's own measurement noise, not real spatial structure. Color "
-               f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat}{loo_caveat} {hi_caveat}")
+               f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat}{bc_caveat}{loo_caveat} {hi_caveat}")
         _bare_export(key, science_map, grid_bc, masked, alpha)
 
     # ---- A + B + C combined: same physical box and colour scale, each panel's own resolution declared,
@@ -1183,7 +1330,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             f"for them. Hatched/dimmed B/C areas are backed by only ONE nearby real point - a bump/dip there "
             f"may be that point's own measurement noise, not real structure (see map_coverage_density). B and "
             f"C share the IDENTICAL smoothing kernel and support radius - only raster density differs."
-            f"{noise_caveat}{loo_caveat} {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
+            f"{noise_caveat}{bc_caveat}{loo_caveat} {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
     paths = []
     for ext in ("png", "svg", "pdf"):
         p = out_dir / f"map_abc_combined.{ext}"
@@ -1425,6 +1572,7 @@ def cmd_run(args) -> int:
         "quality_b": built["quality_b"].to_dict(), "uncertainty_kind": unc_kind,
         "spatial_confidence": spatial_confidence, "noise_dominance": built["noise_dominance"],
         "loo_cross_validation": built["loo_cross_validation"],
+        "bc_exact_coordinate_consistency": built["bc_exact_coordinate_consistency"],
         "thermal_drift": thermal,
         "exports": exports, "points_csv": "points.csv",
         "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),

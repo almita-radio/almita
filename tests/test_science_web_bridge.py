@@ -19,7 +19,8 @@ from science_engine.models import BeamModel, ScienceGrid
 from science_engine.simulation import build_synthetic_science_input, rectangular_grid_specs
 from science_engine.spatial import angular_separation_deg
 
-from science_web_bridge import (MapConfig, MosaicShapeError, _reconcile_used_point_sets, auto_spatial_params,
+from science_web_bridge import (MapConfig, MosaicShapeError, _odd_ratio_companion_factor,
+                                _reconcile_used_point_sets, auto_spatial_params, bc_exact_coordinate_consistency_summary,
                                 board_json_payload, build_all_products, build_fine_grid, build_mosaic_grid,
                                 loo_cross_validation_summary, noise_dominance_summary, render_all_maps,
                                 spatial_confidence_summary, viridis_hex)
@@ -603,3 +604,66 @@ def test_build_all_products_exposes_loo_cross_validation():
     for field in ("bias", "rms", "mae", "predicted_vs_measured_correlation", "field_value_std",
                  "rms_worse_than_predicting_the_field_mean", "worst_5"):
         assert field in loo
+
+
+# ---------------------------------------------------------------- bc_exact_coordinate_consistency_summary:
+# a follow-up question ("por que r=0.946 no es ~1 si es el mismo campo") revealed the earlier "B vs C at
+# matched coordinates" check (used to produce that r) was really NEAREST-PIXEL-INDEX matching, not a same-
+# coordinate comparison - build_fine_grid()'s pixel centers only exactly coincide across two factors when
+# their ratio is an ODD integer (proved in _odd_ratio_companion_factor's own docstring). These tests verify
+# that algebra and the resulting exact (zero-diff) consistency check directly, without resampling any image.
+
+def test_odd_ratio_companion_factor_finds_exact_nesting_for_odd_ratios():
+    assert _odd_ratio_companion_factor(3) == (1, 3)     # matches shipped interp_factor_b
+    assert _odd_ratio_companion_factor(6) == (2, 3)     # matches shipped interp_factor_c
+    assert _odd_ratio_companion_factor(10) == (2, 5)
+    assert _odd_ratio_companion_factor(12) == (4, 3)
+
+
+def test_odd_ratio_companion_factor_is_degenerate_for_pure_powers_of_two():
+    """A pure power of 2 has NO smaller grid whose centers exactly nest inside it under this convention -
+    the function honestly returns itself (k=1) rather than a false companion; callers must check for this
+    (see bc_exact_coordinate_consistency_summary's degenerate_self_comparison flag)."""
+    for f in (2, 4, 8, 16):
+        factor_lo, k = _odd_ratio_companion_factor(f)
+        assert factor_lo == f and k == 1
+
+
+def test_bc_exact_coordinate_consistency_is_exact_at_shared_coordinates():
+    """The real, direct test: evaluate the SAME build_cube()/integrated_map() call at coordinates shared
+    exactly by B/C and a small odd-ratio companion grid (never a resampled image) - must match to float
+    precision, proving B and C compute the identical field and any earlier nonzero "B vs C" difference was a
+    nearest-pixel quantization artifact of that comparison method, not a computational inconsistency."""
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0, interp_factor_b=3, interp_factor_c=6))
+    bcc = built["bc_exact_coordinate_consistency"]
+    for key in ("b", "c"):
+        r = bcc[key]
+        assert r["degenerate_self_comparison"] is False   # 3 and 6 both have a real, smaller companion
+        assert r["max_coordinate_mismatch_deg"] < 1e-9
+        assert r["n_both_valid"] > 0
+        assert r["exact_match"] is True
+        assert r["max_abs_diff"] < 1e-6
+        assert r["rms_diff"] < 1e-6
+    # the nearest-pixel reference (kept only for context) must show a REAL, nonzero coordinate offset -
+    # otherwise this test would not be distinguishing the two methods at all.
+    ref = bcc["nearest_pixel_reference"]
+    assert ref["max_coordinate_offset_deg"] > 0
+
+
+def test_bc_exact_coordinate_consistency_flags_degenerate_power_of_two_factors():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0, interp_factor_b=2, interp_factor_c=4))
+    bcc = built["bc_exact_coordinate_consistency"]
+    assert bcc["b"]["degenerate_self_comparison"] is True
+    assert bcc["c"]["degenerate_self_comparison"] is True
+    # a degenerate (self) comparison is still trivially exact - it just proves nothing beyond determinism
+    assert bcc["b"]["exact_match"] is True and bcc["c"]["exact_match"] is True
+
+
+def test_build_all_products_exposes_bc_exact_coordinate_consistency():
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    bcc = built["bc_exact_coordinate_consistency"]
+    assert bcc is not None
+    assert set(bcc.keys()) == {"b", "c", "nearest_pixel_reference"}

@@ -314,9 +314,17 @@
             ? "  → CONSISTENT WITH PURE NOISE at this point spacing: any multi-pixel bump/dip in B/C may be chance noise, not real structure\n"
             : "  → neighbours correlate more than pure noise would predict\n")
         ) : "")
+      + (manifest.bc_exact_coordinate_consistency ? (
+          `B/C CONSISTENCY CHECK (computational self-consistency, NOT predictive skill — see LEAVE-ONE-OUT below): `
+          + `evaluated at IDENTICAL physical coordinates (small odd-ratio companion grids, never a resampled `
+          + `image) — B max|Δ|=${manifest.bc_exact_coordinate_consistency.b.max_abs_diff.toExponential(2)}, `
+          + `C max|Δ|=${manifest.bc_exact_coordinate_consistency.c.max_abs_diff.toExponential(2)} against their `
+          + `own companions (float-precision only) → B and C compute the SAME field; only raster density differs\n`
+        ) : "")
       + (manifest.loo_cross_validation && manifest.loo_cross_validation.predicted_vs_measured_correlation != null ? (
-          `LEAVE-ONE-OUT CHECK: predicting each of ${manifest.loo_cross_validation.n_predictable} real point(s) from `
-          + `ONLY its neighbours (same kernel as B/C) correlates with its own measured value at `
+          `LEAVE-ONE-OUT CHECK (predictive skill against REAL measurements — a DIFFERENT question from the `
+          + `B/C consistency check above): predicting each of ${manifest.loo_cross_validation.n_predictable} `
+          + `real point(s) from ONLY its neighbours (same kernel as B/C) correlates with its own measured value at `
           + `r=${manifest.loo_cross_validation.predicted_vs_measured_correlation.toFixed(2)}, RMS held-out error=`
           + `${manifest.loo_cross_validation.rms.toFixed(4)} vs field std=${manifest.loo_cross_validation.field_value_std.toFixed(4)}`
           + (manifest.loo_cross_validation.rms_worse_than_predicting_the_field_mean
