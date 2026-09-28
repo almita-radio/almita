@@ -42,6 +42,15 @@ SERVE_SUFFIXES = {".png": "image/png", ".json": "application/json", ".csv": "tex
 MAX_SERVE_BYTES = 25 * 1024 * 1024
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 DEVICE = "LX200 OnStep"
+# How long a real ALIGN PLAN (align_plan) stays approved for RUN, counted from when that PLAN's own job
+# finished with a real PASS (job.json's server-recorded ended_utc - never the browser's clock or anything it
+# reports). The web UI shows a countdown from the same number (served via align_defaults()) and disables RUN
+# once it passes; start()/build_command() independently re-derives and enforces the same deadline from the
+# server's own job record before ever launching the real alignment.py RUN, so a stale tab, a paused laptop, or
+# a tampered request can never start a slew against an approved-but-expired PLAN. Sky refreshes never touch
+# this (they only redraw candidate coordinates; see console/align.js's planApprovedFor/comparisonParams()), and
+# a RUN that started within the window is left to finish even if the window elapses during the real run.
+PLAN_VALIDITY_SECONDS = 180
 
 
 class OpsBlocked(Exception):
@@ -106,12 +115,49 @@ def read_mount(host: str = "localhost", port: int = 7624, timeout: float = 3.0) 
             "mount_state": st.get("Tracking"), "onstep_error": st.get("Error"), "onstep_time_utc": props.get("TIME_UTC", {}).get("el", {}).get("UTC")}
 
 
+# The only two OnStep "OnStep Status" > "Tracking" text values this repo has ever seen documented or exercised
+# (see tests/test_indi_onstep_status.py's ELEMENTS and hw_solar_goto_selftest.py's fixture) that are real,
+# at-rest states safe to start a NEW GOTO from - tracking motor off ("Idle") or on and following the sky
+# ("Tracking"), the mount's ordinary state after any previous alignment/observation. This is a WHITELIST, not a
+# blocklist: the third-party OnStep driver's full vocabulary for this field is not enumerated anywhere in this
+# repo, so a keyword blocklist can only ever catch movement words it already knows about ("Slewing" but not
+# some other real-but-unlisted spelling) - it silently PASSES anything unrecognised. A whitelist fails the
+# other, safer way: it blocks real movement whatever it happens to be called, an unrecognised/new OnStep status
+# string, AND a genuinely absent one (None) - never assuming "not a known movement word" means "safe to GOTO".
+_MOUNT_REST_STATES = ("Idle", "Tracking")
+
+
 def mount_idle_problems(m: Dict[str, Any]) -> List[str]:
+    """Real preconditions for safely sending the mount a NEW GOTO: connected, unparked, no reported OnStep
+    error, and in a KNOWN, at-rest OnStep status - never that its tracking motor happens to be off.
+
+    mount_state (OnStep's "Tracking" status text) is an ACTIVITY string, not an on/off switch: "Idle"
+    (tracking off, stationary) and "Tracking" (tracking on, following the sky, stationary) are BOTH real, safe
+    states to GOTO from - the mount's ordinary resting state after any previous alignment/observation IS
+    "Tracking", not "Idle". This used to require mount_state == "Idle" exactly, which blocked ALIGN from
+    starting whenever the mount was simply tracking normally - a real, reproducible block found testing REAL
+    ALIGN from the web. Tracking ON/OFF (this field, and the separate TELESCOPE_TRACK_STATE switch already
+    read into m["tracking"]) is NOT the tracking RATE/MODE (sidereal vs solar - see
+    alignment_engine.tracking.TrackingMode): this function never touches either, and never blocks on tracking
+    being ON or OFF by itself - only on mount_state not being one of _MOUNT_REST_STATES. Any OTHER mount_state -
+    real movement ("Slewing", "GOTO in progress", ...), an unrecognised OnStep status this repo has never seen,
+    or none reported at all - is blocked, fail-closed, with the received value named in the message. ALIGN's
+    own real engine already owns establishing/verifying/restoring the correct tracking RATE for both reference
+    types - HI targets are fixed sky positions and need SIDEREAL, the Sun needs its own SOLAR rate - via
+    `async with TrackingSession(backend, TrackingMode.SIDEREAL | SOLAR, ...)` in
+    alignment_engine/engine.py (both the HI and the solar code paths), which restores whatever rate was
+    active beforehand on exit; this preflight gate runs before that session ever starts and is deliberately
+    silent on rate for exactly that reason - nothing here should pre-empt or duplicate it, and it must never
+    "fix" a block by turning tracking off."""
     if m.get("error"):
         return [m["error"]]
     p = []
+    if m.get("connected") is False: p.append("mount not connected")
     if m.get("eod_state") not in ("Idle", "Ok"): p.append(f"mount coordinates state {m.get('eod_state')}")
-    if m.get("mount_state") not in (None, "Idle"): p.append(f"mount state {m.get('mount_state')} (must be Idle)")
+    state = m.get("mount_state")
+    if state not in _MOUNT_REST_STATES:
+        p.append(f"mount state {state!r} is not a known rest state (expected Idle or Tracking) - real movement, "
+                 "an unrecognised OnStep status, or none reported at all")
     if m.get("parked"): p.append("mount is parked")
     if m.get("onstep_error") not in (None, "None", "Goto No Error"): p.append(f"OnStep error {m.get('onstep_error')}")
     return p
@@ -434,8 +480,26 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             approved = plan_dir / "alignment_result.json"
             if not approved.is_file():
                 raise ValueError("approved_plan_dir has no alignment_result.json - PLAN first")
+            plan_rel = str(plan_dir.relative_to(ROOT))
+            plan_res = _read_json(approved) or {}
+            if plan_res.get("result_status") != "PASS":
+                raise ValueError(f"approved_plan_dir's PLAN did not PASS (result_status={plan_res.get('result_status')}) - PLAN again before RUN")
+            # PLAN_VALIDITY_SECONDS, enforced here independently of the browser: found purely from the server's
+            # own job record for this output_dir (never a job id or timestamp taken from the request), and timed
+            # against the server's own clock, not anything the client reports. A RUN request is refused once this
+            # PLAN's own job finished more than PLAN_VALIDITY_SECONDS ago - matching (never trusting) the same
+            # countdown the web UI shows from ended_utc + PLAN_VALIDITY_SECONDS. A RUN that starts inside the
+            # window is not re-checked once launched, so it is left to finish even if the window elapses meanwhile.
+            plan_job = _find_job_by_output_dir("align_plan", plan_rel)
+            ended = (plan_job or {}).get("ended_utc")
+            if not ended:
+                raise ValueError("no server record of when that PLAN finished (its job record is missing) - PLAN again before RUN")
+            age_s = (datetime.now(timezone.utc) - datetime.fromisoformat(ended)).total_seconds()
+            if age_s > PLAN_VALIDITY_SECONDS:
+                raise ValueError(f"the approved PLAN passed {age_s:.0f}s ago, past its {PLAN_VALIDITY_SECONDS}s validity window "
+                                  "(timed on the server from when that PLAN's own job finished, not the browser's clock) - PLAN again before RUN")
             argv += ["--approved-plan", str(approved.relative_to(ROOT))]
-            meta["approved_plan_dir"] = str(plan_dir.relative_to(ROOT))
+            meta["approved_plan_dir"] = plan_rel
         return argv, meta
     if stage == "calibrate":
         n, secs = int(_float(p, "n_captures", 1, 20, 5)), _float(p, "capture_seconds", 0.5, 30, 2.0)
@@ -742,6 +806,29 @@ def list_jobs(limit: int = 30) -> List[Dict[str, Any]]:
         rows.append({"job_id": n, "stage": j["stage"], "state": _state(j), "started_utc": j.get("started_utc"), "ended_utc": j.get("ended_utc"), "exit_code": j.get("exit_code"),
                      "verdict": classify(j)["verdict"]})
     return rows
+
+
+def _find_job_by_output_dir(stage: str, output_dir_rel: str) -> Optional[Dict[str, Any]]:
+    """The job.json (if any) of the given stage whose OWN recorded output_dir matches - used to recover an
+    align_plan job's real, server-recorded ended_utc from nothing but the directory RUN was told to use.
+    Deliberately never takes a job id or a timestamp from the request: the server derives both purely from its
+    own prior records, so nothing the browser reports (a stale tab, a clock, a hand-crafted request) can move
+    the PLAN_VALIDITY_SECONDS deadline. Newest first (job dir names are timestamp-sortable), so a re-PLAN of
+    the same output_dir - which cannot normally happen since build_command() stamps a fresh one each time -
+    would still resolve to the most recent record rather than a stale one."""
+    if not OPS_DIR.is_dir():
+        return None
+    for d in sorted(OPS_DIR.iterdir(), reverse=True):
+        jf = d / "job.json"
+        if not jf.is_file():
+            continue
+        try:
+            j = json.loads(jf.read_text())
+        except (OSError, ValueError):
+            continue
+        if j.get("stage") == stage and (j.get("meta") or {}).get("output_dir") == output_dir_rel:
+            return j
+    return None
 
 
 def _state(j: Dict[str, Any]) -> str:
@@ -1596,6 +1683,10 @@ def align_defaults() -> Dict[str, Any]:
         pass
     return {"ring_radii_deg": [5.0, 2.0, 0.6], "ring_points": 8, "min_elevation_deg": a.min_elevation, "settle_s": a.settle,
             "capture_time_s": a.integration_seconds, "gain_db": a.gain, "sun_gain_db": a.sun_gain,
+            # Single source of truth for the web's PLAN countdown (console/align.js reads this, never a
+            # hardcoded number of its own) - the SAME PLAN_VALIDITY_SECONDS start()/build_command() enforces
+            # server-side for the "align" stage, so the displayed countdown and the real deadline can never drift.
+            "plan_validity_seconds": PLAN_VALIDITY_SECONDS,
             "beam_fwhm_deg": beam_fwhm, "beam_fwhm_source": beam_source,
             "beam_fwhm_note": "alignment.py's own PROVISIONAL_BEAM_FWHM_DEG=14.0 and observer_config.json's beam_fwhm_deg=20.0 disagree "
                              "(documented in alignment_engine/config.py and docs/SCIENCE_SCOPE.md); neither is a measured physical beam. "

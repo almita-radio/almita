@@ -264,6 +264,18 @@
     let selectedArea = null;      // HI only: "A" | "B" | "C" (the operator's pick); solar always uses the Sun itself
     let sky = null;               // last real /api/ops/align/sky response
     let durationModel = null;     // from /api/ops/align/defaults
+    // How long an approved (EXITED, PASS) PLAN stays valid for RUN, in seconds - read from the server
+    // (align_defaults()'s own plan_validity_seconds) rather than hardcoded here, so the countdown shown below
+    // can never drift from what almita_web_ops.py's build_command() actually enforces server-side when RUN is
+    // submitted (the real, authoritative check - this page's own countdown is display-only).
+    let planValiditySeconds = null;
+    // {mode, selectedArea} exactly as they were at the moment the operator clicked PLAN (set synchronously in the
+    // click handler below, so there is no race window - JS is single-threaded and nothing else writes mode/
+    // selectedArea except an operator click). Used only to decide identity ("is the candidate I approved still the
+    // one selected"), never to re-derive its coordinates - those always come from the PLAN job's own recorded
+    // params (see comparisonParams()). This is what lets an approved HI PLAN survive the 30s auto refreshSky()
+    // below (which recomputes A/B/C's coordinates, not their identity) without expiring on its own.
+    let planApprovedFor = { mode: null, selectedArea: null };
 
     function ringConfig() { return U.ringConfig($("real-ring-radii"), $("real-ring-points")); }
 
@@ -272,6 +284,7 @@
       if (!r.ok) { realErr(r.error); return; }
       const d = r.data.data;
       durationModel = d.duration_model;
+      planValiditySeconds = d.plan_validity_seconds;
       $("real-ring-radii").value = d.ring_radii_deg.join(",");
       $("real-ring-points").value = d.ring_points;
       $("real-capture-time").value = d.capture_time_s;
@@ -372,12 +385,25 @@
       const exited = p && p.state === "EXITED";
       // Whether the last PLAN's own recorded request params (server-side, verbatim) still match what's currently
       // configured/selected - independent of whether that PLAN PASSed or FAILed (e.g. on its own temporal check).
-      // If the ring/capture/beam/min-elevation params or the selected A/B/C centre changed since (REFRESH SKY VIEW
-      // recomputed the candidates, the operator edited a field, or picked a different area), the plan is OBSOLETE
-      // regardless of its verdict - it must never be shown as if it still describes the current selection.
-      const paramsMatch = exited && U.paramsEqual(p.params, planParams());
+      // If the ring/capture/beam/min-elevation params changed, or the operator explicitly picked a different A/B/C
+      // area or switched mode since, the plan is OBSOLETE regardless of its verdict - it must never be shown as if
+      // it still describes the current selection. comparisonParams() (not planParams()) is used here so that the
+      // periodic refreshSky() below - which only recomputes A/B/C's live coordinates, not what's selected - can
+      // never invalidate an approved PLAN on its own; only an explicit operator change does.
+      const paramsMatch = exited && U.paramsEqual(p.params, comparisonParams());
       const stale = exited && !paramsMatch;
-      const planned = exited && p.verdict === "PASS" && paramsMatch;
+      // PLAN_VALIDITY_SECONDS countdown - DISPLAY ONLY. The server independently re-derives and enforces the
+      // SAME deadline, from the SAME server-recorded p.ended_utc (when that PLAN job's real subprocess
+      // exited), the moment RUN is actually submitted - see almita_web_ops.py build_command()'s "align" stage.
+      // Nothing here is authoritative; it exists only so the operator can see time passing without needing to
+      // guess almita_web_ops.py's own PLAN_VALIDITY_SECONDS. Timed from ended_utc, never from when the operator
+      // happened to click PLAN or load this page, and never reset by refreshSky()'s periodic redraw below,
+      // which never touches planJob at all.
+      const passedFresh = exited && paramsMatch && p.verdict === "PASS" && p.ended_utc && planValiditySeconds != null;
+      const ageS = passedFresh ? (Date.now() - Date.parse(p.ended_utc)) / 1000 : null;
+      const expired = passedFresh && ageS > planValiditySeconds;
+      const remainingS = passedFresh ? Math.max(0, planValiditySeconds - ageS) : null;
+      const planned = exited && p.verdict === "PASS" && paramsMatch && !expired;
       const running = r && r.state === "RUNNING";
       const rc = ringConfig();
       const n = rc.valid ? 1 + rc.radii.length * rc.points : null;
@@ -387,7 +413,8 @@
       U.setEnabled($("real-plan"), rc.valid && areaOk && sunOk,
         !rc.valid ? "fix the ring radii / points above" : !areaOk ? "pick area A, B, C or MANUAL above" : "the Sun is below the horizon right now");
       U.setEnabled($("real-run"), !!planned && $("real-confirm").value === "MOVE" && !running,
-        running ? "an alignment is running" : stale ? "the PLAN is obsolete (parameters or the selected area changed) - PLAN again"
+        running ? "an alignment is running" : expired ? `the PLAN's ${planValiditySeconds}s validity window has passed - PLAN again`
+          : stale ? "the PLAN is obsolete (parameters or the selected area changed) - PLAN again"
           : !planned ? "run the real PLAN first (it must PASS)" : "type MOVE (uppercase) to allow movement");
       U.renderRingPatternTotal(rc, $("real-pattern-total"));
       if (n) {
@@ -415,6 +442,23 @@
           }
         }
       }
+      const validityBox = $("real-plan-validity");
+      if (validityBox) {
+        if (passedFresh && expired) {
+          validityBox.hidden = false;
+          validityBox.style.color = "var(--warn,#e6b85c)";
+          validityBox.textContent = `PLAN EXPIRED — more than ${planValiditySeconds}s have passed since it finished with PASS ` +
+            `(${U.utc(p.ended_utc)}). RUN is disabled: PLAN again before RUN.`;
+        } else if (passedFresh) {
+          validityBox.hidden = false;
+          validityBox.style.color = "";
+          const expiresUtc = U.utc(new Date(Date.parse(p.ended_utc) + planValiditySeconds * 1000).toISOString());
+          validityBox.textContent = `PLAN valid for ${Math.ceil(remainingS)}s more (finished ${U.utc(p.ended_utc)}; expires ${expiresUtc}). ` +
+            "If RUN starts before then, it is allowed to finish even if this window elapses during the run.";
+        } else {
+          validityBox.hidden = true;
+        }
+      }
     }
     $("real-confirm").addEventListener("input", updateReal);
     $("real-ring-radii").addEventListener("input", () => { refreshSky(); updateReal(); });
@@ -440,23 +484,47 @@
       out.textContent = `REAL PREFLIGHT ${d.overall} (${U.utc(d.generated_utc)})\n` + d.checks.map((c) => `[${c.status}] ${c.name}: ${c.detail}`).join("\n");
     }, "CHECKING…"));
 
-    function planParams() {
+    // Shared by planParams() (what to actually POST) and comparisonParams() (what to compare an approved PLAN
+    // against) so both always build identical key order for U.paramsEqual()'s plain JSON.stringify comparison.
+    function buildParams(center) {
       const rc = ringConfig();
       const p = { reference: mode === "solar" ? "sun" : "hi", ring_radii: rc.radii, ring_points: rc.points, capture_time: Number($("real-capture-time").value),
         beam_fwhm: Number($("real-beam-fwhm").value), min_elevation: Number($("real-min-elevation").value) };
-      const c = selectedCenter();
-      if (c) { p.center_ra_hours = c.ra_hours; p.center_dec_deg = c.dec_deg; }
+      if (center) { p.center_ra_hours = center.ra_hours; p.center_dec_deg = center.dec_deg; }
       return p;
+    }
+    function planParams() { return buildParams(selectedCenter()); }
+    // What to compare the last APPROVED PLAN against, for staleness. If the operator has not explicitly changed
+    // mode or the selected HI area since that PLAN was requested (planApprovedFor still matches), the centre comes
+    // from the PLAN job's own recorded params - frozen, never a live sky.areas lookup - so refreshSky() recomputing
+    // A/B/C's coordinates for the SAME label can never make an approved PLAN look obsolete. The ring/capture/beam/
+    // min-elevation fields and the reference itself are still read live: an explicit edit to any of them, or an
+    // explicit area/mode change, correctly falls through to selectedCenter() (or simply differs) and DOES require
+    // a new PLAN, as it always did.
+    function comparisonParams() {
+      const p = planJob.last;
+      const frozen = p && p.state === "EXITED" && planApprovedFor.mode === mode && planApprovedFor.selectedArea === selectedArea &&
+        mode === "hi" && selectedArea && selectedArea !== "MANUAL" && p.params && p.params.center_ra_hours != null;
+      return buildParams(frozen ? { ra_hours: p.params.center_ra_hours, dec_deg: p.params.center_dec_deg } : selectedCenter());
     }
     $("real-plan").addEventListener("click", U.guard($("real-plan"), () => {
       const rc = ringConfig();
       if (!rc.valid || (mode === "hi" && !selectedArea) || (mode === "solar" && !(sky && sky.sun.above_horizon))) return undefined;
+      planApprovedFor = { mode, selectedArea };   // record identity synchronously, at click time - see declaration above
       return planJob.start("align_plan", planParams());
     }, "PLANNING…"));
     $("real-run").addEventListener("click", U.guard($("real-run"), () => {
       const j = planJob.last, f = j && j.facts, pc = f && f.pattern_config;
-      if (!j || j.state !== "EXITED" || j.verdict !== "PASS" || !U.paramsEqual(j.params, planParams())) {
-        alert("PLAN is obsolete or missing (parameters or the selected area changed since PLAN ran) - PLAN again before RUN.");
+      if (!j || j.state !== "EXITED" || j.verdict !== "PASS" || !U.paramsEqual(j.params, comparisonParams())) {
+        alert("PLAN is obsolete or missing (parameters, or the selected area/mode, changed since PLAN ran) - PLAN again before RUN.");
+        return undefined;
+      }
+      // Client-side belt only (the server is the actual authority - almita_web_ops.py build_command()'s
+      // "align" stage re-derives and enforces this same deadline from its own job record before ever starting
+      // alignment.py, regardless of what this check decides): catches an expired PLAN immediately, with a clear
+      // message, instead of letting the click reach the server just to be refused there a moment later.
+      if (j.ended_utc && planValiditySeconds != null && (Date.now() - Date.parse(j.ended_utc)) / 1000 > planValiditySeconds) {
+        alert(`This PLAN's ${planValiditySeconds}s validity window has passed - PLAN again before RUN.`);
         return undefined;
       }
       const ok = confirm(`REAL ALIGNMENT (${mode.toUpperCase()}): the mount will slew and capture MAIN across ${pc ? pc.total_positions : "?"} positions ` +
@@ -466,7 +534,10 @@
         (mode === "solar" ? "RUN will switch OnStep to SOLAR tracking rate and verify it before moving; it restores the previous tracking mode when done or stopped.\n" : "") +
         "SYNC is never sent.\nConfirm physically: free travel, cables, antenna, nobody in the way.\nProceed?");
       if (!ok || !j) return undefined;
-      return runJob.start("align", { ...planParams(), approved_plan_dir: j.output_dir }, $("real-confirm").value);
+      // Send the PLAN job's OWN recorded params verbatim (never a fresh live planParams()/comparisonParams()) -
+      // this is the actual approved target; it must be exactly what RUN executes, unaffected by anything that
+      // happened on screen since PLAN completed.
+      return runJob.start("align", { ...j.params, approved_plan_dir: j.output_dir }, $("real-confirm").value);
     }, "STARTING…"));
     planJob.recover("align_plan"); runJob.recover("align");
     loadDefaults().then(() => { setMode("hi"); });

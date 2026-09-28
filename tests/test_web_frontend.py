@@ -380,6 +380,175 @@ def test_align_page_reload_adopts_a_running_session(tmp_path):
     assert out["badge"] == "RUNNING" and "run is in progress on the server" in out["body"] and out["run"] == [True, "a simulation is running"] and out["polls"] >= 1
 
 
+# ------------------------------------------------------------------ ALIGN: REAL ALIGNMENT panel (real-plan/real-run,
+# the /api/ops/... job-based panel - separate from the simulation/legacy "real" toggle above) freeze-on-PLAN
+# regression. Reported live: refreshSky() runs every 30s and recomputes A/B/C's coordinates; comparing a fresh
+# planParams() (which re-looked-up the selected area's CURRENT, just-refreshed coordinates) against an approved
+# PLAN's own recorded params made the PLAN go OBSOLETE on its own, with no operator action, well inside the
+# operator's review window. The fix compares against the approved PLAN's own frozen centre (comparisonParams(),
+# console/align.js) as long as the operator hasn't explicitly changed mode/area, and RUN now always sends the
+# job's own recorded params - never a fresh live one - as its payload.
+
+REAL_ALIGN_ROUTES = r"""
+window.__routes["GET /api/ops/align/defaults"] = { body: { data: {
+  duration_model: { overhead_per_point_s: 5, ensemble_fixed_s: 10, psd_per_20s_capture_s: 1, metric_per_20s_capture_s: 1, solar_metric_per_20s_capture_s: 1 },
+  ring_radii_deg: [5.0, 2.0], ring_points: 4, capture_time_s: 20, beam_fwhm_deg: 20, min_elevation_deg: 20,
+  plan_validity_seconds: 180, beam_fwhm_source: "test", beam_fwhm_note: "test note" } } };
+window.__routes["GET /api/ops/mount"] = { body: { data: { mount_state: "Tracking", tracking: "on", track_mode: "sidereal", eod_state: "Ok", parked: false,
+  onstep_error: "None", ra_h: 6.0, dec_deg: -30.0, pier: ["EAST"], read_utc: new Date().toISOString(), connected: true } } };
+window.__routes["GET /api/ops/jobs"] = { body: { data: [] } };
+window.__skyCall = 0;
+window.__routes["GET /api/ops/align/sky"] = () => {
+  window.__skyCall++;
+  // a real refresh recomputing candidate coordinates: same labels every time, slightly different numbers each
+  // call - exactly what refreshSky()'s 30s auto-refresh (or an operator-pressed REFRESH SKY VIEW) does live.
+  const drift = window.__skyCall * 0.01;
+  const areas = [
+    { label: "A", ra_hours: 6.000 + drift, dec_deg: -30.000 - drift, az_deg: 90, alt_deg: 45, radius_deg: 5, score: 0.9, contrast_1e20cm2: 1.0, mean_1e20cm2: 2.0 },
+    { label: "B", ra_hours: 8.000 + drift, dec_deg: -20.000 - drift, az_deg: 120, alt_deg: 40, radius_deg: 5, score: 0.8, contrast_1e20cm2: 1.0, mean_1e20cm2: 2.0 },
+    { label: "C", ra_hours: 10.000 + drift, dec_deg: -10.000 - drift, az_deg: 150, alt_deg: 35, radius_deg: 5, score: 0.7, contrast_1e20cm2: 1.0, mean_1e20cm2: 2.0 } ];
+  window.__lastAreaA = areas[0];
+  return { body: { data: { computed_utc: new Date().toISOString(), sun: { az_deg: 180, alt_deg: -10, above_horizon: false },
+    areas, ranking_defendible: true, ranking_note: "test ranking", catalog_source: null } } };
+};
+window.__jobs = {}; window.__planSeq = 0; window.__planAgeAtCreationS = 0;
+window.__routes["POST /api/ops/start/align_plan"] = (body) => {
+  window.__planSeq++;
+  const jobId = "plan-" + window.__planSeq;
+  const c = (body.params.center_ra_hours != null) ? { ra_hours: body.params.center_ra_hours, dec_deg: body.params.center_dec_deg } : null;
+  // ended_utc backdated by window.__planAgeAtCreationS (default 0) - lets a driver simulate a PLAN that
+  // finished some real seconds ago (e.g. past the 180s validity window) without actually waiting for it,
+  // exactly mirroring the server's own real, wall-clock-based ended_utc field.
+  const endedUtc = new Date(Date.now() - (window.__planAgeAtCreationS || 0) * 1000).toISOString();
+  window.__jobs[jobId] = { job_id: jobId, state: "EXITED", verdict: "PASS", exit_code: 0, elapsed_s: 1, params: body.params,
+    facts: { center: c,
+      pattern_config: { total_positions: 9, ring_radii_deg: body.params.ring_radii, ring_points_per_ring: body.params.ring_points },
+      planned_positions: [{ index: 0, ra_hours: c ? c.ra_hours : 6, dec_deg: c ? c.dec_deg : -30, separation_from_center_deg: 0, elapsed_offset_s: 0, capture_start_utc: new Date().toISOString(), alt_min_deg: 45 }],
+      max_separation_from_center_deg: 5.0,
+      temporal_check: { ok: true, min_altitude_deg: 45, min_altitude_point_index: 0, min_altitude_utc: new Date().toISOString(), margin_deg: 25, run_duration_s: 300, min_elevation_deg: 20 } },
+    output_dir: "data/align/PLAN-" + jobId, started_utc: endedUtc, ended_utc: endedUtc, log_tail: "" };
+  return { body: { data: { job_id: jobId } } };
+};
+window.__routes["GET /api/ops/job/plan-1"] = () => ({ body: { data: window.__jobs["plan-1"] } });
+window.__routes["GET /api/ops/job/plan-2"] = () => ({ body: { data: window.__jobs["plan-2"] } });
+window.__routes["POST /api/ops/start/align"] = (body) => {
+  window.__jobs["run-1"] = { job_id: "run-1", state: "EXITED", verdict: "PASS", exit_code: 0, elapsed_s: 1, params: body.params, facts: {},
+    output_dir: "data/align/RUN-1", started_utc: new Date().toISOString(), log_tail: "" };
+  return { body: { data: { job_id: "run-1" } } };
+};
+window.__routes["GET /api/ops/job/run-1"] = () => ({ body: { data: window.__jobs["run-1"] } });
+"""
+
+_PICK_AREA_JS = 'function pick(label) { const b = [...document.querySelectorAll("#real-hi-areas button")].find((x) => x.textContent.startsWith(label + ":")); b.click(); }'
+
+
+def test_align_real_hi_plan_survives_periodic_sky_refresh_but_explicit_change_requires_new_plan(tmp_path):
+    driver = (_PICK_AREA_JS + r"""
+await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3, 5000);
+$("real-confirm").value = "MOVE"; $("real-confirm").dispatchEvent(new Event("input"));
+pick("A");
+$("real-plan").click();
+await until(() => $("real-job-align_plan").textContent.includes("PASS"), 5000);
+await sleep(1100);
+out.afterPlan = { stale: $("real-plan-stale").hidden, runDisabled: $("real-run").disabled };
+// simulate several automatic sky refreshes (same refreshSky() the 30s setInterval calls) - candidate coordinates
+// drift, the approved area's IDENTITY does not.
+for (let i = 0; i < 3; i++) { $("real-sky-refresh").click(); await sleep(200); }
+await sleep(1100);
+out.afterRefreshes = { stale: $("real-plan-stale").hidden, runDisabled: $("real-run").disabled, skyCalls: window.__skyCall };
+// an EXPLICIT operator action: pick a different HI candidate
+pick("B");
+await sleep(600);
+out.afterExplicitChange = { stale: $("real-plan-stale").hidden, runDisabled: $("real-run").disabled, staleText: $("real-plan-stale").textContent };
+""").strip()
+    out = run_page(tmp_path, "align", REAL_ALIGN_ROUTES, driver, budget=40000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["afterPlan"] == {"stale": True, "runDisabled": False}                        # fresh PLAN: not stale, RUN enabled
+    # several real automatic-refresh-equivalent calls happened (skyCalls counts the initial load's own refresh + 3 more)...
+    assert out["afterRefreshes"]["skyCalls"] == 4
+    assert out["afterRefreshes"] == {"stale": True, "runDisabled": False, "skyCalls": 4}     # ...and the PLAN is still NOT obsolete
+    assert out["afterExplicitChange"]["stale"] is False and out["afterExplicitChange"]["runDisabled"] is True
+    assert "PLAN OBSOLETE" in out["afterExplicitChange"]["staleText"]                        # ...but picking a different area does invalidate it
+
+
+def test_align_real_run_sends_the_approved_plan_centre_not_a_live_recompute(tmp_path):
+    driver = (_PICK_AREA_JS + r"""
+await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3, 5000);
+$("real-confirm").value = "MOVE"; $("real-confirm").dispatchEvent(new Event("input"));
+pick("A");
+$("real-plan").click();
+await until(() => $("real-job-align_plan").textContent.includes("PASS"), 5000);
+await sleep(200);
+out.approvedCenter = { ra: window.__jobs["plan-1"].params.center_ra_hours, dec: window.__jobs["plan-1"].params.center_dec_deg };
+// several benign refreshes AFTER approval - the live sky view's "A" coordinates drift away from what was approved
+for (let i = 0; i < 4; i++) { $("real-sky-refresh").click(); await sleep(200); }
+await sleep(1100);
+out.runEnabledAfterRefreshes = !$("real-run").disabled;
+out.liveAreaA = window.__lastAreaA;
+$("real-run").click();
+await until(() => window.__count("POST /api/ops/start/align") >= 1, 5000);
+const call = window.__calls.find((c) => c.key === "POST /api/ops/start/align");
+out.sentParams = call.body.params;
+""").strip()
+    out = run_page(tmp_path, "align", REAL_ALIGN_ROUTES, driver, budget=40000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["runEnabledAfterRefreshes"] is True                     # benign refreshes never blocked RUN
+    # the live sky view really did drift away from what was approved (otherwise this test would prove nothing)
+    assert out["liveAreaA"]["ra_hours"] != out["approvedCenter"]["ra"]
+    # RUN sent the ORIGINALLY APPROVED centre, not the live, drifted one
+    assert out["sentParams"]["center_ra_hours"] == out["approvedCenter"]["ra"]
+    assert out["sentParams"]["center_dec_deg"] == out["approvedCenter"]["dec"]
+    assert out["sentParams"]["center_ra_hours"] != out["liveAreaA"]["ra_hours"]
+
+
+# ------------------------------------------------------------------ ALIGN: REAL ALIGNMENT panel - PLAN validity
+# window (180s from when PLAN itself finished with PASS, server-recorded). window.__planAgeAtCreationS
+# backdates a fixture PLAN's own ended_utc so these can exercise both sides of the boundary without a real
+# 180s wait; the server-side enforcement itself (almita_web_ops.py build_command()) is covered separately in
+# tests/test_almita_web_ops_plan_validity.py (pure Python, no browser needed there).
+
+def test_align_real_plan_countdown_survives_refresh_and_run_disables_exactly_at_expiry(tmp_path):
+    driver = (_PICK_AREA_JS + r"""
+await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3, 5000);
+$("real-confirm").value = "MOVE"; $("real-confirm").dispatchEvent(new Event("input"));
+pick("A");
+// a PLAN backdated to already be 170s old the instant it "finishes" - ~10s of its 180s window left, no real wait
+window.__planAgeAtCreationS = 170;
+$("real-plan").click();
+await until(() => $("real-job-align_plan").textContent.includes("PASS"), 5000);
+await sleep(200);
+out.nearExpiry = { runDisabled: $("real-run").disabled, validityHidden: $("real-plan-validity").hidden, validityText: $("real-plan-validity").textContent };
+const expiresPhrase = (out.nearExpiry.validityText.match(/expires [^)]+\)/) || [""])[0];
+// an automatic-refresh-equivalent sky redraw meanwhile must not touch the countdown's anchor at all
+$("real-sky-refresh").click(); await sleep(300);
+out.afterRefresh = { runDisabled: $("real-run").disabled, expiresPhraseUnchanged: (($("real-plan-validity").textContent.match(/expires [^)]+\)/) || [""])[0]) === expiresPhrase };
+// now a PLAN backdated to already be 200s old (past the 180s window) the instant it "finishes"
+window.__planAgeAtCreationS = 200;
+$("real-plan").click();
+await until(() => window.__planSeq >= 2 && $("real-job-align_plan").textContent.includes("PASS"), 5000);
+await sleep(1100);
+out.expired = { runDisabled: $("real-run").disabled, runTitle: $("real-run").title,
+                validityHidden: $("real-plan-validity").hidden, validityText: $("real-plan-validity").textContent };
+""").strip()
+    out = run_page(tmp_path, "align", REAL_ALIGN_ROUTES, driver, budget=40000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    # ~10s of real window left: RUN still enabled, a countdown is shown (not the OBSOLETE/EXPIRED wording)
+    assert out["nearExpiry"]["runDisabled"] is False
+    assert out["nearExpiry"]["validityHidden"] is False
+    assert "PLAN valid for" in out["nearExpiry"]["validityText"] and "expires" in out["nearExpiry"]["validityText"]
+    # a benign sky refresh must not reset or otherwise touch the deadline
+    assert out["afterRefresh"]["runDisabled"] is False
+    assert out["afterRefresh"]["expiresPhraseUnchanged"] is True
+    # past the 180s window: RUN disabled with a clear reason, and the box switches to an explicit EXPIRED notice
+    assert out["expired"]["runDisabled"] is True
+    assert "validity window has passed" in out["expired"]["runTitle"]
+    assert out["expired"]["validityHidden"] is False
+    assert "PLAN EXPIRED" in out["expired"]["validityText"] and "180s" in out["expired"]["validityText"]
+
+
 CAL_ROUTES = r"""
 window.__routes["GET /api/calibrate/status"] = () => ({ body: { ok: true, blocked: false, data: { calibration_level: "OPERATIONAL_RELATIVE", calibration_workflow_active: !!window.__active,
   resource: { status: "FREE", orchestrator_state: "PLANNED", detail: "free" }, receiver: { serial: %s, center_frequency_hz: { value: 1420405751.77, verification: "VERIFIED_BY_SERVICE_COMMAND_LINE" },
