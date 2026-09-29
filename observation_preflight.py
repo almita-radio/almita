@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import calibration_foundation
 import capture as capture_module
 import dual_sdr_benchmark
 import observation_plan
@@ -195,6 +196,44 @@ def _quicklook_check(quicklook_cfg: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         return _check("Quicklook", "QUICKLOOK", OPTIONAL, WARNING,
                        f"calibration profile unavailable ({profile_path}): {type(exc).__name__}: {exc}")
+
+
+def _quicklook_calibration_match_check(quicklook_cfg: Dict[str, Any], main_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """REQUIRED (can BLOCK): compares the PLANNED capture's own frequency/sample rate/gain/topology against the
+    selected calibration profile - using calibration_foundation.check_calibration_compatibility_values(), the
+    EXACT SAME decision function Quicklook itself calls once real captures start arriving - so this can never
+    reach a different verdict than Quicklook will. Exists because of a real incident: a WIZARD profile built at
+    a stale 1420405000 Hz silently let a real 625-point observation run at observer_config.json's real
+    1420405752 Hz complete before Quicklook discovered every single point was INCOMPATIBLE - this check catches
+    that BEFORE capture.py ever starts, not after 625 real captures. _quicklook_check() above already reports a
+    genuinely unavailable/corrupt profile file (WARNING, unchanged) - this check only fires once that file
+    loads, so the two never double-report the same root cause."""
+    if not quicklook_cfg.get("enabled"):
+        return _check("Quicklook / calibration match", "QUICKLOOK", OPTIONAL, PASS, "quicklook disabled; not checked")
+    profile_path = quicklook_cfg.get("calibration_profile_path")
+    try:
+        profile = calibration_foundation.load_calibration_profile(profile_path)
+    except Exception:
+        return _check("Quicklook / calibration match", "QUICKLOOK", OPTIONAL, PASS,
+                       "profile unavailable - see the Quicklook check above")
+    topology = capture_module.INPUT_TOPOLOGIES["antenna"]  # OBSERVE's real captures are always this topology (see _capture_args())
+    result = calibration_foundation.check_calibration_compatibility_values(
+        profile, center_frequency_hz=main_cfg.get("center_frequency_hz"),
+        sample_rate_hz=main_cfg.get("sample_rate"), gain_db=main_cfg.get("gain_db"), topology=topology,
+    )
+    if result["status"] == "COMPATIBLE":
+        return _check("Quicklook / calibration match", "QUICKLOOK", REQUIRED, PASS,
+                      f"planned capture matches {profile_path}: {result['reason']}")
+    return _check(
+        "Quicklook / calibration match", "QUICKLOOK", REQUIRED, BLOCK,
+        f"planned capture will NOT match {profile_path} ({result['reason']}) - Quicklook would skip every point "
+        f"as {result['status']}, discovered only after capturing. Planned: center_frequency_hz="
+        f"{main_cfg.get('center_frequency_hz')}, sample_rate={main_cfg.get('sample_rate')}, gain_db="
+        f"{main_cfg.get('gain_db')}. Profile ({profile_path}): center_frequency_hz="
+        f"{profile['metadata'].get('center_frequency_hz')}, sample_rate_hz={profile['metadata'].get('sample_rate_hz')}, "
+        f"gain_db={profile['metadata'].get('gain_db')}. Fix: either select/build a calibration profile at the "
+        "planned values, or change quicklook.calibration_profile_path, then PLAN again."
+    )
 
 
 def _console_check() -> Dict[str, Any]:
@@ -364,6 +403,7 @@ async def run_plan_preflight(resolved_plan: Dict[str, Any], *, host: str = "loca
     checks.append(await _main_sdr_presence_check(sdr_host, sdr_port))
     checks.append(_rfi_ref_check(resolved_plan["rfi_ref"], resolved_plan["rfi_ref"].get("port", 1235)))
     checks.append(_quicklook_check(resolved_plan["quicklook"]))
+    checks.append(_quicklook_calibration_match_check(resolved_plan["quicklook"], resolved_plan["main"]))
     checks.append(_console_check())
     checks.extend(_software_check(resolved_plan))
 
@@ -412,6 +452,7 @@ async def run_execution_preflight(resolved_plan: Dict[str, Any], *, host: str = 
     checks.append(_disk_check(Path(resolved_plan["grid_session_dir"]), resolved_plan["storage"]["required_bytes"]))
     checks.append(_rfi_ref_check(resolved_plan["rfi_ref"], resolved_plan["rfi_ref"].get("port", 1235)))
     checks.append(_quicklook_check(resolved_plan["quicklook"]))
+    checks.append(_quicklook_calibration_match_check(resolved_plan["quicklook"], resolved_plan["main"]))
     checks.append(_console_check())
     checks.extend(_software_check(resolved_plan))
 

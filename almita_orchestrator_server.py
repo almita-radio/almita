@@ -162,7 +162,9 @@ def _read_json_body(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
 
 def _observe_defaults() -> Dict[str, Any]:
     config = json.loads(Path("observer_config.json").read_text(encoding="utf-8"))
-    defaults = config.get("observation_defaults", {})
+    # single source of truth for the operating frequency/rate: almita_web_ops.observation_defaults() (also used
+    # by the CALIBRATE wizard's own defaults and its backend fallback) - not a second independent read here.
+    defaults = almita_web_ops.observation_defaults()
     return {
         "main": {
             "center_frequency_hz": defaults.get("center_frequency_hz", 1420405000),
@@ -272,6 +274,8 @@ class ObserveHandler(BaseHTTPRequestHandler):
                 return self._ops_science_map()
             if path == "/api/ops/align/defaults":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.align_defaults()})
+            if path == "/api/ops/calibrate/wizard_defaults":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.calibrate_wizard_defaults()})
             if path == "/api/ops/align/sky":
                 return self._ops_align_sky()
             if path == "/api/ops/file":

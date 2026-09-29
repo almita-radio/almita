@@ -241,37 +241,35 @@ def load_calibration_profile(path: str | Path) -> dict[str, Any]:
     return {"metadata": metadata, **arrays}
 
 
-def check_calibration_compatibility(
-    profile: dict[str, Any], capture: str | Path,
-    *, topology: str | None = None,
+def check_calibration_compatibility_values(
+    profile: dict[str, Any], *,
+    center_frequency_hz: float | None, sample_rate_hz: float | None, gain_db: float | None,
+    fft_size: int | None = None, topology: str | None,
 ) -> dict[str, str]:
-    path = Path(capture)
-    if path.name.endswith(".part"):
-        return {"status": "INCOMPATIBLE", "reason": "partial capture"}
-    try:
-        with h5py.File(path, "r") as source:
-            attributes = {key: _plain(value) for key, value in source.attrs.items()}
-    except (OSError, KeyError) as error:
-        return {"status": "INCOMPATIBLE", "reason": str(error)}
+    """The actual COMPATIBLE/INCOMPATIBLE/UNKNOWN decision, given already-resolved values - never reads a
+    file itself. check_calibration_compatibility() below (a real capture's own HDF5 attrs) and
+    observation_preflight.py's pre-RUN check (a resolved OBSERVE plan's PLANNED values, before capture.py ever
+    runs - see the module's own real incident: a WIZARD calibration profile built at a stale 1420405000 Hz
+    silently let a real 625-point observation capture at observer_config.json's real 1420405752 Hz, and
+    Quicklook only discovered the mismatch after the fact) both call this SAME function so the two can never
+    reach a different verdict for the same real numbers."""
     metadata = profile["metadata"]
     checks = (
-        ("center frequency", attributes.get("center_frequency_hz"), metadata["center_frequency_hz"]),
-        ("sample rate", attributes.get("sample_rate_hz"), metadata["sample_rate_hz"]),
-        ("gain", _gain_from_attributes(attributes), metadata["gain_db"]),
+        ("center frequency", center_frequency_hz, metadata["center_frequency_hz"]),
+        ("sample rate", sample_rate_hz, metadata["sample_rate_hz"]),
+        ("gain", gain_db, metadata["gain_db"]),
     )
     for name, actual, expected in checks:
         if actual is None:
             return {"status": "UNKNOWN", "reason": f"capture {name} unavailable"}
         if float(actual) != float(expected):
             return {"status": "INCOMPATIBLE", "reason": f"{name}: {actual} != {expected}"}
-    capture_fft_size = attributes.get("fft_size", attributes.get("calibration_fft_size"))
-    if capture_fft_size is not None and int(capture_fft_size) != int(metadata["fft_size"]):
+    if fft_size is not None and int(fft_size) != int(metadata["fft_size"]):
         return {
             "status": "INCOMPATIBLE",
-            "reason": f"FFT size: {capture_fft_size} != {metadata['fft_size']}",
+            "reason": f"FFT size: {fft_size} != {metadata['fft_size']}",
         }
-    capture_topology = topology or attributes.get("reference_topology") or attributes.get("rf_input")
-    if capture_topology is None:
+    if topology is None:
         return {"status": "UNKNOWN", "reason": "capture topology unavailable"}
     expected_topology = metadata["instrument_chain"]
     aliases = {
@@ -285,10 +283,34 @@ def check_calibration_compatibility(
         # a genuinely matching one.
         "ANTENNA_CURRENT_OPERATIONAL": expected_topology,
     }
-    normalized = aliases.get(str(capture_topology), str(capture_topology))
+    normalized = aliases.get(str(topology), str(topology))
     if normalized != expected_topology:
         return {"status": "INCOMPATIBLE", "reason": f"instrument chain: {normalized} != {expected_topology}"}
     return {"status": "COMPATIBLE", "reason": "frequency, sample rate, gain and topology match"}
+
+
+def check_calibration_compatibility(
+    profile: dict[str, Any], capture: str | Path,
+    *, topology: str | None = None,
+) -> dict[str, str]:
+    path = Path(capture)
+    if path.name.endswith(".part"):
+        return {"status": "INCOMPATIBLE", "reason": "partial capture"}
+    try:
+        with h5py.File(path, "r") as source:
+            attributes = {key: _plain(value) for key, value in source.attrs.items()}
+    except (OSError, KeyError) as error:
+        return {"status": "INCOMPATIBLE", "reason": str(error)}
+    capture_fft_size = attributes.get("fft_size", attributes.get("calibration_fft_size"))
+    capture_topology = topology or attributes.get("reference_topology") or attributes.get("rf_input")
+    return check_calibration_compatibility_values(
+        profile,
+        center_frequency_hz=attributes.get("center_frequency_hz"),
+        sample_rate_hz=attributes.get("sample_rate_hz"),
+        gain_db=_gain_from_attributes(attributes),
+        fft_size=capture_fft_size,
+        topology=capture_topology,
+    )
 
 
 def apply_relative_calibration(

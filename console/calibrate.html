@@ -16,9 +16,12 @@
         <div class="obs-row"><label for="wz-s">SECONDS PER CAPTURE</label><input type="number" id="wz-s" min="0.5" max="30" step="any" value="2"></div>
         <div class="obs-row"><label for="wz-stab">50 Ω STABILIZATION TIME (s — suggested; CAPTURE still needs your explicit click, never automatic)</label><input type="number" id="wz-stab" min="0" max="600" value="20"></div>
         <div class="obs-row"><label for="wz-hi-settle">HI GOTO SETTLE TIME (s — real, after the mount stops slewing)</label><input type="number" id="wz-hi-settle" min="0" max="120" step="any" value="2"></div>
-        <div class="obs-row"><label for="wz-freq">CENTER FREQUENCY (Hz)</label><input type="number" id="wz-freq" value="1420405000"></div>
-        <div class="obs-row"><label for="wz-rate">SAMPLE RATE (samples/s)</label><input type="number" id="wz-rate" value="2400000"></div>
-        <div class="obs-row"><label for="wz-gain">GAIN (dB)</label><input type="number" id="wz-gain" value="40.2" step="any"></div>
+        <!-- No static value= here on purpose: loadWizardDefaults() (calibrate.js) fills these from the server's
+             observation_defaults() before the START button is even enabled, so this form can never silently
+             diverge from observer_config.json / OBSERVE's own defaults again (see calibrate.js for the incident). -->
+        <div class="obs-row"><label for="wz-freq">CENTER FREQUENCY (Hz)</label><input type="number" id="wz-freq"></div>
+        <div class="obs-row"><label for="wz-rate">SAMPLE RATE (samples/s)</label><input type="number" id="wz-rate"></div>
+        <div class="obs-row"><label for="wz-gain">GAIN (dB)</label><input type="number" id="wz-gain" step="any"></div>
         <div class="obs-row"><label for="wz-clip">CLIPPING RAIL-HIT THRESHOLD (fraction)</label><input type="number" id="wz-clip" value="0.0001" step="any"></div>
         <div class="obs-row"><label for="wz-stab-th">STABILITY RMS-FRACTION THRESHOLD</label><input type="number" id="wz-stab-th" value="0.10" step="any"></div>
         <div class="obs-row"><label for="wz-rfi">RFI PROXY: MIN USABLE BAND FRACTION</label><input type="number" id="wz-rfi" value="0.5" step="any"></div>

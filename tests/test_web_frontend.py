@@ -594,6 +594,46 @@ def test_calibrate_page_reload_adopts_the_running_job_and_status_polls_slowly(tm
     assert out["polls"] >= 1 and out["run"] == [True, "a calibration simulation is running"] and out["workflow"] == "SIMULATION RUNNING" and out["statusCalls"] <= 3
 
 
+# ------------------------------------------------------------------ CALIBRATE: wizard form loads its CENTER FREQUENCY /
+# SAMPLE RATE / GAIN from the server (never the old hardcoded HTML value="1420405000") and START stays disabled
+# until that resolves - the actual frontend half of the real incident's fix (see
+# tests/test_frequency_single_source_of_truth.py for the backend/single-source-of-truth half).
+
+def test_calibrate_wizard_loads_its_frequency_from_the_server_not_a_hardcoded_html_value(tmp_path):
+    routes = CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { delay: 60, body: { ok: true, data: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } } };
+"""
+    driver = r"""
+out.beforeLoad = { freq: $w("wz-freq").value, startDisabled: $w("wz-start").disabled };
+await until(() => $w("wz-freq").value === "1420405752", 3000);
+out.afterLoad = { freq: $w("wz-freq").value, rate: $w("wz-rate").value, gain: $w("wz-gain").value, startDisabled: $w("wz-start").disabled };
+"""
+    # calibrate.js's wizard section defines its own local $w() inside an IIFE block - expose the same lookup to the driver
+    driver = 'const $w = (id) => document.getElementById(id);\n' + driver
+    out = run_page(tmp_path, "calibrate", routes, driver, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["beforeLoad"]["freq"] == "" and out["beforeLoad"]["startDisabled"] is True    # no stale/hardcoded value shown, START not yet usable
+    assert out["afterLoad"] == {"freq": "1420405752", "rate": "2400000", "gain": "40.2", "startDisabled": False}
+
+
+def test_calibrate_wizard_start_recovers_if_defaults_request_fails(tmp_path):
+    routes = CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { status: 500, body: { ok: false, error: "boom" } };
+"""
+    driver = r"""
+const $w = (id) => document.getElementById(id);
+await sleep(600);
+out.startDisabled = $w("wz-start").disabled;
+out.err = document.getElementById("error-banner").textContent;
+"""
+    out = run_page(tmp_path, "calibrate", routes, driver, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["startDisabled"] is False                 # never permanently stuck disabled by a backend hiccup
+    assert "could not load wizard defaults" in out["err"]
+
+
 # ------------------------------------------------------------------ STATUS page
 
 def test_status_page_layers_disconnect_and_recovery(tmp_path):

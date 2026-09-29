@@ -61,6 +61,37 @@ def _utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def observation_defaults() -> Dict[str, Any]:
+    """The ONE place that reads observer_config.json's observation_defaults - every page/endpoint that needs to
+    suggest or validate the real operating frequency/rate/gain (OBSERVE's own /api/observe/defaults,
+    calibrate_wizard_defaults() below, and build_command()'s calibrate_wizard "start" fallback) reads it from
+    here, so they can never quietly diverge from each other or from observer_config.json again. Real incident
+    this exists to prevent: a CALIBRATE wizard session run with console/calibrate.html's own hardcoded
+    value="1420405000" (never synced to this file) built a calibration profile at 1420405000 Hz while
+    observer_config.json's real center_frequency_hz was 1420405752 Hz - a real 625-point observation completed
+    at the real 1420405752 Hz, and every single point was silently INCOMPATIBLE with that profile; Quicklook
+    only discovered it after the fact (see observation_preflight.py's _quicklook_calibration_match_check for the
+    new pre-RUN guard against the SAME class of mismatch)."""
+    try:
+        return json.loads((ROOT / "observer_config.json").read_text()).get("observation_defaults", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def calibrate_wizard_defaults() -> Dict[str, Any]:
+    """Suggested (never blank) defaults for the CALIBRATE reference wizard's own start form - from the SAME
+    observation_defaults() OBSERVE's own /api/observe/defaults reads, so a wizard session run without editing
+    the form always targets the frequency/rate a real OBSERVE session would actually use. gain_db is the
+    wizard's OWN reference gain (its 50 ohm/HI captures), not OBSERVE's operational gain - operator-editable,
+    matches the wizard form's own prior static default."""
+    d = observation_defaults()
+    return {
+        "center_frequency_hz": d.get("center_frequency_hz", 1420405000),
+        "sample_rate_hz": d.get("sample_rate_hz", 2400000),
+        "gain_db": 40.2,
+    }
+
+
 def _within(path: Path, root: Path) -> bool:
     try:
         path = path.resolve()
@@ -515,7 +546,11 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             cs = _float(p, "capture_seconds", 0.5, 30, 2.0)
             ss = _float(p, "stabilize_seconds", 0, 600, 20.0)
             hss = _float(p, "hi_settle_seconds", 0, 120, 2.0)
-            cf = _float(p, "center_frequency_hz", 1e6, 2e9, 1_420_405_000.0)
+            # Fallback only fires if the request omits the field entirely (the frontend now always sends the
+            # value it loaded from calibrate_wizard_defaults(), which is this SAME observation_defaults()) -
+            # this used to be the hardcoded literal 1_420_405_000.0, independent of observer_config.json; see
+            # observation_defaults()'s docstring for the real incident that caused.
+            cf = _float(p, "center_frequency_hz", 1e6, 2e9, float(observation_defaults().get("center_frequency_hz", 1_420_405_000.0)))
             sr = _float(p, "sample_rate_hz", 200_000, 4e6, 2_400_000.0)
             gain = _float(p, "gain_db", 0, 60, 40.2)
             ct = _float(p, "clipping_threshold", 1e-6, 0.1, 1e-4)

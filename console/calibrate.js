@@ -529,6 +529,27 @@
       }
     }
 
+    async function loadWizardDefaults() {
+      // The form's own HTML value="..." (below) is only a pre-load placeholder for the instant before this
+      // resolves - never trust it past this point. Real source of truth: observer_config.json's
+      // observation_defaults, the SAME values OBSERVE's own form loads (almita_web_ops.observation_defaults()) -
+      // so a wizard session run without editing this form always targets what a real OBSERVE session would
+      // actually use. Real incident this fixes: this field used to be a static HTML literal (1420405000) that
+      // never matched observer_config.json's real 1420405752 - a wizard session run without editing it built a
+      // calibration profile Quicklook later rejected for an entire real 625-point observation.
+      U.setEnabled($w("wz-start"), false, "loading defaults…");
+      const r = await U.api("/api/ops/calibrate/wizard_defaults", { timeoutMs: 15000 });
+      if (r.ok) {
+        const d = r.data.data;
+        $w("wz-freq").value = d.center_frequency_hz;
+        $w("wz-rate").value = d.sample_rate_hz;
+        $w("wz-gain").value = d.gain_db;
+      } else {
+        wzErr("could not load wizard defaults (" + U.errorText(r.error) + ") - CENTER FREQUENCY/SAMPLE RATE/GAIN above are only the page's own static placeholder; verify against observer_config.json before starting");
+      }
+      U.setEnabled($w("wz-start"), true, "");
+    }
+
     async function recoverWizard() {
       const r = await U.api("/api/ops/jobs", { timeoutMs: 15000 });
       if (!r.ok) return;
@@ -650,6 +671,7 @@
       } catch (err) { wzErr(`abort failed: ${msg(err)}`); }
     }, "…"));
 
+    loadWizardDefaults().catch(() => { U.setEnabled($w("wz-start"), true, ""); });
     recoverWizard().catch(() => {});
   }
 })();
