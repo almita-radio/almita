@@ -44,8 +44,10 @@ CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "tar
                            "duration", "error_message", "data_filename", "session_name"}
 # frozen surface -> (paths, pinned commit): any difference to the pin or to HEAD is reported
 FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "f5e2f65"), ("almita_science.py", "f5e2f65"),
-          ("science_forensics", "02b8e5a"), ("almita_science_forensics.py", "8f4b40a"), ("capture.py", "8f4b40a"),
-          ("observation_orchestrator.py", "8f4b40a"), ("observation_spec.py", "8f4b40a"))
+          ("science_forensics", "02b8e5a"), ("almita_science_forensics.py", "8f4b40a"),
+          # re-pinned to 26fa261: operator-ordered changes - campaign-activity gate (c02016b) and explicit SDR
+          # tuning with requested/applied/evidence attrs (26fa261). The spectral data path is unchanged.
+          ("capture.py", "26fa261"), ("observation_orchestrator.py", "26fa261"), ("observation_spec.py", "26fa261"))
 DEFAULT_WINDOW = (150857.0, 5607.0)          # candidate LSRK window (m/s) of the feature campaign
 MIN_ALT_DEG, HA_MARGIN_H = 30.0, 0.25        # same values the plan/`windows` use
 ENDPOINTS = {"MAIN rtl_tcp": 1234, "INDI": 7624}

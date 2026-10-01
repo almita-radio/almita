@@ -349,7 +349,11 @@ def test_frozen_modules_untouched():
         assert out.stdout.strip() == "", out.stdout
     out = subprocess.run(["git", "diff", "--name-only", "8f4b40a", "--", "science_forensics/models.py", "science_forensics/measure.py", "science_forensics/statistics.py",
                           "science_forensics/negative.py", "science_forensics/ingest.py", "science_forensics/session.py", "science_forensics/plots.py",
-                          "science_forensics/synthetic.py", "almita_science_forensics.py", "capture.py", "observation_orchestrator.py"],
+                          "science_forensics/synthetic.py", "almita_science_forensics.py"],
+                         cwd=ROOT, capture_output=True, text=True)
+    assert out.stdout.strip() == "", out.stdout
+    # capture.py / observation_orchestrator.py re-pinned at 26fa261 (campaign-activity gate + explicit SDR tuning)
+    out = subprocess.run(["git", "diff", "--name-only", "26fa261", "--", "capture.py", "observation_orchestrator.py"],
                          cwd=ROOT, capture_output=True, text=True)
     assert out.stdout.strip() == "", out.stdout
 
