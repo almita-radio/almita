@@ -171,9 +171,11 @@ function renderQuicklook(quicklook){
   renderThumbs(quicklook);
 }
 
-function renderRfiRef(rfiRef){
+function renderRfiRef(rfiRef,acquisitionState){
   const state=rfiRef.status||"DISABLED";
-  $("rfi-ref-badge").textContent=state;$("rfi-ref-badge").className=badgeClass(state);
+  // a failure outside a running acquisition is the record of the LAST session, not a live state: say so (same colour)
+  const pastFailure=["FAILED","UNAVAILABLE"].includes(state)&&!["STARTING","RUNNING"].includes(acquisitionState);
+  $("rfi-ref-badge").textContent=pastFailure?`LAST SESSION ${state}`:state;$("rfi-ref-badge").className=badgeClass(state);
   if(state==="DISABLED"){$("rfi-ref-kv").innerHTML=pair("RFI REFERENCE","DISABLED");return}
   $("rfi-ref-kv").innerHTML=[
     pair("RECEIVER / SERIAL",rfiRef.device_serial?`V3 / ${rfiRef.device_serial}`:"—"),
@@ -510,7 +512,7 @@ function render(status){
   const quicklook=status.quicklook||{state:"IDLE"};
   renderQuicklook(quicklook);
   const rfiRef=status.rfi_ref||{status:"DISABLED"};
-  renderRfiRef(rfiRef);
+  renderRfiRef(rfiRef,(status.acquisition||{}).state);
   renderRfiProducts(rfiRef,quicklook,(status.acquisition||{}).session_id||null);
   renderActivityLog(status.activity_log);
   if(window.SpectralStack3D)window.SpectralStack3D.update((status.acquisition||{}).session_id||null,(status.acquisition||{}).state);

@@ -615,3 +615,11 @@ def test_health_does_not_report_running_for_a_session_that_ended_without_stop():
     obs = ended["workflows"]["observation"]
     assert obs["state"] == "COMPLETED" and "capture.py has exited" in obs["detail"]
     assert not any("an observation is" in r for r in ended["operational"]["reasons"])
+
+
+def test_rfi_failure_of_an_ended_session_does_not_freeze_the_dongle_down():
+    ended = {"updated_utc": NOW.isoformat(), "acquisition": {"state": "COMPLETED"}, "rfi_ref": {"status": "FAILED"}}
+    present = Fake(usb=("00000001", "00000002"), status=ended).health()["dependencies"]["rfi_sdr"]
+    assert present["state"] == "AVAILABLE" and "last session RFI_REF FAILED" in present["detail"]
+    absent = Fake(usb=("00000001",), status=ended).health()["dependencies"]["rfi_sdr"]
+    assert absent["state"] == "DOWN"

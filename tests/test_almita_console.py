@@ -1176,6 +1176,15 @@ def test_47_frontend_rfi_thumbs_stopped_state_retains_products(tmp_path):
     assert "WAITING FOR RFI PRODUCTS" not in html
 
 
+def test_47b_frontend_rfi_failure_of_an_ended_session_is_labelled_last_session(tmp_path):
+    (tmp_path / "ended").mkdir()
+    (tmp_path / "live").mkdir()
+    ended = dom(console_root(tmp_path / "ended", status=status_fixture("COMPLETED", rfi_ref=_rfi_ref_running(status="FAILED"))))
+    assert ">LAST SESSION FAILED<" in ended
+    live = dom(console_root(tmp_path / "live", status=status_fixture("RUNNING", rfi_ref=_rfi_ref_running(status="FAILED"))))
+    assert ">FAILED<" in live and ">LAST SESSION FAILED<" not in live
+
+
 def test_48_frontend_antenna_a_interpolated_preview_thumb_shown_when_available(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture(
         "RUNNING", quicklook=_quicklook_running(interpolated_map_available=True))))

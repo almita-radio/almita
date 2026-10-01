@@ -184,7 +184,13 @@ def collect_health(*, runtime_dir: Path = DEFAULT_RUNTIME_DIR, now: Optional[dat
     deps["main_sdr"]["usb_serial_00000001_present"] = "00000001" in serials
     rfi = (status.get("rfi_ref") or {}).get("status")
     rfi_present = "00000002" in serials
-    if rfi in ("DISABLED", None):
+    if rfi in ("FAILED", "UNAVAILABLE") and acq_state != "RUNNING":
+        # the failure belongs to a session that is over: it must not freeze the dongle as DOWN forever (found live:
+        # 2026-09-28's "No matching devices" kept rfi_sdr DOWN after the dongle was re-attached). Presence decides now.
+        deps["rfi_sdr"] = {"state": "AVAILABLE" if rfi_present else "DOWN",
+                           "detail": ("USB serial 00000002 present" if rfi_present else "USB serial 00000002 not attached (optional)") + f"; last session RFI_REF {rfi}",
+                           "session_status": rfi}
+    elif rfi in ("DISABLED", None):
         deps["rfi_sdr"] = {"state": "AVAILABLE" if rfi_present else "DOWN", "detail": "USB serial 00000002 present" if rfi_present else "USB serial 00000002 not attached (optional)",
                            "session_status": rfi or "DISABLED"}
     elif rfi in ("FAILED", "UNAVAILABLE"):
