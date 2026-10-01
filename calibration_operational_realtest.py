@@ -65,15 +65,21 @@ async def main(args) -> int:
     # for a multi-day observation - this gate closes that specific gap
     # for THIS script without modifying the shared, frozen
     # capture_conflict.py module.
+    # The label alone is not proof of activity: a session that ended without STOP leaves RUNNING on disk.
+    # active_campaign_reason() checks the verified capture.py AND quicklook_live.py PIDs (the shared rule
+    # the web's physical-stage gate uses too); an unreadable status fails closed.
     try:
         import observation_orchestrator
-        status = observation_orchestrator.get_status()
-        orchestrator_state = (status.get("orchestrator") or {}).get("orchestrator_state")
+        orch = observation_orchestrator.get_status().get("orchestrator") or {}
+        active = observation_orchestrator.active_campaign_reason(orch)
+        if active:
+            campaign_detail = (f"{active} - an ACTIVE campaign holds or cycles the single rtl_tcp client slot")
+        else:
+            campaign_detail = (f"orchestrator_state={orch.get('orchestrator_state')} session={orch.get('session_id')}: "
+                               "no live capture.py or quicklook_live.py owns it (verified by PID + start time)")
     except Exception as exc:
-        orchestrator_state = f"UNKNOWN ({type(exc).__name__}: {exc})"
-    _gate(gates, "no_active_orchestrator_campaign", orchestrator_state != "RUNNING",
-          f"orchestrator_state={orchestrator_state} - an ACTIVE campaign may hold or cycle the single "
-          f"rtl_tcp client slot (e.g. via quicklook_live.py) even with no capture.py alive right now")
+        active = campaign_detail = f"orchestrator status UNKNOWN ({type(exc).__name__}: {exc})"
+    _gate(gates, "no_active_orchestrator_campaign", not active, campaign_detail)
 
     handshake = probe_rtl_tcp_handshake(args.host, args.port)
     _gate(gates, "rtl_tcp_reachable_device_readback", handshake.reachable, handshake.detail)

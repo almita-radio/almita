@@ -218,6 +218,28 @@ def _quicklook_ownership_matches(runtime: Dict[str, Any]) -> bool:
     return runtime.get("quicklook_cmd_needle", "quicklook_live.py") in identity["cmdline"]
 
 
+def active_campaign_reason(orchestrator: Dict[str, Any]) -> Optional[str]:
+    """Why an orchestrator campaign is really active (and owns MAIN SDR + mount), or None.
+
+    The one shared answer for every gate (web physical stages, the operational calibration test). The
+    orchestrator_state label alone is not proof: a session that ended without STOP leaves RUNNING on disk
+    forever (2026-09-28 -> blocked everything on 2026-10-01). A verified live capture.py or quicklook_live.py
+    (which cycles rtl_tcp between points) is active in ANY state - DEGRADED included, capture.py keeps running
+    there. PREFLIGHT/READY have no capture process yet and always count as active; RUNNING/STOPPING with no
+    capture_pid on record fail closed. Never writes anything: a stale sidecar stays on disk as evidence."""
+    state = orchestrator.get("orchestrator_state")
+    where = f"session {orchestrator.get('session_id')}"
+    if orchestrator.get("capture_pid") and _capture_ownership_matches(orchestrator):
+        return f"orchestrator {state} ({where}): capture.py pid {orchestrator['capture_pid']} is alive"
+    if orchestrator.get("quicklook_pid") and _quicklook_ownership_matches(orchestrator):
+        return f"orchestrator {state} ({where}): quicklook_live pid {orchestrator['quicklook_pid']} is alive"
+    if state in ("PREFLIGHT", "READY"):
+        return f"orchestrator {state} ({where}): a capture is about to start"
+    if state in ("RUNNING", "STOPPING") and not orchestrator.get("capture_pid"):
+        return f"orchestrator {state} ({where}) with no capture_pid on record - cannot prove it ended"
+    return None
+
+
 def _capture_args(plan: Dict[str, Any], runtime_dir: str) -> List[str]:
     args = [
         sys.executable, str(Path(__file__).resolve().parent / "capture.py"),

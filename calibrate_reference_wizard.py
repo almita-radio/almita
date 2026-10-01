@@ -54,6 +54,16 @@ def _save_state(session_dir: Path, state: Dict[str, Any]) -> None:
     atomic_write_json(_state_path(session_dir), state)
 
 
+# Same convergence tolerance INDITelescopeControl.goto() requires before it reports success; re-checked after
+# the settle sleep so a capture never starts with the mount anywhere else.
+ARRIVAL_TOLERANCE_DEG = 0.25
+
+
+def _progress(line: str) -> None:
+    """Human progress for the web job log. stderr, and never braces: the job parser takes the one JSON blob."""
+    print(f"[capture-hi] {line}".replace("{", "(").replace("}", ")"), file=sys.stderr, flush=True)
+
+
 def _emit(payload: Dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
@@ -261,10 +271,24 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
             raise RuntimeError("INDI connection failed")
         await sdr.connect()
         await sdr.configure(int(center_frequency_hz), int(sample_rate_hz), gain=gain_db)
+        start_ra, start_dec = await telescope.get_coordinates(force_refresh=True)
+        _progress(f"mount before GOTO: RA {start_ra} h  Dec {start_dec} deg")
+        _progress(f"GOTO target: RA {ra_hours:.5f} h  Dec {dec_deg:.4f} deg")
         if not await telescope.goto(ra_hours, dec_deg):
-            raise RuntimeError("GOTO failed")
+            raise RuntimeError(f"GOTO to RA {ra_hours:.5f} h Dec {dec_deg:.4f} deg failed (mount Alert, timeout or "
+                               f"no convergence) - mount last read at RA {start_ra} h Dec {start_dec} deg; NO capture taken")
+        _progress(f"GOTO converged; settling {settle_seconds:g} s before capturing")
         await asyncio.sleep(settle_seconds)
         mount_ra, mount_dec = await telescope.get_coordinates(force_refresh=True)
+        arrival_error_deg = (None if mount_ra is None or mount_dec is None
+                             else telescope._angular_distance_deg(mount_ra, mount_dec, ra_hours, dec_deg))
+        if arrival_error_deg is None or arrival_error_deg > ARRIVAL_TOLERANCE_DEG:
+            raise RuntimeError(f"mount is not at the target after settling: readback RA {mount_ra} h Dec {mount_dec} deg, "
+                               f"error {arrival_error_deg} deg > {ARRIVAL_TOLERANCE_DEG} deg - NO capture taken")
+        slew_deg = (None if start_ra is None or start_dec is None
+                    else telescope._angular_distance_deg(start_ra, start_dec, mount_ra, mount_dec))
+        _progress(f"mount at target after settle: RA {mount_ra} h  Dec {mount_dec} deg  error {arrival_error_deg:.4f} deg  "
+                  f"slewed {slew_deg} deg; capturing")
         for i in range(n_captures):
             path = cap_dir / f"capture_{i:03d}.h5"
             # sdr_capture.py's HDF5-attrs writer (frozen, never modified here) defaults center_frequency_hz to
@@ -276,8 +300,13 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
                               {"gain": gain_db, "center_frequency_hz": center_frequency_hz,
                                "purpose": "calibrate_wizard_hi", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
             paths.append(path)
+        end_ra, end_dec = await telescope.get_coordinates(force_refresh=True)
         return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg,
                "mount_ra_hours": mount_ra, "mount_dec_deg": mount_dec, "gain_db": gain_db,
+               "pre_goto_ra_hours": start_ra, "pre_goto_dec_deg": start_dec, "slew_distance_deg": slew_deg,
+               "arrival_error_deg": arrival_error_deg, "arrival_tolerance_deg": ARRIVAL_TOLERANCE_DEG,
+               "settle_seconds": settle_seconds, "goto_busy_seconds": telescope.last_slew_busy_duration_sec,
+               "post_capture_ra_hours": end_ra, "post_capture_dec_deg": end_dec,
                "capture_seconds": capture_seconds, "sample_rate_hz": sample_rate_hz,
                "center_frequency_hz": center_frequency_hz, "captured_utc": datetime.now(timezone.utc).isoformat(),
                "capture_paths": [str(p) for p in paths], "simulated": False}
@@ -350,9 +379,13 @@ def cmd_capture_hi(args) -> int:
             cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
             cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir, args.simulate))
     else:
-        capture = asyncio.run(_capture_n_at(
-            cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
-            cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir))
+        try:
+            capture = asyncio.run(_capture_n_at(
+                cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
+                cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir))
+        except RuntimeError as exc:
+            # The step is left at READY_HI_*: nothing was captured, the operator sees why and can retry.
+            raise SystemExit(f"{label} movement FAILED: {exc}")
 
     from calibration_engine.acquisition import read_capture_iq
     paths = [Path(p) for p in capture["capture_paths"]]

@@ -925,8 +925,11 @@ def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> 
         if probs:
             raise OpsBlocked("mount is not ready for movement: " + "; ".join(probs))
         import observation_orchestrator
-        if ((observation_orchestrator.get_status().get("orchestrator") or {}).get("orchestrator_state")) in ("RUNNING", "STOPPING", "PREFLIGHT"):
-            raise OpsBlocked("an observation is active: the mount belongs to it")
+        # The label alone is not proof (a session that ended without STOP leaves RUNNING behind): same real-activity
+        # rule as the operational calibration test's precheck.
+        held = observation_orchestrator.active_campaign_reason(observation_orchestrator.get_status().get("orchestrator") or {})
+        if held:
+            raise OpsBlocked(f"an observation is active: the mount belongs to it - {held}")
     d = _job_dir(job_id)
     d.mkdir(parents=True, exist_ok=False)
     job = {"job_id": job_id, "stage": stage, "argv": argv, "cwd": str(ROOT), "params": params, "meta": meta, "physical": spec["physical"], "started_utc": _utc(),
