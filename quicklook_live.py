@@ -38,6 +38,7 @@ STOP_REQUESTED = False
 # the CLI default below; QuicklookLive itself still defaults to
 # runtime_dir=None (announcements are opt-in at the class level).
 DEFAULT_RUNTIME_DIR = str(Path(__file__).resolve().parent / "data" / "runtime")
+SESSION_TERMINAL_EVENTS = ("SESSION_COMPLETED", "SESSION_ABORTED")  # capture.py _announce(event=...)
 
 
 def request_stop(signum=None, frame=None):
@@ -355,12 +356,26 @@ class QuicklookLive:
         except Exception:
             pass
 
+    def _session_finished(self)->bool:
+        """Lifecycle only: True once capture.py has published a terminal state for THIS session in the runtime
+        dir. Without it a session that ends on its own (no STOP) left quicklook polling forever - found live:
+        2026-09-28's process still running 3 days later. No runtime_dir (tests/offline) = never."""
+        if self.runtime_dir is None:
+            return False
+        current=read_json_safe(self.runtime_dir/"current_session.json") or {}
+        return current.get("session_id")==self.session_id and current.get("event") in SESSION_TERMINAL_EVENTS
+
     def run(self,once=False):
         _log(self.log_path,"SESSION START",self.session_id)
         self._announce()
+        idle_after_end=0
         while True:
             status=self.scan_once()
             if once or STOP_REQUESTED:break
+            # two consecutive empty scans after the terminal state, so the session's last point is never missed
+            idle_after_end=idle_after_end+1 if status["backlog_initial"]==0 and self._session_finished() else 0
+            if idle_after_end>=2:
+                _log(self.log_path,"SESSION ENDED","capture reported a terminal state and no point is pending");break
             time.sleep(self.poll_interval)
         validation={"status":"PASS","offline_simulation":True,
           "processed_points":status["points_processed"],"skipped_points":status["points_skipped"],

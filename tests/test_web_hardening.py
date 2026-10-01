@@ -594,3 +594,24 @@ def test_successful_polls_are_not_logged_but_failures_and_actions_are(capsys):
     assert "/api/nope" in out and "404" in out and "POST /api/observe/plan" in out and "400" in out
     line = next(l for l in out.splitlines() if "/api/nope" in l)
     assert re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00 INFO  almita_orchestrator_server req=[0-9a-f]{8} ", line)      # UTC timestamp, level, component, request id
+
+
+def test_stale_running_label_does_not_claim_main_once_its_capture_is_gone(monkeypatch):
+    import almita_web_common
+    import observation_orchestrator
+    from alignment_engine import capture_conflict
+    monkeypatch.setattr(capture_conflict, "check_no_conflicting_capture", lambda *a, **k: capture_conflict.CaptureConflictResult(False, "none"))
+    monkeypatch.setattr(almita_web_common, "_quicklook_live_running", lambda: False)
+    for orch, expected in (({"orchestrator_state": "RUNNING", "capture_pid": 1, "capture_process_alive": False}, "FREE"),
+                           ({"orchestrator_state": "RUNNING", "capture_pid": 1, "capture_process_alive": True}, "CLAIMED_BY_OBSERVATION"),
+                           ({"orchestrator_state": "RUNNING"}, "CLAIMED_BY_OBSERVATION")):            # no pid recorded yet: stay conservative
+        monkeypatch.setattr(observation_orchestrator, "get_status", lambda orch=orch, **k: {"orchestrator": orch})
+        assert almita_web_common.get_sdr_resource_status().status.value == expected, orch
+
+
+def test_health_does_not_report_running_for_a_session_that_ended_without_stop():
+    ended = Fake(status={"updated_utc": NOW.isoformat(), "acquisition": {"state": "COMPLETED"}, "rfi_ref": {"status": "DISABLED"}}).health(
+        orchestrator=lambda: {"orchestrator": {"orchestrator_state": "RUNNING", "capture_pid": 1, "capture_process_alive": False, "session_id": "s1"}})
+    obs = ended["workflows"]["observation"]
+    assert obs["state"] == "COMPLETED" and "capture.py has exited" in obs["detail"]
+    assert not any("an observation is" in r for r in ended["operational"]["reasons"])

@@ -150,8 +150,13 @@ def collect_health(*, runtime_dir: Path = DEFAULT_RUNTIME_DIR, now: Optional[dat
         problems["observation"] = f"{type(exc).__name__}: {exc}"
     orch_state = ((orch.get("orchestrator") or {}).get("orchestrator_state")) or "UNKNOWN"
     acq_state = (status.get("acquisition") or {}).get("state")
+    obs_detail = f"acquisition: {acq_state or 'IDLE'}"
+    if orch_state == "RUNNING" and (orch.get("orchestrator") or {}).get("capture_process_alive") is False:
+        # session ended on its own (no STOP): the sidecar label stays RUNNING, but its recorded capture.py is gone
+        orch_state = acq_state if acq_state in ("COMPLETED", "ABORTED", "DEGRADED") else "UNKNOWN"
+        obs_detail += "; orchestrator label still RUNNING but its capture.py has exited"
     workflows = {
-        "observation": {"state": orch_state, "detail": f"acquisition: {acq_state or 'IDLE'}", "session_id": (orch.get("orchestrator") or {}).get("session_id")},
+        "observation": {"state": orch_state, "detail": obs_detail, "session_id": (orch.get("orchestrator") or {}).get("session_id")},
         "calibration": {"state": "RUNNING" if jobs.any_alive(prefix="CAL-") else "IDLE", "detail": "simulation jobs of this web app"},
         "alignment": {"state": "RUNNING" if (jobs.any_alive(prefix="SOLAR-") or jobs.any_alive(prefix="HI-")) else "IDLE", "detail": "simulation jobs of this web app"},
     }

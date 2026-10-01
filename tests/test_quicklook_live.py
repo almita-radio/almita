@@ -315,3 +315,27 @@ def test_interpolated_preview_failure_never_breaks_native_grid(tmp_path,monkeypa
     assert native["map_mode"]=="NATIVE_GRID"
     assert native["quicklook_metrics"]["observed_cells"]==3
     assert not (out/"quicklook_map_interpolated.json").exists()
+
+
+def test_run_exits_on_its_own_once_capture_reports_the_session_ended(tmp_path, monkeypatch):
+    """Lifecycle only: a session that ends without STOP must not leave quicklook polling forever."""
+    import quicklook_live as ql
+    live = ql.QuicklookLive.__new__(ql.QuicklookLive)
+    live.session_id, live.runtime_dir, live.poll_interval = "S1", tmp_path, 0.0
+    live.log_path = tmp_path / "ql.log"
+    live.output, live.state, live.performance = tmp_path, {"points": {}}, []
+    monkeypatch.setattr(live, "_announce", lambda: None)
+    scans = []
+    def scan_once():
+        scans.append(1)
+        if len(scans) == 3:
+            (tmp_path / "current_session.json").write_text('{"session_id": "S1", "event": "SESSION_COMPLETED", "state": "COMPLETED"}')
+        if len(scans) > 50:
+            raise AssertionError("did not stop")
+        return {"backlog_initial": 0, "points_processed": 0, "points_skipped": 0}
+    monkeypatch.setattr(live, "scan_once", scan_once)
+    live.run()
+    assert len(scans) == 4 and "SESSION ENDED" in live.log_path.read_text()
+    other = tmp_path / "current_session.json"
+    other.write_text('{"session_id": "OTHER", "event": "SESSION_COMPLETED"}')
+    assert live._session_finished() is False

@@ -91,10 +91,15 @@ def get_sdr_resource_status(calibration_active: bool = False) -> ResourceCheck:
         status = observation_orchestrator.get_status()
         orchestrator_state = (status.get("orchestrator") or {}).get("orchestrator_state")
         session_id = (status.get("orchestrator") or {}).get("session_id")
+        # get_status() computes this from the recorded capture_pid's live identity (absent when no pid yet: keep claiming).
+        capture_alive = (status.get("orchestrator") or {}).get("capture_process_alive", True)
     except Exception as exc:
         return ResourceCheck(SDRResourceStatus.UNKNOWN, f"could not read orchestrator status: {exc}")
 
-    if orchestrator_state == "RUNNING":
+    # A session that ended on its own (no STOP) leaves the sidecar label at RUNNING forever - found live: 2026-09-28's
+    # completed session still claimed MAIN days later. The label only claims while its recorded capture.py is alive,
+    # the same live-identity rule START's own _refuse_if_already_active() already applies.
+    if orchestrator_state == "RUNNING" and capture_alive:
         return ResourceCheck(SDRResourceStatus.CLAIMED_BY_OBSERVATION,
                               f"orchestrator campaign is RUNNING (session_id={session_id})",
                               orchestrator_state, session_id)
