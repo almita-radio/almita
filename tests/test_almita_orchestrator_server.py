@@ -30,7 +30,7 @@ def _web_payload(*, rfi_ref_enabled=True, bias_tee=True):
             "min_altitude_deg": 10, "traversal": "SERPENTINE",
         },
         "capture": {"seconds": 10, "settle_seconds": 2},
-        "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+        "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
         "rfi_ref": {"enabled": rfi_ref_enabled, "serial": "00000002", "gain_db": 25.0, "bias_tee": bias_tee},
         "quicklook": {"enabled": False, "native_grid": True, "interpolated_preview": False,
                       "calibration_profile_path": None},

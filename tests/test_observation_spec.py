@@ -16,7 +16,7 @@ def _valid_raw():
             "min_altitude_deg": 10, "traversal": "SERPENTINE",
         },
         "capture": {"seconds": 10, "settle_seconds": 2},
-        "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+        "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
         "rfi_ref": {"enabled": True, "serial": "00000002", "gain_db": 25.0},
         "quicklook": {"enabled": True, "native_grid": True, "interpolated_preview": True,
                       "calibration_profile_path": "profile.json"},
@@ -176,3 +176,15 @@ def test_load_and_validate_round_trips_valid_yaml(tmp_path):
     path.write_text(yaml.safe_dump(_valid_raw()))
     result = sp.load_and_validate(str(path))
     assert result["session"]["name"] == "ALMITA-TEST-01"
+
+
+@pytest.mark.parametrize("field,value,match", [("center_frequency_hz", 1420405000, "agreed operating frequency"),
+                                               ("center_frequency_hz", 1420, "agreed operating frequency"),
+                                               ("sample_rate", 2048000, "operating sample rate")])
+def test_spec_off_the_operating_configuration_is_rejected(field, value, match):
+    """Single source of truth: a spec cannot quietly plan at the stale 1420405000 Hz, a MHz-looking value or
+    another sample rate (observer_config.json observation_defaults via sdr_tuning.operating_config())."""
+    raw = _valid_raw()
+    raw["main"][field] = value
+    with pytest.raises(sp.ObservationSpecError, match=match):
+        sp.validate_spec_dict(raw)

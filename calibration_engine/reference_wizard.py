@@ -31,7 +31,7 @@ here, in either case.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -91,15 +91,21 @@ class WizardStep(str, Enum):
     ABORTED = "ABORTED"
 
 
+def _operating(key: str) -> float:
+    import sdr_tuning
+    return float(sdr_tuning.operating_config()[key])
+
+
 @dataclass
 class WizardConfig:
     n_captures: int = 5
     capture_seconds: float = 2.0
     stabilize_seconds: float = 20.0        # SUGGESTED settle time for the 50 ohm step - capture still needs an explicit click
     hi_settle_seconds: float = 2.0         # REAL settle after a GOTO, before the HI captures start (mount/tracking to stop moving)
-    center_frequency_hz: float = 1_420_405_000.0
-    sample_rate_hz: float = 2_400_000.0
-    gain_db: float = 40.2
+    # single source (sdr_tuning.operating_config, observer_config.json) - was a stale 1_420_405_000.0 literal
+    center_frequency_hz: float = field(default_factory=lambda: _operating("center_frequency_hz"))
+    sample_rate_hz: float = field(default_factory=lambda: _operating("sample_rate_hz"))
+    gain_db: float = field(default_factory=lambda: _operating("gain_db"))
     clipping_rail_hit_fraction: float = ClippingThresholds().clipped_rail_hit_fraction
     stability_rms_fraction_threshold: float = 0.10     # quality.MAX_STABILITY_RMS_FRACTION_GOOD, exposed as editable
     # bandpass.usable_band_fraction below this is treated as the RFI-contamination proxy this wizard has -
@@ -147,7 +153,7 @@ class PhysicalReferenceConfig:
 
 def bias_t_known_facts(port: int = 1234) -> Dict[str, Any]:
     """Exactly what is REALLY known about Bias-T right now - never inflated. rtl_tcp's -T flag only says the
-    service was TOLD to enable it at startup (VERIFIED_BY_SERVICE_COMMAND_LINE); the protocol has no
+    service was TOLD to enable it at startup (SERVICE_STARTUP_ARGV); the protocol has no
     voltage/current readback at all, so "-T present" is NOT proof of measured voltage or current at the
     connector. Also carries the standing safety instruction: power down before touching connectors."""
     cmdline = inspect_rtl_tcp_service_command_line(port)
@@ -155,7 +161,7 @@ def bias_t_known_facts(port: int = 1234) -> Dict[str, Any]:
     if not cmdline.found:
         note = "rtl_tcp service command line not found - Bias-T state unknown"
     elif enabled_flag:
-        note = "rtl_tcp was started with -T (VERIFIED_BY_SERVICE_COMMAND_LINE)"
+        note = "rtl_tcp was started with -T (SERVICE_STARTUP_ARGV)"
     else:
         note = "rtl_tcp -T flag not found in the running service's command line"
     return {

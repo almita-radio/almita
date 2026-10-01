@@ -32,6 +32,7 @@ from astropy.time import Time
 from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
 from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture
+import sdr_tuning
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 from runtime_state import announce_session, atomic_write_json
 from rfi_monitor import RFIReferenceMonitor
@@ -107,7 +108,7 @@ class CaptureExecutor:
                  config_path: str = "observer_config.json",
                  verbose: bool = False, sdr_mode: str = "network",
                  sdr_host: str = "localhost", sdr_port: int = 1234,
-                 sdr_freq: int = 1420405752, sdr_sample_rate: int = 2400000,
+                 sdr_freq: Optional[int] = None, sdr_sample_rate: int = 2400000,
                  sdr_gain_db: float = 40.2,
                  input_topology: str = INPUT_TOPOLOGIES["antenna"],
                  bias_tee_enabled: bool = True,
@@ -133,7 +134,7 @@ class CaptureExecutor:
             sdr_mode: SDR capture mode 'usb' or 'network' (default: network)
             sdr_host: rtl_tcp server host (default: localhost)
             sdr_port: rtl_tcp server port (default: 1234)
-            sdr_freq: Center frequency in Hz (default: 1420405752 for HI)
+            sdr_freq: Center frequency in Hz (default: the operating frequency, sdr_tuning.operating_config())
             sdr_sample_rate: Sample rate in Hz (default: 2400000)
         """
         self.csv_path = Path(csv_path)
@@ -163,7 +164,7 @@ class CaptureExecutor:
         self.sdr_mode = sdr_mode
         self.sdr_host = sdr_host
         self.sdr_port = sdr_port
-        self.sdr_freq = sdr_freq
+        self.sdr_freq = sdr_freq if sdr_freq is not None else sdr_tuning.operating_center_frequency_hz()
         self.sdr_sample_rate = sdr_sample_rate
         self.sdr_gain_db = float(sdr_gain_db)
         self.input_topology = input_topology
@@ -171,6 +172,7 @@ class CaptureExecutor:
             raise ValueError(f"unsupported input topology: {input_topology}")
         self.bias_tee_enabled = bool(bias_tee_enabled)
         self.sdr = None
+        self.sdr_tuning = None   # sdr_tuning record of the explicit tuning (requested / applied / evidence)
 
         # RFI_REF: optional, disposable secondary receiver (auxiliary RFI
         # monitoring only). MAIN above is the sole authoritative science
@@ -187,7 +189,7 @@ class CaptureExecutor:
             runtime_dir=self.runtime_dir,
             device_serial=rfi_ref_serial,
             port=rfi_ref_port,
-            center_frequency_hz=sdr_freq,
+            center_frequency_hz=self.sdr_freq,
             sample_rate=sdr_sample_rate,
             gain_db=rfi_ref_gain_db,
             bias_tee=rfi_ref_bias_tee,
@@ -1285,11 +1287,11 @@ class CaptureExecutor:
             
             # Connect and configure SDR
             await self.sdr.connect()
-            await self.sdr.configure(
-                center_freq=self.sdr_freq,
-                sample_rate=self.sdr_sample_rate,
-                gain=self.sdr_gain_db,
-            )
+            # Explicit tuning with evidence (sdr_tuning): all four rtl_tcp commands are sent whatever the
+            # previous client left, and capture refuses to start unless rtl_tcp acknowledged exactly these values.
+            self.sdr_tuning = await sdr_tuning.tune_explicitly(
+                self.sdr, self.sdr_freq, self.sdr_sample_rate, self.sdr_gain_db,
+                operating=sdr_tuning.operating_config())
             
             if self.verbose:
                 self.log(f"SDR initialized: {self.sdr_freq/1e6:.6f} MHz @ {self.sdr_sample_rate/1e6:.2f} MS/s")
@@ -1837,12 +1839,13 @@ class CaptureExecutor:
                         'tracking': True,
                         'telescope_name': self.telescope.device_name if hasattr(self.telescope, 'device_name') else 'Unknown',
                         
-                        # SDR configuration
+                        # SDR configuration: requested and applied (rtl_tcp-acknowledged) kept apart, with evidence
                         'center_freq': self.sdr_freq,
                         'center_frequency_hz': self.sdr_freq,
                         'sample_rate_hz': self.sdr_sample_rate,
                         'gain': self.sdr_gain_db,
                         'gain_requested_db': self.sdr_gain_db,
+                        **(sdr_tuning.tuning_attrs(self.sdr_tuning) if self.sdr_tuning else {}),
                         'gain_mode': 'manual',
                         'instrument_topology': self.input_topology,
                         'rf_input': self.input_topology,
@@ -2377,8 +2380,8 @@ Useful for re-observations or after fixing equipment issues.
                         help='rtl_tcp server host (default: localhost)')
     parser.add_argument('--sdr-port', type=int, default=1234,
                         help='rtl_tcp server port (default: 1234)')
-    parser.add_argument('--sdr-freq', type=int, default=1420405752,
-                        help='Center frequency in Hz (default: 1420405752 for HI line)')
+    parser.add_argument('--sdr-freq', type=int, default=None,
+                        help='Center frequency in Hz (default: the operating frequency in observer_config.json)')
     parser.add_argument('--sdr-rate', type=int, default=2400000,
                         help='Sample rate in Hz (default: 2400000)')
     parser.add_argument('--sdr-gain', type=float, default=40.2,

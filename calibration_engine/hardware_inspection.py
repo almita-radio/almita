@@ -8,7 +8,7 @@ allows even when everything else about real hardware is off-limits.
 
 Three honest verification tiers, never conflated:
 - CONFIGURED_EXPECTED: only from this codebase's own written defaults/docs
-- VERIFIED_BY_SERVICE_COMMAND_LINE: read from the actual running rtl_tcp
+- SERVICE_STARTUP_ARGV: read from the actual running rtl_tcp
   process's argv via `ps` - real, but reports what rtl_tcp was TOLD to do
   at startup, not confirmation the tuner is presently obeying it.
 - VERIFIED_BY_DEVICE_READBACK: from rtl_tcp's own protocol handshake -
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 VERIFICATION_CONFIGURED_EXPECTED = "CONFIGURED_EXPECTED"
-VERIFICATION_SERVICE_COMMAND_LINE = "VERIFIED_BY_SERVICE_COMMAND_LINE"
+VERIFICATION_SERVICE_COMMAND_LINE = "SERVICE_STARTUP_ARGV"
 VERIFICATION_DEVICE_READBACK = "VERIFIED_BY_DEVICE_READBACK"
 
 # rtl_tcp's own dongle-info magic -> tuner name mapping (from librtlsdr's
@@ -94,7 +94,7 @@ def inspect_rtl_tcp_service_command_line(port: int) -> ServiceCommandLineInfo:
     plain OS process listing) looking for the rtl_tcp process bound to
     `port`, and parses its OWN argv for -d/-f/-s/-g/-T. This reports what
     the service was TOLD at startup, not a live device confirmation -
-    labeled VERIFIED_BY_SERVICE_COMMAND_LINE, distinct from and weaker
+    labeled SERVICE_STARTUP_ARGV, distinct from and weaker
     than a true protocol readback."""
     try:
         result = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True, timeout=5)

@@ -216,17 +216,20 @@ async def _capture_at(host: str, port: int, sdr_host: str, sdr_port: int, ra_hou
         if not await telescope.connect():
             raise RuntimeError("INDI connection failed")
         await sdr.connect()
-        await sdr.configure(int(center_frequency_hz), int(sample_rate_hz), gain=gain_db)
+        import sdr_tuning
+        tuning = await sdr_tuning.tune_explicitly(sdr, center_frequency_hz, sample_rate_hz, gain_db,
+                                                  operating=sdr_tuning.operating_config())
         if not await telescope.goto(ra_hours, dec_deg):
             raise RuntimeError("GOTO failed")
         await asyncio.sleep(settle_seconds)
         mount_ra, mount_dec = await telescope.get_coordinates(force_refresh=True)
         await sdr.capture(capture_seconds, str(output_path), int(sample_rate_hz),
-                          {"gain": gain_db, "purpose": "observe_gain_pilot", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
+                          {**sdr_tuning.tuning_attrs(tuning), "gain_requested_db": gain_db,
+                           "purpose": "observe_gain_pilot", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
         return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg, "mount_ra_hours": mount_ra, "mount_dec_deg": mount_dec,
                "gain_db": gain_db, "capture_seconds": capture_seconds, "sample_rate_hz": sample_rate_hz,
                "center_frequency_hz": center_frequency_hz, "captured_utc": datetime.now(timezone.utc).isoformat(),
-               "hdf5_path": str(output_path)}
+               "hdf5_path": str(output_path), "tuning": tuning}
     finally:
         await sdr.close()
         await telescope.disconnect()

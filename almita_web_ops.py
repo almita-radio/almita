@@ -72,8 +72,9 @@ def observation_defaults() -> Dict[str, Any]:
     at the real 1420405752 Hz, and every single point was silently INCOMPATIBLE with that profile; Quicklook
     only discovered it after the fact (see observation_preflight.py's _quicklook_calibration_match_check for the
     new pre-RUN guard against the SAME class of mismatch)."""
-    try:
-        return json.loads((ROOT / "observer_config.json").read_text()).get("observation_defaults", {})
+    import sdr_tuning
+    try:   # the same file sdr_tuning.operating_config() validates - one path, one reader of record
+        return json.loads(sdr_tuning.CONFIG_PATH.read_text()).get("observation_defaults", {})
     except (OSError, ValueError):
         return {}
 
@@ -84,12 +85,9 @@ def calibrate_wizard_defaults() -> Dict[str, Any]:
     the form always targets the frequency/rate a real OBSERVE session would actually use. gain_db is the
     wizard's OWN reference gain (its 50 ohm/HI captures), not OBSERVE's operational gain - operator-editable,
     matches the wizard form's own prior static default."""
-    d = observation_defaults()
-    return {
-        "center_frequency_hz": d.get("center_frequency_hz", 1420405000),
-        "sample_rate_hz": d.get("sample_rate_hz", 2400000),
-        "gain_db": 40.2,
-    }
+    import sdr_tuning
+    op = sdr_tuning.operating_config()   # raises if observer_config.json lacks it: never a literal fallback
+    return {"center_frequency_hz": op["center_frequency_hz"], "sample_rate_hz": op["sample_rate_hz"], "gain_db": op["gain_db"]}
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -194,6 +192,65 @@ def mount_idle_problems(m: Dict[str, Any]) -> List[str]:
     return p
 
 
+ONSTEP_CLOCK_LOG = ROOT / "data" / "mount" / "onstep_clock_log.jsonl"
+ONSTEP_CLOCK_MAX_AGE_H = 24.0
+ONSTEP_CLOCK_TOLERANCE_S = 2.0
+
+
+def onstep_clock_check(log: Path = ONSTEP_CLOCK_LOG, now: Optional[datetime] = None) -> Dict[str, str]:
+    """The mount clock offset from the last REAL measurement (scripts/mount/onstep_clock.py: driver reconnect,
+    fresh :GL#/:GC# read compared with the host clock at that instant).
+
+    The live TIME_UTC property is NOT used: it is a snapshot the driver took when it connected and never ticks,
+    so "now - TIME_UTC" is the snapshot's age. Reporting that as an offset produced the false "OnStep is ~9.6 min
+    behind" of 2026-10-01 (measured for real right after: -1.7 s)."""
+    name = "OnStep clock (measured)"
+    now = now or datetime.now(timezone.utc)
+    try:
+        last = json.loads(log.read_text().strip().splitlines()[-1])
+    except (OSError, ValueError, IndexError):
+        return _check(name, "WARNING", "never measured - run scripts/mount/onstep_clock.py measure (no movement)", "clock")
+    final = last.get("after") or last.get("before") or {}
+    age_h = (now - datetime.fromisoformat(last["utc"])).total_seconds() / 3600
+    offset = final.get("offset_seconds")
+    detail = f"offset {offset:+.1f} s measured {age_h:.1f} h ago (resolution about 2 s)"
+    if offset is None or abs(offset) > ONSTEP_CLOCK_TOLERANCE_S:
+        return _check(name, "WARNING", detail + " - correct with scripts/mount/onstep_clock.py set", "clock")
+    if age_h > ONSTEP_CLOCK_MAX_AGE_H:
+        return _check(name, "WARNING", detail + " - measurement older than 24 h, measure again", "clock")
+    return _check(name, "PASS", detail, "clock")
+
+
+def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/proc")) -> Dict[str, str]:
+    """MAIN rtl_tcp must run line-buffered (stdbuf -oL): its "set freq N" acknowledgements are the tuning
+    evidence every acquisition waits for (sdr_tuning) - without them every capture is blocked, so BLOCK here.
+    Its startup argv differing from the operating configuration is only a WARNING: acquisitions retune
+    explicitly and never trust the argv as the current tuning."""
+    import sdr_tuning
+    name = "MAIN rtl_tcp tuning evidence"
+    try:
+        if pid is None:
+            pid = int(subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", sdr_tuning.MAIN_RTL_TCP_UNIT],
+                                     capture_output=True, text=True, timeout=5).stdout.strip() or 0)
+        if not pid:
+            return _check(name, "BLOCK", f"{sdr_tuning.MAIN_RTL_TCP_UNIT} has no running process", "hardware")
+        argv = (proc / str(pid) / "cmdline").read_bytes().split(b"\0")
+        env = (proc / str(pid) / "environ").read_bytes().split(b"\0")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return _check(name, "BLOCK", f"cannot inspect MAIN rtl_tcp: {exc}", "hardware")
+    if b"_STDBUF_O=L" not in env:
+        return _check(name, "BLOCK", "rtl_tcp is not line-buffered (no stdbuf -oL): tuning acknowledgements reach "
+                      "the journal late and every acquisition is blocked - install systemd/rtl_tcp.service", "hardware")
+    args = [a.decode(errors="replace") for a in argv if a]
+    startup = int(args[args.index("-f") + 1]) if "-f" in args[:-1] else None
+    op = sdr_tuning.operating_center_frequency_hz()
+    if startup != op:
+        return _check(name, "WARNING", f"line-buffered; startup argv -f {startup} differs from the operating {op} Hz "
+                      "(acquisitions retune explicitly; fix systemd/rtl_tcp.service)", "hardware")
+    return _check(name, "PASS", f"line-buffered (stdbuf -oL); startup argv -f {startup} = operating {op} Hz "
+                  "(startup state only - every acquisition retunes explicitly)", "hardware")
+
+
 # ------------------------------------------------------------------ real preflight (read-only)
 def _check(name: str, status: str, detail: str, category: str) -> Dict[str, str]:
     return {"name": name, "status": status, "detail": detail, "category": category}
@@ -235,13 +292,8 @@ def preflight() -> Dict[str, Any]:
         checks.append(_check("system clock", "PASS" if synced else "WARNING", f"NTPSynchronized={td.get('NTPSynchronized', 'unknown')} (timezone {td.get('Timezone', '?')})", "clock"))
     except Exception as exc:  # noqa: BLE001
         checks.append(_check("system clock", "WARNING", f"timedatectl unavailable: {exc}", "clock"))
-    if mount.get("onstep_time_utc"):
-        try:
-            delta = datetime.fromisoformat(mount["onstep_time_utc"]).replace(tzinfo=timezone.utc).timestamp() - time.time()
-            checks.append(_check("OnStep TIME_UTC vs system", "WARNING" if abs(delta) > 60 else "PASS",
-                                 f"OnStep {mount['onstep_time_utc']} is {delta / 3600:+.2f} h from the system clock (system clock is the authority; not modified)", "clock"))
-        except ValueError:
-            pass
+    checks.append(onstep_clock_check())
+    checks.append(main_rtl_tcp_tuning_check())
     try:
         cfg = json.loads((ROOT / "observer_config.json").read_text())
         obs = cfg.get("observer", {})
@@ -550,9 +602,10 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             # value it loaded from calibrate_wizard_defaults(), which is this SAME observation_defaults()) -
             # this used to be the hardcoded literal 1_420_405_000.0, independent of observer_config.json; see
             # observation_defaults()'s docstring for the real incident that caused.
-            cf = _float(p, "center_frequency_hz", 1e6, 2e9, float(observation_defaults().get("center_frequency_hz", 1_420_405_000.0)))
-            sr = _float(p, "sample_rate_hz", 200_000, 4e6, 2_400_000.0)
-            gain = _float(p, "gain_db", 0, 60, 40.2)
+            op = calibrate_wizard_defaults()
+            cf = _float(p, "center_frequency_hz", 1e6, 2e9, float(op["center_frequency_hz"]))
+            sr = _float(p, "sample_rate_hz", 200_000, 4e6, float(op["sample_rate_hz"]))
+            gain = _float(p, "gain_db", 0, 60, float(op["gain_db"]))
             ct = _float(p, "clipping_threshold", 1e-6, 0.1, 1e-4)
             st = _float(p, "stability_threshold", 0.001, 1.0, 0.10)
             rt = _float(p, "rfi_threshold", 0.0, 1.0, 0.5)

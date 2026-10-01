@@ -28,6 +28,7 @@ from calibration_engine.reference_wizard import (
     bias_t_known_facts, evaluate_reference_captures,
 )
 from calibration_engine.spectral_contrast import compute_spectral_contrast, evaluate_hi_spectral_captures
+import sdr_tuning
 
 SESSION_PREFIX = "WIZARD"
 HI_KINDS = ("HI_ALTO", "HI_BAJO")
@@ -151,6 +152,11 @@ async def _do_50r_capture(session_dir: Path, state: Dict[str, Any], simulate: Op
     else:
         backend = RealCalibrationAcquisitionBackend(host="localhost", port=1234)
         await backend.connect()
+        try:
+            await backend.tune(cfg.center_frequency_hz, cfg.sample_rate_hz, cfg.gain_db)
+        except Exception:
+            await backend.close()
+            raise
     iq_arrays = []
     try:
         for i in range(cfg.n_captures):
@@ -161,23 +167,17 @@ async def _do_50r_capture(session_dir: Path, state: Dict[str, Any], simulate: Op
             if simulate:
                 await backend.capture(**kwargs, metadata={"reference_kind": "AMBIENT_50R", "simulated_scenario": simulate}, index=i)
             else:
-                # sdr_capture.py's own HDF5-attrs-writing code (_capture_network, frozen module - never
-                # modified here) defaults center_frequency_hz to a HARDCODED 1420405752 and gain to the
-                # literal string "auto" unless the metadata dict supplies the EXACT keys
-                # 'center_frequency_hz'/'gain_requested_db' (capture_metadata.update(metadata) then
-                # overrides the placeholder - the same pattern calibration_operational_realtest.py already
-                # uses, documented there). Found live: an earlier real wizard session's 50R/HI captures
-                # recorded the placeholder values because this dict was missing them.
-                await backend.capture(**kwargs, metadata={"reference_kind": "AMBIENT_50R",
-                                                           "configuration_source": "VERIFIED_BY_SERVICE_COMMAND_LINE",
-                                                           "center_frequency_hz": cfg.center_frequency_hz,
-                                                           "gain_requested_db": cfg.gain_db})
+                # The backend writes requested/applied/evidence attrs from its own tune() record.
+                await backend.capture(**kwargs, metadata={"reference_kind": "AMBIENT_50R"})
             iq, _ = read_capture_iq(str(path))
             iq_arrays.append(iq)
     finally:
         if not simulate:
             await backend.close()
-    return evaluate_reference_captures(iq_arrays, cfg.sample_rate_hz, cfg.center_frequency_hz, cfg)
+    result = evaluate_reference_captures(iq_arrays, cfg.sample_rate_hz, cfg.center_frequency_hz, cfg)
+    if not simulate:
+        result["tuning"] = backend.tuning
+    return result
 
 
 def cmd_capture_50r(args) -> int:
@@ -266,18 +266,35 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
     telescope = INDITelescopeControl("localhost", 7624, "LX200 OnStep", False)
     sdr = SDRCapture("network", "localhost", 1234, verbose=False)
     paths: List[Path] = []
+    tracking_restore = False
     try:
         if not await telescope.connect():
             raise RuntimeError("INDI connection failed")
         await sdr.connect()
-        await sdr.configure(int(center_frequency_hz), int(sample_rate_hz), gain=gain_db)
+        try:
+            tuning = await sdr_tuning.tune_explicitly(sdr, center_frequency_hz, sample_rate_hz, gain_db,
+                                                      operating=sdr_tuning.operating_config())
+        except sdr_tuning.TuningIncoherent as exc:
+            raise RuntimeError(str(exc)) from exc
+        _progress(f"SDR tuned: requested {tuning['requested']['center_frequency_hz']} Hz, "
+                  f"rtl_tcp acknowledged {tuning['applied']['center_frequency_hz']} Hz")
         start_ra, start_dec = await telescope.get_coordinates(force_refresh=True)
         _progress(f"mount before GOTO: RA {start_ra} h  Dec {start_dec} deg")
         _progress(f"GOTO target: RA {ra_hours:.5f} h  Dec {dec_deg:.4f} deg")
         if not await telescope.goto(ra_hours, dec_deg):
             raise RuntimeError(f"GOTO to RA {ra_hours:.5f} h Dec {dec_deg:.4f} deg failed (mount Alert, timeout or "
                                f"no convergence) - mount last read at RA {start_ra} h Dec {start_dec} deg; NO capture taken")
-        _progress(f"GOTO converged; settling {settle_seconds:g} s before capturing")
+        # Celestial reference: hold it with sidereal tracking during the whole hold. OnStep leaves tracking OFF
+        # after a GOTO (found 2026-10-01: the readback RA drifted at the sidereal rate during the captures).
+        tracking_before = await telescope.get_tracking_state(timeout=2.0)
+        if not await telescope.set_track_mode("sidereal") or not await telescope.wait_track_mode("sidereal", timeout=10.0):
+            raise RuntimeError("SIDEREAL track mode not confirmed by the mount - NO capture taken")
+        if tracking_before != "on":
+            tracking_restore = True
+            if not await telescope.set_tracking(True) or not await telescope.wait_tracking_state(expected_on=True, timeout=10.0):
+                raise RuntimeError("tracking ON not confirmed by the mount after GOTO - NO capture taken")
+        _progress(f"GOTO converged; sidereal tracking ON confirmed (was {tracking_before}); "
+                  f"settling {settle_seconds:g} s before capturing")
         await asyncio.sleep(settle_seconds)
         mount_ra, mount_dec = await telescope.get_coordinates(force_refresh=True)
         arrival_error_deg = (None if mount_ra is None or mount_dec is None
@@ -289,29 +306,49 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
                     else telescope._angular_distance_deg(start_ra, start_dec, mount_ra, mount_dec))
         _progress(f"mount at target after settle: RA {mount_ra} h  Dec {mount_dec} deg  error {arrival_error_deg:.4f} deg  "
                   f"slewed {slew_deg} deg; capturing")
+        hold: List[Dict[str, Any]] = []
+
+        async def _hold_sample(phase: str) -> float:
+            ra, dec = await telescope.get_coordinates(force_refresh=True)
+            state = await telescope.get_tracking_state(timeout=2.0)
+            err = None if ra is None or dec is None else telescope._angular_distance_deg(ra, dec, ra_hours, dec_deg)
+            hold.append({"phase": phase, "utc": datetime.now(timezone.utc).isoformat(), "ra_hours": ra,
+                         "dec_deg": dec, "error_deg": err, "tracking": state})
+            if err is None or err > ARRIVAL_TOLERANCE_DEG or state != "on":
+                raise RuntimeError(f"target NOT held at {phase}: error {err} deg (tolerance {ARRIVAL_TOLERANCE_DEG}), "
+                                   f"tracking {state} - captures stopped after {len(paths)} of {n_captures}")
+            return err
+
         for i in range(n_captures):
+            await _hold_sample(f"before capture {i}")
             path = cap_dir / f"capture_{i:03d}.h5"
-            # sdr_capture.py's HDF5-attrs writer (frozen, never modified here) defaults center_frequency_hz to
-            # a hardcoded 1420405752 unless the metadata dict has the EXACT key 'center_frequency_hz' (the
-            # 'gain' key here already correctly overrides the placeholder gain, by coincidence of matching the
-            # base dict's own key name - frequency needs the same exact-key treatment; see the analogous
-            # fix/comment in _do_50r_capture above).
             await sdr.capture(capture_seconds, str(path), int(sample_rate_hz),
-                              {"gain": gain_db, "center_frequency_hz": center_frequency_hz,
-                               "purpose": "calibrate_wizard_hi", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
+                              {**sdr_tuning.tuning_attrs(tuning), "gain_requested_db": gain_db,
+                               "purpose": "calibrate_wizard_hi", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg,
+                               "tracking": "sidereal_on_confirmed"})
             paths.append(path)
-        end_ra, end_dec = await telescope.get_coordinates(force_refresh=True)
+            err = await _hold_sample(f"after capture {i}")
+            _progress(f"capture {i} done; target held, error {err:.4f} deg")
+        end_ra, end_dec = hold[-1]["ra_hours"], hold[-1]["dec_deg"]
         return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg,
                "mount_ra_hours": mount_ra, "mount_dec_deg": mount_dec, "gain_db": gain_db,
                "pre_goto_ra_hours": start_ra, "pre_goto_dec_deg": start_dec, "slew_distance_deg": slew_deg,
                "arrival_error_deg": arrival_error_deg, "arrival_tolerance_deg": ARRIVAL_TOLERANCE_DEG,
                "settle_seconds": settle_seconds, "goto_busy_seconds": telescope.last_slew_busy_duration_sec,
+               "tracking": {"mode": "sidereal", "state_before_goto_hold": tracking_before,
+                            "max_hold_error_deg": max(h["error_deg"] for h in hold), "samples": hold},
                "post_capture_ra_hours": end_ra, "post_capture_dec_deg": end_dec,
                "capture_seconds": capture_seconds, "sample_rate_hz": sample_rate_hz,
                "center_frequency_hz": center_frequency_hz, "captured_utc": datetime.now(timezone.utc).isoformat(),
-               "capture_paths": [str(p) for p in paths], "simulated": False}
+               "capture_paths": [str(p) for p in paths], "simulated": False, "tuning": tuning}
     finally:
         await sdr.close()
+        if tracking_restore:     # leave tracking as it was before this hold (OFF): best effort, reported
+            try:
+                if not (await telescope.set_tracking(False) and await telescope.wait_tracking_state(expected_on=False, timeout=10.0)):
+                    _progress("WARNING: could not confirm tracking OFF after the hold")
+            except Exception as exc:  # noqa: BLE001 - never mask the original outcome
+                _progress(f"WARNING: tracking OFF after the hold failed: {type(exc).__name__}: {exc}")
         await telescope.disconnect()
 
 
@@ -529,7 +566,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--capture-seconds", type=float, default=2.0)
     s.add_argument("--stabilize-seconds", type=float, default=20.0)
     s.add_argument("--hi-settle-seconds", type=float, default=2.0)
-    s.add_argument("--center-freq", type=float, default=1_420_405_000.0)
+    s.add_argument("--center-freq", type=float, default=float(sdr_tuning.operating_center_frequency_hz()))
     s.add_argument("--sample-rate", type=float, default=2_400_000.0)
     s.add_argument("--gain", type=float, default=40.2)
     s.add_argument("--clipping-threshold", type=float, default=1.0e-4)

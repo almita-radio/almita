@@ -19,6 +19,7 @@ import threading
 
 import almita_calibrate
 from almita_web_common import JOBS, envelope, get_sdr_resource_status, list_sessions, resolve_within_root
+import sdr_tuning
 
 SESSION_ROOT = "data/calibration"
 _RUN_LAUNCH_LOCK = threading.Lock()  # serializes the brief CalibrationSession.__init__ patch below
@@ -41,7 +42,9 @@ def get_status() -> Dict[str, Any]:
     from calibration_engine.hardware_inspection import inspect_rtl_tcp_service_command_line, probe_rtl_tcp_handshake
     from calibration_engine.receiver_config import KNOWN_RECEIVERS
 
+    import sdr_tuning
     deployment = read_current_deployment_state(DEFAULT_STATE_PATH)
+    operating = sdr_tuning.operating_config()
     resource = get_sdr_resource_status()
     # This status route is polled by the page. The handshake connects to the MAIN rtl_tcp (single-client): never do that while an
     # observation/quicklook owns it - report it as not probed instead (the page shows the CONFIGURED/EXPECTED tier).
@@ -61,22 +64,25 @@ def get_status() -> Dict[str, Any]:
     if cmdline.found:
         for key in ("center_frequency_hz", "sample_rate_hz", "gain_db"):
             if key in cmdline.parsed:
-                receiver[key] = {"value": cmdline.parsed[key], "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"}
+                receiver[key] = {"value": cmdline.parsed[key], "verification": "SERVICE_STARTUP_ARGV"}
         receiver["bias_t_state"] = {"value": "ON" if cmdline.parsed.get("bias_t_enabled") else "OFF",
-                                     "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"}
+                                     "verification": "SERVICE_STARTUP_ARGV"}
     else:
         receiver["note"] = "rtl_tcp service command line not found - values below are CONFIGURED/EXPECTED only"
-        receiver["center_frequency_hz"] = {"value": 1_420_405_752.0, "verification": "CONFIGURED_EXPECTED"}
-        receiver["sample_rate_hz"] = {"value": 2_400_000.0, "verification": "CONFIGURED_EXPECTED"}
-        receiver["gain_db"] = {"value": 40.2, "verification": "CONFIGURED_EXPECTED"}
+        for key in ("center_frequency_hz", "sample_rate_hz", "gain_db"):
+            receiver[key] = {"value": operating[key], "verification": "CONFIGURED_EXPECTED"}
+    # The agreed operating configuration (single source, observer_config.json): what every acquisition tunes
+    # to explicitly. The SERVICE_STARTUP_ARGV values above are only rtl_tcp's state when it started.
+    receiver["operating"] = {**operating, "source": "observer_config.json observation_defaults"}
 
+    from hi_spectral_metric import HI_REST_HZ
     frequency_audit = None
     center = receiver.get("center_frequency_hz", {}).get("value")
     if center is not None:
-        nominal_hi_rest_hz = 1_420_405_751.77
         frequency_audit = {
-            "service_center_frequency_hz": center, "nominal_hi_rest_hz": nominal_hi_rest_hz,
-            "difference_hz": round(nominal_hi_rest_hz - center, 2),
+            "service_center_frequency_hz": center, "operating_center_frequency_hz": operating["center_frequency_hz"],
+            "service_startup_matches_operating": float(center) == float(operating["center_frequency_hz"]),
+            "nominal_hi_rest_hz": HI_REST_HZ, "difference_hz": round(HI_REST_HZ - center, 2),
             "label": "CONFIG_MISMATCH_DIFFERENCE_NOT_A_MEASURED_FREQUENCY_ERROR",
         }
 
@@ -134,7 +140,7 @@ def run_simulation(body: Dict[str, Any]) -> Dict[str, Any]:
     scenario = body.get("scenario")
     args = SimpleNamespace(
         backend="simulated", receiver=body.get("receiver", "MAIN"), session_root=SESSION_ROOT,
-        center_frequency_hz=float(body.get("center_frequency_hz", 1_420_405_752.0)),
+        center_frequency_hz=float(body.get("center_frequency_hz", sdr_tuning.operating_center_frequency_hz())),
         sample_rate_hz=float(body.get("sample_rate_hz", 2_400_000.0)), gain_db=float(body.get("gain_db", 40.2)),
         bias_t_state=body.get("bias_t_state", "ON"), n_captures=int(body.get("n_captures", 5)),
         capture_seconds=float(body.get("capture_seconds", 2.0)), scenario=scenario, json=True,

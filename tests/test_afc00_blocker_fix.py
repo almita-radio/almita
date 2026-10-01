@@ -64,7 +64,8 @@ def test_capture_defaults_are_manual_fixed_gain_and_explicit_topology(tmp_path):
     assert executor.input_topology == INPUT_TOPOLOGIES["antenna"]
     assert executor.bias_tee_enabled is True
     source = inspect.getsource(CaptureExecutor.execute_observation_plan)
-    assert "gain=self.sdr_gain_db" in source and "gain='auto'" not in source
+    # explicit tuning (sdr_tuning.tune_explicitly) with the executor's own manual gain, never 'auto'
+    assert "tune_explicitly(" in source and "self.sdr_gain_db" in source and "gain='auto'" not in source
 
 
 def test_future_hdf5_and_manifest_contract(tmp_path):

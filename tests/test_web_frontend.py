@@ -551,7 +551,7 @@ out.expired = { runDisabled: $("real-run").disabled, runTitle: $("real-run").tit
 
 CAL_ROUTES = r"""
 window.__routes["GET /api/calibrate/status"] = () => ({ body: { ok: true, blocked: false, data: { calibration_level: "OPERATIONAL_RELATIVE", calibration_workflow_active: !!window.__active,
-  resource: { status: "FREE", orchestrator_state: "PLANNED", detail: "free" }, receiver: { serial: %s, center_frequency_hz: { value: 1420405751.77, verification: "VERIFIED_BY_SERVICE_COMMAND_LINE" },
+  resource: { status: "FREE", orchestrator_state: "PLANNED", detail: "free" }, receiver: { serial: %s, center_frequency_hz: { value: 1420405751.77, verification: "SERVICE_STARTUP_ARGV" },
   sample_rate_hz: { value: 2400000, verification: "CONFIGURED_EXPECTED" }, gain_db: { value: 40.2, verification: "CONFIGURED_EXPECTED" }, bias_t_state: { value: %s, verification: null }, tuner_type: { value: "R828D", verification: "VERIFIED_BY_DEVICE_READBACK" } },
   gain_table: { candidate_table_size: 29, provenance: "p", device_reported_gain_count: null, status: "UNVERIFIED_FOR_THIS_DEVICE" }, frequency_audit: { label: "L", service_center_frequency_hz: 1420405751.77, nominal_hi_rest_hz: 1420405751.77, difference_hz: 0 },
   sessions: [{ session_id: "CAL-1", phase: "DONE" }], profiles: [] } } });
@@ -580,7 +580,7 @@ out.after = [$("btn-run-sim").disabled, $("btn-profile-build").disabled];
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
     assert "<b onclick" in out["cards"] and out["bolds"] == 0                                                                     # text, not markup
-    assert any("1420.405752 MHz" in c and "VERIFIED BY SERVICE COMMAND LINE" in c for c in out["freq"]) and any("2.40 MS/s" in c for c in out["freq"])   # MHz with units + provenance tag
+    assert any("1420.405752 MHz" in c and "SERVICE STARTUP ARGV" in c for c in out["freq"]) and any("2.40 MS/s" in c for c in out["freq"])   # MHz with units + provenance tag
     assert out["real"] == [False, "", True]                                  # REAL calibration is enabled (MAIN free in the stub): its panel runs the real command
     assert out["runPosts"] == 1 and out["runBtn"] == [True, "a calibration simulation is running"]
     assert "No captures" in out["empty"]

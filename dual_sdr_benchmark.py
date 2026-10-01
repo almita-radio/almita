@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import sdr_tuning
 
 RTL_TCP_BIN = "rtl_tcp"
 MAIN_SERVICE = "rtl_tcp.service"
@@ -800,7 +801,7 @@ def build_arg_parser():
     p.add_argument("--secondary-host", default="127.0.0.1")
     p.add_argument("--secondary-port", type=int, default=1235)
     p.add_argument("--secondary-serial", default="00000002")
-    p.add_argument("--secondary-freq", type=int, default=1_420_405_000)
+    p.add_argument("--secondary-freq", type=int, default=sdr_tuning.operating_center_frequency_hz())
     p.add_argument("--secondary-samplerate", type=int, default=2_400_000)
     p.add_argument("--secondary-gain", default="25")
     p.add_argument("--secondary-bind-timeout", type=float, default=10.0)

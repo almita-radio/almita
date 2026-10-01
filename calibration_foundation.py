@@ -99,6 +99,9 @@ def build_calibration_profile(
     bias_t_state: str = "ON", fft_size: int = 8192,
 ) -> dict[str, Any]:
     """Build and persist a gain-specific relative reference ensemble."""
+    import sdr_tuning
+    operating = sdr_tuning.operating_config()   # single source - the reference files must match it
+    op_freq, op_rate = operating["center_frequency_hz"], operating["sample_rate_hz"]
     files = [str(Path(path)) for path in reference_files]
     if len(files) < 2:
         raise ValueError("at least two independent reference captures are required")
@@ -112,7 +115,7 @@ def build_calibration_profile(
             _gain_from_attributes(attributes),
         )
         source_signatures[filename] = signature
-        if signature[:2] != (1420405752, 2400000) or signature[2] != float(gain_db):
+        if signature[:2] != (op_freq, op_rate) or signature[2] != float(gain_db):
             raise ValueError(f"incompatible reference configuration: {filename} {signature}")
         if frequency is not None and not np.array_equal(frequency, f):
             raise ValueError("reference frequency axes differ")
@@ -136,9 +139,9 @@ def build_calibration_profile(
     median_absolute_deviation = np.median(np.abs(stack - reference), axis=0)
     reference_sigma = 1.4826 * median_absolute_deviation
     dc_measurement = measure_dc_mask_half_width(
-        frequency, reference, 1420405752,
+        frequency, reference, op_freq,
     )
-    dc = make_dc_mask(frequency, 1420405752, dc_measurement["half_width_hz"])
+    dc = make_dc_mask(frequency, op_freq, dc_measurement["half_width_hz"])
     spur, spur_regions = detect_fixed_spurs(
         frequency, stack, excluded_mask=dc,
         persistence_threshold=max(0.5, 1.0 - 1.0 / len(files)),
@@ -166,9 +169,9 @@ def build_calibration_profile(
         "reference_topology": reference_topology,
         "instrument_chain": "LNA_FILTER_CABLING_TO_RTL_SDR",
         "bias_t_state": bias_t_state,
-        "center_frequency_hz": 1420405752,
+        "center_frequency_hz": op_freq,
         "frequency_hz": {"start": float(frequency[0]), "stop": float(frequency[-1]), "bin_width": bin_hz},
-        "sample_rate_hz": 2400000,
+        "sample_rate_hz": op_rate,
         "gain_db": float(gain_db),
         "fft_size": int(fft_size),
         "window": "Hann (numpy.hanning)",
@@ -177,7 +180,7 @@ def build_calibration_profile(
         "reference_count": len(files),
         "reference_files": files,
         "reference_records": records,
-        "dc_frequency_hz": 1420405752,
+        "dc_frequency_hz": op_freq,
         "dc_mask": dc_measurement,
         "dc_mask_bins": int(np.sum(dc)),
         "dc_mask_half_width_hz": dc_measurement["half_width_hz"],

@@ -96,7 +96,15 @@ def inspect_capture_metadata(capture: str | Path, fft_size: int = 8192) -> Dict[
     # 'center_frequency_hz' - some real captures from before that was fixed in calibrate_reference_wizard.py
     # carry this placeholder, not a real measurement of what rtl_tcp was actually tuned to.
     SDR_CAPTURE_PLACEHOLDER_CENTER_FREQUENCY_HZ = 1420405752
-    if attrs.get("center_frequency_hz") == SDR_CAPTURE_PLACEHOLDER_CENTER_FREQUENCY_HZ:
+    # Captures since 2026-10-02 carry explicit-tuning evidence (sdr_tuning.tuning_attrs): an rtl_tcp-acknowledged
+    # applied frequency equal to center_frequency_hz corroborates it; only captures WITHOUT that stay suspect.
+    tuning_corroborated = (attrs.get("tuning_evidence") == "RTL_TCP_SERVER_ACK"
+                           and attrs.get("applied_center_frequency_hz") is not None
+                           and attrs.get("applied_center_frequency_hz") == attrs.get("center_frequency_hz"))
+    if attrs.get("tuning_evidence") is not None and not tuning_corroborated:
+        contradictions.append(f"tuning evidence {attrs.get('tuning_evidence')!r} does not corroborate center_frequency_hz="
+                              f"{attrs.get('center_frequency_hz')} (applied {attrs.get('applied_center_frequency_hz')})")
+    if attrs.get("center_frequency_hz") == SDR_CAPTURE_PLACEHOLDER_CENTER_FREQUENCY_HZ and not tuning_corroborated:
         contradictions.append(f"center_frequency_hz is exactly {SDR_CAPTURE_PLACEHOLDER_CENTER_FREQUENCY_HZ} Hz - "
                               "sdr_capture.py's own hardcoded metadata-writer fallback, not necessarily what "
                               "rtl_tcp was actually configured to; treat this capture's frequency as suspect unless "

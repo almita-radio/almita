@@ -16,16 +16,14 @@ by-reading-the-code problems with trusting that for a wizard session's real capt
      can silently be that PLACEHOLDER, not a real measurement - trusting them (or a hardcoded expectation of
      them) would be exactly the "no uses los valores fijos del constructor antiguo" this module exists to
      avoid.
-  2. A wizard session's REAL configured frequency need not even be 1420405752 Hz - the wizard's own recorded
-     WizardConfig and its receiver_snapshot (a real, live rtl_tcp service argv read via `ps`,
-     VERIFIED_BY_SERVICE_COMMAND_LINE - the same fact-finding calibration_operational_realtest.py's own
-     "REAL CALIBRATION" uses) are the actual, independently verified ground truth for what this session's
-     captures were really taken at - never assumed equal to some other session's literal.
+  2. The rtl_tcp service argv is NOT the frequency the captures were taken at: rtl_tcp keeps whatever the
+     previous client tuned. Ground truth is the explicit tuning record written when the 50 ohm captures were
+     taken (sdr_tuning.tune_explicitly: requested + rtl_tcp acknowledgement), per session and per file.
 
 This module therefore: (a) requires the wizard's own real, complete, LNA_INPUT-connected 50 ohm captures
-(never SKIPPED, never simulated, never partial); (b) cross-checks the wizard's DECLARED config against its
-real, service-argv-VERIFIED receiver_snapshot for frequency/sample-rate/gain COHERENCE, refusing on any
-disagreement rather than picking one source silently; (c) builds the reference ensemble using the SAME real
+(never SKIPPED, never simulated, never partial); (b) cross-checks the wizard's DECLARED config against the
+explicit tuning record (requested + rtl_tcp-acknowledged) for frequency/sample-rate/gain COHERENCE, refusing
+on any disagreement rather than picking one source silently; (c) builds the reference ensemble using the SAME real
 DSP primitives calibration_foundation.build_calibration_profile() itself uses
 (hi_spectral_metric.robust_psd_from_iq / measure_dc_mask_half_width / dc_mask / detect_fixed_spurs - reused,
 not reimplemented) but parametrized on the session's own VERIFIED values, never a hardcoded literal; (d)
@@ -83,40 +81,48 @@ def _read_wizard_state(session_dir: Path) -> Dict[str, Any]:
 
 
 def resolve_verified_config(state: Dict[str, Any]) -> VerifiedCaptureConfig:
-    """The session's real, cross-checked frequency/rate/gain - NEVER read from the per-capture HDF5 attrs
-    (see module docstring for why those can be a sdr_capture.py placeholder), always from the wizard's own
-    DECLARED config cross-checked against its real, ps-based receiver_snapshot. Raises on any disagreement -
-    never averages or silently prefers one source."""
+    """The frequency/rate/gain the 50 ohm captures were really taken at, from the explicit tuning record the
+    capture step wrote (sdr_tuning.tune_explicitly: requested values + rtl_tcp's own acknowledgement on that
+    connection). The wizard's declared config, the requested values and the acknowledged values must all
+    agree; anything else raises. The rtl_tcp service argv is NOT evidence of the tuning (rtl_tcp keeps what
+    the previous client set - the 2026-10-01 incident); it is only read for the Bias-T startup flag, which
+    no client changes."""
+    import sdr_tuning
     cfg = state.get("config") or {}
-    snap = ((state.get("receiver_snapshot") or {}).get("service_command_line") or {})
-    if not snap.get("found"):
-        raise WizardProfileError("wizard_state.json has no verified receiver_snapshot.service_command_line "
-                                 "(rtl_tcp service argv was not found at session start) - cannot establish a "
-                                 "real, verified frequency/rate/gain for this session")
-    parsed = snap.get("parsed") or {}
+    tuning = (state.get("fifty_ohm_result") or {}).get("tuning")
+    if not tuning:
+        raise WizardProfileError("the 50 ohm captures have no explicit tuning record - they were taken without "
+                                 "tuning the receiver (captures before 2026-10-02 relied on whatever rtl_tcp was "
+                                 "left at), so their real frequency cannot be established")
+    if tuning.get("evidence") != sdr_tuning.EVIDENCE_SERVER_ACK:
+        raise WizardProfileError(f"50 ohm tuning evidence is {tuning.get('evidence')!r}, not "
+                                 f"{sdr_tuning.EVIDENCE_SERVER_ACK}")
+    req, app = tuning.get("requested") or {}, tuning.get("applied") or {}
     caveats: List[str] = []
 
-    def _coherent(label: str, declared: Optional[float], verified: Optional[float], tol: float) -> float:
-        if declared is None or verified is None:
-            raise WizardProfileError(f"{label}: missing (declared={declared}, verified={verified})")
-        if abs(float(declared) - float(verified)) > tol:
-            raise WizardProfileError(f"{label} INCOHERENT: wizard config declared {declared}, but the real "
-                                     f"rtl_tcp service (VERIFIED_BY_SERVICE_COMMAND_LINE at session start) was "
-                                     f"actually running {verified} - refusing to guess which is real")
-        return float(verified)
+    def _coherent(label: str, tol: float) -> float:
+        declared, requested, applied = cfg.get(label), req.get(label), app.get(label)
+        if None in (declared, requested, applied):
+            raise WizardProfileError(f"{label}: missing (declared={declared}, requested={requested}, applied={applied})")
+        if abs(float(declared) - float(requested)) > tol or abs(float(requested) - float(applied)) > tol:
+            raise WizardProfileError(f"{label} INCOHERENT: wizard declared {declared}, tuning requested {requested}, "
+                                     f"rtl_tcp acknowledged {applied} - refusing to guess which is real")
+        return float(applied)
 
-    center_frequency_hz = _coherent("center_frequency_hz", cfg.get("center_frequency_hz"), parsed.get("center_frequency_hz"), FREQ_COHERENCE_TOLERANCE_HZ)
-    sample_rate_hz = _coherent("sample_rate_hz", cfg.get("sample_rate_hz"), parsed.get("sample_rate_hz"), RATE_COHERENCE_TOLERANCE_HZ)
-    gain_db = _coherent("gain_db", cfg.get("gain_db"), parsed.get("gain_db"), GAIN_COHERENCE_TOLERANCE_DB)
-    bias_t_on = bool(parsed.get("bias_t_enabled"))
+    center_frequency_hz = _coherent("center_frequency_hz", FREQ_COHERENCE_TOLERANCE_HZ)
+    sample_rate_hz = _coherent("sample_rate_hz", RATE_COHERENCE_TOLERANCE_HZ)
+    gain_db = _coherent("gain_db", GAIN_COHERENCE_TOLERANCE_DB)
+    if tuning.get("pll_not_locked_count"):
+        caveats.append(f"librtlsdr reported 'PLL not locked' {tuning['pll_not_locked_count']} time(s) while tuning")
+    snap = ((state.get("receiver_snapshot") or {}).get("service_command_line") or {})
+    bias_t_on = bool(snap.get("found") and (snap.get("parsed") or {}).get("bias_t_enabled"))
     if not bias_t_on:
-        caveats.append("Bias-T was NOT verified ON in the real service command line at session start")
+        caveats.append("Bias-T was NOT shown ON by the rtl_tcp service startup argv at session start")
     return VerifiedCaptureConfig(
         center_frequency_hz=center_frequency_hz, sample_rate_hz=sample_rate_hz, gain_db=gain_db,
         bias_t_verified_on=bias_t_on, caveats=caveats,
-        source="wizard_state.json config cross-checked against receiver_snapshot.service_command_line "
-              "(VERIFIED_BY_SERVICE_COMMAND_LINE, a real ps-based read of the live rtl_tcp process argv at "
-              "session start) - agreement within tolerance required, never assumed",
+        source=(f"explicit tuning before the 50 ohm captures: requested == declared == rtl_tcp acknowledged "
+                f"({sdr_tuning.EVIDENCE_SERVER_ACK}, {tuning.get('tuned_utc')}); rtl_tcp has no frequency readback"),
     )
 
 
@@ -184,18 +190,17 @@ def build_profile_from_wizard(session_dir: str | Path, output_stem: str | Path, 
         if file_sample_rate is None or abs(float(file_sample_rate) - verified.sample_rate_hz) > RATE_COHERENCE_TOLERANCE_HZ:
             raise WizardProfileError(f"{path}: recorded sample_rate_hz={file_sample_rate} does not match the "
                                      f"session's verified {verified.sample_rate_hz} - refusing")
-        # The per-file center_frequency_hz/gain attrs are NOT trusted for the profile itself (see module
-        # docstring - they can be sdr_capture.py's own placeholder); disclosed here, never silently dropped.
-        file_freq, file_gain = attrs.get("center_frequency_hz"), attrs.get("gain_requested_db", attrs.get("gain"))
-        if file_freq is None or abs(float(file_freq) - verified.center_frequency_hz) > FREQ_COHERENCE_TOLERANCE_HZ:
-            per_file_placeholder_notes.append(f"{path.name}: recorded center_frequency_hz={file_freq!r} differs "
-                                              f"from the session-verified {verified.center_frequency_hz} - "
-                                              "profile built using the verified value, not this file attribute "
-                                              "(a known sdr_capture.py placeholder-default gap; see module docstring)")
-        if file_gain in (None, "auto"):
-            per_file_placeholder_notes.append(f"{path.name}: recorded gain={file_gain!r} (no real per-capture "
-                                              f"gain readback) - profile built using the session-verified "
-                                              f"{verified.gain_db} dB")
+        # Every file carries its own requested/applied tuning (sdr_tuning.tuning_attrs); it must match the session's.
+        if attrs.get("tuning_evidence") != "RTL_TCP_SERVER_ACK" or attrs.get("applied_center_frequency_hz") is None:
+            raise WizardProfileError(f"{path}: no per-capture tuning evidence (tuning_evidence="
+                                     f"{attrs.get('tuning_evidence')!r}) - refusing")
+        file_freq, file_gain = attrs.get("applied_center_frequency_hz"), attrs.get("applied_gain_db")
+        if abs(float(file_freq) - verified.center_frequency_hz) > FREQ_COHERENCE_TOLERANCE_HZ:
+            raise WizardProfileError(f"{path}: applied_center_frequency_hz={file_freq} differs from the session's "
+                                     f"tuned {verified.center_frequency_hz} - refusing")
+        if file_gain is None or abs(float(file_gain) - verified.gain_db) > GAIN_COHERENCE_TOLERANCE_DB:
+            raise WizardProfileError(f"{path}: applied_gain_db={file_gain} differs from the session's tuned "
+                                     f"{verified.gain_db} dB - refusing")
         f, psd = robust_psd_from_iq(iq, verified.sample_rate_hz, verified.center_frequency_hz, fft_size=fft_size, combine="median")
         if frequency is not None and not np.array_equal(frequency, f):
             raise WizardProfileError(f"{path}: FFT frequency axis differs from the other captures")

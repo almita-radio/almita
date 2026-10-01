@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""First real operational-calibration capture - MAIN receiver, current
-config, no changes. Explicitly, narrowly authorized: 5 x 2s captures,
-sample statistics, clipping/headroom, relative bandpass, cross-capture
-repeatability. NO gain/PPM/Bias-T/frequency/sample-rate change, NO mount
-movement, NO GOTO, NO tracking change, NO SYNC.
+"""Real operational-calibration capture - MAIN receiver at the agreed operating
+configuration. 5 x 2s captures, sample statistics, clipping/headroom, relative
+bandpass, cross-capture repeatability. NO PPM/Bias-T change, NO mount movement,
+NO GOTO, NO tracking change, NO SYNC.
 
-Never calls SDRCapture.configure() (see calibration_engine/acquisition.py's
-RealCalibrationAcquisitionBackend docstring for why that is the actual
-mechanism that makes this genuinely read-only at the rtl_tcp protocol
-level) - center_frequency/sample_rate/gain/Bias-T are read from the LIVE
-rtl_tcp process's own command line (read-only `ps` inspection) and
-recorded as VERIFIED_BY_SERVICE_COMMAND_LINE, never transmitted.
+Tunes MAIN explicitly before capturing (sdr_tuning.tune_explicitly via
+RealCalibrationAcquisitionBackend.tune): frequency/sample rate/gain come from
+the single source (observer_config.json, sdr_tuning.operating_config()) and are
+recorded as requested + rtl_tcp-acknowledged (RTL_TCP_SERVER_ACK). The rtl_tcp
+service argv is recorded only as the service's startup state: it is not
+evidence of the current tuning, because rtl_tcp keeps what the previous client
+set (the 2026-10-01 incident). Bias-T is the one value still taken from the
+argv, since no client changes it.
 """
 from __future__ import annotations
 
@@ -105,13 +106,14 @@ async def main(args) -> int:
         print(f"\nBLOCKED: {reason}")
         return 2
 
-    # Everything below this line is genuinely known-good to proceed:
-    # rtl_tcp is reachable, the running service is confirmed (via its own
-    # argv, read-only) to be MAIN, and no conflicting capture is active.
-    verified_center_frequency_hz = cmdline.parsed["center_frequency_hz"]
-    verified_sample_rate_hz = cmdline.parsed["sample_rate_hz"]
-    verified_gain_db = cmdline.parsed["gain_db"]
-    verified_bias_t = cmdline.parsed["bias_t_enabled"]
+    # rtl_tcp is reachable, the running service is MAIN (serial from its argv) and no conflicting capture is
+    # active. The tuning itself comes from the single source and is applied explicitly below.
+    import sdr_tuning
+    operating = sdr_tuning.operating_config()
+    requested_center_frequency_hz = operating["center_frequency_hz"]
+    requested_sample_rate_hz = operating["sample_rate_hz"]
+    requested_gain_db = operating["gain_db"]
+    startup_bias_t = cmdline.parsed["bias_t_enabled"]
 
     session = CalibrationSession(args.session_root, new_session_id())
     print(f"Session: {session.dir}")
@@ -132,23 +134,23 @@ async def main(args) -> int:
 
     receiver_payload = {
         "receiver_id": "MAIN",
-        "serial": {"value": found_serial, "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"},
+        "serial": {"value": found_serial, "verification": "SERVICE_STARTUP_ARGV"},
         "tuner_type": {"value": handshake.tuner_type, "verification": "VERIFIED_BY_DEVICE_READBACK"},
         "gain_count_reported_by_device": {"value": handshake.gain_count, "verification": "VERIFIED_BY_DEVICE_READBACK"},
-        "center_frequency_hz": {"value": verified_center_frequency_hz, "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"},
-        "sample_rate_hz": {"value": verified_sample_rate_hz, "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"},
-        "gain_requested_db": {"value": verified_gain_db, "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"},
+        "tuning": None,   # filled after tune(): requested / applied (rtl_tcp acknowledgement) / evidence
         "gain_effective_db": {"value": None, "verification": "NOT_READABLE_BY_RTL_TCP_PROTOCOL"},
-        "bias_t_state": {"value": "ON" if verified_bias_t else "OFF", "verification": "VERIFIED_BY_SERVICE_COMMAND_LINE"},
+        "bias_t_state": {"value": "ON" if startup_bias_t else "OFF", "verification": "SERVICE_STARTUP_ARGV"},
+        "service_startup_argv": {"center_frequency_hz": cmdline.parsed.get("center_frequency_hz"),
+                                 "sample_rate_hz": cmdline.parsed.get("sample_rate_hz"),
+                                 "gain_db": cmdline.parsed.get("gain_db"),
+                                 "meaning": "rtl_tcp's state when the service started - NOT the current tuning"},
         "rtl_tcp_endpoint": f"{args.host}:{args.port}",
         "deployment_state": deployment.state.value if deployment else "UNKNOWN",
         "code_commit": _current_commit_hash(), "working_tree_dirty": _working_tree_dirty(),
-        "note": "center_frequency/sample_rate/gain/Bias-T are read from the live rtl_tcp process's own "
-                "argv (ps, read-only) - this codebase never sent them and rtl_tcp has no protocol "
-                "readback for them. Only tuner_type/gain_count come from the connection handshake, a "
-                "genuine device-side confirmation.",
+        "note": "frequency/sample rate/gain are tuned explicitly on this connection and recorded as requested "
+                "+ rtl_tcp acknowledgement (RTL_TCP_SERVER_ACK); rtl_tcp has no readback for them. Only "
+                "tuner_type/gain_count come from the connection handshake, a genuine device-side confirmation.",
     }
-    session.write_receiver_config(receiver_payload)
     session.write_config(vars(args))
 
     per_capture = []
@@ -157,6 +159,25 @@ async def main(args) -> int:
     await backend.connect()
     try:
         try:
+            tuning = await backend.tune(requested_center_frequency_hz, requested_sample_rate_hz, requested_gain_db)
+        except sdr_tuning.TuningIncoherent as exc:
+            session.write_receiver_config(receiver_payload)
+            session.log_event("TUNING_INCOHERENT", detail=str(exc))
+            session.write_result({"calibration_level": CURRENT_LEVEL.value,
+                                  "absolute_calibration": ABSOLUTE_CALIBRATION_AVAILABLE,
+                                  "receiver": receiver_payload, "per_capture": [], "captures_completed": 0,
+                                  "captures_requested": args.n_captures, "error": f"TuningIncoherent: {exc}"})
+            session.write_state({"phase": "BLOCKED_TUNING", "error": str(exc)})
+            print(f"\nBLOCKED: {exc}")
+            return 2
+        receiver_payload["tuning"] = tuning
+        session.write_receiver_config(receiver_payload)
+        print(f"[TUNING] requested {tuning['requested']} - rtl_tcp acknowledged {tuning['applied']} "
+              f"({tuning['evidence']}, PLL-not-locked x{tuning['pll_not_locked_count']})")
+        verified_center_frequency_hz = tuning["applied"]["center_frequency_hz"]
+        verified_sample_rate_hz = tuning["applied"]["sample_rate_hz"]
+        verified_gain_db = tuning["requested"]["gain_db"]
+        try:
             for i in range(args.n_captures):
                 session.log_event("CAPTURE_BEGIN", index=i)
                 path = session.capture_path(f"capture_{i:03d}")
@@ -164,20 +185,8 @@ async def main(args) -> int:
                     duration_seconds=args.capture_seconds, output_path=str(path),
                     center_frequency_hz=verified_center_frequency_hz, sample_rate_hz=verified_sample_rate_hz,
                     gain_db=verified_gain_db,
-                    # sdr_capture.py's own attrs-writing logic (_capture_network)
-                    # defaults center_frequency_hz to a HARDCODED 1420405752 unless
-                    # metadata['center_frequency_hz'] is supplied directly (it reads
-                    # metadata.get('center_freq', ...) for its OWN internal default,
-                    # but capture_metadata.update(metadata) afterward lets an exact
-                    # key match override that) - found by reading the source before
-                    # ever running this against real hardware; without this key the
-                    # HDF5 attrs would silently record the WRONG (stale, 752 Hz off)
-                    # frequency instead of the one actually verified from the live
-                    # rtl_tcp process's own command line.
                     metadata={"index": i, "receiver_id": "MAIN", "serial": found_serial,
-                              "configuration_source": "VERIFIED_BY_SERVICE_COMMAND_LINE",
-                              "center_frequency_hz": verified_center_frequency_hz,
-                              "gain_requested_db": verified_gain_db, "rf_input": "ANTENNA_CURRENT_OPERATIONAL"})
+                              "rf_input": "ANTENNA_CURRENT_OPERATIONAL"})
                 iq, attributes = read_capture_iq(str(path))
                 unsigned_uint8 = iq.dtype == np.uint8
                 nominal_midpoint_check = abs(float(np.mean(iq)) - 127.5) < 20.0

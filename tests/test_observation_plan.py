@@ -31,7 +31,7 @@ def _valid_spec(**overrides):
             "min_altitude_deg": 10, "traversal": "SERPENTINE",
         },
         "capture": {"seconds": 1, "settle_seconds": 0.5},
-        "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+        "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
         "rfi_ref": {"enabled": False, "serial": "00000002", "gain_db": 25.0},
         "quicklook": {"enabled": False, "native_grid": True, "interpolated_preview": False,
                       "calibration_profile_path": None},

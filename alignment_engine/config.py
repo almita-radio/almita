@@ -14,6 +14,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, fields
+
+
+def _operating(key: str) -> float:
+    import sdr_tuning
+    return float(sdr_tuning.operating_config()[key])
 from pathlib import Path
 from typing import Optional
 
@@ -68,9 +73,10 @@ class HIScanConfig:
     raster_spacing_deg: float = 3.0
     integration_seconds: float = 20.0
     settle_seconds: float = 2.0
-    gain_db: float = 40.2
-    center_frequency_hz: float = 1_420_405_752.0
-    sample_rate_hz: float = 2_400_000.0
+    # single source: observer_config.json via sdr_tuning.operating_config() - never a literal here
+    gain_db: float = field(default_factory=lambda: _operating("gain_db"))
+    center_frequency_hz: float = field(default_factory=lambda: _operating("center_frequency_hz"))
+    sample_rate_hz: float = field(default_factory=lambda: _operating("sample_rate_hz"))
     velocity_window_km_s: float = 200.0
     reference_catalog_path: str = "data/hi_sky_catalog_2000pts.csv"
     expected_fwhm_deg: Optional[float] = None

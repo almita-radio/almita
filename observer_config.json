@@ -22,6 +22,7 @@
     "capture_duration_s": 10.0,
     "sample_rate_hz": 2400000,
     "center_frequency_hz": 1420405752,
+    "gain_db": 40.2,
     "beam_fwhm_deg": 20.0,
     "beam_sampling_fraction": 0.3333333333
   },

@@ -18,6 +18,7 @@ from astropy.time import Time
 from indi_telescope_control import INDITelescopeControl
 from sdr_capture import SDRCapture, read_hdf5_iq_components
 from temperature_sensors import DS18B20Reader
+import sdr_tuning
 from hi_spectral_metric import (
     HI_REST_HZ as METRIC_HI_REST_HZ,
     compute_hi_metric_v2,
@@ -396,7 +397,7 @@ class AlignmentRunner:
         self.catalog_coords, self.catalog_values = load_hi_catalog(args.catalog)
         sensor_config = config.get("temperature_sensors", {})
         self.temperature_reader = DS18B20Reader(sensor_config) if sensor_config else None
-        self.telescope = self.sdr = None
+        self.telescope = self.sdr = None; self.tuning = None
 
     def resolve_reference(self):
         now = Time.now(); sun = sun_eod(now)
@@ -453,7 +454,8 @@ class AlignmentRunner:
         if not await self.telescope.connect(): raise RuntimeError("INDI connection failed")
         await self.sdr.connect()
         gain = self.args.sun_gain if reference == "sun" else self.args.gain
-        await self.sdr.configure(int(self.args.center_freq), self.args.sample_rate, gain=gain)
+        self.tuning = await sdr_tuning.tune_explicitly(self.sdr, self.args.center_freq, self.args.sample_rate, gain,
+                                                       operating=sdr_tuning.operating_config())
         return gain
 
     async def acquire(self, reference, positions, gain):
@@ -479,7 +481,8 @@ class AlignmentRunner:
                 record["temperatures_pre"] = self.temperature_reader.read_all() if self.temperature_reader else {}
                 record["capture_started_utc"] = datetime.now(timezone.utc).isoformat()
                 await self.sdr.capture(duration, str(path), self.args.sample_rate,
-                                       {"gain": gain, "alignment_reference": reference,
+                                       {**sdr_tuning.tuning_attrs(self.tuning), "gain_requested_db": gain,
+                                        "alignment_reference": reference,
                                         "target_ra_hours": position.ra.hour,
                                         "target_dec_deg": position.dec.deg})
                 record["capture_completed_utc"] = datetime.now(timezone.utc).isoformat()
@@ -1084,7 +1087,7 @@ def parse_args(argv=None):
     p.add_argument("--capture-time", type=float); p.add_argument("--integration-seconds", type=float)
     p.add_argument("--settle", type=float, default=2)
     p.add_argument("--min-elevation", type=float, default=20); p.add_argument("--max-clipping", type=float, default=.01)
-    p.add_argument("--center-freq", type=int, default=round(HI_REST_HZ)); p.add_argument("--sample-rate", type=int, default=2_400_000)
+    p.add_argument("--center-freq", type=int, default=sdr_tuning.operating_center_frequency_hz()); p.add_argument("--sample-rate", type=int, default=2_400_000)
     p.add_argument("--host", default="localhost"); p.add_argument("--port", type=int, default=7624)
     p.add_argument("--device", default="LX200 OnStep"); p.add_argument("--sdr-host", default="localhost")
     p.add_argument("--sdr-port", type=int, default=1234); p.add_argument("--observer-config", default="observer_config.json")

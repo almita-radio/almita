@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from temperature_sensors import is_plausible_temperature_c
+import sdr_tuning
 
 SDR_SENSOR="28-082471f4e41b";LNA_SENSOR="28-2c5acd1e64ff"
 
@@ -108,14 +109,15 @@ def collect(workspace=Path("/home/stellarmate/almita"),proc=Path("/proc"),w1=Pat
     if lna_temp["status"]!="OK":warnings.append(f"LNA temperature {lna_temp['status']}")
     if not processes:warnings.append("rtl_tcp process not detected")
     if listening is False:warnings.append("rtl_tcp port 127.0.0.1:1234 not listening")
+    _op=sdr_tuning.operating_config()  # expected values: the single source, observer_config.json
     value={"schema_version":"1.0","status":"DEGRADED" if warnings else "OK","created_utc":utcnow(),
       "hostname":socket.gethostname(),"uptime_seconds":uptime,
       "system":{"cpu_percent":cpu,"load_1m":load[0],"load_5m":load[1],"load_15m":load[2],**memory},
       "storage":{"filesystem":str(workspace),"total_bytes":disk.total,"used_bytes":disk.used,"available_bytes":disk.free,"percent":disk.used/disk.total*100},
       "network":network,
       "sdr":{"rtl_tcp_process_detected":bool(processes),"rtl_tcp_processes":processes,"rtl_tcp_port":1234,
-        "rtl_tcp_port_listening":listening,"expected_frequency_hz":1420405752,"expected_sample_rate_hz":2400000,
-        "expected_gain_db":40.2,"bias_tee_expected":True,"observed_frequency_hz":None,"observed_sample_rate_hz":None,
+        "rtl_tcp_port_listening":listening,"expected_frequency_hz":_op["center_frequency_hz"],"expected_sample_rate_hz":_op["sample_rate_hz"],
+        "expected_gain_db":_op["gain_db"],"bias_tee_expected":True,"observed_frequency_hz":None,"observed_sample_rate_hz":None,
         "observed_gain_db":None,"observed_bias_tee":None},
       "temperatures":{"sdr_c":sdr_temp["value_c"],"sdr_status":sdr_temp["status"],"lna_c":lna_temp["value_c"],"lna_status":lna_temp["status"]},
       "mount":{"status":"NOT_EXPOSED","tracking":None,"ra":None,"dec":None},

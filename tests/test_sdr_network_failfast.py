@@ -28,6 +28,7 @@ class FakeNetworkSocket:
 async def test_network_capture_completes_by_exact_sample_count(tmp_path):
     output = tmp_path / "normal.h5"
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.socket = FakeNetworkSocket(lambda size: bytes([128]) * size)
 
     metrics = await capture.capture(0.02, str(output), sample_rate=100)
@@ -75,3 +76,13 @@ async def test_network_stall_timeout_fails_without_hdf5_or_part(tmp_path):
     assert network_socket.timeouts == [pytest.approx(0.25, abs=0.1)]
     assert not output.exists()
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_untuned_capture_never_records_a_placeholder_frequency():
+    """sdr_capture used to write a fixed 1420405752 into center_frequency_hz when the caller gave none - the
+    root of captures declaring a frequency they were not taken at. Untuned connection -> no frequency."""
+    capture = SDRCapture(mode="network")
+    assert capture.current_frequency is None
+    import inspect
+    source = inspect.getsource(SDRCapture)
+    assert "metadata.get('center_freq', 1420405752)" not in source

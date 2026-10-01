@@ -85,6 +85,15 @@ def _compute_spectrum_from_iq_file(h5_path: str, fft_size: int = 8192):
     return frequency_hz, psd
 
 
+
+def sdr_tuning_attrs(tuning):
+    """HDF5 attrs (requested / applied / evidence) of the explicit tuning done in prepare()."""
+    if tuning is None:
+        raise RuntimeError("capture before prepare() tuned the receiver - NO capture taken")
+    import sdr_tuning
+    return sdr_tuning.tuning_attrs(tuning)
+
+
 class RealHIAcquisitionBackend:
     """Wraps sdr_capture.SDRCapture (network/rtl_tcp mode) - the SAME class
     capture.py itself uses - never a second, duplicated rtl_tcp client.
@@ -103,6 +112,7 @@ class RealHIAcquisitionBackend:
         self._sdr = None
         self._configured_params = None
         self._point_index = 0
+        self.tuning = None
 
     async def prepare(self, *, center_frequency_hz: float, sample_rate_hz: float, gain_db) -> dict:
         """Connect and configure once, ahead of the raster, so per-point
@@ -114,7 +124,9 @@ class RealHIAcquisitionBackend:
         from sdr_capture import SDRCapture
         self._sdr = SDRCapture("network", self.host, self.port, verbose=self.verbose)
         await self._sdr.connect()
-        await self._sdr.configure(center_freq=int(center_frequency_hz), sample_rate=int(sample_rate_hz), gain=gain_db)
+        import sdr_tuning
+        self.tuning = await sdr_tuning.tune_explicitly(self._sdr, center_frequency_hz, sample_rate_hz, gain_db,
+                                                       operating=sdr_tuning.operating_config())
         self._configured_params = {"center_frequency_hz": center_frequency_hz,
                                     "sample_rate_hz": sample_rate_hz, "gain_db": gain_db}
         return dict(self._configured_params)
@@ -142,7 +154,8 @@ class RealHIAcquisitionBackend:
         raw_path = str(self.session.point_path(index, suffix="h5"))
         timestamp_utc = datetime.now(timezone.utc).isoformat()
         await self._sdr.capture(integration_seconds, raw_path, sample_rate=int(sample_rate_hz),
-                                 metadata={"point_index": index, "ra_deg": float(point_coordinate.icrs.ra.deg),
+                                 metadata={**sdr_tuning_attrs(self.tuning),
+                                           "point_index": index, "ra_deg": float(point_coordinate.icrs.ra.deg),
                                            "dec_deg": float(point_coordinate.icrs.dec.deg),
                                            "timestamp_utc": timestamp_utc})
         frequency_hz, power = _compute_spectrum_from_iq_file(raw_path)

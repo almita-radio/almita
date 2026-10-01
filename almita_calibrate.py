@@ -21,6 +21,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Optional
+import sdr_tuning
 
 
 def _print(payload: dict, as_json: bool, human_lines) -> None:
@@ -329,7 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--backend", choices=["simulated", "real"], default="simulated")
     run_p.add_argument("--receiver", default="MAIN")
     run_p.add_argument("--session-root", default="data/calibration")
-    run_p.add_argument("--center-frequency-hz", type=float, default=1_420_405_752.0)
+    run_p.add_argument("--center-frequency-hz", type=float, default=float(sdr_tuning.operating_center_frequency_hz()))
     run_p.add_argument("--sample-rate-hz", type=float, default=2_400_000.0)
     run_p.add_argument("--gain-db", type=float, default=40.2)
     run_p.add_argument("--bias-t-state", default="ON")

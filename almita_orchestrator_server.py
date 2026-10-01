@@ -174,11 +174,12 @@ def _observe_defaults() -> Dict[str, Any]:
     # single source of truth for the operating frequency/rate: almita_web_ops.observation_defaults() (also used
     # by the CALIBRATE wizard's own defaults and its backend fallback) - not a second independent read here.
     defaults = almita_web_ops.observation_defaults()
+    operating = almita_web_ops.calibrate_wizard_defaults()   # sdr_tuning.operating_config(): no literal fallback
     return {
         "main": {
-            "center_frequency_hz": defaults.get("center_frequency_hz", 1420405000),
-            "sample_rate": defaults.get("sample_rate_hz", 2400000),
-            "gain_db": 40.2,
+            "center_frequency_hz": operating["center_frequency_hz"],
+            "sample_rate": operating["sample_rate_hz"],
+            "gain_db": operating["gain_db"],
             "bias_tee": True,
         },
         "grid": {

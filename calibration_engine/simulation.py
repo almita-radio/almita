@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import numpy as np
+import sdr_tuning
 
 
 @dataclass
@@ -20,7 +21,7 @@ class InstrumentSimulationConfig:
     n_blocks: int = 64                     # >= 4*fft_size samples needed by robust_psd_from_iq (4 segments min)
     fft_size: int = 8192
     sample_rate_hz: float = 2_400_000.0
-    center_frequency_hz: float = 1_420_405_752.0
+    center_frequency_hz: float = field(default_factory=lambda: float(sdr_tuning.operating_center_frequency_hz()))
     seed: int = 0
     gain_linear: float = 20.0              # amplitude scale before quantization - the simulation's own "gain knob"
     dc_offset_i: float = 0.0

@@ -67,12 +67,38 @@ def test_real_dead_pids_are_not_active():
 
 # ------------------------------------------------------------------ _capture_n_at
 class _FakeTelescope:
-    def __init__(self, positions, goto_ok=True):
+    def __init__(self, positions, goto_ok=True, tracking_confirms=True, tracking_drops_after=None):
         self.positions = list(positions)   # successive get_coordinates() answers
         self.goto_ok = goto_ok
         self.gotos = []
         self.last_slew_busy_duration_sec = 12.5
         self._angular_distance_deg = _real_distance
+        self.tracking = "off"
+        self.tracking_confirms = tracking_confirms
+        self.tracking_drops_after = tracking_drops_after   # number of get_tracking_state() calls while ON
+        self.tracking_reads_on = 0
+        self.track_mode = None
+        self.tracking_writes = []
+
+    async def get_tracking_state(self, timeout=1.0):
+        if self.tracking == "on":
+            self.tracking_reads_on += 1
+            if self.tracking_drops_after is not None and self.tracking_reads_on > self.tracking_drops_after:
+                return "off"
+        return self.tracking
+    async def set_track_mode(self, mode):
+        self.track_mode = mode
+        return True
+    async def wait_track_mode(self, expected, timeout=5.0):
+        return self.track_mode == expected
+    async def set_tracking(self, enable):
+        self.tracking_writes.append(enable)
+        if enable and not self.tracking_confirms:
+            return True
+        self.tracking = "on" if enable else "off"
+        return True
+    async def wait_tracking_state(self, expected_on, timeout=5.0):
+        return (self.tracking == "on") == expected_on
 
     async def connect(self): return True
     async def disconnect(self): return None
@@ -135,3 +161,32 @@ def test_arrival_recorded_and_captures_taken_only_at_target(fake_hw, tmp_path):
     assert out["arrival_error_deg"] < wiz.ARRIVAL_TOLERANCE_DEG
     assert out["slew_distance_deg"] > 50
     assert out["post_capture_ra_hours"] == 16.1302
+
+
+def test_tracking_not_confirmed_takes_no_capture(fake_hw, tmp_path):
+    fake_hw(_FakeTelescope([(21.54, -20.43), (16.1301, -51.551)], tracking_confirms=False))
+    with pytest.raises(RuntimeError, match="tracking ON not confirmed"):
+        _run(tmp_path)
+    assert _FakeSDR.captures == []
+
+
+def test_target_lost_mid_hold_stops_the_captures(fake_hw, tmp_path):
+    # tracking reads "on" for the first 2 samples, then the mount reports it off
+    t = _FakeTelescope([(21.54, -20.43), (16.1301, -51.551)], tracking_drops_after=2)
+    fake_hw(t)
+    with pytest.raises(RuntimeError, match="target NOT held"):
+        _run(tmp_path)
+    assert len(_FakeSDR.captures) == 1
+    assert t.tracking_writes[-1] is False          # tracking restored OFF even on failure
+
+
+def test_hold_samples_recorded_and_tracking_restored(fake_hw, tmp_path):
+    t = _FakeTelescope([(21.54, -20.43), (16.1301, -51.551)])
+    fake_hw(t)
+    out = _run(tmp_path)
+    assert t.track_mode == "sidereal"
+    assert t.tracking_writes == [True, False]
+    tr = out["tracking"]
+    assert tr["mode"] == "sidereal" and tr["state_before_goto_hold"] == "off"
+    assert len(tr["samples"]) == 4 and all(x["tracking"] == "on" for x in tr["samples"])
+    assert tr["max_hold_error_deg"] < wiz.ARRIVAL_TOLERANCE_DEG

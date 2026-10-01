@@ -184,9 +184,21 @@ def _validate_main(raw: dict) -> dict:
     _require(bias_tee is True,
               f"{where}.bias_tee: false is not supported — capture.py has no CLI flag to disable "
               "bias-tee (it is always enabled in production); omit this field or set it to true")
+    center = int(_num(raw, "center_frequency_hz", where, min_value=1, kind=int))
+    rate = int(_num(raw, "sample_rate", where, min_value=1, kind=int))
+    # Single source of truth (sdr_tuning.operating_config(), observer_config.json): a spec cannot quietly run
+    # at another frequency/rate - that is how calibration profiles and observations drifted apart before.
+    import sdr_tuning
+    op = sdr_tuning.operating_config()
+    _require(center == op["center_frequency_hz"],
+             f"{where}.center_frequency_hz: {center} Hz is not the agreed operating frequency "
+             f"{op['center_frequency_hz']} Hz (observer_config.json observation_defaults) - fix the spec")
+    _require(rate == op["sample_rate_hz"],
+             f"{where}.sample_rate: {rate} is not the operating sample rate {op['sample_rate_hz']} "
+             "(observer_config.json observation_defaults) - fix the spec")
     return {
-        "center_frequency_hz": int(_num(raw, "center_frequency_hz", where, min_value=1, kind=int)),
-        "sample_rate": int(_num(raw, "sample_rate", where, min_value=1, kind=int)),
+        "center_frequency_hz": center,
+        "sample_rate": rate,
         "gain_db": _num(raw, "gain_db", where),
         "bias_tee": bias_tee,
     }

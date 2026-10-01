@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import rfi_monitor
+import sdr_tuning
 from runtime_state import read_json_safe
 
 
@@ -208,7 +209,9 @@ async def test_successful_start_reaches_running_with_correct_config_and_session_
 
         assert m.status == "RUNNING"
         cmd = launch_cmds[0]
-        assert cmd[:3] == ["rtl_tcp", "-d", "00000002"]
+        rtl = cmd[cmd.index("rtl_tcp"):]
+        assert rtl[:3] == ["rtl_tcp", "-d", "00000002"]
+        assert cmd[:2] == ["stdbuf", "-oL"] or cmd[0].endswith("stdbuf") or cmd[0] == "rtl_tcp"
         assert "1420405000" in cmd
         assert "2400000" in cmd
         assert "25.0" in cmd
@@ -1197,3 +1200,68 @@ async def test_history_bounded_and_session_tagged_no_full_iq(tmp_path, monkeypat
         await m.stop()
         server.close()
         await server.wait_closed()
+
+
+# ------------------------------------------------------------------ explicit tuning (real _tune_explicitly)
+class _Writer:
+    def __init__(self, log_path, ack=True, ack_freq=None):
+        self.sent, self.log_path, self.ack, self.ack_freq = b"", log_path, ack, ack_freq
+
+    def write(self, data):
+        self.sent += data
+
+    async def drain(self):
+        import struct
+        if not self.ack:
+            return
+        lines = []
+        for i in range(0, len(self.sent), 5):
+            cmd, val = struct.unpack(">BI", self.sent[i:i + 5])
+            if cmd == 0x01:
+                lines.append(f"set freq {self.ack_freq if self.ack_freq is not None else val}")
+            elif cmd == 0x02:
+                lines.append(f"set sample rate {val}")
+            elif cmd == 0x03:
+                lines.append(f"set gain mode {val}")
+            elif cmd == 0x04:
+                lines.append(f"set gain {val}")
+        with open(self.log_path, "a") as handle:
+            handle.write("\n".join(lines) + "\n")
+
+
+def _monitor(tmp_path, **kw):
+    log = tmp_path / "rfi_ref" / "rtl_tcp.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("=== launch ===\nset freq 1420405000\n")   # stale startup-era line must not count
+    return rfi_monitor.RFIReferenceMonitor(enabled=True, runtime_dir=tmp_path, center_frequency_hz=1420405752,
+                                           sample_rate=2_400_000, gain_db=25.0, log_path=log, **kw), log
+
+
+@pytest.mark.real_tuning
+@pytest.mark.asyncio
+async def test_rfi_ref_sends_all_four_commands_and_records_acknowledged_tuning(tmp_path):
+    import struct
+    m, log = _monitor(tmp_path)
+    w = _Writer(log)
+    rec = await m._tune_explicitly(w)
+    sent = [struct.unpack(">BI", w.sent[i:i + 5]) for i in range(0, len(w.sent), 5)]
+    assert sent == [(0x01, 1420405752), (0x02, 2_400_000), (0x03, 1), (0x04, 250)]
+    assert rec["applied"] == {"center_frequency_hz": 1420405752, "sample_rate_hz": 2_400_000, "gain_db": 25.0}
+    assert rec["evidence"] == sdr_tuning.EVIDENCE_SERVER_ACK
+
+
+@pytest.mark.real_tuning
+@pytest.mark.asyncio
+async def test_rfi_ref_wrong_or_missing_acknowledgement_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(sdr_tuning, "ACK_TIMEOUT_SECONDS", 0.3)
+    m, log = _monitor(tmp_path)
+    with pytest.raises(sdr_tuning.TuningIncoherent):
+        await m._tune_explicitly(_Writer(log, ack=False))
+    m, log = _monitor(tmp_path)
+    with pytest.raises(sdr_tuning.TuningIncoherent):
+        await m._tune_explicitly(_Writer(log, ack_freq=1420405000))
+
+
+def test_rfi_ref_default_frequency_is_the_operating_one(tmp_path):
+    m = rfi_monitor.RFIReferenceMonitor(enabled=False, runtime_dir=tmp_path)
+    assert m.center_frequency_hz == sdr_tuning.operating_center_frequency_hz()

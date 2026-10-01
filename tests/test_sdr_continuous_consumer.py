@@ -54,6 +54,7 @@ class StreamingSocket:
 @pytest.mark.asyncio
 async def test_discard_drains_and_single_thread_owns_stream_recv():
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     sock = StreamingSocket(delay=0.001)
     capture.socket = sock
     capture._ensure_consumer_started()
@@ -68,6 +69,7 @@ async def test_discard_drains_and_single_thread_owns_stream_recv():
 @pytest.mark.asyncio
 async def test_capture_boundary_exact_size_and_immediate_discard(tmp_path):
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.socket = StreamingSocket(delay=0.001)
     capture._ensure_consumer_started()
     await asyncio.sleep(0.02)
@@ -86,6 +88,7 @@ async def test_capture_boundary_exact_size_and_immediate_discard(tmp_path):
 @pytest.mark.asyncio
 async def test_disconnect_is_typed_and_bounded(tmp_path):
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.socket = StreamingSocket(chunks=[b""])
     with pytest.raises(SDRDisconnected) as raised:
         await capture.capture(1, str(tmp_path / "x.h5"), sample_rate=10)
@@ -95,6 +98,7 @@ async def test_disconnect_is_typed_and_bounded(tmp_path):
 @pytest.mark.asyncio
 async def test_stall_is_typed(tmp_path):
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.stall_timeout = 0.05
     capture.socket = StreamingSocket(repeat=None)
     with pytest.raises(SDRStallNoBytes):
@@ -104,6 +108,7 @@ async def test_stall_is_typed(tmp_path):
 @pytest.mark.asyncio
 async def test_low_throughput_is_typed(tmp_path):
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.stall_timeout = 1
     capture.throughput_grace = 0.05
     capture.throughput_ratio = 0.8
@@ -115,6 +120,7 @@ async def test_low_throughput_is_typed(tmp_path):
 @pytest.mark.asyncio
 async def test_wall_timeout_is_typed(tmp_path):
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.stall_timeout = 1
     capture.throughput_grace = 10
     capture.max_capture_wall_override = 0.08
@@ -126,6 +132,7 @@ async def test_wall_timeout_is_typed(tmp_path):
 @pytest.mark.asyncio
 async def test_cancellation_returns_consumer_to_discard(tmp_path):
     capture = SDRCapture(mode="network")
+    capture.current_frequency = 1420405752   # as after a real configure(): HDF5 must record a known frequency
     capture.socket = StreamingSocket(delay=0.02, repeat=b"\x80", max_chunk=10)
     task = asyncio.create_task(capture.capture(10, str(tmp_path / "x.h5"), sample_rate=1000))
     await asyncio.sleep(0.04)

@@ -37,9 +37,10 @@ def test_calibrate_wizard_defaults_reflects_a_changed_observer_config(tmp_path, 
     """Not just coincidentally equal today: changing observer_config.json changes BOTH the wizard's and
     OBSERVE's suggested frequency identically, proving they share one real source, not two literals that
     happen to agree right now."""
-    cfg = {"observation_defaults": {"center_frequency_hz": 1420999999, "sample_rate_hz": 2400000}}
+    cfg = {"observation_defaults": {"center_frequency_hz": 1420999999, "sample_rate_hz": 2400000, "gain_db": 40.2}}
     (tmp_path / "observer_config.json").write_text(json.dumps(cfg))
-    monkeypatch.setattr(ops, "ROOT", tmp_path)
+    import sdr_tuning
+    monkeypatch.setattr(sdr_tuning, "CONFIG_PATH", tmp_path / "observer_config.json")
     assert ops.observation_defaults()["center_frequency_hz"] == 1420999999
     assert ops.calibrate_wizard_defaults()["center_frequency_hz"] == 1420999999
 
@@ -49,9 +50,10 @@ def test_calibrate_wizard_start_fallback_no_longer_a_bare_literal(monkeypatch, t
     from observation_defaults() too - this used to be the literal 1_420_405_000.0, independent of
     observer_config.json (the actual root cause of the real incident: the wizard form's own default disagreed
     with observer_config.json's real 1420405752 Hz)."""
-    cfg = {"observation_defaults": {"center_frequency_hz": 1420111111, "sample_rate_hz": 2400000}}
+    cfg = {"observation_defaults": {"center_frequency_hz": 1420111111, "sample_rate_hz": 2400000, "gain_db": 40.2}}
     (tmp_path / "observer_config.json").write_text(json.dumps(cfg))
-    monkeypatch.setattr(ops, "ROOT", tmp_path)
+    import sdr_tuning
+    monkeypatch.setattr(sdr_tuning, "CONFIG_PATH", tmp_path / "observer_config.json")
     argv, meta = ops.build_command("calibrate_wizard", {"action": "start"}, "job-1")
     assert "--center-freq" in argv
     assert argv[argv.index("--center-freq") + 1] == "1420111111.0"

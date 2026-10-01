@@ -27,7 +27,7 @@
   function verifyTag(v) {
     if (!v) return null;
     const cls = v === "VERIFIED_BY_DEVICE_READBACK" ? "verify-device"
-              : v === "VERIFIED_BY_SERVICE_COMMAND_LINE" ? "verify-service" : "verify-expected";
+              : v === "SERVICE_STARTUP_ARGV" ? "verify-service" : "verify-expected";
     const span = document.createElement("span");
     span.className = "verify-tag " + cls;
     span.textContent = String(v).replace(/_/g, " ");
