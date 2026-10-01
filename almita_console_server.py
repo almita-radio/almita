@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Resident read-only HTTP server for the ALMITA field console.
+"""Field console (MONITOR) web layer: handler + public-root preparation.
+
+No longer a server of its own: almita_orchestrator_server.py inherits ConsoleHandler and serves the console,
+the API and the streams on ONE port behind one authentication gate. main() below only refuses and points
+there, so an unauthenticated second port cannot come back by accident.
 
 Serves the static console/ frontend plus a symlinked view of the canonical
 runtime status directory (data/runtime/). Reuses serve_dashboard's read-only
@@ -12,21 +16,17 @@ startup is purely informational (read from local interface configuration).
 """
 from __future__ import annotations
 
-import argparse
-import errno
-import functools
 import hashlib
 import json
 import select
 import shutil
-import signal
 import socket
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from serve_dashboard import ReadOnlyHandler, ReadOnlyServer
+from serve_dashboard import ReadOnlyHandler
 
 import mount_camera
 
@@ -132,12 +132,6 @@ class ConsoleHandler(ReadOnlyHandler):
             relay.unsubscribe(sub)
 
 
-def make_console_server(root: Path, bind: str = "0.0.0.0", port: int = 8088) -> ReadOnlyServer:
-    root = Path(root).resolve()
-    handler = functools.partial(ConsoleHandler, directory=str(root))
-    return ReadOnlyServer((bind, port), handler)
-
-
 def _asset_version(path: Path) -> str:
     """Short content hash used to cache-bust a static asset's URL. Changes
     only when the file's own bytes change, so a browser that already cached
@@ -201,66 +195,16 @@ def write_version_json(public_root: Path) -> Path:
         sha = "unknown"
     info = {"project": "ALMITA", "author": "Felipe Fridman", "project_url": "https://github.com/almita-radio/almita", "component": "field_console",
             "git_short_sha": sha, "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "hostname": socket.gethostname(),
-            "transport": "HTTP (LAN, no TLS, no authentication)"}
+            "transport": "HTTP (LAN, no TLS), single-user Basic authentication"}
     path = Path(public_root) / "version.json"
     path.write_text(json.dumps(info, indent=2))
     return path
 
 
-def list_local_ipv4() -> list[str]:
-    """Best-effort, read-only listing of local IPv4 addresses. Informational
-    only - never used to open ports, forward traffic, or reach the Internet.
-    """
-    addresses: list[str] = []
-    try:
-        output = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2)
-        if output.returncode == 0:
-            addresses = [token for token in output.stdout.split() if "." in token]
-    except (OSError, subprocess.SubprocessError):
-        pass
-    if not addresses:
-        try:
-            addresses = [ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if ip != "127.0.0.1"]
-        except OSError:
-            addresses = []
-    return addresses
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--console-source", default=str(CONSOLE_SOURCE))
-    parser.add_argument("--runtime-dir", default=str(ROOT / "data" / "runtime"))
-    parser.add_argument("--public-root", default=str(ROOT / "data" / "console_web"))
-    parser.add_argument("--bind", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8088)
-    args = parser.parse_args()
-
-    public_root = prepare_console_web(Path(args.console_source), Path(args.runtime_dir), Path(args.public_root))
-    write_version_json(public_root)
-    try:
-        server = make_console_server(public_root, bind=args.bind, port=args.port)
-    except OSError as exc:
-        reason = "port already in use (another instance or service holds it; nothing was killed)" if exc.errno == errno.EADDRINUSE else str(exc)
-        print(f"ALMITA CONSOLE ERROR cannot bind {args.bind}:{args.port}: {reason}", flush=True)
-        return 2
-
-    def stop(*_):
-        raise KeyboardInterrupt
-    signal.signal(signal.SIGINT, stop)
-    signal.signal(signal.SIGTERM, stop)
-
-    print(f"ALMITA CONSOLE START bind={args.bind} port={server.server_port} root={public_root}", flush=True)
-    for ip in list_local_ipv4():
-        print(f"  http://{ip}:{server.server_port}/", flush=True)
-    print(f"  http://127.0.0.1:{server.server_port}/", flush=True)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-        print("ALMITA CONSOLE STOP", flush=True)
-    return 0
+    print("almita_console_server.py no longer serves a port of its own: the field console is served by "
+          "almita_orchestrator_server.py (single authenticated port, default 8088).", flush=True)
+    return 2
 
 
 if __name__ == "__main__":

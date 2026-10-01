@@ -22,7 +22,7 @@ import almita_orchestrator_server as server_mod
 
 @contextlib.contextmanager
 def running_server():
-    httpd = server_mod.make_server("127.0.0.1", 0)
+    httpd = server_mod.make_server("127.0.0.1", 0, authenticator=None)  # auth exercised in test_web_auth.py
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:

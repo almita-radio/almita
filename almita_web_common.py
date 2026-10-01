@@ -1,4 +1,4 @@
-"""Shared plumbing for the :8090 web app's ALIGN/CALIBRATE routes
+"""Shared plumbing for the single-port web app's ALIGN/CALIBRATE routes
 (almita_orchestrator_server.py). No scientific logic lives here - only
 response shaping, resource-ownership detection, session listing, and a
 minimal background-job runner. Every real computation still goes through

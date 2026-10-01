@@ -1,4 +1,4 @@
-// ALMITA SCIENCE — calls the :8090 ops API only. All map/quality/coverage numbers come from
+// ALMITA SCIENCE — calls the same-origin ops API only. All map/quality/coverage numbers come from
 // science_engine (frozen) via science_web_bridge.py and the read-only /api/ops/science/* endpoints -
 // this file only discovers REDUCE sessions, shows coverage/PLAN/RUN as real jobs, and renders the three
 // real heatmaps (as the same PNGs a download would give) plus a point picker fed by the same per-point

@@ -46,7 +46,7 @@ VALID_SPEC = {
 
 @contextlib.contextmanager
 def running_server():
-    httpd = server_mod.make_server("127.0.0.1", 0)
+    httpd = server_mod.make_server("127.0.0.1", 0, authenticator=None)  # auth exercised in test_web_auth.py
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -155,8 +155,8 @@ def test_watcher_and_console_down_only_degrade():
     assert stale["services"]["console_watcher"]["state"] == "STALE" and stale["operational"]["level"] == "DEGRADED" and stale["operational"]["degraded_by"]
     missing = Fake(status={}).health()
     assert missing["services"]["console_watcher"]["state"] == "DOWN"
-    no_console = Fake(ports=(1234, 7624, 8090)).health()
-    assert no_console["services"]["field_console"]["state"] == "DOWN" and no_console["operational"]["level"] == "DEGRADED" and no_console["operational"]["ready"] is False
+    single_port = Fake(ports=(1234, 7624)).health()                                # the console is this same process now, not a 2nd port
+    assert single_port["services"]["field_console"]["state"] == "UP" and "same process" in single_port["services"]["field_console"]["detail"]
 
 
 def test_rfi_sdr_is_optional_and_never_blocks_readiness():
@@ -406,7 +406,7 @@ def _console_public(tmp_path):
 
 @contextlib.contextmanager
 def running_console(public):
-    server = serve_dashboard.make_server(public, port=0)
+    server = server_mod.make_server("127.0.0.1", 0, authenticator=None, public_root=public)  # console = same single server
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -431,7 +431,7 @@ def test_every_local_reference_of_every_8090_page_resolves():
             assert http_call(base, "GET", asset)[0] == 200
 
 
-def test_console_8088_serves_all_assets_and_version(tmp_path):
+def test_single_port_serves_console_assets_and_version(tmp_path):
     public = _console_public(tmp_path)
     with running_console(public) as base:
         status, _, html = http_call(base, "GET", "/")
@@ -447,7 +447,7 @@ def test_console_8088_serves_all_assets_and_version(tmp_path):
         info = json.loads(body)
         assert status == 200 and info["component"] == "field_console" and "@" not in body.decode()
         assert headers["X-Frame-Options"] == "SAMEORIGIN" and headers["Referrer-Policy"] == "same-origin"
-        assert http_call(base, "POST", "/", body={})[0] == 405                          # read-only server
+        assert http_call(base, "POST", "/", body={})[0] in (404, 405)                   # console paths stay read-only
         assert http_call(base, "GET", "/nope.html")[0] == 404
         assert http_call(base, "GET", "/runtime/../../etc/passwd")[0] in (400, 403, 404)
 
@@ -522,12 +522,11 @@ def test_port_conflict_gives_a_clear_error_and_kills_nothing(monkeypatch, capsys
     port = holder.getsockname()[1]
     tmp_public, tmp_rt = ROOT / "data" / "console_web_test_tmp", ROOT / "data" / "console_web_test_tmp_rt"
     try:
-        monkeypatch.setattr(sys, "argv", ["almita_orchestrator_server.py", "--host", "127.0.0.1", "--port", str(port)])
+        monkeypatch.setattr(sys, "argv", ["almita_orchestrator_server.py", "--host", "127.0.0.1", "--port", str(port), "--public-root", str(tmp_public), "--runtime-dir", str(tmp_rt)])
         assert server_mod.main() == 2
         assert "port already in use" in capsys.readouterr().out
-        monkeypatch.setattr(sys, "argv", ["almita_console_server.py", "--bind", "127.0.0.1", "--port", str(port), "--public-root", str(tmp_public), "--runtime-dir", str(tmp_rt)])
-        assert console_server.main() == 2
-        assert "port already in use" in capsys.readouterr().out
+        assert console_server.main() == 2                                              # retired standalone server: binds nothing
+        assert "almita_orchestrator_server.py" in capsys.readouterr().out
     finally:
         holder.close()
         shutil.rmtree(tmp_public, ignore_errors=True)
@@ -535,9 +534,10 @@ def test_port_conflict_gives_a_clear_error_and_kills_nothing(monkeypatch, capsys
 
 
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
-def test_orchestrator_server_shuts_down_cleanly_on_signal(sig):
+def test_orchestrator_server_shuts_down_cleanly_on_signal(sig, tmp_path):
     port = _free_port()
-    proc = subprocess.Popen([sys.executable, str(ROOT / "almita_orchestrator_server.py"), "--host", "127.0.0.1", "--port", str(port)],
+    proc = subprocess.Popen([sys.executable, str(ROOT / "almita_orchestrator_server.py"), "--host", "127.0.0.1", "--port", str(port),
+                             "--public-root", str(tmp_path / "public"), "--runtime-dir", str(tmp_path / "rt")],
                             cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         deadline = time.time() + 60
@@ -546,6 +546,9 @@ def test_orchestrator_server_shuts_down_cleanly_on_signal(sig):
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1) as r:
                     assert r.status == 200
                     break
+            except urllib.error.HTTPError as exc:                                      # 401/503: up, behind the auth gate
+                assert exc.code in (401, 503)
+                break
             except OSError:
                 time.sleep(0.3)
         else:
@@ -569,7 +572,8 @@ def test_server_starts_without_any_hardware_and_reports_dependencies_down():
 
 def test_systemd_units_are_consistent_with_the_documented_ports_and_paths():
     units = {u.name: u.read_text() for u in (ROOT / "systemd").glob("almita-*.service")}
-    web = {"almita-console-web.service": ("almita_console_server.py", "8088"), "almita-observe-api.service": ("almita_orchestrator_server.py", "8090")}
+    assert "almita-console-web.service" not in units                                # retired: one web server, one port
+    web = {"almita-observe-api.service": ("almita_orchestrator_server.py", "--port 8088")}
     for name, (script, port) in web.items():
         text = units[name]
         assert "WorkingDirectory=/home/stellarmate/almita" in text and f"/home/stellarmate/almita/{script}" in text and port in text

@@ -6,13 +6,13 @@
   <header class="topbar">
     <div><h1>ALMITA FIELD CONSOLE</h1><span id="ops-chip" class="readonly">OPERATIONAL STATE …</span></div>
     <nav class="obs-nav">
-      <a class="obs-nav-link" id="nav-pipeline" href="#">PIPELINE</a>
-      <a class="obs-nav-link" id="nav-observe" href="#">OBSERVE</a>
-      <a class="obs-nav-link" id="nav-align" href="#">ALIGN</a>
-      <a class="obs-nav-link" id="nav-calibrate" href="#">CALIBRATE</a>
-      <a class="obs-nav-link" id="nav-reduce" href="#">REDUCE</a>
-      <a class="obs-nav-link" id="nav-science" href="#">SCIENCE</a>
-      <a class="obs-nav-link" id="nav-status" href="#">STATUS</a>
+      <a class="obs-nav-link" id="nav-pipeline" href="/pipeline.html">PIPELINE</a>
+      <a class="obs-nav-link" id="nav-observe" href="/observe.html">OBSERVE</a>
+      <a class="obs-nav-link" id="nav-align" href="/align.html">ALIGN</a>
+      <a class="obs-nav-link" id="nav-calibrate" href="/calibrate.html">CALIBRATE</a>
+      <a class="obs-nav-link" id="nav-reduce" href="/reduce.html">REDUCE</a>
+      <a class="obs-nav-link" id="nav-science" href="/science.html">SCIENCE</a>
+      <a class="obs-nav-link" id="nav-status" href="/status.html">STATUS</a>
       <a class="obs-nav-link active" href="#">MONITOR</a>
       <a class="obs-nav-link" href="#last-session">LAST SESSION</a>
     </nav>
@@ -97,18 +97,4 @@
   <script src="spectral_stack_3d.js"></script>
   <script src="common.js"></script>
   <script src="app.js"></script>
-  <script>
-    // The operating pages (PIPELINE, OBSERVE, ALIGN, CALIBRATE: real RW, with typed confirmations) live on the orchestrator's own server
-    // (:8090). This :8088 page stays the always-on monitor (it serves GET/HEAD only) and shows the live operational state in its header.
-    const base = location.protocol + "//" + location.hostname + ":8090";
-    document.getElementById("nav-pipeline").href = base + "/pipeline.html";
-    document.getElementById("nav-align").href = base + "/align.html";
-    document.getElementById("nav-calibrate").href = base + "/calibrate.html";
-    document.getElementById("nav-reduce").href = base + "/reduce.html";
-    document.getElementById("nav-science").href = base + "/science.html";
-    document.getElementById("nav-observe").href =
-      location.protocol + "//" + location.hostname + ":8090/observe.html";
-    document.getElementById("nav-status").href =
-      location.protocol + "//" + location.hostname + ":8090/status.html";
-  </script>
 </body></html>

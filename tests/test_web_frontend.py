@@ -836,7 +836,7 @@ def test_console_link_state_is_live_stale_or_disconnected(tmp_path):
 def test_console_dt_labels_timestamps_as_utc_and_has_footer_and_status_link(tmp_path):
     with console_running(tmp_path, _status(updated_utc="2026-09-02T19:05:12.654321+00:00")) as base:
         html = dom_of(base + "/")
-    assert "<dt>UPDATED (UTC)</dt>" in html and '<dd id="updated">19:05:12</dd>' in html and 'id="nav-status"' in html and ":8090/status.html" in html
+    assert "<dt>UPDATED (UTC)</dt>" in html and '<dd id="updated">19:05:12</dd>' in html and 'id="nav-status" href="/status.html"' in html and ":8090" not in html
     assert "Felipe Fridman" in html and "GitHub project" in html and "build" in html
 
 

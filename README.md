@@ -48,7 +48,7 @@ Supporting systems: **ALIGN** (conservative pointing alignment), **CALIBRATE** (
 | `almita_align.py` / `almita_calibrate.py` | alignment and calibration workflows |
 | `almita_reduce.py` | RAW -> reduced spectra |
 | `almita_science.py` | reduced spectra -> science products (`inspect`, `plan`, `run`, `replay`, `compare`, `validate`) |
-| `almita_console_server.py`, `almita_orchestrator_server.py` | local web console (:8088) and observe API (:8090) |
+| `almita_console_server.py`, `almita_orchestrator_server.py` | single authenticated web server :8088 (console + API + streams; `almita_web_auth.py` sets the user) |
 
 Every command has `--help`. The long-running services are described under `systemd/`.
 

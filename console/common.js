@@ -187,7 +187,7 @@
     { key: "PIPELINE", href: "/pipeline.html" }, { key: "OBSERVE", href: "/observe.html" }, { key: "ALIGN", href: "/align.html" }, { key: "CALIBRATE", href: "/calibrate.html" },
     { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" }, { key: "STATUS", href: "/status.html" },
   ];
-  function consoleBase() { return `${location.protocol}//${location.hostname}:8088`; }
+  function consoleBase() { return ""; }  // MONITOR is served by this same origin (single web port)
   U.consoleBase = consoleBase;
 
   U.mountHeader = function (section, subtitle) {
@@ -237,7 +237,7 @@
 
   U.chip = chip;
 
-  // Compact instrument health in every 8090 page header: OBSERVATION / MAIN SDR / INDI + LIVE|STALE|DISCONNECTED of this very link.
+  // Compact instrument health in every operating page header: OBSERVATION / MAIN SDR / INDI + LIVE|STALE|DISCONNECTED of this very link.
   U.mountHealthStrip = function (strip, opts) {
     if (!strip) return null;
     const o = Object.assign({ intervalMs: 5000 }, opts || {});

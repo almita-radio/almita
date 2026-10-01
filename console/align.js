@@ -1,4 +1,4 @@
-// ALMITA ALIGN — calls the :8090 ALIGN API only. All fit/offset/quality/sync-eligibility numbers come from the backend
+// ALMITA ALIGN — calls the same-origin ALIGN API only. All fit/offset/quality/sync-eligibility numbers come from the backend
 // (alignment_engine) - this file only presents, orchestrates, and polls. No science here. The REAL ALIGNMENT panel runs alignment.py on the real mount + MAIN (typed MOVE); the sections below are the simulation.
 (function () {
   "use strict";

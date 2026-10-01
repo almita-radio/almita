@@ -11,14 +11,20 @@ observation schema before it ever reaches the core — no shell execution,
 no raw command strings from request data, no eval. Static asset serving
 is read-only and path-sanitized (no directory listing, no traversal).
 
-Offline/local instrument UI: no external CDN, no cloud dependency, no
-authentication infrastructure (matching almita_console_server.py's own
-established no-auth-but-local-LAN model).
+Offline/local instrument UI: no external CDN, no cloud dependency.
+
+Single web server/port (default 8088): this process also serves the field
+console (MONITOR index, runtime/ status files, mount-camera MJPEG relay) by
+inheriting almita_console_server.ConsoleHandler, so every page, API, result
+file and stream shares one origin and one authentication gate
+(almita_web_auth: single-user HTTP Basic, fail closed). Captures, quicklook,
+REDUCE/SCIENCE jobs keep running as separate detached processes.
 """
 from __future__ import annotations
 
 import argparse
 import errno
+import functools
 import json
 import math
 import re
@@ -37,7 +43,9 @@ import observation_orchestrator
 import observation_plan
 import observation_spec
 
+import almita_console_server
 import almita_web_align
+import almita_web_auth
 import almita_web_calibrate
 import almita_web_ops
 import almita_web_system
@@ -63,8 +71,9 @@ CALIBRATE_SESSION_ROOT = Path("data/calibration").resolve()
 # almita_console_server.py's read-only, no-POST contract). OBSERVE's own
 # three entries are unchanged (Fase 50) - ALIGN/CALIBRATE are additive.
 CONSOLE_SOURCE = Path(__file__).resolve().parent / "console"
+DEFAULT_PUBLIC_ROOT = Path(__file__).resolve().parent / "data" / "console_web"   # prepared at startup by almita_console_server.prepare_console_web
+DEFAULT_RUNTIME_DIR = Path(__file__).resolve().parent / "data" / "runtime"
 STATIC_FILES = {
-    "/": "index_redirect",
     "/observe.html": "observe.html",
     "/observe.js": "observe.js",
     "/styles.css": "styles.css",
@@ -196,25 +205,67 @@ def _validated_resolved_plan_path(raw: Any) -> str:
     return raw
 
 
-class ObserveHandler(BaseHTTPRequestHandler):
+class ObserveHandler(almita_console_server.ConsoleHandler):
+    """Orchestrator API + operating pages; anything else that is not /api/ falls through to the inherited field-console
+    handler (static MONITOR files from the prepared public root, runtime/, /mount_camera/*)."""
     server_version = "AlmitaOrchestratorAPI/1"
     timeout = CLIENT_SOCKET_TIMEOUT_SECONDS
 
     # ---- logging: UTC timestamp, level, component, request id; never bodies
-    _QUIET_POLL_PATHS = ("/healthz", "/api/system/health", "/api/system/version", "/api/observe/status", "/api/align/status", "/api/calibrate/status")
+    _QUIET_POLL_PATHS = ("/healthz", "/api/system/health", "/api/system/version", "/api/observe/status", "/api/align/status", "/api/calibrate/status", "/mount_camera/status")
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
         # Successful polls (every open page asks every few seconds) would fill the journal: log them only when they fail.
         code = str(args[1]) if len(args) > 1 else ""
         path = urlsplit(getattr(self, "path", "") or "").path
-        if getattr(self, "command", "") in ("GET", "HEAD") and code[:1] in ("2", "3") and (path in self._QUIET_POLL_PATHS or path.startswith("/api/align/session/") or path.startswith("/api/calibrate/session/")):
+        if getattr(self, "command", "") in ("GET", "HEAD") and code[:1] in ("2", "3") and (path in self._QUIET_POLL_PATHS or path.startswith("/api/align/session/") or path.startswith("/api/calibrate/session/") or path.startswith("/runtime/")):
             return
         _log("INFO", f"req={getattr(self, '_request_id', '-')} {self.address_string()} {format % args}")
 
     def _begin(self) -> str:
         self._request_id = uuid.uuid4().hex[:8]
         self._head_only = False
+        self._console_route = False
         return urlsplit(self.path).path            # routing ignores the query string (?v=..., bookmarks)
+
+    def _gate(self, write: bool = False) -> bool:
+        """Authentication for every method and path (pages, API, result files, streams), plus a same-origin check for
+        state-changing requests (CSRF: a browser attaches cached Basic credentials to cross-site requests too).
+        False = already answered. server.authenticator None = open, which only tests ask for explicitly."""
+        auth = getattr(self.server, "authenticator", None)
+        if auth is not None:
+            if not auth.configured():
+                _log("WARN", f"req={self._request_id} {self.address_string()} refused: web authentication not configured (access closed)")
+                _error_response(self, 503, "web authentication not configured on the server: access closed")
+                return False
+            if not auth.check(self.headers.get("Authorization")):
+                body = json.dumps({"ok": False, "status": "ERROR", "error": "authentication required", "http_status": 401,
+                                   "request_id": self._request_id}).encode()
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", f'Basic realm="{almita_web_auth.REALM}", charset="UTF-8"')
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                _common_headers(self)
+                self.end_headers()
+                _write_body(self, body)
+                return False
+        if write and not self._same_origin():
+            _log("WARN", f"req={self._request_id} {self.address_string()} refused cross-origin {self.command} {urlsplit(self.path).path}")
+            _error_response(self, 403, "cross-origin request refused")
+            return False
+        return True
+
+    def _same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin:
+            return origin != "null" and urlsplit(origin).netloc.lower() == (self.headers.get("Host") or "").lower()
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")  # no Origin: non-browser client (curl)
+
+    def end_headers(self) -> None:
+        if getattr(self, "_console_route", False):  # inherited console routes keep the old :8088 cache/security headers
+            return super().end_headers()
+        BaseHTTPRequestHandler.end_headers(self)
 
     def _fail(self, exc: BaseException, status: int, public: str) -> None:
         """Traceback -> backend log only (with the request id); the browser gets a short message + the id."""
@@ -229,6 +280,8 @@ class ObserveHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib method name
         path = self._begin()
         self._head_only = self.command == "HEAD"
+        if not self._gate():
+            return
         try:
             if path == "/healthz":
                 return _json_response(self, 200, almita_web_system.liveness())
@@ -297,7 +350,11 @@ class ObserveHandler(BaseHTTPRequestHandler):
             asset_match = _ASSET_PATH_RE.match(path)
             if asset_match:
                 return self._serve_asset(asset_match.group("rel"))
-            return self._not_found()
+            if path.startswith("/api/"):
+                return self._not_found()
+            self._console_route = True  # MONITOR page, runtime/, vendor/, version.json, /mount_camera/* (read-only)
+            console = almita_console_server.ConsoleHandler
+            return console.do_HEAD(self) if self._head_only else console.do_GET(self)
         except OSError as exc:  # a file/socket the route depends on is missing or unreadable: dependency problem, not a code bug
             self._fail(exc, 503, f"dependency unavailable ({type(exc).__name__})")
         except Exception as exc:  # noqa: BLE001 - never crash the server on a bad request
@@ -319,12 +376,6 @@ class ObserveHandler(BaseHTTPRequestHandler):
         return _json_response(self, 200, almita_web_calibrate.get_session(session_id))
 
     def _serve_static(self, path: str) -> None:
-        if path == "/":
-            self.send_response(302)
-            self.send_header("Location", "/observe.html")
-            _common_headers(self)
-            self.end_headers()
-            return
         filename = STATIC_FILES[path]
         candidate = (CONSOLE_SOURCE / filename).resolve()
         if CONSOLE_SOURCE != candidate.parent or not candidate.is_file():
@@ -340,7 +391,12 @@ class ObserveHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self._begin()
+        if not self._gate(write=True):
+            return
         try:
+            if path == "/mount_camera/config":
+                self._console_route = True
+                return self._mount_camera_set_config()
             if path == "/api/observe/plan":
                 return self._handle_plan()
             if path == "/api/observe/start":
@@ -407,6 +463,8 @@ class ObserveHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         self._begin()
+        if not self._gate(write=True):
+            return
         self.send_response(405)
         self.send_header("Allow", "GET, HEAD, POST")
         body = json.dumps({"ok": False, "status": "ERROR", "error": "read/JSON-write only", "http_status": 405,
@@ -615,17 +673,28 @@ class ObserveServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def make_server(host: str = "0.0.0.0", port: int = 8090) -> ThreadingHTTPServer:
-    return ObserveServer((host, port), ObserveHandler)
+_AUTH_FROM_FILE = object()
+
+
+def make_server(host: str = "0.0.0.0", port: int = 8088, authenticator: Any = _AUTH_FROM_FILE,
+                public_root: Path = DEFAULT_PUBLIC_ROOT) -> ThreadingHTTPServer:
+    """Default: credentials from almita_web_auth's file (fail closed when missing). authenticator=None = OPEN, tests only."""
+    server = ObserveServer((host, port), functools.partial(ObserveHandler, directory=str(Path(public_root).resolve())))
+    server.authenticator = almita_web_auth.Authenticator() if authenticator is _AUTH_FROM_FILE else authenticator
+    return server
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ALMITA Orchestrator Web API (local, offline)")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8090)
+    parser.add_argument("--port", type=int, default=8088)
+    parser.add_argument("--public-root", default=str(DEFAULT_PUBLIC_ROOT), help="assembled console files (rewritten at startup)")
+    parser.add_argument("--runtime-dir", default=str(DEFAULT_RUNTIME_DIR))
     args = parser.parse_args()
+    public_root = almita_console_server.prepare_console_web(CONSOLE_SOURCE, Path(args.runtime_dir), Path(args.public_root))
+    almita_console_server.write_version_json(public_root)
     try:
-        server = make_server(args.host, args.port)
+        server = make_server(args.host, args.port, public_root=public_root)
     except OSError as exc:
         reason = "port already in use (another instance or service holds it; nothing was killed)" if exc.errno == errno.EADDRINUSE else str(exc)
         _log("ERROR", f"cannot bind {args.host}:{args.port}: {reason}")
@@ -637,7 +706,10 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
-    print(f"ALMITA ORCHESTRATOR API START  {args.host}:{args.port}", flush=True)
+    print(f"ALMITA ORCHESTRATOR API START  {args.host}:{args.port} (console + API + streams, single port)", flush=True)
+    if not server.authenticator.configured():
+        _log("WARN", f"web authentication NOT configured ({server.authenticator.path}): every request is refused until "
+                     "`almita_web_auth.py set-password --user <name>` writes it")
     try:
         server.serve_forever()
     finally:

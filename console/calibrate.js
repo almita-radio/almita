@@ -1,4 +1,4 @@
-// ALMITA CALIBRATE — calls the :8090 CALIBRATE API only. All clipping/
+// ALMITA CALIBRATE — calls the same-origin CALIBRATE API only. All clipping/
 // headroom/bandpass/gain/quality numbers come from calibration_engine via
 // the backend - this file only presents, orchestrates, and polls.
 (function () {

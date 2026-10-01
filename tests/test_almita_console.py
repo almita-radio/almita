@@ -217,10 +217,11 @@ def test_14_missing_quicklook_is_waiting_not_crash(tmp_path):
 # ---------------------------------------------------------------- 15-19: server
 
 
-def test_15_server_binds_0000_8088_by_default():
-    source = (ROOT / "almita_console_server.py").read_text()
-    assert '"--bind", default="0.0.0.0"' in source
+def test_15_single_web_server_binds_0000_8088_by_default():
+    source = (ROOT / "almita_orchestrator_server.py").read_text()
+    assert '"--host", default="0.0.0.0"' in source
     assert '"--port", type=int, default=8088' in source
+    assert "almita_orchestrator_server.py" in (ROOT / "almita_console_server.py").read_text()  # the old standalone main only points there
 
 
 def test_15b_prepare_console_web_cache_busts_static_assets(tmp_path):

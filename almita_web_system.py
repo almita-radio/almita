@@ -1,4 +1,4 @@
-"""System health / version glue for the :8090 web app (almita_orchestrator_server.py).
+"""System health / version glue for the single-port web app (almita_orchestrator_server.py).
 
 READ-ONLY and PASSIVE: reads /proc/net/tcp (listening ports, no connection), sysfs USB serials, the watcher's almita_status.json,
 the orchestrator's own runtime files and this process's job table. It never connects to rtl_tcp or INDI, never moves the mount and
@@ -25,7 +25,7 @@ from runtime_state import read_json_safe
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_RUNTIME_DIR = ROOT / "data" / "runtime"
-PORT_FIELD_CONSOLE, PORT_MAIN_RTL, PORT_INDI, PORT_OBSERVE_API = 8088, 1234, 7624, 8090
+PORT_WEB, PORT_MAIN_RTL, PORT_INDI = 8088, 1234, 7624   # PORT_WEB: the one web server (console + API + streams)
 WATCHER_STALE_SECONDS = 10.0
 HEALTH_CACHE_SECONDS = 2.0
 STARTED_UTC = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -131,9 +131,8 @@ def collect_health(*, runtime_dir: Path = DEFAULT_RUNTIME_DIR, now: Optional[dat
     problems: Dict[str, str] = {}
 
     # ---- services
-    services: Dict[str, Dict[str, Any]] = {"observe_api": {"state": "UP", "detail": f"answering this request (port {PORT_OBSERVE_API})"}}
-    services["field_console"] = ({"state": "UP", "detail": f"port {PORT_FIELD_CONSOLE} listening"} if PORT_FIELD_CONSOLE in listening
-                                 else {"state": "DOWN", "detail": f"nothing listening on port {PORT_FIELD_CONSOLE}"})
+    services: Dict[str, Dict[str, Any]] = {"observe_api": {"state": "UP", "detail": f"answering this request (port {PORT_WEB})"}}
+    services["field_console"] = {"state": "UP", "detail": f"served by this same process (single web port {PORT_WEB})"}
     age = _age_seconds(status.get("updated_utc"), now)
     if not status:
         services["console_watcher"] = {"state": "DOWN", "detail": "no almita_status.json (watcher not running or never wrote)"}

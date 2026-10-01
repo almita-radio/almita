@@ -1,4 +1,4 @@
-// ALMITA REDUCE — calls the :8090 ops API only. All spectral/mask/calibration/velocity numbers come from
+// ALMITA REDUCE — calls the same-origin ops API only. All spectral/mask/calibration/velocity numbers come from
 // reduce_engine (frozen) via reduce_plan/reduce/reduce_capture_plan/reduce_capture and the read-only
 // /api/ops/reduce/* endpoints - this file only discovers inputs, previews metadata, shows PLAN/RUN as real
 // jobs, and renders results. No science here, no reduction math duplicated in JS.

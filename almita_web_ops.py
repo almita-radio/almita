@@ -1,4 +1,4 @@
-"""REAL operations for the :8090 web app.
+"""REAL operations for the single-port web app.
 
 This module launches the EXISTING ALMITA command lines as detached subprocesses and reports what they really did. It reimplements nothing:
 
