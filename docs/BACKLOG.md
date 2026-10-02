@@ -31,4 +31,22 @@ project, so obstacles stay "NOT evaluated" until one exists.
 - browsing limited to the calibration directories, with nothing sensitive exposed;
 - a browser-local file only by an explicit upload that returns a real server path.
 
-**Status:** see the BL-002 commit on the same branch.
+**Status:** implemented on branch `backlog/wizard-preview-profile-picker`. Not deployed.
+- `calibration_profile_catalog.py` lists and validates server profiles: only `<stem>.json` + `.npz` under
+  `data/calibration`, no symlinks or `..` escaping it, and no other directories.
+  - Validity is checked by `calibration_foundation.load_calibration_profile` (Quicklook's loader).
+  - Compatibility is checked by `observation_preflight.planned_profile_compatibility`, the same decision the
+    pre-RUN preflight now calls.
+- `almita_orchestrator_server.py` adds two read-only endpoints:
+  - `GET /api/observe/calibration-profiles` lists profiles;
+  - `GET /api/observe/calibration-profiles/validate?path=` returns 400 with an operator message.
+  Both accept the OBSERVE `center_frequency_hz` / `sample_rate` / `gain_db` as query parameters.
+- OBSERVE page: a SELECT SERVER PROFILE… picker with compatibility per row and USE. Manual entry is kept and is
+  validated on change, and again when frequency, rate or gain change. Paths from the browser's own disk
+  (`C:\…`, `fakepath`, `file:`) get an explicit error.
+
+**Not implemented (optional in the request):** uploading a profile from the browser's disk. It would need an
+explicit upload endpoint that writes under `data/calibration/uploads/` and returns that server path. Today the
+selector only accepts files already on the server.
+
+**Pending:** live check on the OBSERVE page after the campaign (server restart needed for the new endpoints).

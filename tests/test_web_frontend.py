@@ -982,3 +982,50 @@ out.second = { rows: rows(), ref: $w("wz-plan-preview-ref").textContent, limits:
     second = out["second"]                                            # RE-PROPOSE: the preview follows the new plan
     assert "02:10:00" in second["ref"] and second["warnRows"] == 1
     assert second["rows"][0][5].startswith("OUT OF LIMITS") and "WARNING" in second["limits"]
+
+
+# ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
+
+def test_observe_calibration_profile_picker_lists_server_profiles_and_validates_manual_entry(tmp_path):
+    routes = OBSERVE_ROUTES + r"""
+const GOOD = "data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json";
+window.__routes["GET /api/observe/calibration-profiles"] = { body: { ok: true, data: { root: "data/calibration", disk: "server", profiles: [
+  { path: GOOD, valid: true, error: null, summary: { created_utc: "2026-10-02T01:40:00Z", center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 },
+    compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } },
+  { path: "data/calibration/WIZARD-OLD/observe_profile/calibration_profile_v1.json", valid: true, error: null,
+    summary: { created_utc: "2026-09-28T02:38:00Z", center_frequency_hz: 1420405000, sample_rate_hz: 2400000, gain_db: 40.2 },
+    compatibility: { status: "INCOMPATIBLE", reason: "center frequency: 1420405752 != 1420405000" } },
+  { path: "data/calibration/BROKEN/calibration_profile_v1.json", valid: false, error: "ValueError: V1 profile must explicitly disable absolute calibration", summary: null, compatibility: null } ] } } };
+window.__routes["GET /api/observe/calibration-profiles/validate"] = (b) => window.__validateReply;
+window.__validateReply = { body: { ok: true, data: { path: GOOD, disk: "server", valid: true, compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } } } };
+"""
+    driver = r"""
+await until(() => $("f-freq").value !== "", 3000);
+$("f-ql-cal-browse").click();
+await until(() => !$("f-ql-cal-picker").hidden, 3000);
+const rows = [...document.querySelectorAll("#f-ql-cal-table tbody tr")];
+out.rows = rows.map((tr) => [...tr.children].slice(0, 4).map((td) => td.textContent));
+out.useDisabled = rows.map((tr) => tr.querySelector("button").disabled);
+out.warnRows = document.querySelectorAll("#f-ql-cal-table tr.row-warn").length;
+out.note = $("f-ql-cal-picker-note").textContent;
+out.listQuery = window.__calls.filter((c) => c.key === "GET /api/observe/calibration-profiles").length;
+rows[0].querySelector("button").click();
+await until(() => $("f-ql-cal-status").textContent.includes("COMPATIBLE"), 3000);
+out.afterUse = { value: $("f-ql-cal").value, status: $("f-ql-cal-status").textContent, hidden: $("f-ql-cal-picker").hidden };
+window.__validateReply = { status: 400, body: { ok: false, error: "this looks like a path on the browser's computer - the ALMITA server cannot read it; pick a profile that exists on the server (SELECT SERVER PROFILE)" } };
+$("f-ql-cal").value = "C:\\fakepath\\calibration_profile_v1.json";
+$("f-ql-cal").dispatchEvent(new Event("change"));
+await until(() => $("f-ql-cal-status").textContent.startsWith("NOT USABLE"), 3000);
+out.manual = { value: $("f-ql-cal").value, status: $("f-ql-cal-status").textContent, cls: $("f-ql-cal-status").className, readOnly: $("f-ql-cal").readOnly };
+"""
+    out = run_page(tmp_path, "observe", routes, driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["rows"][0][0] == "data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json"
+    assert out["rows"][1][3].startswith("INCOMPATIBLE") and out["rows"][2][3].startswith("INVALID")
+    assert out["useDisabled"] == [False, False, True] and out["warnRows"] == 1
+    assert "ALMITA server" in out["note"] and out["listQuery"] == 1
+    assert out["afterUse"]["value"].endswith("WIZARD-A/observe_profile/calibration_profile_v1.json")
+    assert "valid server profile" in out["afterUse"]["status"] and out["afterUse"]["hidden"] is True
+    assert out["manual"]["status"].startswith("NOT USABLE: this looks like a path on the browser's computer")
+    assert "status-error" in out["manual"]["cls"] and out["manual"]["readOnly"] is False   # manual entry kept
