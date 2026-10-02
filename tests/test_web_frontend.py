@@ -930,3 +930,55 @@ window.__fetches = 0; const _f = window.fetch; window.fetch = (...a) => { window
     assert abs(m2["nodes"] - m1["nodes"]) <= 5 and m1["timers"] == m2["timers"] and m2["timers"] <= 8
     per_min = (m2["fetches"] - m1["fetches"]) / 29
     assert 25 <= per_min <= 60                                                       # ~30 polls/min at 2 s (+ optional artifacts): no runaway polling
+
+
+# ------------------------------------------------------------------ CALIBRATE wizard: Alt/Az preview of the HI plan
+# The facts come from the real backend function (calibration_engine.hi_plan_preview.build_preview) applied to a plan of
+# the exact shape the wizard saves, so the page is tested against what the server really sends.
+
+def _wizard_plan_routes():
+    import copy
+    from calibration_engine.hi_plan_preview import build_preview
+    from tests.test_hi_plan_preview import PLAN
+    plan2 = copy.deepcopy(PLAN)
+    plan2["generated_utc"] = "2026-10-02T02:10:00.000Z"
+    plan2["candidates"]["HI_ALTO"]["altitude_check"].update(worst_case_altitude_deg=19.5, clears=False)
+
+    def facts(plan):
+        return {"session_id": "WIZARD-T", "session_dir": "data/calibration/WIZARD-T", "action": "plan_hi", "step": "PLAN_HI",
+                "config": {"n_captures": 5, "stabilize_seconds": 20}, "fifty_ohm": {"status": "DONE"}, "hi_references": {},
+                "hi_plan": plan, "hi_plan_preview": build_preview(plan)}
+    return CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { body: { ok: true, data: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } } };
+window.__routes["GET /api/ops/jobs"] = { body: { ok: true, data: [{ job_id: "J1", stage: "calibrate_wizard" }] } };
+window.__routes["GET /api/ops/job/J1"] = { body: { ok: true, data: { job_id: "J1", state: "EXITED", facts: %s } } };
+window.__routes["POST /api/ops/start/calibrate_wizard"] = { body: { ok: true, data: { job_id: "J2" } } };
+window.__routes["GET /api/ops/job/J2"] = { body: { ok: true, data: { job_id: "J2", state: "EXITED", facts: %s } } };
+""" % (json.dumps(facts(PLAN)), json.dumps(facts(plan2)))
+
+
+def test_calibrate_wizard_plan_preview_shows_order_limits_reference_and_no_obstacle_claim(tmp_path):
+    driver = r"""
+const $w = (id) => document.getElementById(id);
+await until(() => !$w("wz-plan-preview").hidden && document.querySelectorAll("#wz-plan-preview-table tbody tr").length === 2, 5000);
+const rows = () => [...document.querySelectorAll("#wz-plan-preview-table tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent));
+const painted = () => { const c = $w("wz-plan-sky"); const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; };
+out.first = { rows: rows(), ref: $w("wz-plan-preview-ref").textContent, limits: $w("wz-plan-preview-limits").textContent,
+              horizon: $w("wz-plan-preview-horizon").textContent, painted: painted(), warnRows: document.querySelectorAll("#wz-plan-preview-table tr.row-warn").length };
+$w("wz-replan-hi").click();
+await until(() => $w("wz-plan-preview-ref").textContent.includes("02:10:00"), 5000);
+out.second = { rows: rows(), ref: $w("wz-plan-preview-ref").textContent, limits: $w("wz-plan-preview-limits").textContent,
+               warnRows: document.querySelectorAll("#wz-plan-preview-table tr.row-warn").length };
+"""
+    out = run_page(tmp_path, "calibrate", _wizard_plan_routes(), driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    first = out["first"]
+    assert [r[:4] for r in first["rows"]] == [["1", "HI_ALTO", "225.7°", "30.3°"], ["2", "HI_BAJO", "124.9°", "69.8°"]]
+    assert all(r[5] == "OK" for r in first["rows"]) and first["warnRows"] == 0
+    assert "2026-10-02T01:35:38.044Z" in first["ref"] and "Both zones within" in first["limits"]
+    assert first["horizon"].startswith("OBSTACLES NOT EVALUATED")
+    assert first["painted"] > 1000                                    # the sky view really drew something
+    second = out["second"]                                            # RE-PROPOSE: the preview follows the new plan
+    assert "02:10:00" in second["ref"] and second["warnRows"] == 1
+    assert second["rows"][0][5].startswith("OUT OF LIMITS") and "WARNING" in second["limits"]

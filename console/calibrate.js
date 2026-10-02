@@ -426,6 +426,44 @@
       $w("wz-plan-hi-rfi-note").textContent = plan.rfi_note || "";
     }
 
+    // Alt/Az preview of the HI plan. Every number comes from facts.hi_plan_preview, which the backend re-shapes from
+    // the wizard's OWN saved hi_plan (calibration_engine/hi_plan_preview.py) - nothing is recomputed in the browser,
+    // so the preview cannot diverge from what capture-hi will point at. Re-rendered on every state, so a new plan
+    // (RE-PROPOSE) replaces it.
+    const PREVIEW_COLORS = { HI_ALTO: "#e6b85c", HI_BAJO: "#5cc8e6" };
+    const fmtDeg = (v) => (typeof v === "number" && isFinite(v) ? v.toFixed(1) + "°" : "—");
+    function drawPlanPreview(canvasId, preview) {
+      const pts = (preview && preview.points) || [];
+      const drawable = pts.filter((p) => typeof p.az_deg === "number" && typeof p.alt_deg === "number");
+      U.drawSkyView($w(canvasId), {
+        areas: drawable.map((p) => ({ label: p.label, order: p.order, az_deg: p.az_deg, alt_deg: p.alt_deg,
+                                     radius_deg: p.radius_deg || 0, warn: !p.within_limits })),
+      }, { colors: PREVIEW_COLORS, path: drawable.map((p) => [p.az_deg, p.alt_deg]),
+           selected: (pts.find((p) => p.status === "NEXT") || {}).label || null });
+    }
+    function renderPlanPreview(preview) {
+      const box = $w("wz-plan-preview");
+      box.hidden = !preview;
+      if (!preview) return;
+      drawPlanPreview("wz-plan-sky", preview);
+      const tbody = document.querySelector("#wz-plan-preview-table tbody");
+      tbody.textContent = "";
+      for (const p of preview.points) {
+        const tr = document.createElement("tr");
+        const limits = p.within_limits ? "OK" : "OUT OF LIMITS: " + p.limit_problems.join("; ");
+        for (const v of [String(p.order), p.label, fmtDeg(p.az_deg), fmtDeg(p.alt_deg), fmtDeg(p.worst_case_altitude_deg), limits]) {
+          const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+        }
+        if (!p.within_limits) tr.className = "row-warn";
+        tbody.appendChild(tr);
+      }
+      $w("wz-plan-preview-ref").textContent = `Reference instant: ${preview.reference_utc || "unknown"} UTC — ${preview.reference_note}`;
+      const lim = preview.limits || {};
+      $w("wz-plan-preview-limits").textContent = (preview.all_within_limits ? "Both zones within the configured limits" : "WARNING: at least one zone is OUT OF the configured limits")
+        + ` (min elevation ${lim.min_elevation_deg ?? "—"}° over a ${lim.hold_seconds ?? "—"} s hold; circles = beam FWHM ${lim.beam_fwhm_deg ?? "—"}°; dashed line = visiting order).`;
+      $w("wz-plan-preview-horizon").textContent = preview.horizon && preview.horizon.available ? "" : "OBSTACLES NOT EVALUATED — " + ((preview.horizon || {}).note || "");
+    }
+
     function render(state) {
       lastState = state;
       const bt = state.bias_t_facts;
@@ -465,6 +503,7 @@
           $w("wz-plan-hi-note").textContent = `proposed ${state.hi_plan.generated_utc} — ${state.hi_plan.grid_points_considered} visible points considered`;
           $w("wz-plan-hi-result").hidden = false;
           renderHiPlanTable(state.hi_plan);
+          renderPlanPreview(state.hi_plan_preview || null);
         }
       } else if (state.step === "READY_HI_ALTO" || state.step === "READY_HI_BAJO") {
         const label = state.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
@@ -473,6 +512,12 @@
         $w("wz-ready-hi-label").textContent = `${label} — RA ${cand.ra_hours.toFixed(4)} h, Dec ${cand.dec_deg.toFixed(3)}°`;
         $w("wz-ready-hi-note").textContent = `Real GOTO + ${state.config.n_captures} capture(s) at this approved point. ${cand.reason}. The mount WILL move.`;
         $w("wz-hi-move-confirm").value = "";
+        const pv = state.hi_plan_preview || null;
+        $w("wz-ready-sky").hidden = !pv;
+        if (pv) drawPlanPreview("wz-ready-sky", pv);
+        $w("wz-ready-preview-note").textContent = pv
+          ? `Approved plan as of ${pv.reference_utc} UTC (highlighted: ${label}, next). ${pv.horizon.available ? "" : "Obstacles not evaluated - check the sky physically."}`
+          : "";
       } else if (state.step === "RESULT_HI_ALTO" || state.step === "RESULT_HI_BAJO") {
         const label = state.step === "RESULT_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
         const ref = state.hi_references[label];

@@ -251,6 +251,13 @@ def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/pro
                   "(startup state only - every acquisition retunes explicitly)", "hardware")
 
 
+def _hi_plan_preview(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    from calibration_engine.hi_plan_preview import build_preview
+    step = state.get("step") or ""
+    current = "HI_ALTO" if step == "READY_HI_ALTO" else ("HI_BAJO" if step == "READY_HI_BAJO" else None)
+    return build_preview(state.get("hi_plan"), current_label=current, measured=list((state.get("hi_references") or {}).keys()))
+
+
 # ------------------------------------------------------------------ real preflight (read-only)
 def _check(name: str, status: str, detail: str, category: str) -> Dict[str, str]:
     return {"name": name, "status": status, "detail": detail, "category": category}
@@ -1130,6 +1137,8 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                             "fifty_ohm": st.get("fifty_ohm"), "fifty_ohm_result": st.get("fifty_ohm_result"),
                             "reconnect_antenna_confirmed_utc": st.get("reconnect_antenna_confirmed_utc"),
                             "hi_plan": st.get("hi_plan"), "hi_plan_approved_utc": st.get("hi_plan_approved_utc"),
+                            # Alt/Az sky preview: re-shaped from this SAME saved hi_plan, never recomputed
+                            "hi_plan_preview": _hi_plan_preview(st),
                             # hi_references: every HI kind's full result (not just the one just captured) - the
                             # web UI's RESULT step needs this on every render, including after a page reload/
                             # recovery where the LAST job might be "next"/"status", not "capture-hi" itself.
