@@ -50,3 +50,35 @@ explicit upload endpoint that writes under `data/calibration/uploads/` and retur
 selector only accepts files already on the server.
 
 **Pending:** live check on the OBSERVE page after the campaign (server restart needed for the new endpoints).
+
+## Activating BL-001 / BL-002 (only after the running campaign has finished)
+
+Nothing here was deployed. Merging alone changes the live UI, because `console/` is served from the source
+tree on every request. Wizard and ops subprocesses also import the changed modules fresh. So merge only
+when no observation, wizard or quicklook is running.
+
+1. Check that nothing is active: `pgrep -af "capture[.]py|quicklook_live|calibrate_reference_wizard"` prints
+   nothing, and the OBSERVE page shows COMPLETED or ABORTED.
+2. On the deployment branch, from the main checkout:
+   `git merge --no-ff backlog/wizard-preview-profile-picker`
+3. Restart the web server so it loads `almita_orchestrator_server.py`, `almita_web_ops.py` and
+   `observation_preflight.py`:
+   `sudo systemctl restart almita-observe-api.service`.
+   - The BL-002 endpoints and BL-001's `hi_plan_preview` facts need this restart.
+   - The `console/` HTML/JS change on the next page load without it.
+   - `rtl_tcp`, INDI and the console watcher do not need restarting.
+4. Verify:
+   - **OBSERVE:** SELECT SERVER PROFILE… lists `data/calibration/**/calibration_profile_v1.json` with
+     COMPATIBLE/INCOMPATIBLE against the form values.
+     - USE fills the path and the status line says "valid server profile · COMPATIBLE".
+     - Typing `C:\fakepath\x.json` shows "NOT USABLE: … browser's computer".
+     - `curl -u felipe 'http://localhost:8088/api/observe/calibration-profiles/validate?path=../observer_config.json'`
+       returns 400.
+   - **CALIBRATE wizard:** after PROPOSE HI ALTO / HI BAJO ZONES the sky preview shows
+     "1 HI_ALTO" and "2 HI_BAJO" with a dashed path, the az/alt table, the reference instant and
+     "OBSTACLES NOT EVALUATED".
+     - RE-PROPOSE replaces it.
+     - READY_HI_* shows the next zone highlighted.
+     - ALIGN's sky view looks exactly as before.
+5. Tests, which need no hardware:
+   `.venv/bin/python -m pytest -q tests/test_hi_plan_preview.py tests/test_calibration_profile_catalog.py tests/test_web_frontend.py`
