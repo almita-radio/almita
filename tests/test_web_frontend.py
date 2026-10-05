@@ -1041,6 +1041,56 @@ out.second = { rows: rows(), ref: $w("wz-plan-preview-ref").textContent, limits:
     assert second["rows"][0][5].startswith("OUT OF LIMITS") and "WARNING" in second["limits"]
 
 
+def test_calibrate_wizard_map_draws_the_hi4pi_layer_of_the_plan_instant_with_its_scale_and_active_point(tmp_path):
+    """The preview carries ALIGN's HI4PI layer computed at the plan instant (preview.sky): the page draws it under
+    the zones, shows the colour scale and names the order and the active zone; in READY_HI_BAJO the same map
+    marks HI_ALTO as measured and HI_BAJO as active."""
+    import copy
+    from calibration_engine.hi_plan_preview import build_preview
+    from tests.test_hi_plan_preview import PLAN
+    sky = {"hi4pi_grid": {"n": 4, "values_1e20cm2": [None, 2, 3, None, 2, 10, 20, 3, 4, 30, 40, 5, None, 5, 6, None],
+                          "value_range_1e20cm2": [2, 40]}, "obstime_utc": PLAN["generated_utc"], "beam_fwhm_deg": 20.0}
+
+    def facts(step, measured):
+        pv = build_preview(PLAN, current_label="HI_BAJO" if step == "READY_HI_BAJO" else None, measured=measured)
+        pv["sky"] = sky
+        return {"session_id": "WIZARD-T", "session_dir": "data/calibration/WIZARD-T", "action": "plan_hi", "step": step,
+                "config": {"n_captures": 5, "stabilize_seconds": 20}, "fifty_ohm": {"status": "DONE"},
+                "hi_references": {m: {} for m in measured}, "hi_plan": copy.deepcopy(PLAN), "hi_plan_approved_utc": "x",
+                "hi_plan_preview": pv}
+    routes = CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { body: { ok: true, data: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } } };
+window.__routes["GET /api/ops/jobs"] = { body: { ok: true, data: [{ job_id: "J1", stage: "calibrate_wizard" }] } };
+window.__routes["GET /api/ops/job/J1"] = () => window.__job;
+window.__job = { body: { ok: true, data: { job_id: "J1", state: "EXITED", facts: %s } } };
+window.__ready = { body: { ok: true, data: { job_id: "J1", state: "EXITED", facts: %s } } };
+""" % (json.dumps(facts("PLAN_HI", [])), json.dumps(facts("READY_HI_BAJO", ["HI_ALTO"])))
+    driver = r"""
+const $w = (id) => document.getElementById(id);
+await until(() => !$w("wz-plan-preview").hidden && !$w("wz-plan-sky-legend").hidden, 5000);
+const c = $w("wz-plan-sky");
+out.square = Math.abs(c.clientWidth - c.clientHeight) <= 1;
+const cx = c.getBoundingClientRect(), pr = c.parentElement.getBoundingClientRect();
+out.centred = Math.abs((cx.left + cx.right) / 2 - (pr.left + pr.right) / 2) <= 1;
+out.planNote = $w("wz-plan-sky-note").textContent;
+"""
+    out = run_page(tmp_path, "calibrate", routes, driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["square"] and out["centred"]
+    assert "HI4PI layer at the plan instant 2026-10-02T01:35:38.044Z (beam 20°)" in out["planNote"]
+    assert "order: 1 HI_ALTO → 2 HI_BAJO" in out["planNote"] and "active" not in out["planNote"]
+
+    ready_driver = r"""
+const $w = (id) => document.getElementById(id);
+await until(() => !$w("wz-step-ready-hi").hidden && !$w("wz-ready-sky-legend").hidden, 5000);
+out.readyNote = $w("wz-ready-sky-note").textContent;
+"""
+    out = run_page(tmp_path, "calibrate", routes + "\nwindow.__job = window.__ready;\n", ready_driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert "order: 1 HI_ALTO (measured) → 2 HI_BAJO · active: HI_BAJO" in out["readyNote"]
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_picker_lists_server_profiles_and_validates_manual_entry(tmp_path):

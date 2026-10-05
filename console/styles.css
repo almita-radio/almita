@@ -171,3 +171,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 
 /* CALIBRATE wizard: HI plan preview rows outside the configured limits */
 .status-table tr.row-warn td{color:var(--error)}
+
+/* CALIBRATE wizard sky view (ALIGN's drawSkyView): a square disk centred in its panel at any width */
+.wz-sky{display:block;width:100%;max-width:420px;aspect-ratio:1/1;height:auto;margin:10px auto 4px;border:1px solid var(--line);border-radius:8px}
+.wz-sky-legend{display:block;width:100%;max-width:300px;height:34px;margin:0 auto 6px}
+.wz-sky-note{text-align:center}

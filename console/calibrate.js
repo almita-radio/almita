@@ -432,14 +432,32 @@
     // (RE-PROPOSE) replaces it.
     const PREVIEW_COLORS = { HI_ALTO: "#e6b85c", HI_BAJO: "#5cc8e6" };
     const fmtDeg = (v) => (typeof v === "number" && isFinite(v) ? v.toFixed(1) + "°" : "—");
+    // Same view as ALIGN (U.drawSkyView: zenith at the centre, N up, E right, altitude rings, HI4PI layer + its scale).
+    // The HI layer is the real HI4PI map at the plan's OWN instant and beam (preview.sky, server-side), so the colour
+    // under each zone is the one the plan chose it from. The active point (status NEXT) is highlighted.
     function drawPlanPreview(canvasId, preview) {
       const pts = (preview && preview.points) || [];
       const drawable = pts.filter((p) => typeof p.az_deg === "number" && typeof p.alt_deg === "number");
+      const sky = (preview && preview.sky) || {};
       U.drawSkyView($w(canvasId), {
-        areas: drawable.map((p) => ({ label: p.label, order: p.order, az_deg: p.az_deg, alt_deg: p.alt_deg,
-                                     radius_deg: p.radius_deg || 0, warn: !p.within_limits })),
-      }, { colors: PREVIEW_COLORS, path: drawable.map((p) => [p.az_deg, p.alt_deg]),
+        hi4pi_grid: sky.hi4pi_grid || null,
+        areas: drawable.map((p) => ({ label: p.label + (p.status === "MEASURED" ? " ✓" : ""), order: p.order,
+                                     az_deg: p.az_deg, alt_deg: p.alt_deg, radius_deg: p.radius_deg || 0, warn: !p.within_limits })),
+      }, { colors: { ...PREVIEW_COLORS, "HI_ALTO ✓": PREVIEW_COLORS.HI_ALTO, "HI_BAJO ✓": PREVIEW_COLORS.HI_BAJO },
+           path: drawable.map((p) => [p.az_deg, p.alt_deg]),
            selected: (pts.find((p) => p.status === "NEXT") || {}).label || null });
+      const legend = $w(canvasId + "-legend"), note = $w(canvasId + "-note");
+      if (legend) {
+        legend.hidden = !sky.hi4pi_grid;
+        if (sky.hi4pi_grid) U.drawHi4piLegend(legend, sky.hi4pi_grid.value_range_1e20cm2, "N_HI (cm⁻²)");
+      }
+      if (note) {
+        const active = pts.find((p) => p.status === "NEXT");
+        note.textContent = (sky.hi4pi_grid ? `HI4PI layer at the plan instant ${sky.obstime_utc} (beam ${sky.beam_fwhm_deg}°)`
+                                           : `HI4PI layer unavailable: ${sky.hi4pi_error || "not computed"}`)
+          + ` · order: ${pts.map((p) => p.order + " " + p.label + (p.status === "MEASURED" ? " (measured)" : "")).join(" → ")}`
+          + (active ? ` · active: ${active.label}` : "");
+      }
     }
     function renderPlanPreview(preview) {
       const box = $w("wz-plan-preview");
@@ -514,6 +532,7 @@
         $w("wz-hi-move-confirm").value = "";
         const pv = state.hi_plan_preview || null;
         $w("wz-ready-sky").hidden = !pv;
+        if (!pv) { $w("wz-ready-sky-legend").hidden = true; $w("wz-ready-sky-note").textContent = ""; }
         if (pv) drawPlanPreview("wz-ready-sky", pv);
         $w("wz-ready-preview-note").textContent = pv
           ? `Approved plan as of ${pv.reference_utc} UTC (highlighted: ${label}, next). ${pv.horizon.available ? "" : "Obstacles not evaluated - check the sky physically."}`

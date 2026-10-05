@@ -251,11 +251,42 @@ def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/pro
                   "(startup state only - every acquisition retunes explicitly)", "hardware")
 
 
+_HI_PLAN_SKY_CACHE: Dict[Any, Dict[str, Any]] = {}
+
+
+def _hi_plan_sky(hi_plan: Dict[str, Any]) -> Dict[str, Any]:
+    """ALIGN's HI4PI Alt/Az layer (hi4pi_map.sky_grid, same smoothing as the plan: its own beam_fwhm_deg) at the
+    plan's OWN instant, so the colour under each zone is what the plan saw. Cached per plan (job facts are polled
+    every few seconds; the sky at a fixed instant never changes). Never raises: an unavailable map is reported."""
+    key = (hi_plan.get("generated_utc"), hi_plan.get("beam_fwhm_deg"))
+    if key in _HI_PLAN_SKY_CACHE:
+        return _HI_PLAN_SKY_CACHE[key]
+    try:
+        import hi4pi_map
+        from astropy.coordinates import EarthLocation
+        from astropy.time import Time
+        import astropy.units as u
+        obs = json.loads((ROOT / "observer_config.json").read_text())["observer"]
+        location = EarthLocation(lat=obs["latitude_deg"] * u.deg, lon=obs["longitude_deg"] * u.deg, height=obs["elevation_m"] * u.m)
+        grid = hi4pi_map.sky_grid(location, Time(str(key[0]).rstrip("Z"), scale="utc"), float(key[1]))
+        out = {"hi4pi_grid": {"n": grid["grid_n"], "values_1e20cm2": grid["grid"], "value_range_1e20cm2": grid["value_range_1e20cm2"]},
+               "obstime_utc": grid["obstime_utc"], "beam_fwhm_deg": grid["beam_fwhm_deg"]}
+    except Exception as exc:   # noqa: BLE001 - the preview must still show the zones without the layer
+        out = {"hi4pi_error": f"{type(exc).__name__}: {exc}"}
+    if len(_HI_PLAN_SKY_CACHE) > 8:
+        _HI_PLAN_SKY_CACHE.clear()
+    _HI_PLAN_SKY_CACHE[key] = out
+    return out
+
+
 def _hi_plan_preview(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     from calibration_engine.hi_plan_preview import build_preview
     step = state.get("step") or ""
     current = "HI_ALTO" if step == "READY_HI_ALTO" else ("HI_BAJO" if step == "READY_HI_BAJO" else None)
-    return build_preview(state.get("hi_plan"), current_label=current, measured=list((state.get("hi_references") or {}).keys()))
+    preview = build_preview(state.get("hi_plan"), current_label=current, measured=list((state.get("hi_references") or {}).keys()))
+    if preview is not None:
+        preview["sky"] = _hi_plan_sky(state["hi_plan"])
+    return preview
 
 
 # ------------------------------------------------------------------ real preflight (read-only)

@@ -73,7 +73,9 @@
             <div class="obs-summary" id="wz-plan-hi-rfi-note"></div>
             <div id="wz-plan-preview" class="wz-plan-preview" hidden>
               <h3>Sky preview (Alt/Az, zenith at centre, N up)</h3>
-              <canvas id="wz-plan-sky" width="420" height="360" style="width:100%;max-width:420px;height:360px;display:block;margin:10px auto;border:1px solid var(--line);border-radius:8px" aria-label="Alt/Az preview of the planned HI zones"></canvas>
+              <canvas id="wz-plan-sky" class="wz-sky" width="420" height="420" aria-label="Alt/Az preview of the planned HI zones"></canvas>
+              <canvas id="wz-plan-sky-legend" class="wz-sky-legend" width="300" height="34" hidden title="HI4PI real map colour scale at the plan instant - N_HI column density, not an Almita measurement"></canvas>
+              <div class="obs-summary wz-sky-note" id="wz-plan-sky-note"></div>
               <div class="twrap"><table id="wz-plan-preview-table" class="status-table"><thead><tr><th>order</th><th>zone</th><th>az</th><th>alt (plan instant)</th><th>worst alt over hold</th><th>limits</th></tr></thead><tbody></tbody></table></div>
               <div class="obs-summary" id="wz-plan-preview-ref"></div>
               <div class="obs-summary" id="wz-plan-preview-limits"></div>
@@ -89,7 +91,9 @@
         <div id="wz-step-ready-hi" hidden>
           <h3 id="wz-ready-hi-label"></h3>
           <div class="obs-summary" id="wz-ready-hi-note"></div>
-          <canvas id="wz-ready-sky" width="420" height="360" style="width:100%;max-width:420px;height:360px;display:block;margin:10px auto;border:1px solid var(--line);border-radius:8px" aria-label="Alt/Az preview of the approved HI zones"></canvas>
+          <canvas id="wz-ready-sky" class="wz-sky" width="420" height="420" aria-label="Alt/Az preview of the approved HI zones"></canvas>
+          <canvas id="wz-ready-sky-legend" class="wz-sky-legend" width="300" height="34" hidden title="HI4PI real map colour scale at the plan instant - N_HI column density, not an Almita measurement"></canvas>
+          <div class="obs-summary wz-sky-note" id="wz-ready-sky-note"></div>
           <div class="obs-summary" id="wz-ready-preview-note"></div>
           <div class="obs-row"><label for="wz-hi-move-confirm">TYPE MOVE TO ALLOW THE REAL GOTO + CAPTURE</label><input type="text" id="wz-hi-move-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
           <div class="obs-actions"><button type="button" id="wz-capture-hi">CAPTURE NOW (real GOTO + capture)</button></div>

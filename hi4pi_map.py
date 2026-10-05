@@ -130,21 +130,9 @@ def _local_contrast(smoothed: np.ndarray, wcs: WCS, pix_scale_deg: float, ra_deg
 _MAX_PATTERN_CHECKS = 60
 
 
-def sky_grid_and_ranking(location: EarthLocation, obstime: Time, min_elevation_deg: float, beam_fwhm_deg: float,
-                         exterior_radius_deg: float, ring_radii_deg: Sequence[float], ring_points: int,
-                         capture_time_s: float, grid_n: int = 90, top_n: int = 3) -> Dict[str, Any]:
-    """Real, no-hardware computation for the ALIGN HI sky view: a continuous Alt/Az raster of the REAL HI4PI map
-    (already beam-smoothed by beam_fwhm_deg) for the current time/location, PLUS the A/B/C ranking computed from
-    THE SAME smoothed map and the SAME grid points (so the colour shown and the ranking always correspond to the
-    same data). A candidate is only offered if its WHOLE real ring pattern (ring_radii_deg/ring_points - the SAME
-    pattern RUN will command) clears min_elevation_deg not just right now but AT THE REAL WALL-CLOCK TIME each of
-    its points would actually be captured during a run starting at `obstime` (alignment.py's own
-    pattern_temporal_altitudes(), reused here - not reimplemented, so this always matches what RUN itself will
-    check before its first movement): a ~30-minute, 25-point run visits its last points long after PLAN/RUN was
-    clicked, and a centre that clears the limit right now can still have a later point fall below it before the
-    run finishes. Candidates whose pattern dips below the limit at ANY point in the run are discarded, never
-    returned as if usable. Raises HI4PIUnavailable if the map cannot be read - callers must not fall back to the
-    synthetic model silently."""
+def _disk_raster(location: EarthLocation, obstime: Time, beam_fwhm_deg: float, grid_n: int):
+    """The beam-smoothed map sampled on the Alt/Az disk raster drawSkyView() blits: (grid, value range, and the
+    inside-the-disk points' alt/az/ra/dec, which the ranking reuses)."""
     data, wcs, pix_scale_deg = _load()
     smoothed = _smoothed(beam_fwhm_deg)
 
@@ -174,6 +162,37 @@ def sky_grid_and_ranking(location: EarthLocation, obstime: Time, min_elevation_d
     vlo, vhi = (float(np.percentile(values[finite], 2)), float(np.percentile(values[finite], 98))) if finite.any() else (0.0, 1.0)
     if vhi <= vlo:
         vhi = vlo + 1e-6
+    return grid, (vlo, vhi), alt, az, ra_deg, dec_deg, smoothed, wcs, pix_scale_deg
+
+
+def _grid_payload(grid: np.ndarray) -> List[Optional[float]]:
+    return [None if not np.isfinite(v) else round(float(v), 6) for v in grid.ravel()]
+
+
+def sky_grid(location: EarthLocation, obstime: Time, beam_fwhm_deg: float, grid_n: int = 90) -> Dict[str, Any]:
+    """Only the Alt/Az HI4PI raster (no ranking) for `obstime` - the same layer ALIGN draws, for any instant
+    (CALIBRATE draws it at its HI plan's own instant). Raises HI4PIUnavailable like the ranking does."""
+    grid, (vlo, vhi), *_ = _disk_raster(location, obstime, beam_fwhm_deg, grid_n)
+    return {"grid_n": grid_n, "grid": _grid_payload(grid), "value_range_1e20cm2": [vlo, vhi],
+            "obstime_utc": obstime.utc.isot + "Z", "beam_fwhm_deg": beam_fwhm_deg, "source": SOURCE}
+
+
+def sky_grid_and_ranking(location: EarthLocation, obstime: Time, min_elevation_deg: float, beam_fwhm_deg: float,
+                         exterior_radius_deg: float, ring_radii_deg: Sequence[float], ring_points: int,
+                         capture_time_s: float, grid_n: int = 90, top_n: int = 3) -> Dict[str, Any]:
+    """Real, no-hardware computation for the ALIGN HI sky view: a continuous Alt/Az raster of the REAL HI4PI map
+    (already beam-smoothed by beam_fwhm_deg) for the current time/location, PLUS the A/B/C ranking computed from
+    THE SAME smoothed map and the SAME grid points (so the colour shown and the ranking always correspond to the
+    same data). A candidate is only offered if its WHOLE real ring pattern (ring_radii_deg/ring_points - the SAME
+    pattern RUN will command) clears min_elevation_deg not just right now but AT THE REAL WALL-CLOCK TIME each of
+    its points would actually be captured during a run starting at `obstime` (alignment.py's own
+    pattern_temporal_altitudes(), reused here - not reimplemented, so this always matches what RUN itself will
+    check before its first movement): a ~30-minute, 25-point run visits its last points long after PLAN/RUN was
+    clicked, and a centre that clears the limit right now can still have a later point fall below it before the
+    run finishes. Candidates whose pattern dips below the limit at ANY point in the run are discarded, never
+    returned as if usable. Raises HI4PIUnavailable if the map cannot be read - callers must not fall back to the
+    synthetic model silently."""
+    grid, (vlo, vhi), alt, az, ra_deg, dec_deg, smoothed, wcs, pix_scale_deg = _disk_raster(location, obstime, beam_fwhm_deg, grid_n)
 
     # Ranking candidates: the same grid points, restricted to real altitude >= min_elevation.
     candidates_mask = alt >= min_elevation_deg
@@ -229,7 +248,7 @@ def sky_grid_and_ranking(location: EarthLocation, obstime: Time, min_elevation_d
         if len(chosen) >= top_n:
             break
 
-    return {"grid_n": grid_n, "grid": [None if not np.isfinite(v) else round(float(v), 6) for v in grid.ravel()],
+    return {"grid_n": grid_n, "grid": _grid_payload(grid),
             "value_range_1e20cm2": [vlo, vhi], "areas": chosen,
             "candidates_considered": int(cand_ra.size), "candidates_pattern_checked": pattern_checks,
             "candidates_pattern_rejected": len(pattern_rejections),
