@@ -63,17 +63,13 @@ def test_quicklook_check_disabled_is_pass():
     assert pf._quicklook_check({"enabled": False})["status"] == pf.PASS
 
 
-def test_quicklook_check_valid_profile_is_pass(tmp_path):
-    profile = tmp_path / "profile.json"
-    profile.write_text(json.dumps({"ok": True}))
-    result = pf._quicklook_check({"enabled": True, "calibration_profile_path": str(profile)})
-    assert result["status"] == pf.PASS
-
-
-def test_quicklook_check_missing_profile_is_warning_not_block(tmp_path):
+def test_quicklook_check_missing_profile_blocks(tmp_path):
+    """QUICKLOOK enabled is started with exactly this path: a profile the server cannot use BLOCKs (it used to be a
+    WARNING and the run started with a Quicklook that could only fail). Valid/invalid profile cases:
+    tests/test_calibration_profile_catalog.py::test_preflight_blocks_an_unusable_quicklook_profile_and_passes_the_selected_one."""
     result = pf._quicklook_check({"enabled": True, "calibration_profile_path": str(tmp_path / "missing.json")})
-    assert result["status"] == pf.WARNING
-    assert result["criticality"] == pf.OPTIONAL
+    assert result["status"] == pf.BLOCK
+    assert result["criticality"] == pf.REQUIRED
 
 
 def test_console_check_missing_web_root_is_warning(monkeypatch):

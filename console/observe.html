@@ -47,12 +47,14 @@
         <div class="obs-row"><label><input type="checkbox" id="f-ql-enabled" checked> Enabled</label></div>
         <div class="obs-row"><label><input type="checkbox" id="f-ql-native" checked> Native Grid</label></div>
         <div class="obs-row"><label><input type="checkbox" id="f-ql-interp" checked> Interpolated Preview</label></div>
-        <div class="obs-row"><label for="f-ql-cal">Calibration profile path (on the ALMITA server, not this browser)</label><input type="text" id="f-ql-cal" placeholder="data/calibration/.../calibration_profile_v1.json" aria-describedby="f-ql-cal-status"></div>
-        <div class="obs-actions"><button type="button" id="f-ql-cal-browse">SELECT SERVER PROFILE…</button></div>
+        <div class="obs-row"><label for="f-ql-cal">Calibration profile — a file on the ALMITA server (not this computer)</label><input type="text" id="f-ql-cal" placeholder="choose with BROWSE ALMITA SERVER…" aria-describedby="f-ql-cal-selected f-ql-cal-status"></div>
+        <div class="obs-actions"><button type="button" id="f-ql-cal-browse">BROWSE ALMITA SERVER…</button></div>
+        <div class="obs-summary fx-selected" id="f-ql-cal-selected"></div>
         <div class="obs-summary" id="f-ql-cal-status" role="status"></div>
-        <div id="f-ql-cal-picker" hidden>
+        <div id="f-ql-cal-picker" class="file-explorer" hidden>
+          <div class="fx-head"><span class="fx-disk">ALMITA SERVER</span><nav id="f-ql-cal-crumbs" class="fx-crumbs" aria-label="server directory"></nav><button type="button" id="f-ql-cal-close">CLOSE</button></div>
           <div class="obs-summary" id="f-ql-cal-picker-note"></div>
-          <div class="twrap"><table id="f-ql-cal-table" class="status-table"><thead><tr><th>profile (server path)</th><th>created</th><th>Hz / sps / dB</th><th>vs this observation</th><th></th></tr></thead><tbody></tbody></table></div>
+          <div class="twrap"><table id="f-ql-cal-table" class="status-table"><thead><tr><th>name</th><th>Hz / sps / dB</th><th>vs this observation</th><th></th></tr></thead><tbody></tbody></table></div>
         </div>
 
         <h3>CONSOLE</h3>

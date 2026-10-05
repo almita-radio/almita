@@ -1093,46 +1093,80 @@ out.readyNote = $w("wz-ready-sky-note").textContent;
 
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
-def test_observe_calibration_profile_picker_lists_server_profiles_and_validates_manual_entry(tmp_path):
+def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):
+    """OBSERVE's profile selector is a file explorer of the ALMITA SERVER's data/calibration: breadcrumbs, folders,
+    each profile with its frequency / sample rate / gain and compatibility; an INCOMPATIBLE or invalid file cannot
+    be selected and says why; SELECT fills the path and shows the server directory and file name; a path from the
+    browser's own disk is rejected. Typing stays possible (validated the same way)."""
     routes = OBSERVE_ROUTES + r"""
 const GOOD = "data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json";
-window.__routes["GET /api/observe/calibration-profiles"] = { body: { ok: true, data: { root: "data/calibration", disk: "server", profiles: [
-  { path: GOOD, valid: true, error: null, summary: { created_utc: "2026-10-02T01:40:00Z", center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 },
-    compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } },
-  { path: "data/calibration/WIZARD-OLD/observe_profile/calibration_profile_v1.json", valid: true, error: null,
-    summary: { created_utc: "2026-09-28T02:38:00Z", center_frequency_hz: 1420405000, sample_rate_hz: 2400000, gain_db: 40.2 },
-    compatibility: { status: "INCOMPATIBLE", reason: "center frequency: 1420405752 != 1420405000" } },
-  { path: "data/calibration/BROKEN/calibration_profile_v1.json", valid: false, error: "ValueError: V1 profile must explicitly disable absolute calibration", summary: null, compatibility: null } ] } } };
-window.__routes["GET /api/observe/calibration-profiles/validate"] = (b) => window.__validateReply;
-window.__validateReply = { body: { ok: true, data: { path: GOOD, disk: "server", valid: true, compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } } } };
+const VIEWS = {
+  "": { disk: "server", root: "data/calibration", dir: "data/calibration", parent: null,
+        breadcrumbs: [{ name: "calibration", path: "data/calibration" }],
+        dirs: [{ type: "dir", name: "WIZARD-A", path: "data/calibration/WIZARD-A" }, { type: "dir", name: "WIZARD-OLD", path: "data/calibration/WIZARD-OLD" }], files: [] },
+  "data/calibration/WIZARD-A": { disk: "server", root: "data/calibration", dir: "data/calibration/WIZARD-A", parent: "data/calibration",
+        breadcrumbs: [{ name: "calibration", path: "data/calibration" }, { name: "WIZARD-A", path: "data/calibration/WIZARD-A" }],
+        dirs: [{ type: "dir", name: "observe_profile", path: "data/calibration/WIZARD-A/observe_profile" }],
+        files: [{ type: "other", name: "wizard_state.json", dir: "data/calibration/WIZARD-A", path: "data/calibration/WIZARD-A/wizard_state.json",
+                  valid: false, selectable: false, error: "no .npz arrays next to it", summary: null, compatibility: null }] },
+  "data/calibration/WIZARD-A/observe_profile": { disk: "server", root: "data/calibration", dir: "data/calibration/WIZARD-A/observe_profile",
+        parent: "data/calibration/WIZARD-A",
+        breadcrumbs: [{ name: "calibration", path: "data/calibration" }, { name: "WIZARD-A", path: "data/calibration/WIZARD-A" },
+                      { name: "observe_profile", path: "data/calibration/WIZARD-A/observe_profile" }], dirs: [],
+        files: [{ type: "profile", name: "calibration_profile_v1.json", dir: "data/calibration/WIZARD-A/observe_profile", path: GOOD,
+                  valid: true, selectable: true, error: null,
+                  summary: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 },
+                  compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } },
+                { type: "profile", name: "old_profile.json", dir: "data/calibration/WIZARD-A/observe_profile", path: "data/calibration/WIZARD-A/observe_profile/old_profile.json",
+                  valid: true, selectable: false, error: null,
+                  summary: { center_frequency_hz: 1420405000, sample_rate_hz: 2400000, gain_db: 40.2 },
+                  compatibility: { status: "INCOMPATIBLE", reason: "center frequency: 1420405752 != 1420405000" } }] } };
+window.__routes["GET /api/observe/calibration-profiles/browse"] = () => ({ body: { ok: true, data: VIEWS[window.__nextDir || ""] } });
+window.__routes["GET /api/observe/calibration-profiles/validate"] = () => window.__validateReply;
+window.__validateReply = { body: { ok: true, data: { path: GOOD, disk: "server", valid: true,
+  summary: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 },
+  compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } } } };
 """
     driver = r"""
 await until(() => $("f-freq").value !== "", 3000);
+const rows = () => [...document.querySelectorAll("#f-ql-cal-table tbody tr")];
+const text = () => rows().map((tr) => [...tr.children].slice(0, 3).map((td) => td.textContent));
+const openRow = async (name, dir) => { window.__nextDir = dir; rows().find((tr) => tr.children[0].textContent === name).querySelector("button").click();
+                                       await until(() => $("f-ql-cal-picker-note").textContent.startsWith(dir + "/"), 3000); };
 $("f-ql-cal-browse").click();
 await until(() => !$("f-ql-cal-picker").hidden, 3000);
-const rows = [...document.querySelectorAll("#f-ql-cal-table tbody tr")];
-out.rows = rows.map((tr) => [...tr.children].slice(0, 4).map((td) => td.textContent));
-out.useDisabled = rows.map((tr) => tr.querySelector("button").disabled);
-out.warnRows = document.querySelectorAll("#f-ql-cal-table tr.row-warn").length;
-out.note = $("f-ql-cal-picker-note").textContent;
-out.listQuery = window.__calls.filter((c) => c.key === "GET /api/observe/calibration-profiles").length;
-rows[0].querySelector("button").click();
+out.root = { rows: text(), crumbs: $("f-ql-cal-crumbs").textContent, disk: document.querySelector(".fx-disk").textContent };
+await openRow("WIZARD-A/", "data/calibration/WIZARD-A");
+out.wizard = { rows: text(), disabled: rows().map((tr) => tr.querySelector("button").disabled) };
+await openRow("observe_profile/", "data/calibration/WIZARD-A/observe_profile");
+out.profiles = { rows: text(), disabled: rows().map((tr) => tr.querySelector("button").disabled), crumbs: $("f-ql-cal-crumbs").textContent,
+                 warn: document.querySelectorAll("#f-ql-cal-table tr.row-warn").length };
+rows().find((tr) => tr.children[0].textContent === "calibration_profile_v1.json").querySelector("button").click();
 await until(() => $("f-ql-cal-status").textContent.includes("COMPATIBLE"), 3000);
-out.afterUse = { value: $("f-ql-cal").value, status: $("f-ql-cal-status").textContent, hidden: $("f-ql-cal-picker").hidden };
-window.__validateReply = { status: 400, body: { ok: false, error: "this looks like a path on the browser's computer - the ALMITA server cannot read it; pick a profile that exists on the server (SELECT SERVER PROFILE)" } };
+out.afterSelect = { value: $("f-ql-cal").value, selected: $("f-ql-cal-selected").textContent, status: $("f-ql-cal-status").textContent,
+                    hidden: $("f-ql-cal-picker").hidden };
+window.__validateReply = { status: 400, body: { ok: false, error: "this looks like a path on the browser's computer - the ALMITA server cannot read it; pick a profile that exists on the server (BROWSE ALMITA SERVER)" } };
 $("f-ql-cal").value = "C:\\fakepath\\calibration_profile_v1.json";
 $("f-ql-cal").dispatchEvent(new Event("change"));
-await until(() => $("f-ql-cal-status").textContent.startsWith("NOT USABLE"), 3000);
-out.manual = { value: $("f-ql-cal").value, status: $("f-ql-cal-status").textContent, cls: $("f-ql-cal-status").className, readOnly: $("f-ql-cal").readOnly };
+await until(() => $("f-ql-cal-status").textContent.startsWith("REJECTED"), 3000);
+out.manual = { status: $("f-ql-cal-status").textContent, selected: $("f-ql-cal-selected").textContent, readOnly: $("f-ql-cal").readOnly };
 """
     out = run_page(tmp_path, "observe", routes, driver, budget=20000)
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
-    assert out["rows"][0][0] == "data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json"
-    assert out["rows"][1][3].startswith("INCOMPATIBLE") and out["rows"][2][3].startswith("INVALID")
-    assert out["useDisabled"] == [False, False, True] and out["warnRows"] == 1
-    assert "ALMITA server" in out["note"] and out["listQuery"] == 1
-    assert out["afterUse"]["value"].endswith("WIZARD-A/observe_profile/calibration_profile_v1.json")
-    assert "valid server profile" in out["afterUse"]["status"] and out["afterUse"]["hidden"] is True
-    assert out["manual"]["status"].startswith("NOT USABLE: this looks like a path on the browser's computer")
-    assert "status-error" in out["manual"]["cls"] and out["manual"]["readOnly"] is False   # manual entry kept
+    assert out["root"]["disk"] == "ALMITA SERVER" and out["root"]["crumbs"] == "data/calibration"
+    assert [r[0] for r in out["root"]["rows"]] == ["WIZARD-A/", "WIZARD-OLD/"]
+    assert out["wizard"]["rows"][0][0] == "../" and ["wizard_state.json", "—", "REJECTED: no .npz arrays next to it"] in out["wizard"]["rows"]
+    assert out["wizard"]["disabled"] == [False, False, True]
+    assert out["profiles"]["crumbs"] == "data/calibration/WIZARD-A/observe_profile"
+    assert out["profiles"]["rows"][1:] == [
+        ["calibration_profile_v1.json", "1420405752 Hz · 2400000 sps · 40.2 dB", "COMPATIBLE: frequency, sample rate, gain and topology match"],
+        ["old_profile.json", "1420405000 Hz · 2400000 sps · 40.2 dB", "REJECTED: center frequency: 1420405752 != 1420405000"]]
+    assert out["profiles"]["disabled"] == [False, False, True] and out["profiles"]["warn"] == 1
+    a = out["afterSelect"]
+    assert a["value"] == "data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json" and a["hidden"] is True
+    assert a["selected"] == ("SERVER directory: data/calibration/WIZARD-A/observe_profile/\nfile: calibration_profile_v1.json\n"
+                             "1420405752 Hz · 2400000 sps · 40.2 dB")
+    assert "valid server profile · COMPATIBLE" in a["status"]
+    assert out["manual"]["status"].startswith("REJECTED: this looks like a path on the browser's computer")
+    assert out["manual"]["selected"] == "" and out["manual"]["readOnly"] is False

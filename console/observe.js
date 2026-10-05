@@ -290,8 +290,10 @@
   }, "STOP REQUESTED…");
 
   // ------------------------------------------------------------------ calibration profile (server disk only)
-  // The backend opens quicklook.calibration_profile_path on ITS disk, so the picker lists and validates server files
-  // (/api/observe/calibration-profiles, limited to data/calibration). Manual entry stays; it is validated the same way.
+  // The backend opens quicklook.calibration_profile_path on ITS disk (quicklook_live --calibration-profile), so the
+  // explorer browses the SERVER's data/calibration one directory at a time (/api/observe/calibration-profiles/browse)
+  // and only files there can be selected. Selecting is read-only: nothing is copied, uploaded or overwritten.
+  // Typing a path stays possible; it is validated by the same server code (/validate), as is the PLAN preflight.
   function profileQuery(extra) {
     const q = new URLSearchParams(extra || {});
     for (const [key, id] of [["center_frequency_hz", "f-freq"], ["sample_rate", "f-rate"], ["gain_db", "f-gain"]]) {
@@ -299,49 +301,72 @@
     }
     return q.toString();
   }
+  const fmtValues = (s) => (s ? `${s.center_frequency_hz} Hz · ${s.sample_rate_hz} sps · ${s.gain_db} dB` : "—");
   function setProfileStatus(text, cls) { const el = $("f-ql-cal-status"); el.textContent = text; el.className = "obs-summary " + (cls || ""); }
+  function setSelected(d) {
+    if (!d) { $("f-ql-cal-selected").textContent = ""; return; }
+    const cut = d.path.lastIndexOf("/");
+    $("f-ql-cal-selected").textContent = `SERVER directory: ${d.path.slice(0, cut)}/\nfile: ${d.path.slice(cut + 1)}\n${fmtValues(d.summary)}`;
+  }
   let profileCheckSeq = 0;
   async function validateProfilePath() {
     const raw = $("f-ql-cal").value.trim();
     const seq = ++profileCheckSeq;
-    if (!raw) { setProfileStatus(""); return; }
+    if (!raw) { setProfileStatus(""); setSelected(null); return; }
     setProfileStatus("checking on the server…");
     const r = await U.api(`/api/observe/calibration-profiles/validate?${profileQuery({ path: raw })}`, { timeoutMs: 15000 });
     if (seq !== profileCheckSeq) return;                  // a newer check superseded this one
-    if (!r.ok) { setProfileStatus(`NOT USABLE: ${r.error.message}`, "status-error"); return; }
+    if (!r.ok) { setSelected(null); setProfileStatus(`REJECTED: ${r.error.message}`, "status-error"); return; }
     const d = r.data.data, c = d.compatibility || {};
     if (d.path !== raw) $("f-ql-cal").value = d.path;   // normalized server path (e.g. .npz -> .json)
-    const cls = c.status === "COMPATIBLE" ? "status-ok" : (c.status === "INCOMPATIBLE" ? "status-error" : "status-unknown");
-    setProfileStatus(`valid server profile · ${c.status || "UNKNOWN"} with this observation: ${c.reason || "—"}`, cls);
+    setSelected(d);
+    if (c.status === "INCOMPATIBLE") { setProfileStatus(`REJECTED for this observation: ${c.reason}`, "status-error"); return; }
+    setProfileStatus(`valid server profile · ${c.status || "UNKNOWN"} with this observation: ${c.reason || "—"}`,
+                     c.status === "COMPATIBLE" ? "status-ok" : "status-unknown");
   }
-  function renderProfilePicker(list) {
-    const tbody = document.querySelector("#f-ql-cal-table tbody");
-    tbody.textContent = "";
-    $("f-ql-cal-picker-note").textContent = list.profiles.length
-      ? `${list.profiles.length} profile(s) on the ALMITA server under ${list.root}/ — compatibility checked against the frequency, sample rate and gain above.`
-      : `No calibration profile found on the ALMITA server under ${list.root}/.`;
-    for (const p of list.profiles) {
-      const tr = document.createElement("tr");
-      const s = p.summary || {};
-      const c = p.compatibility || {};
-      const cells = [p.path, s.created_utc || "—", p.valid ? `${s.center_frequency_hz} / ${s.sample_rate_hz} / ${s.gain_db}` : "—",
-                     p.valid ? `${c.status}: ${c.reason}` : `INVALID: ${p.error}`];
-      for (const v of cells) { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); }
-      const td = document.createElement("td");
-      const b = document.createElement("button");
-      b.type = "button"; b.textContent = "USE"; b.disabled = !p.valid;
-      b.addEventListener("click", () => { $("f-ql-cal").value = p.path; $("f-ql-cal-picker").hidden = true; validateProfilePath(); });
-      td.appendChild(b); tr.appendChild(td);
-      if (p.valid && c.status !== "COMPATIBLE") tr.className = "row-warn";
+  function cell(tr, text, cls) { const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; }
+  function renderExplorer(view) {
+    const crumbs = $("f-ql-cal-crumbs"); crumbs.textContent = "";
+    view.breadcrumbs.forEach((b, i) => {
+      if (i) { const sep = document.createElement("span"); sep.textContent = "/"; crumbs.appendChild(sep); }
+      const btn = document.createElement("button"); btn.type = "button"; btn.textContent = i === 0 ? view.root : b.name;
+      btn.addEventListener("click", () => browse(b.path)); crumbs.appendChild(btn);
+    });
+    const nProfiles = view.files.filter((f) => f.type === "profile").length;
+    $("f-ql-cal-picker-note").textContent = `${view.dir}/ on the ALMITA server — ${view.dirs.length} folder(s), ${nProfiles} profile(s). `
+      + "Compatibility is checked against the frequency, sample rate and gain above. Selecting never copies or overwrites a file.";
+    const tbody = document.querySelector("#f-ql-cal-table tbody"); tbody.textContent = "";
+    const open = (label, path) => {
+      const tr = document.createElement("tr"); cell(tr, label, "fx-name"); cell(tr, ""); cell(tr, "folder");
+      const b = document.createElement("button"); b.type = "button"; b.textContent = "OPEN"; b.addEventListener("click", () => browse(path));
+      cell(tr, "").appendChild(b); tbody.appendChild(tr);
+    };
+    if (view.parent) open("../", view.parent);
+    for (const d of view.dirs) open(d.name + "/", d.path);
+    for (const f of view.files) {
+      const tr = document.createElement("tr"); const c = f.compatibility || {};
+      cell(tr, f.name, "fx-name"); cell(tr, f.valid ? fmtValues(f.summary) : "—");
+      cell(tr, !f.valid ? `REJECTED: ${f.error}` : (c.status === "INCOMPATIBLE" ? `REJECTED: ${c.reason}` : `${c.status}: ${c.reason}`));
+      const b = document.createElement("button"); b.type = "button"; b.textContent = "SELECT"; b.disabled = !f.selectable;
+      b.addEventListener("click", () => { $("f-ql-cal").value = f.path; $("f-ql-cal-picker").hidden = true; validateProfilePath(); });
+      cell(tr, "").appendChild(b);
+      if (!f.selectable) tr.className = "row-warn";
       tbody.appendChild(tr);
     }
   }
-  $("f-ql-cal-browse").addEventListener("click", U.guard($("f-ql-cal-browse"), async () => {
-    const r = await U.api(`/api/observe/calibration-profiles?${profileQuery()}`, { timeoutMs: 30000 });
-    if (!r.ok) { setProfileStatus(`could not list server profiles: ${r.error.message}`, "status-error"); return; }
-    renderProfilePicker(r.data.data);
+  async function browse(dir) {
+    const r = await U.api(`/api/observe/calibration-profiles/browse?${profileQuery({ dir: dir || "" })}`, { timeoutMs: 30000 });
+    if (!r.ok) { setProfileStatus(`could not browse the server: ${r.error.message}`, "status-error"); return false; }
+    renderExplorer(r.data.data);
     $("f-ql-cal-picker").hidden = false;
-  }, "LISTING…"));
+    return true;
+  }
+  $("f-ql-cal-browse").addEventListener("click", U.guard($("f-ql-cal-browse"), async () => {
+    const cur = $("f-ql-cal").value.trim();           // open where the current selection lives, else the root
+    const dir = cur.startsWith("data/calibration/") ? cur.slice(0, cur.lastIndexOf("/")) : "";
+    if (!(await browse(dir)) && dir) await browse("");
+  }, "OPENING…"));
+  $("f-ql-cal-close").addEventListener("click", () => { $("f-ql-cal-picker").hidden = true; });
   $("f-ql-cal").addEventListener("change", validateProfilePath);
   for (const id of ["f-freq", "f-rate", "f-gain"]) $(id).addEventListener("change", validateProfilePath);
 

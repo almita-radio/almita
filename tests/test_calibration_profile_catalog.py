@@ -154,3 +154,76 @@ def test_http_list_and_validate(tmp_path, monkeypatch, repo):
         assert status == 400 and "only profiles under data/calibration/" in body["error"]
         status, body = _get(f"{base}/api/observe/calibration-profiles?center_frequency_hz=abc")
         assert status == 400
+
+
+# ------------------------------------------------------------------ file-explorer view (one server directory at a time)
+
+def _hashes(root):
+    import hashlib
+    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_browse_root_shows_directories_with_breadcrumbs_and_nothing_outside(repo):
+    root, cal = repo
+    out = cat.browse_directory("", cal, root, MAIN)
+    assert out["disk"] == "server" and out["dir"] == "data/calibration" and out["parent"] is None
+    assert [d["name"] for d in out["dirs"]] == ["BROKEN", "WIZARD-A", "WIZARD-OLD"]
+    assert out["files"] == [] and out["breadcrumbs"] == [{"name": "calibration", "path": "data/calibration"}]
+
+
+def test_browse_a_profile_directory_shows_name_dir_values_and_why_one_is_rejected(repo):
+    root, cal = repo
+    good = cat.browse_directory("data/calibration/WIZARD-A/observe_profile", cal, root, MAIN)
+    assert good["parent"] == "data/calibration/WIZARD-A"
+    [f] = good["files"]
+    assert (f["name"], f["dir"], f["selectable"]) == ("calibration_profile_v1.json", "data/calibration/WIZARD-A/observe_profile", True)
+    assert (f["summary"]["center_frequency_hz"], f["summary"]["sample_rate_hz"], f["summary"]["gain_db"]) == (1420405752, 2400000, 40.2)
+    old = cat.browse_directory("data/calibration/WIZARD-OLD/observe_profile", cal, root, MAIN)["files"][0]
+    assert old["selectable"] is False and old["compatibility"]["status"] == "INCOMPATIBLE"
+    assert "center frequency" in old["compatibility"]["reason"]
+    broken = cat.browse_directory("data/calibration/BROKEN", cal, root, MAIN)["files"][0]
+    assert broken["valid"] is False and broken["selectable"] is False and broken["error"]
+    state = cat.browse_directory("data/calibration/WIZARD-A", cal, root, MAIN)
+    assert [d["name"] for d in state["dirs"]] == ["observe_profile"]
+    assert state["files"][0]["type"] == "other" and "no .npz" in state["files"][0]["error"]   # wizard_state.json
+
+
+@pytest.mark.parametrize("bad", ["data", "data/calibration/../..", "/etc", "data\\calibration", "data/calibration/NOPE"])
+def test_browse_refuses_anything_outside_or_missing(repo, bad):
+    root, cal = repo
+    with pytest.raises(cat.ProfilePathError):
+        cat.browse_directory(bad, cal, root, MAIN)
+
+
+def test_browse_list_and_validate_never_write_to_the_profiles(repo):
+    root, cal = repo
+    before = _hashes(cal)
+    for d in ("", "data/calibration/WIZARD-A", "data/calibration/WIZARD-A/observe_profile", "data/calibration/BROKEN"):
+        cat.browse_directory(d, cal, root, MAIN)
+    cat.list_profiles(cal, root, MAIN)
+    cat.validate_profile_path("data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json", cal, root, MAIN)
+    assert _hashes(cal) == before
+
+
+def test_http_browse(tmp_path, monkeypatch, repo):
+    with _server(tmp_path, monkeypatch, repo) as base:
+        q = urllib.parse.urlencode({"dir": "data/calibration/WIZARD-OLD/observe_profile", **MAIN})
+        status, body = _get(f"{base}/api/observe/calibration-profiles/browse?{q}")
+        assert status == 200 and body["data"]["files"][0]["compatibility"]["status"] == "INCOMPATIBLE"
+        status, body = _get(f"{base}/api/observe/calibration-profiles/browse?dir=..%2F..")
+        assert status == 400 and body["disk"] == "server"
+
+
+# ------------------------------------------------------------------ OBSERVE preflight uses the same validation
+
+def test_preflight_blocks_an_unusable_quicklook_profile_and_passes_the_selected_one(repo, monkeypatch):
+    import observation_preflight as pf
+    root, cal = repo
+    monkeypatch.setattr(pf, "CALIBRATION_ROOT", cal)
+    good = pf._quicklook_check({"enabled": True, "calibration_profile_path": "data/calibration/WIZARD-A/observe_profile/calibration_profile_v1.json"})
+    assert good["status"] == pf.PASS and "1420405752 Hz, 2400000 sps, 40.2 dB" in good["detail"]
+    for bad, why in (("data/calibration/NOPE/calibration_profile_v1.json", "does not exist"),
+                     ("data/calibration/BROKEN/calibration_profile_v1.json", "not a valid calibration profile"),
+                     ("../secret.json", "only profiles under")):
+        res = pf._quicklook_check({"enabled": True, "calibration_profile_path": bad})
+        assert (res["status"], res["criticality"]) == (pf.BLOCK, pf.REQUIRED) and why in res["detail"], res

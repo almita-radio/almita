@@ -185,17 +185,27 @@ def _rfi_ref_check(rfi_ref_cfg: Dict[str, Any], port: int) -> Dict[str, Any]:
                   "without touching it (MAIN unaffected)")
 
 
+CALIBRATION_ROOT = Path(__file__).resolve().parent / "data" / "calibration"
+
+
 def _quicklook_check(quicklook_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """With QUICKLOOK enabled, quicklook_live is started with exactly this path and loads it at once, so a path
+    the server cannot use BLOCKs here (it used to be a WARNING, and the run then started with a Quicklook that
+    could only fail). Same validation as the web selector (calibration_profile_catalog.validate_profile_path):
+    a file under data/calibration on this server, its .npz next to it, loadable by Quicklook's own loader."""
     if not quicklook_cfg.get("enabled"):
         return _check("Quicklook", "QUICKLOOK", OPTIONAL, PASS, "disabled by request; not checked")
+    import calibration_profile_catalog
     profile_path = quicklook_cfg.get("calibration_profile_path")
     try:
-        with open(profile_path, "r", encoding="utf-8") as handle:
-            json.load(handle)
-        return _check("Quicklook", "QUICKLOOK", OPTIONAL, PASS, f"calibration profile OK: {profile_path}")
-    except Exception as exc:
-        return _check("Quicklook", "QUICKLOOK", OPTIONAL, WARNING,
-                       f"calibration profile unavailable ({profile_path}): {type(exc).__name__}: {exc}")
+        found = calibration_profile_catalog.validate_profile_path(profile_path, CALIBRATION_ROOT, CALIBRATION_ROOT.parent.parent)
+    except calibration_profile_catalog.ProfilePathError as exc:
+        return _check("Quicklook", "QUICKLOOK", REQUIRED, BLOCK,
+                      f"calibration profile not usable ({profile_path}): {exc} - select a server profile, or disable QUICKLOOK")
+    s = found["summary"]
+    return _check("Quicklook", "QUICKLOOK", OPTIONAL, PASS,
+                  f"calibration profile OK: {found['path']} ({s.get('center_frequency_hz')} Hz, {s.get('sample_rate_hz')} sps, "
+                  f"{s.get('gain_db')} dB)")
 
 
 def planned_profile_compatibility(profile: Dict[str, Any], main_cfg: Dict[str, Any]) -> Dict[str, str]:

@@ -293,7 +293,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "status": "OK", "data": almita_web_system.version_info()})
             if path == "/api/observe/defaults":
                 return _json_response(self, 200, _observe_defaults())
-            if path in ("/api/observe/calibration-profiles", "/api/observe/calibration-profiles/validate"):
+            if path in ("/api/observe/calibration-profiles", "/api/observe/calibration-profiles/validate",
+                        "/api/observe/calibration-profiles/browse"):
                 return self._handle_calibration_profiles(path)
             if path == "/api/observe/status":
                 status = observation_orchestrator.get_status()
@@ -393,8 +394,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         _write_body(self, data)
 
     def _handle_calibration_profiles(self, path: str) -> None:
-        """Read-only: server-side calibration profiles for OBSERVE's quicklook.calibration_profile_path (list, or
-        validate one path). Only files under the calibration root on THIS server - see calibration_profile_catalog."""
+        """Read-only: server-side calibration profiles for OBSERVE's quicklook.calibration_profile_path (list, browse
+        one directory, or validate one path). Only files under the calibration root on THIS server - see calibration_profile_catalog."""
         import calibration_profile_catalog as catalog
         query = parse_qs(urlsplit(self.path).query)
 
@@ -409,6 +410,12 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         except ValueError as exc:
             return _json_response(self, 400, {"ok": False, "error": str(exc)})
         root, repo_root = almita_web_ops.SERVE_ROOTS["calibration"], almita_web_ops.ROOT
+        if path.endswith("/browse"):
+            try:
+                data = catalog.browse_directory((query.get("dir") or [""])[0], root, repo_root, main)
+            except catalog.ProfilePathError as exc:
+                return _json_response(self, 400, {"ok": False, "error": str(exc), "disk": "server"})
+            return _json_response(self, 200, {"ok": True, "data": data})
         if path.endswith("/validate"):
             try:
                 data = catalog.validate_profile_path((query.get("path") or [""])[0], root, repo_root, main)

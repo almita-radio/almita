@@ -176,3 +176,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .wz-sky{display:block;width:100%;max-width:420px;aspect-ratio:1/1;height:auto;margin:10px auto 4px;border:1px solid var(--line);border-radius:8px}
 .wz-sky-legend{display:block;width:100%;max-width:300px;height:34px;margin:0 auto 6px}
 .wz-sky-note{text-align:center}
+
+/* OBSERVE: calibration profile explorer (server files only) */
+.file-explorer{border:1px solid var(--line);margin:6px 0 10px;padding:6px}
+.fx-head{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font:11px/1.4 ui-monospace,monospace}
+.fx-disk{font-weight:700;color:var(--accent);letter-spacing:.08em}
+.fx-crumbs{display:flex;flex-wrap:wrap;gap:2px;flex:1}
+.fx-crumbs button{background:none;border:0;color:var(--text);padding:0 2px;font:inherit;cursor:pointer;text-decoration:underline}
+.fx-crumbs span{color:var(--muted)}
+.fx-name{overflow-wrap:anywhere}
+.fx-selected{font-family:ui-monospace,monospace;white-space:pre-line}

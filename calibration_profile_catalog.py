@@ -109,7 +109,7 @@ def validate_profile_path(raw: Any, root: Path, repo_root: Path, main: Optional[
         raise ProfilePathError("invalid path")
     if re.match(r"^[A-Za-z]:[\\/]", text) or "\\" in text or "fakepath" in text.lower() or text.lower().startswith("file:"):
         raise ProfilePathError("this looks like a path on the browser's computer - the ALMITA server cannot read it; "
-                               "pick a profile that exists on the server (SELECT SERVER PROFILE)")
+                               "pick a profile that exists on the server (BROWSE ALMITA SERVER)")
     candidate = Path(text)
     if not candidate.is_absolute():
         candidate = Path(repo_root) / candidate
@@ -136,3 +136,66 @@ def validate_profile_path(raw: Any, root: Path, repo_root: Path, main: Optional[
     rel = str(candidate.resolve().relative_to(Path(repo_root).resolve()))
     return {"path": rel, "disk": "server", "valid": True, "summary": _summary(profile["metadata"]),
             "compatibility": _compatibility(profile, main)}
+
+
+MAX_BROWSE_ENTRIES = 300
+
+
+def _profile_entry(path: Path, repo_root: Path, main: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    rel = path.resolve().relative_to(Path(repo_root).resolve())
+    entry: Dict[str, Any] = {"type": "profile", "name": path.name, "dir": str(rel.parent), "path": str(rel)}
+    try:
+        profile = _load(path)
+    except Exception as exc:  # noqa: BLE001 - a broken file is listed with its reason, never fatal
+        entry.update(valid=False, selectable=False, error=f"{type(exc).__name__}: {exc}", summary=None, compatibility=None)
+        return entry
+    compat = _compatibility(profile, main)
+    entry.update(valid=True, error=None, summary=_summary(profile["metadata"]), compatibility=compat,
+                 selectable=compat["status"] != "INCOMPATIBLE")
+    return entry
+
+
+def browse_directory(rel_dir: Any, root: Path, repo_root: Path, main: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """One directory of the calibration root on the SERVER, for a file-explorer view: its sub-directories and
+    every .json in it - profiles with their frequency / sample rate / gain and compatibility against `main`
+    (`selectable` is False for an invalid or INCOMPATIBLE one, with the reason), other .json files with why they
+    are not a profile. Read-only: nothing is written, copied or overwritten. Raises ProfilePathError for a
+    directory outside the root, a symlink or a missing one."""
+    root_r, repo_r = Path(root).resolve(), Path(repo_root).resolve()
+    text = (rel_dir or "").strip() if isinstance(rel_dir, str) else ""
+    if "\x00" in text or "\\" in text:
+        raise ProfilePathError("invalid directory")
+    target = root_r if not text else (repo_r / text)
+    if target.is_symlink() or not _within(target, root_r):
+        raise ProfilePathError(f"only directories under {root_r.relative_to(repo_r)}/ on the ALMITA server can be browsed")
+    target = target.resolve()
+    if not target.is_dir():
+        raise ProfilePathError("directory does not exist on the ALMITA server")
+    dirs: List[Dict[str, Any]] = []
+    files: List[Dict[str, Any]] = []
+    for child in sorted(target.iterdir(), key=lambda p: p.name):
+        if len(dirs) + len(files) >= MAX_BROWSE_ENTRIES:
+            break
+        if child.is_symlink() or child.name.startswith("."):
+            continue
+        rel = str(child.relative_to(repo_r))
+        if child.is_dir():
+            dirs.append({"type": "dir", "name": child.name, "path": rel})
+        elif child.suffix == ".json":
+            if _looks_like_profile(child):
+                files.append(_profile_entry(child, repo_r, main))
+            else:
+                reason = ("no .npz arrays next to it" if not child.with_suffix(".npz").is_file()
+                          else "not a calibration profile (missing center_frequency_hz / absolute_calibration)")
+                files.append({"type": "other", "name": child.name, "dir": str(child.parent.relative_to(repo_r)),
+                              "path": rel, "valid": False, "selectable": False, "error": reason,
+                              "summary": None, "compatibility": None})
+    crumbs, here = [], target
+    while True:
+        crumbs.append({"name": here.name, "path": str(here.relative_to(repo_r))})
+        if here == root_r:
+            break
+        here = here.parent
+    return {"disk": "server", "root": str(root_r.relative_to(repo_r)), "dir": str(target.relative_to(repo_r)),
+            "parent": None if target == root_r else str(target.parent.relative_to(repo_r)),
+            "breadcrumbs": list(reversed(crumbs)), "dirs": dirs, "files": files, "compared_against": main}
