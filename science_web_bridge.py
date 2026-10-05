@@ -490,33 +490,42 @@ def mosaic_geometry_summary(filtered_input, base_grid, nodes, point_cell, planne
     return out
 
 
-# ------------------------------------------------------------------ B/C in row bands: same pixels, bounded RAM
+# ------------------------------------------------------------------ B/C in 2D tiles: same pixels, bounded RAM and time
 # A full (Nv, Ny, Nx) cube costs science_engine.validation.PEAK_RAM_BYTES_PER_VOXEL (57 B: four float64/int64
-# accumulators, value/variance/uncertainty at finalize, valid). The real 400-point session's C raster
-# (120x120 x 8192 channels) needed ~6.6 GB. Every voxel of build_cube() depends only on its own pixel's beam
-# weights and the points (always summed in ascending point_index order), and integrated_map() reduces each
-# pixel over velocity alone, so the map can be built one band of rows at a time and stitched: same values,
-# same pixels, peak RAM bounded by one band.
+# accumulators, value/variance/uncertainty at finalize, valid); the real 400-point session's C raster needed one of
+# ~6.6 GB (120x120 board) / ~9.1 GB (132x150 shared-projection raster) x 8192 channels. Every voxel of build_cube()
+# depends only on its own pixel's beam weights and on the points (always summed in ascending point_index order), and
+# integrated_map() reduces each pixel over velocity alone - so the map is built one small 2D tile at a time with the
+# frozen build_cube()/integrated_map() and stitched: same values, same pixels. A tile also only accumulates the
+# points whose support reaches it (build_cube() skips the rest), which is what makes it fast: the frozen engine
+# otherwise adds every point to every voxel of the grid, most of them with a zero weight.
 QUALITY_PROXY_BYTES_PER_VOXEL = 18   # kept uncertainty (8) + valid (1); assess_science_quality's nanmedian copy (8) + isfinite (1)
+TILE_TARGET_BYTES = 256 * 1024 ** 2  # one tile's cube (57 B/voxel): small enough that few points reach it
 
 
-def _row_band_grid(grid, y0: int, y1: int):
-    """Rows [y0, y1) of `grid` as a ScienceGrid whose pixel_centers_deg() are those same rows' centres.
-    pixel_centers_deg() divides x by cos(centre dec), so the band, centred at another dec, gets its width
-    scaled by cos(band dec)/cos(grid dec) - its RA per pixel then matches the full grid (to float rounding)."""
+def _tile_grid(grid, y0: int, y1: int, x0: int, x1: int):
+    """Pixels [y0:y1, x0:x1] of `grid` as a ScienceGrid whose pixel_centers_deg() are those same pixels' centres.
+    pixel_centers_deg() computes ra = centre_ra + x / cos(centre_dec): a tile centred at another dec gets its width
+    scaled by cos(tile dec) / cos(grid dec) and its centre RA shifted by its own x offset / cos(grid dec), so every
+    pixel lands on the full grid's RA/Dec (to float rounding, ~1e-13 deg)."""
     from science_engine.models import ScienceGrid
+    xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
     ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
-    band_dec = grid.center_dec_deg + 0.5 * (ys[y0] + ys[y1])
-    scale = np.cos(np.radians(band_dec)) / np.cos(np.radians(grid.center_dec_deg))
-    return ScienceGrid(frame=grid.frame, center_ra_deg=grid.center_ra_deg, center_dec_deg=float(band_dec),
-                       width_deg=float(grid.width_deg * scale), height_deg=float(ys[y1] - ys[y0]),
-                       pixel_scale_deg=grid.pixel_scale_deg, nx=grid.nx, ny=y1 - y0)
+    cos0 = np.cos(np.radians(grid.center_dec_deg))
+    tile_dec = grid.center_dec_deg + 0.5 * (ys[y0] + ys[y1])
+    x_mid = 0.5 * (xs[x0] + xs[x1])
+    scale = np.cos(np.radians(tile_dec)) / cos0
+    return ScienceGrid(frame=grid.frame, center_ra_deg=float((grid.center_ra_deg + x_mid / cos0) % 360.0),
+                       center_dec_deg=float(tile_dec), width_deg=float((xs[x1] - xs[x0]) * scale),
+                       height_deg=float(ys[y1] - ys[y0]), pixel_scale_deg=grid.pixel_scale_deg, nx=x1 - x0, ny=y1 - y0)
 
 
-def band_plan(grid, n_velocity_channels: int, n_points: int, keep_quality_inputs: bool) -> dict[str, Any]:
-    """Rows per band so that one band's cube + the fixed load stays within the budget science_engine's own
-    preflight applies (min of 3 GB and 60% of MemAvailable) - the budget is never raised. ok=False only if even a
-    single-row band does not fit."""
+def tile_plan(grid, n_velocity_channels: int, n_points: int, keep_quality_inputs: bool) -> dict[str, Any]:
+    """Tile size and the peak RAM it implies, from the allocations the tiled build really makes:
+    baseline (interpreter + imports) + the ingested spectra (48 B per point-channel) + ONE tile cube (57 B/voxel) +,
+    for map B only, the full-grid uncertainty/valid kept for assess_science_quality (18 B/voxel, see
+    QUALITY_PROXY_BYTES_PER_VOXEL). The budget is the same min(3 GB, 60% of MemAvailable) science_engine's own
+    preflight uses - never raised. ok=False only if even a one-pixel tile does not fit."""
     from science_engine.validation import (MEMORY_FRACTION_OF_AVAILABLE, PEAK_RAM_BASELINE_BYTES,
                                            PEAK_RAM_BYTES_PER_VOXEL, INPUT_BYTES_PER_POINT_CHANNEL,
                                            available_memory_bytes)
@@ -526,26 +535,30 @@ def band_plan(grid, n_velocity_channels: int, n_points: int, keep_quality_inputs
     full_voxels = grid.nx * grid.ny * n_velocity_channels
     fixed = (PEAK_RAM_BASELINE_BYTES + n_points * n_velocity_channels * INPUT_BYTES_PER_POINT_CHANNEL
              + (full_voxels * QUALITY_PROXY_BYTES_PER_VOXEL if keep_quality_inputs else 0))
-    per_row = grid.nx * n_velocity_channels * PEAK_RAM_BYTES_PER_VOXEL
-    rows = int(min(grid.ny, max(0, (budget - fixed) // per_row)))
-    n_bands = -(-grid.ny // rows) if rows else None
-    peak = fixed + rows * per_row if rows else fixed + per_row
-    return {"ok": rows >= 1, "rows_per_band": rows, "n_bands": n_bands, "estimated_peak_bytes": int(peak),
-            "budget_bytes": int(budget), "full_cube_estimate_bytes": int(full_voxels * PEAK_RAM_BYTES_PER_VOXEL + fixed),
-            "detail": (f"{grid.ny}x{grid.nx} x {n_velocity_channels} channels in {n_bands} band(s) of <= {rows} row(s): "
-                       f"estimated peak ~{peak / 1024**2:.0f} MB vs budget {budget / 1024**2:.0f} MB "
-                       f"(one full cube would need ~{(full_voxels * PEAK_RAM_BYTES_PER_VOXEL + fixed) / 1024**2:.0f} MB)"
-                       if rows else f"even one row ({per_row / 1024**2:.0f} MB) + fixed load "
-                       f"({fixed / 1024**2:.0f} MB) exceeds the {budget / 1024**2:.0f} MB budget")}
+    per_pixel = n_velocity_channels * PEAK_RAM_BYTES_PER_VOXEL
+    tile_bytes = max(0, min(TILE_TARGET_BYTES, budget - fixed))
+    side = int(np.sqrt(tile_bytes // per_pixel)) if tile_bytes >= per_pixel else 0
+    ty, tx = min(side, grid.ny), min(side, grid.nx)
+    n_tiles = (-(-grid.ny // ty)) * (-(-grid.nx // tx)) if side else None
+    peak = fixed + (ty * tx if side else 1) * per_pixel
+    full = full_voxels * PEAK_RAM_BYTES_PER_VOXEL + PEAK_RAM_BASELINE_BYTES + n_points * n_velocity_channels * INPUT_BYTES_PER_POINT_CHANNEL
+    return {"ok": side >= 1, "tile_shape": [ty, tx] if side else None, "n_tiles": n_tiles,
+            "estimated_peak_bytes": int(peak), "budget_bytes": int(budget), "single_cube_estimate_bytes": int(full),
+            "detail": (f"{grid.ny}x{grid.nx} x {n_velocity_channels} channels in {n_tiles} tile(s) of <= {ty}x{tx} px: "
+                       f"estimated peak ~{peak / 1024**2:.0f} MB vs budget {budget / 1024**2:.0f} MB (baseline + spectra "
+                       f"+ one tile cube{' + B quality inputs' if keep_quality_inputs else ''}; a single full cube "
+                       f"would need ~{full / 1024**2:.0f} MB)" if side else
+                       f"even one pixel ({per_pixel / 1024**2:.1f} MB) + fixed load ({fixed / 1024**2:.0f} MB) exceeds "
+                       f"the {budget / 1024**2:.0f} MB budget")}
 
 
-def integrated_map_in_bands(filtered_input, grid, beam, sc, *, keep_quality_inputs: bool = False):
-    """build_cube() + integrated_map() over `grid`, one row band at a time (band_plan()), stitched into ONE
-    SpatialMap on `grid`. Returns (map, build_info, quality_cube): build_info is the engine's own when one
-    band covers the grid; otherwise per-point facts are merged (used = union over bands, OUTSIDE_BEAM_SUPPORT
-    only for a point no band used). quality_cube (keep_quality_inputs) is a ScienceCube carrying the real
-    full-grid uncertainty/valid - all assess_science_quality() reads - with the other arrays as zero-cost
-    broadcast views, never fabricated values."""
+def integrated_map_in_tiles(filtered_input, grid, beam, sc, *, keep_quality_inputs: bool = False):
+    """build_cube() + integrated_map() over `grid`, one 2D tile at a time (tile_plan()), stitched into ONE
+    SpatialMap on `grid`. Returns (map, build_info, quality_cube): build_info is the engine's own when one tile
+    covers the grid; otherwise per-point facts are merged (used = union over tiles, OUTSIDE_BEAM_SUPPORT only
+    for a point no tile used). quality_cube (keep_quality_inputs) is a ScienceCube carrying the real full-grid
+    uncertainty/valid - all assess_science_quality() reads - with the other arrays as zero-cost broadcast views,
+    never fabricated values."""
     import gc
     from science_engine.cube import build_cube, canonical_velocity_axis
     from science_engine.integration import integrated_map
@@ -553,34 +566,39 @@ def integrated_map_in_bands(filtered_input, grid, beam, sc, *, keep_quality_inpu
 
     velocity_axis = canonical_velocity_axis(filtered_input)
     nv = int(velocity_axis.shape[0])
-    plan = band_plan(grid, nv, len(filtered_input.points), keep_quality_inputs)
+    plan = tile_plan(grid, nv, len(filtered_input.points), keep_quality_inputs)
     if not plan["ok"]:
         raise ValueError(f"BLOCKED before allocating {grid.ny}x{grid.nx}: {plan['detail']}")
-    rows = plan["rows_per_band"]
-    parts, infos = [], []
+    ty, tx = plan["tile_shape"]
+    ny, nx = grid.ny, grid.nx
+    value = np.full((ny, nx), np.nan); unc = np.full((ny, nx), np.nan); wsum = np.zeros((ny, nx))
+    npt = np.zeros((ny, nx), dtype=np.int64); valid = np.zeros((ny, nx), dtype=bool); cov = np.zeros((ny, nx))
+    metadata, infos = None, []
     unc_full = valid_full = None
     if keep_quality_inputs:
-        unc_full = np.empty((nv, grid.ny, grid.nx), dtype=np.float64)
-        valid_full = np.empty((nv, grid.ny, grid.nx), dtype=bool)
-    for y0 in range(0, grid.ny, rows):
-        y1 = min(grid.ny, y0 + rows)
-        band = grid if (y0, y1) == (0, grid.ny) else _row_band_grid(grid, y0, y1)
-        cube = build_cube(filtered_input, band, beam, sc)
-        parts.append(integrated_map(cube, sc))
-        infos.append(cube.build_info)
-        if keep_quality_inputs:
-            unc_full[:, y0:y1] = cube.uncertainty
-            valid_full[:, y0:y1] = cube.valid
-        del cube
-        gc.collect()
-
-    def cat(name):
-        arrs = [getattr(m, name) for m in parts]
-        return None if arrs[0] is None else np.concatenate(arrs, axis=0)
-    first = parts[0]
-    stitched = SpatialMap(grid=grid, kind=first.kind, value=cat("value"), uncertainty=cat("uncertainty"),
-                          weight_sum=cat("weight_sum"), n_pointings=cat("n_pointings"), valid=cat("valid"),
-                          units=first.units, metadata=dict(first.metadata), spectral_coverage=cat("spectral_coverage"))
+        unc_full = np.empty((nv, ny, nx), dtype=np.float64)
+        valid_full = np.empty((nv, ny, nx), dtype=bool)
+    for y0 in range(0, ny, ty):
+        y1 = min(ny, y0 + ty)
+        for x0 in range(0, nx, tx):
+            x1 = min(nx, x0 + tx)
+            tile = grid if (y0, y1, x0, x1) == (0, ny, 0, nx) else _tile_grid(grid, y0, y1, x0, x1)
+            cube = build_cube(filtered_input, tile, beam, sc)
+            m = integrated_map(cube, sc)
+            sl = (slice(y0, y1), slice(x0, x1))
+            value[sl], wsum[sl], npt[sl], valid[sl], cov[sl] = m.value, m.weight_sum, m.n_pointings, m.valid, m.spectral_coverage
+            if m.uncertainty is not None:
+                unc[sl] = m.uncertainty
+            metadata = metadata or dict(m.metadata)
+            infos.append(cube.build_info)
+            if keep_quality_inputs:
+                unc_full[:, y0:y1, x0:x1] = cube.uncertainty
+                valid_full[:, y0:y1, x0:x1] = cube.valid
+            del cube, m
+            gc.collect()
+    stitched = SpatialMap(grid=grid, kind="integrated_relative_intensity", value=value, uncertainty=unc,
+                          weight_sum=wsum, n_pointings=npt, valid=valid, units="relative_intensity_dimensionless * m/s",
+                          metadata=metadata, spectral_coverage=cov)
     if len(infos) == 1:
         info = infos[0]
     else:
@@ -605,9 +623,9 @@ def integrated_map_in_bands(filtered_input, grid, beam, sc, *, keep_quality_inpu
                     n_nonfinite_rejected=int(sum(inf["n_nonfinite_rejected"] for inf in infos)),
                     resample={**infos[0]["resample"],
                               "n_points_resampled": max(inf["resample"]["n_points_resampled"] for inf in infos),
-                              "note": f"per-band statistics (max over {len(infos)} row bands); each point's own "
-                                      f"resampling does not depend on the band"},
-                    row_bands={"n_bands": len(infos), "rows_per_band": rows})
+                              "note": f"per-tile statistics (max over {len(infos)} tiles); each point's own "
+                                      f"resampling does not depend on the tile"},
+                    tiles={"n_tiles": len(infos), "tile_shape": [ty, tx]})
     quality_cube = None
     if keep_quality_inputs:
         zeros = np.broadcast_to(np.float64(0.0), unc_full.shape)
@@ -615,8 +633,8 @@ def integrated_map_in_bands(filtered_input, grid, beam, sc, *, keep_quality_inpu
                                    uncertainty=unc_full, weight_sum=zeros,
                                    n_pointings=np.broadcast_to(np.int64(0), unc_full.shape), valid=valid_full,
                                    build_info=info)
-    stitched.metadata["row_bands"] = {"n_bands": len(infos), "rows_per_band": rows,
-                                      "estimated_peak_bytes": plan["estimated_peak_bytes"]}
+    stitched.metadata["tiles"] = {"n_tiles": len(infos), "tile_shape": [ty, tx],
+                                  "estimated_peak_bytes": plan["estimated_peak_bytes"]}
     return stitched, info, quality_cube
 
 
@@ -1123,7 +1141,7 @@ def bc_exact_coordinate_consistency_summary(filtered_input, cfg: MapConfig, spat
     def _companion(factor_hi: int):
         factor_lo, k = _odd_ratio_companion_factor(factor_hi)
         grid_lo = board_grid if factor_lo == 1 else build_fine_grid(board_grid, factor_lo)
-        map_lo, _, _ = integrated_map_in_bands(filtered_input, grid_lo, beam, sc)
+        map_lo, _, _ = integrated_map_in_tiles(filtered_input, grid_lo, beam, sc)
         return grid_lo, map_lo, factor_lo, k
 
     def _exact_check(grid_lo, map_lo, grid_hi, map_hi, k) -> dict[str, Any]:
@@ -1261,15 +1279,15 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     beam = build_beam_model(sc)
     velocity_axis = canonical_velocity_axis(filtered_input)
 
-    # B and C: each built in row bands (integrated_map_in_bands) under the same 3 GB / 60%-of-MemAvailable
+    # B and C: each built in 2D tiles (integrated_map_in_tiles) under the same 3 GB / 60%-of-MemAvailable
     # budget, one after the other - a full C cube of the real 400-point session alone needed ~6.6 GB.
-    map_b, info_b, quality_cube_b = integrated_map_in_bands(filtered_input, grid_b, beam, sc, keep_quality_inputs=True)
+    map_b, info_b, quality_cube_b = integrated_map_in_tiles(filtered_input, grid_b, beam, sc, keep_quality_inputs=True)
     quality_b = assess_science_quality(filtered_input, quality_cube_b, sc, map_b)
     used_b = set(info_b["used_point_indices"])
     del quality_cube_b
     gc.collect()
 
-    map_c, info_c, _ = integrated_map_in_bands(filtered_input, grid_c, beam, sc)
+    map_c, info_c, _ = integrated_map_in_tiles(filtered_input, grid_c, beam, sc)
     used_c = set(info_c["used_point_indices"])
     gc.collect()
 
@@ -1858,21 +1876,21 @@ def cmd_plan(args) -> int:
             + ", ".join(f"{k}x: {c['max_point_to_nearest_pixel_deg']:.3f}" for k, c in cov.items())
             + f" vs support {spatial['support_radius_deg']:.3f} deg)" if not uncovered else
             f"{len(uncovered)} point(s) beyond support_radius_deg of every B/C pixel: {uncovered[:10]}")})
-    bands = {}
+    tiles = {}
     if mosaic_ok:
-        # RUN builds B THEN C, each in row bands sized to the budget (integrated_map_in_bands); B also keeps
+        # RUN builds B THEN C, each in 2D tiles sized to the budget (integrated_map_in_tiles); B also keeps
         # the full-grid uncertainty/valid that assess_science_quality() reads.
         for key, grid, keep in (("b", grid_b, True), ("c", grid_c, False)):
-            bands[key] = band_plan(grid, int(velocity_axis.shape[0]), len(filtered.points), keep)
-            checks.append({"name": f"memory_estimate_within_budget_map_{key}", "ok": bands[key]["ok"],
-                           "detail": bands[key]["detail"]})
+            tiles[key] = tile_plan(grid, int(velocity_axis.shape[0]), len(filtered.points), keep)
+            checks.append({"name": f"memory_estimate_within_budget_map_{key}", "ok": tiles[key]["ok"],
+                           "detail": tiles[key]["detail"]})
     blocked = any(not c["ok"] for c in checks)
     payload = {
         "config": cfg.to_dict(), "config_hash": cfg.config_hash(), "calibration_level_counts": counts,
         "board_grid": board.to_dict() if board else None,
         "raster_base_grid": base.to_dict() if base else None,
         "grid_b": grid_b.to_dict() if grid_b else None, "grid_c": grid_c.to_dict() if grid_c else None,
-        "n_rows": n_rows, "n_cols": n_cols, "mosaic_geometry": geometry, "row_bands": bands,
+        "n_rows": n_rows, "n_cols": n_cols, "mosaic_geometry": geometry, "tiles": tiles,
         "spatial_params": spatial, "real_instrument_beam_fwhm_deg": cfg.beam_fwhm_deg,
         "n_velocity_channels": int(velocity_axis.shape[0]),
         "checks": checks, "blocked": blocked,

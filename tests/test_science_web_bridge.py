@@ -773,17 +773,19 @@ def test_regular_board_keeps_its_square_cells_and_extent():
     assert (base.nx, base.ny, base.width_deg, base.height_deg) == (board.nx, board.ny, board.width_deg, board.height_deg)
 
 
-def test_row_band_grid_reproduces_the_full_grids_pixel_centres():
-    from science_web_bridge import _row_band_grid
+def test_tile_grid_reproduces_the_full_grids_pixel_centres():
+    from science_web_bridge import _tile_grid
     grid = ScienceGrid(frame="icrs", center_ra_deg=74.1, center_dec_deg=-33.45, width_deg=37.9, height_deg=33.2,
                        pixel_scale_deg=1.579 / 6, nx=144, ny=126)
     ra, dec = pixel_centers_deg(grid)
-    for y0, y1 in ((0, 7), (7, 64), (64, 126)):
-        bra, bdec = pixel_centers_deg(_row_band_grid(grid, y0, y1))
-        assert np.allclose(bra, ra[y0:y1], atol=1e-9, rtol=0) and np.allclose(bdec, dec[y0:y1], atol=1e-9, rtol=0)
+    for (y0, y1) in ((0, 7), (7, 64), (64, 126)):
+        for (x0, x1) in ((0, 13), (13, 100), (100, 144)):
+            bra, bdec = pixel_centers_deg(_tile_grid(grid, y0, y1, x0, x1))
+            assert np.allclose(bra, ra[y0:y1, x0:x1], atol=1e-9, rtol=0), (y0, x0)
+            assert np.allclose(bdec, dec[y0:y1, x0:x1], atol=1e-9, rtol=0), (y0, x0)
 
 
-def test_banded_map_equals_the_single_cube_map(monkeypatch):
+def test_tiled_map_equals_the_single_cube_map(monkeypatch):
     """The row-band builder must return the SAME map (values, sigma, coverage, n_pointings, used points) and
     the same quality verdict as one full cube - bands only bound memory."""
     import science_web_bridge as swb
@@ -801,12 +803,15 @@ def test_banded_map_equals_the_single_cube_map(monkeypatch):
     cube = build_cube(si, grid, beam, sc)
     ref = integrated_map(cube, sc)
     ref_quality = assess_science_quality(si, cube, sc, ref)
-    real_plan = swb.band_plan
-    monkeypatch.setattr(swb, "band_plan", lambda *a, **k: {**real_plan(*a, **k), "rows_per_band": 4})
-    banded, info, qcube = swb.integrated_map_in_bands(si, grid, beam, sc, keep_quality_inputs=True)
-    assert info["row_bands"]["n_bands"] == 5
+    real_plan = swb.tile_plan
+    monkeypatch.setattr(swb, "tile_plan", lambda *a, **k: {**real_plan(*a, **k), "tile_shape": [4, 5]})
+    banded, info, qcube = swb.integrated_map_in_tiles(si, grid, beam, sc, keep_quality_inputs=True)
+    assert info["tiles"]["n_tiles"] == 5 * 4                     # 18x18 px in 4x5 tiles
     for name in ("value", "uncertainty", "spectral_coverage", "weight_sum"):
-        assert np.allclose(getattr(banded, name), getattr(ref, name), rtol=1e-12, atol=0, equal_nan=True), name
+        # a tile's pixel centres equal the full grid's to ~1e-13 deg (float rounding): differences stay at ~1e-14
+        # of the field's own scale - a per-pixel relative test would only measure how close a value is to zero
+        scale = np.nanmax(np.abs(getattr(ref, name)))
+        assert np.allclose(getattr(banded, name), getattr(ref, name), rtol=0, atol=1e-12 * scale, equal_nan=True), name
     assert np.array_equal(banded.valid, ref.valid) and np.array_equal(banded.n_pointings, ref.n_pointings)
     assert info["used_point_indices"] == cube.build_info["used_point_indices"]
     quality = assess_science_quality(si, qcube, sc, banded)
@@ -819,14 +824,14 @@ def test_banded_map_equals_the_single_cube_map(monkeypatch):
             assert quality.metrics[key] == ref_value, key
 
 
-def test_band_plan_fits_the_real_c_raster_in_the_unchanged_budget():
+def test_tile_plan_fits_the_real_c_raster_in_the_unchanged_budget():
     """The real 400-point session's C raster: one cube needs ~6.6 GB; bands keep the estimate inside 3 GB."""
-    from science_web_bridge import band_plan
+    from science_web_bridge import tile_plan
     grid = ScienceGrid(frame="icrs", center_ra_deg=74.1, center_dec_deg=-33.45, width_deg=37.9, height_deg=33.2,
                        pixel_scale_deg=1.579 / 6, nx=144, ny=126)
-    plan = band_plan(grid, 8192, 400, keep_quality_inputs=False)
-    assert plan["full_cube_estimate_bytes"] > 3 * 1024 ** 3
-    assert plan["ok"] and plan["n_bands"] > 1
+    plan = tile_plan(grid, 8192, 400, keep_quality_inputs=False)
+    assert plan["single_cube_estimate_bytes"] > 3 * 1024 ** 3
+    assert plan["ok"] and plan["n_tiles"] > 1
     assert plan["estimated_peak_bytes"] <= plan["budget_bytes"] <= 3 * 1024 ** 3
 
 
