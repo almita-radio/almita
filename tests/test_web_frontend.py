@@ -773,17 +773,74 @@ def test_science_plan_handles_missing_spatial_params_without_crashing(tmp_path):
 
 def test_science_plan_shows_the_board_lattice_from_the_campaign_plan(tmp_path):
     """The board of a wide campaign comes from the plan's grid_row/grid_col; PLAN says so, with the spacing's
-    source and the largest A-cell vs B/C position offset (a real 30x30 deg campaign: 3.29 deg)."""
+    source, the shared A/B/C footprint and what a rectangular board would have misplaced (3.29 deg)."""
     facts = _science_facts({"nearest_neighbor_spacing_deg": 1.5638, "mosaic_spacing_deg": 1.578947,
                             "mosaic_spacing_source": "campaign_plan", "support_radius_deg": 1.9548,
                             "smoothing_fwhm_deg": 1.5638})
     facts["mosaic_geometry"] = {"lattice_source": "campaign_plan", "campaign_plan": "data/mosaic/C-1",
-                                "board_cell_center_offset_max_deg": 3.2935, "board_cell_center_offset_max_cells": 2.0859}
+                                "raster_extent_deg": [37.89, 33.16], "point_to_a_cell_node_max_deg": 0.0,
+                                "regular_board_offset_max_deg": 3.2935}
     out = run_page(tmp_path, "science", SCIENCE_ROUTES % json.dumps(facts), SCIENCE_DRIVER, budget=15000)
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
     assert "board lattice: campaign plan data/mosaic/C-1   spacing: 1.5789 deg (campaign_plan)" in out["summary"]
-    assert "offset in the B/C projection: 3.29 deg (2.09 cells)" in out["summary"]
+    assert "one footprint 37.89 x 33.16 deg" in out["summary"]
+    assert "a rectangular board would be off by up to 3.29 deg" in out["summary"]
+
+
+SCIENCE_RESULT_ROUTES = r"""
+window.__routes["POST /api/ops/start/science_heatmaps"] = { body: { data: { job_id: "run-1" } } };
+window.__routes["GET /api/ops/job/run-1"] = { body: { data: { job_id: "run-1", state: "EXITED", verdict: "PASS",
+  elapsed_s: 1, output_dir: "data/science/FAKE/S1", facts: { status: "COMPLETED" } } } };
+window.__routes["GET /api/ops/file"] = { body: {
+  campaign_id: "FAKE", reduce_session_id: "REDUCE-1", calibration_level_filter: "RELATIVE", data_completeness: "COMPLETE",
+  n_points_used: 2, n_points_filtered_in: 2, velocity_window_m_s: [-100000, 100000], color_vmin: 0, color_vmax: 2,
+  color_limits_basis: "test", grid_dims: { a: [1, 2], b: [8, 16], c: [16, 32] },
+  config: { interp_factor_b: 2, interp_factor_c: 4 }, spatial_params: { smoothing_fwhm_deg: 1 },
+  real_instrument_beam: { fwhm_deg: 20 }, spatial_confidence: { b: { single_point_fraction: 0 }, c: { single_point_fraction: 0 } },
+  quality_b: { state: "GOOD", reasons: [] }, thermal_drift: { status: "OK", note: "" }, exports: {} } };
+window.__routes["GET /api/ops/science/map"] = { body: { data: {
+  n_rows: 1, n_cols: 2, extent_deg: { half_w: 4, half_h: 2 }, color_vmin: 0, color_vmax: 2, color_stops: ["#440154", "#fde725"],
+  cells: [
+    { row: 0, col: 0, point_index: 1, valid: true, value: 1, uncertainty: 0.1, color: "#440154", ra_deg: 1, dec_degrees: -30,
+      point_status: "USED", corners_xy: [[-4, -2], [0, -2], [0, 0], [-3, 0]] },
+    { row: 0, col: 1, point_index: 2, valid: true, value: 2, uncertainty: 0.1, color: "#fde725", ra_deg: 2, dec_degrees: -30,
+      point_status: "USED", corners_xy: [[0, -2], [4, -2], [3, 0], [0, 0]] } ] } } };
+window.__routes["GET /api/ops/reduce/point"] = { status: 404, body: { error: "no spectrum in this test" } };
+"""
+
+
+def test_science_board_a_draws_quadrilaterals_and_clicks_inside_them(tmp_path):
+    """Map A on the canvas: each cell is its corners_xy quadrilateral, fitted into the square box like the B/C
+    images (object-fit: contain, equal scale, centred), west (col 0) left / east right; a click selects only
+    the cell whose polygon contains it - outside every polygon selects nothing."""
+    driver = SCIENCE_DRIVER + r"""
+const canvas = $("board-canvas-a");
+canvas.style.width = "400px"; canvas.style.height = "400px";
+$("btn-run").click();
+await until(() => window.__count("GET /api/ops/science/map") > 0, 6000);
+await new Promise((r) => setTimeout(r, 300));
+const ctx = canvas.getContext("2d");
+const dpr = window.devicePixelRatio || 1;
+const px = (x, y) => Array.from(ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data.slice(0, 3));
+// box 400x400, footprint 8x4 deg -> 50 px/deg, centred: y in [100, 300]; cells span y 200..300 (dec -2..0)
+out.left = px(120, 260); out.right = px(280, 260); out.above = px(200, 150);
+const rect = canvas.getBoundingClientRect();
+const click = (x, y) => canvas.dispatchEvent(new MouseEvent("click", { clientX: rect.left + x, clientY: rect.top + y, bubbles: true }));
+click(280, 260); await new Promise((r) => setTimeout(r, 100)); out.detailRight = $("cell-detail").textContent;
+$("cell-detail").textContent = ""; click(10, 210); await new Promise((r) => setTimeout(r, 100));
+out.detailOutsideSlantedEdge = $("cell-detail").textContent;
+"""
+    routes = SCIENCE_ROUTES % json.dumps(_science_facts({})) + SCIENCE_RESULT_ROUTES
+    out = run_page(tmp_path, "science", routes, driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["left"] == [0x44, 0x01, 0x54]      # west (col 0) on the left
+    assert out["right"] == [0xfd, 0xe7, 0x25]     # east on the right
+    assert out["above"] == [0x0d, 0x13, 0x17]     # inside the footprint but outside every cell: background
+    assert "real point 2" in out["detailRight"]
+    # (10, 210) is inside cell 0's bounding box but left of its slanted edge (-4,-2)->(-3,0), at x=45 px there
+    assert out["detailOutsideSlantedEdge"] == ""
 
 
 # ------------------------------------------------------------------ Field Console (8088): escaping, LINK state, empty data

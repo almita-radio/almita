@@ -238,16 +238,17 @@
   }, "PLANNING…"));
 
   // Where the board's rows/columns came from (the campaign plan's grid_row/grid_col, or clustered measured
-  // positions) and how far a point's real position sits from its A cell's centre in the maps' projection.
+  // positions), the shared A/B/C footprint, and how far a rectangular board would have misplaced a point.
   function formatMosaicGeometry(sp, geo) {
     if (!geo) return "";
+    const deg = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} deg` : "—");
     const spacing = sp && Number.isFinite(sp.mosaic_spacing_deg)
       ? `${sp.mosaic_spacing_deg.toFixed(4)} deg (${sp.mosaic_spacing_source || "?"})` : "—";
     const lattice = geo.lattice_source === "campaign_plan" ? `campaign plan ${geo.campaign_plan}` : "measured positions (no plan)";
-    const off = Number.isFinite(geo.board_cell_center_offset_max_deg)
-      ? `${geo.board_cell_center_offset_max_deg.toFixed(2)} deg (${geo.board_cell_center_offset_max_cells.toFixed(2)} cells)` : "—";
+    const ext = Array.isArray(geo.raster_extent_deg) ? `${geo.raster_extent_deg[0].toFixed(2)} x ${geo.raster_extent_deg[1].toFixed(2)} deg` : "—";
     return `board lattice: ${lattice}   spacing: ${spacing}\n`
-      + `largest point vs A-cell-centre offset in the B/C projection: ${off}\n`;
+      + `A/B/C: one projection, one footprint ${ext}; A cells drawn at their points (max offset ${deg(geo.point_to_a_cell_node_max_deg)}; `
+      + `a rectangular board would be off by up to ${deg(geo.regular_board_offset_max_deg)})\n`;
   }
 
   function renderPlan(facts) {
@@ -336,12 +337,13 @@
       + `color limits (shared by A/B/C): [${manifest.color_vmin.toFixed(4)}, ${manifest.color_vmax.toFixed(4)}] (${manifest.color_limits_basis})\n`
       + `grid dims: A=${dims.a ? dims.a.join("x") : "—"} → B=${dims.b ? dims.b.join("x") : "—"} `
       + `(${manifest.config.interp_factor_b}x) → C=${dims.c ? dims.c.join("x") : "—"} (${manifest.config.interp_factor_c}x) `
-      + `— same footprint, increasing resolution\n`
+      + `— same projection and footprint; denser RASTER, not finer instrument resolution\n`
       + `support radius (B & C, shared): ${formatSupportRadius(manifest.spatial_params)}   `
       + `smoothing kernel (B & C): ${formatSharedSmoothingFwhm(manifest.spatial_params)}`
       + (manifest.spatial_params && Number.isFinite(manifest.spatial_params.smoothing_fwhm_deg)
         ? " — the ONLY difference between B and C is raster density\n" : "\n")
       + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
+      + formatMosaicGeometry(manifest.spatial_params, manifest.mosaic_geometry)
       + `single-point-only pixels (no corroborating 2nd measurement): B=${(manifest.spatial_confidence.b.single_point_fraction * 100).toFixed(0)}%   `
       + `C=${(manifest.spatial_confidence.c.single_point_fraction * 100).toFixed(0)}% of valid pixels — see COVERAGE DENSITY below\n`
       + (manifest.noise_dominance ? (
@@ -427,32 +429,51 @@
     const canvas = $("board-canvas-a");
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
-    const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square board
+    const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square box, like B/C's <img>
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#0d1317"; ctx.fillRect(0, 0, cssW, cssH);
     if (!lastBoard) return;
+    // Each cell is drawn as its quadrilateral (corners_xy, deg) in the SAME projection and footprint as the B/C
+    // images (extent_deg), fitted into the square box the way object-fit:contain fits those images: equal scale
+    // on both axes, centred - so a cell sits over the same sky as the B/C pixels around it. x (east) grows to
+    // the RIGHT and y (north) upward, exactly as in the exported PNGs (column 0, the westernmost, at the left).
+    // A board without corners_xy (written before this change) falls back to its regular row/col layout.
+    const ext = lastBoard.extent_deg;
     const { n_rows: nRows, n_cols: nCols } = lastBoard;
-    const cw = cssW / nCols, ch = cssH / nRows;
+    let toPx;
+    if (ext) {
+      const k = Math.min(cssW / (2 * ext.half_w), cssH / (2 * ext.half_h));
+      const ox = cssW / 2, oy = cssH / 2;
+      toPx = ([x, y]) => [ox + x * k, oy - y * k];
+    }
     canvas.__cells = [];
     for (const cell of lastBoard.cells) {
-      // SAME orientation as the exported PNGs (render_all_maps' own imshow(extent=...)/set_xlim(half_w,
-      // -half_w)): column index increases LEFT-to-RIGHT on screen (col 0 leftmost), row 0 (southernmost)
-      // drawn at the bottom (origin="lower"). A real report (REDUCE-20260926-052228-531122, 6x6) found this
-      // canvas mirrored horizontally relative to the exported PNG - e.g. point 19 (RA=324.60 deg, the
-      // highest-RA/rightmost point in that mosaic) drew at this canvas's LEFT while the exported A/B/C/
-      // combined all drew it at their RIGHT; confirmed against board.json's own per-cell colours, not by eye.
-      // The bug was here (this used to read `(nCols - 1 - cell.col) * cw`, mirroring column order) - never in
-      // the exported PNGs, which are unchanged.
-      const px = cell.col * cw, py = (nRows - 1 - cell.row) * ch;
-      if (cell.valid) { ctx.fillStyle = cell.color; ctx.fillRect(px, py, cw, ch); }
-      ctx.strokeStyle = "#33414a"; ctx.lineWidth = 1; ctx.strokeRect(px, py, cw, ch);
-      canvas.__cells.push({ px, py, cw, ch, cell });
+      const poly = ext && cell.corners_xy
+        ? cell.corners_xy.map(toPx)
+        : (() => { const cw = cssW / nCols, ch = cssH / nRows, px = cell.col * cw, py = (nRows - 1 - cell.row) * ch;
+                   return [[px, py + ch], [px + cw, py + ch], [px + cw, py], [px, py]]; })();
+      ctx.beginPath(); poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath();
+      if (cell.valid) { ctx.fillStyle = cell.color; ctx.fill(); }
+      ctx.strokeStyle = "#33414a"; ctx.lineWidth = 1; ctx.stroke();
+      canvas.__cells.push({ poly, cell });
     }
     if (lastSelectedCell) {
       const hit = canvas.__cells.find((c) => c.cell.row === lastSelectedCell.row && c.cell.col === lastSelectedCell.col);
-      if (hit) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.strokeRect(hit.px + 1.5, hit.py + 1.5, hit.cw - 3, hit.ch - 3); }
+      if (hit) {
+        ctx.beginPath(); hit.poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath();
+        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.stroke();
+      }
     }
+  }
+
+  function insidePolygon(x, y, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
   }
 
   function cellAtEvent(canvas, ev) {
@@ -460,7 +481,7 @@
     const scale = canvas.clientWidth ? canvas.clientWidth / rect.width : 1;
     const x = (ev.clientX - rect.left) * scale, y = (ev.clientY - rect.top) * scale;
     for (const c of canvas.__cells || []) {
-      if (x >= c.px && x < c.px + c.cw && y >= c.py && y < c.py + c.ch) return c.cell;
+      if (insidePolygon(x, y, c.poly)) return c.cell;
     }
     return null;
   }

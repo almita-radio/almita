@@ -735,20 +735,110 @@ def test_wide_campaign_cannot_be_clustered_but_builds_from_its_plan(tmp_path):
         assert (p.ra_deg, p.dec_degrees) == pytest.approx((ra_deg, dec_deg), abs=1e-9)
 
 
-def test_plan_geometry_reports_the_projection_offset_and_raster_coverage(tmp_path):
-    from science_web_bridge import load_planned_lattice, mosaic_geometry_summary
+def test_wide_campaign_a_cells_follow_the_shared_projection_and_the_raster_covers_them(tmp_path):
+    """A, B and C in ONE projection: A's cells sit where the lattice really lies (deformed quads), the B/C
+    base raster is widened to contain every cell, and every point stays inside B/C support."""
+    from science_web_bridge import (lattice_geometry, load_planned_lattice, mosaic_geometry_summary,
+                                    raster_base_grid)
     si, spacing = _wide_campaign(tmp_path)
     planned = load_planned_lattice(si)
     spatial = auto_spatial_params(si, cfg_with(), planned)
-    board, point_cell, _, _ = build_mosaic_grid(si, spatial["mosaic_spacing_deg"], planned)
-    geo = mosaic_geometry_summary(si, board, point_cell, planned, spatial["support_radius_deg"], (3, 6))
+    board, point_cell, n_rows, n_cols = build_mosaic_grid(si, spatial["mosaic_spacing_deg"], planned)
+    nodes, corners = lattice_geometry(board, n_rows, n_cols, planned)
+    base = raster_base_grid(board, corners)
+    assert corners.shape == (21, 21, 2)
+    assert base.width_deg / 2 >= np.abs(corners[..., 0]).max() and base.height_deg / 2 >= np.abs(corners[..., 1]).max()
+    assert base.nx > board.nx                       # the board's own rectangle would cut the far corners off
+    assert base.center_ra_deg == board.center_ra_deg and base.center_dec_deg == board.center_dec_deg
+    # orientation: x grows with column along every row, y with row along every column
+    assert np.all(np.diff(nodes[..., 0], axis=1) > 0) and np.all(np.diff(nodes[..., 1], axis=0) > 0)
+    geo = mosaic_geometry_summary(si, base, nodes, point_cell, planned, spatial["support_radius_deg"], (2, 3, 6))
     assert geo["lattice_source"] == "campaign_plan"
     assert geo["point_to_planned_target_max_deg"] < 1e-5
-    assert geo["board_cell_center_offset_max_cells"] > 1.0   # the linear projection's real corner distortion
+    assert geo["point_to_a_cell_node_max_deg"] < 1e-5        # A draws each point's cell where the point is
+    assert geo["regular_board_offset_max_deg"] > spacing     # ...which a rectangular board would not
     assert all(not cov["uncovered_points"] for cov in geo["raster_coverage"].values())
     # a support radius smaller than the corners' distance to the raster: those points are named, not dropped
-    tight = mosaic_geometry_summary(si, board, point_cell, planned, 0.05, (3,))
-    assert {1, 20, 381, 400} <= set(tight["raster_coverage"]["3"]["uncovered_points"])
+    tight = mosaic_geometry_summary(si, base, nodes, point_cell, planned, 1e-3, (2,))
+    assert tight["raster_coverage"]["2"]["uncovered_points"]
+
+
+def test_regular_board_keeps_its_square_cells_and_extent():
+    from science_web_bridge import lattice_geometry, raster_base_grid
+    si = mosaic_input(n=6, spacing=1.0)
+    board, _, n_rows, n_cols = build_mosaic_grid(si, 1.0)
+    _, corners = lattice_geometry(board, n_rows, n_cols, None)
+    assert np.allclose(corners[0, :, 0], np.linspace(-3, 3, 7)) and np.allclose(corners[:, 0, 1], np.linspace(-3, 3, 7))
+    base = raster_base_grid(board, corners)
+    assert (base.nx, base.ny, base.width_deg, base.height_deg) == (board.nx, board.ny, board.width_deg, board.height_deg)
+
+
+def test_row_band_grid_reproduces_the_full_grids_pixel_centres():
+    from science_web_bridge import _row_band_grid
+    grid = ScienceGrid(frame="icrs", center_ra_deg=74.1, center_dec_deg=-33.45, width_deg=37.9, height_deg=33.2,
+                       pixel_scale_deg=1.579 / 6, nx=144, ny=126)
+    ra, dec = pixel_centers_deg(grid)
+    for y0, y1 in ((0, 7), (7, 64), (64, 126)):
+        bra, bdec = pixel_centers_deg(_row_band_grid(grid, y0, y1))
+        assert np.allclose(bra, ra[y0:y1], atol=1e-9, rtol=0) and np.allclose(bdec, dec[y0:y1], atol=1e-9, rtol=0)
+
+
+def test_banded_map_equals_the_single_cube_map(monkeypatch):
+    """The row-band builder must return the SAME map (values, sigma, coverage, n_pointings, used points) and
+    the same quality verdict as one full cube - bands only bound memory."""
+    import science_web_bridge as swb
+    from science_engine.cube import build_cube
+    from science_engine.grid import build_beam_model
+    from science_engine.integration import integrated_map
+    from science_engine.quality import assess_science_quality
+    si = mosaic_input(n=6, spacing=1.0)
+    cfg = cfg_with()
+    spatial = auto_spatial_params(si, cfg)
+    sc = swb._kernel_science_config(cfg, spatial["smoothing_fwhm_deg"], spatial["support_radius_deg"] / spatial["smoothing_fwhm_deg"], "test")
+    beam = build_beam_model(sc)
+    board, _, _, _ = build_mosaic_grid(si, 1.0)
+    grid = build_fine_grid(board, 3)
+    cube = build_cube(si, grid, beam, sc)
+    ref = integrated_map(cube, sc)
+    ref_quality = assess_science_quality(si, cube, sc, ref)
+    real_plan = swb.band_plan
+    monkeypatch.setattr(swb, "band_plan", lambda *a, **k: {**real_plan(*a, **k), "rows_per_band": 4})
+    banded, info, qcube = swb.integrated_map_in_bands(si, grid, beam, sc, keep_quality_inputs=True)
+    assert info["row_bands"]["n_bands"] == 5
+    for name in ("value", "uncertainty", "spectral_coverage", "weight_sum"):
+        assert np.allclose(getattr(banded, name), getattr(ref, name), rtol=1e-12, atol=0, equal_nan=True), name
+    assert np.array_equal(banded.valid, ref.valid) and np.array_equal(banded.n_pointings, ref.n_pointings)
+    assert info["used_point_indices"] == cube.build_info["used_point_indices"]
+    quality = assess_science_quality(si, qcube, sc, banded)
+    assert quality.state == ref_quality.state and quality.reasons == ref_quality.reasons
+    assert quality.metrics.keys() == ref_quality.metrics.keys()
+    for key, ref_value in ref_quality.metrics.items():
+        if isinstance(ref_value, float):
+            assert quality.metrics[key] == pytest.approx(ref_value, rel=1e-12), key
+        else:
+            assert quality.metrics[key] == ref_value, key
+
+
+def test_band_plan_fits_the_real_c_raster_in_the_unchanged_budget():
+    """The real 400-point session's C raster: one cube needs ~6.6 GB; bands keep the estimate inside 3 GB."""
+    from science_web_bridge import band_plan
+    grid = ScienceGrid(frame="icrs", center_ra_deg=74.1, center_dec_deg=-33.45, width_deg=37.9, height_deg=33.2,
+                       pixel_scale_deg=1.579 / 6, nx=144, ny=126)
+    plan = band_plan(grid, 8192, 400, keep_quality_inputs=False)
+    assert plan["full_cube_estimate_bytes"] > 3 * 1024 ** 3
+    assert plan["ok"] and plan["n_bands"] > 1
+    assert plan["estimated_peak_bytes"] <= plan["budget_bytes"] <= 3 * 1024 ** 3
+
+
+def test_board_json_carries_each_cells_quadrilateral_and_the_shared_extent(tmp_path):
+    si = mosaic_input(n=6, spacing=1.0)
+    built = build_all_products(si, cfg_with(beam_fwhm_deg=20.0))
+    board = board_json_payload(built)
+    s = built["board_grid"].pixel_scale_deg       # the auto (nearest-neighbour) pitch of this synthetic board
+    assert board["extent_deg"]["half_w"] == pytest.approx(3 * s) and board["extent_deg"]["half_h"] == pytest.approx(3 * s)
+    cell = next(c for c in board["cells"] if (c["row"], c["col"]) == (0, 0))
+    assert cell["corners_xy"] == [pytest.approx([-3 * s, -3 * s]), pytest.approx([-2 * s, -3 * s]),
+                                  pytest.approx([-2 * s, -2 * s]), pytest.approx([-3 * s, -2 * s])]
 
 
 def test_plan_that_does_not_match_the_points_is_refused(tmp_path):
