@@ -13,7 +13,8 @@ Requirements:
 - reference instant shown, out-of-limit points flagged;
 - never claims a zone is free of obstacles without local horizon data.
 
-**Status:** implemented on branch `backlog/wizard-preview-profile-picker`. Not deployed.
+**Status:** integrated in `web-polish-v1` (2026-10-05) and extended: ALIGN's HI4PI layer + scale at the plan's own
+instant (`hi4pi_map.sky_grid`), measured/active zones named, square centred canvases.
 - `calibration_engine/hi_plan_preview.py` re-shapes the wizard's own saved `hi_plan`. It recomputes no positions.
 - `almita_web_ops` adds `hi_plan_preview` to the wizard job facts.
 - `console/calibrate.*` draws it with the shared `U.drawSkyView`, extended with optional order, warn and path; ALIGN's drawing is unchanged.
@@ -31,7 +32,9 @@ project, so obstacles stay "NOT evaluated" until one exists.
 - browsing limited to the calibration directories, with nothing sensitive exposed;
 - a browser-local file only by an explicit upload that returns a real server path.
 
-**Status:** implemented on branch `backlog/wizard-preview-profile-picker`. Not deployed.
+**Status:** integrated in `web-polish-v1` (2026-10-05) and replaced by a server file explorer
+(`/api/observe/calibration-profiles/browse`, BROWSE ALMITA SERVER…): folders, breadcrumbs, Hz/sps/dB and reason per file;
+an unusable QUICKLOOK profile now BLOCKs the OBSERVE preflight. The text below describes the first version.
 - `calibration_profile_catalog.py` lists and validates server profiles: only `<stem>.json` + `.npz` under
   `data/calibration`, no symlinks or `..` escaping it, and no other directories.
   - Validity is checked by `calibration_foundation.load_calibration_profile` (Quicklook's loader).
@@ -82,3 +85,13 @@ when no observation, wizard or quicklook is running.
      - ALIGN's sky view looks exactly as before.
 5. Tests, which need no hardware:
    `.venv/bin/python -m pytest -q tests/test_hi_plan_preview.py tests/test_calibration_profile_catalog.py tests/test_web_frontend.py`
+
+## BL-003 — status indicator centred on every page
+
+**Requested and integrated 2026-10-05.** `.topbar > .hdr-status` (every page, and MONITOR's `<dl>`) is its own full-width,
+centred row; checked at 1280 and 390 px before and after its content changes (tests/test_web_frontend.py).
+
+## BL-004 — no operational use of the retired :8090
+
+**Requested and integrated 2026-10-05.** Blackbox, forensics bench, comments and current docs name the unified :8088;
+historical docs are marked as such; the console only uses relative URLs (tests/test_web_hardening.py).
