@@ -771,6 +771,21 @@ def test_science_plan_handles_missing_spatial_params_without_crashing(tmp_path):
         assert expect in out["summary"], out["summary"]
 
 
+def test_science_plan_shows_the_board_lattice_from_the_campaign_plan(tmp_path):
+    """The board of a wide campaign comes from the plan's grid_row/grid_col; PLAN says so, with the spacing's
+    source and the largest A-cell vs B/C position offset (a real 30x30 deg campaign: 3.29 deg)."""
+    facts = _science_facts({"nearest_neighbor_spacing_deg": 1.5638, "mosaic_spacing_deg": 1.578947,
+                            "mosaic_spacing_source": "campaign_plan", "support_radius_deg": 1.9548,
+                            "smoothing_fwhm_deg": 1.5638})
+    facts["mosaic_geometry"] = {"lattice_source": "campaign_plan", "campaign_plan": "data/mosaic/C-1",
+                                "board_cell_center_offset_max_deg": 3.2935, "board_cell_center_offset_max_cells": 2.0859}
+    out = run_page(tmp_path, "science", SCIENCE_ROUTES % json.dumps(facts), SCIENCE_DRIVER, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert "board lattice: campaign plan data/mosaic/C-1   spacing: 1.5789 deg (campaign_plan)" in out["summary"]
+    assert "offset in the B/C projection: 3.29 deg (2.09 cells)" in out["summary"]
+
+
 # ------------------------------------------------------------------ Field Console (8088): escaping, LINK state, empty data
 
 def _status(**over):

@@ -237,6 +237,19 @@
     } catch (err) { showError(`PLAN failed: ${msg(err)}`); }
   }, "PLANNING…"));
 
+  // Where the board's rows/columns came from (the campaign plan's grid_row/grid_col, or clustered measured
+  // positions) and how far a point's real position sits from its A cell's centre in the maps' projection.
+  function formatMosaicGeometry(sp, geo) {
+    if (!geo) return "";
+    const spacing = sp && Number.isFinite(sp.mosaic_spacing_deg)
+      ? `${sp.mosaic_spacing_deg.toFixed(4)} deg (${sp.mosaic_spacing_source || "?"})` : "—";
+    const lattice = geo.lattice_source === "campaign_plan" ? `campaign plan ${geo.campaign_plan}` : "measured positions (no plan)";
+    const off = Number.isFinite(geo.board_cell_center_offset_max_deg)
+      ? `${geo.board_cell_center_offset_max_deg.toFixed(2)} deg (${geo.board_cell_center_offset_max_cells.toFixed(2)} cells)` : "—";
+    return `board lattice: ${lattice}   spacing: ${spacing}\n`
+      + `largest point vs A-cell-centre offset in the B/C projection: ${off}\n`;
+  }
+
   function renderPlan(facts) {
     U.setBadge($("plan-badge"), facts.blocked ? "BLOCKED" : "READY");
     const n = (facts.will_process_points || []).length;
@@ -247,6 +260,7 @@
       + (facts.grid_b ? `  B=${facts.grid_b.ny}x${facts.grid_b.nx}  C=${facts.grid_c.ny}x${facts.grid_c.nx}` : "  B/C=—") + "\n"
       + `support radius (B & C, shared): ${formatSupportRadius(facts.spatial_params)}   `
       + `smoothing kernel (B & C): ${formatSharedSmoothingFwhm(facts.spatial_params)}\n`
+      + formatMosaicGeometry(facts.spatial_params, facts.mosaic_geometry)
       + `real instrument beam (reported only): ${facts.real_instrument_beam_fwhm_deg} deg   velocity channels: ${facts.n_velocity_channels}\n`
       + `config_hash: ${facts.config_hash}`;
     const list = $("plan-checks"); list.textContent = "";

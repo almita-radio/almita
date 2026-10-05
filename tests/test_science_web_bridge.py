@@ -667,3 +667,120 @@ def test_build_all_products_exposes_bc_exact_coordinate_consistency():
     bcc = built["bc_exact_coordinate_consistency"]
     assert bcc is not None
     assert set(bcc.keys()) == {"b", "c", "nearest_pixel_reference"}
+
+
+# ---------------------------------------------------------------- planned lattice (campaign grid_row/grid_col)
+# A real 400-point campaign (20x20, 30x30 deg, dec -33) failed mosaic_board_buildable at ANY spacing: its
+# plan is a tangent-plane lattice, and science_engine's linear (dRA cos dec0, dDec) projection spreads one
+# planned column over >3 cells there, so clustering projected positions cannot recover rows/columns.
+
+def _wide_campaign(tmp_path, n=20, width_deg=30.0, center_ra_h=4.94, center_dec=-33.4489, edit_rows=None):
+    """A REDUCE session dir + campaign dir pair like the real one: points on a gnomonic lattice, the plan's
+    grid_row/grid_col in mosaic.csv, the manifest's source_campaign_root pointing at the campaign."""
+    import csv
+    import dataclasses
+    import json
+    from science_engine.simulation import SyntheticPointSpec
+    spacing = width_deg / (n - 1)
+    a0, d0 = np.radians(center_ra_h * 15.0), np.radians(center_dec)
+    rows, specs = [], []
+    for r in range(n):
+        for c in range(n):
+            xi, eta = np.radians((c - (n - 1) / 2) * spacing), np.radians((r - (n - 1) / 2) * spacing)
+            rho = np.hypot(xi, eta)
+            cc = np.arctan(rho)
+            dec = np.arcsin(np.cos(cc) * np.sin(d0) + (eta * np.sin(cc) * np.cos(d0) / rho if rho else 0.0))
+            ra = a0 + np.arctan2(xi * np.sin(cc), rho * np.cos(d0) * np.cos(cc) - eta * np.sin(d0) * np.sin(cc))
+            idx = r * n + c + 1
+            ra_h, dec_d = (np.degrees(ra) % 360.0) / 15.0, float(np.degrees(dec))
+            rows.append({"point_number": idx, "grid_row": r, "grid_col": c,
+                         "target_ra_hours": f"{ra_h:.6f}", "target_dec_degrees": f"{dec_d:.6f}"})
+            specs.append(SyntheticPointSpec(point_index=idx, ra_hours=float(f"{ra_h:.6f}"),
+                                            dec_degrees=float(f"{dec_d:.6f}"), calibration_level="UNCALIBRATED"))
+    if edit_rows:
+        edit_rows(rows)
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    with (campaign / "mosaic.csv").open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    (campaign / "grid_metadata.json").write_text(json.dumps({"grid": {
+        "rows": n, "columns": n, "nominal_spacing_deg": spacing, "center_ra_hours": center_ra_h,
+        "center_dec_degrees": center_dec, "projection": "tangent-plane"}}))
+    reduce_dir = tmp_path / "reduce"
+    reduce_dir.mkdir()
+    (reduce_dir / "manifest.json").write_text(json.dumps({"source_campaign_root": str(campaign)}))
+    si = build_synthetic_science_input(specs, noise_sigma=0.02)
+    return dataclasses.replace(si, reduce_session_dir=str(reduce_dir)), spacing
+
+
+def test_wide_campaign_cannot_be_clustered_but_builds_from_its_plan(tmp_path):
+    from science_web_bridge import load_planned_lattice
+    si, spacing = _wide_campaign(tmp_path)
+    with pytest.raises(MosaicShapeError, match="do not form a clean rectangular lattice"):
+        build_mosaic_grid(si, spacing)                      # the old path, even at the plan's own spacing
+    planned = load_planned_lattice(si)
+    spatial = auto_spatial_params(si, cfg_with(), planned)
+    assert spatial["mosaic_spacing_source"] == "campaign_plan"
+    assert spatial["mosaic_spacing_deg"] == pytest.approx(spacing)
+    board, point_cell, n_rows, n_cols = build_mosaic_grid(si, spatial["mosaic_spacing_deg"], planned)
+    assert (n_rows, n_cols) == (20, 20)
+    assert point_cell == {i: ((i - 1) // 20, (i - 1) % 20) for i in range(1, 401)}   # every point, its own cell
+    assert board.center_ra_deg == pytest.approx(4.94 * 15.0)
+    assert board.center_dec_deg == pytest.approx(-33.4489)
+    # coordinates are never touched: each point keeps its own position, which is its planned target
+    for p in si.points:
+        ra_deg, dec_deg = planned.target_by_point[p.point_index]
+        assert (p.ra_deg, p.dec_degrees) == pytest.approx((ra_deg, dec_deg), abs=1e-9)
+
+
+def test_plan_geometry_reports_the_projection_offset_and_raster_coverage(tmp_path):
+    from science_web_bridge import load_planned_lattice, mosaic_geometry_summary
+    si, spacing = _wide_campaign(tmp_path)
+    planned = load_planned_lattice(si)
+    spatial = auto_spatial_params(si, cfg_with(), planned)
+    board, point_cell, _, _ = build_mosaic_grid(si, spatial["mosaic_spacing_deg"], planned)
+    geo = mosaic_geometry_summary(si, board, point_cell, planned, spatial["support_radius_deg"], (3, 6))
+    assert geo["lattice_source"] == "campaign_plan"
+    assert geo["point_to_planned_target_max_deg"] < 1e-5
+    assert geo["board_cell_center_offset_max_cells"] > 1.0   # the linear projection's real corner distortion
+    assert all(not cov["uncovered_points"] for cov in geo["raster_coverage"].values())
+    # a support radius smaller than the corners' distance to the raster: those points are named, not dropped
+    tight = mosaic_geometry_summary(si, board, point_cell, planned, 0.05, (3,))
+    assert {1, 20, 381, 400} <= set(tight["raster_coverage"]["3"]["uncovered_points"])
+
+
+def test_plan_that_does_not_match_the_points_is_refused(tmp_path):
+    from science_web_bridge import load_planned_lattice
+
+    def shift_one_target(rows):
+        rows[0]["target_dec_degrees"] = f"{float(rows[0]['target_dec_degrees']) + 1.0:.6f}"
+    si, spacing = _wide_campaign(tmp_path, edit_rows=shift_one_target)
+    planned = load_planned_lattice(si)
+    with pytest.raises(MosaicShapeError, match="from its planned target"):
+        build_mosaic_grid(si, spacing, planned)
+
+
+def test_plan_with_swapped_columns_is_refused(tmp_path):
+    from science_web_bridge import load_planned_lattice
+
+    def swap(rows):
+        rows[0]["grid_col"], rows[1]["grid_col"] = rows[1]["grid_col"], rows[0]["grid_col"]
+    si, spacing = _wide_campaign(tmp_path, edit_rows=swap)
+    with pytest.raises(MosaicShapeError, match="not monotonic"):
+        build_mosaic_grid(si, spacing, load_planned_lattice(si))
+
+
+def test_explicit_spacing_that_contradicts_the_plan_is_refused(tmp_path):
+    from science_web_bridge import load_planned_lattice
+    si, spacing = _wide_campaign(tmp_path)
+    with pytest.raises(MosaicShapeError, match="contradicts the campaign plan"):
+        build_mosaic_grid(si, spacing * 0.99, load_planned_lattice(si))
+
+
+def test_no_campaign_plan_falls_back_to_measured_positions():
+    from science_web_bridge import load_planned_lattice
+    si = mosaic_input(n=6, spacing=1.0)
+    assert load_planned_lattice(si) is None
+    assert auto_spatial_params(si, cfg_with())["mosaic_spacing_source"] == "median_nearest_neighbor"

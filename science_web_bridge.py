@@ -215,7 +215,7 @@ def _median_nearest_neighbor_spacing_deg(points) -> Optional[float]:
     return float(np.median(finite)) if finite.size else None
 
 
-def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
+def auto_spatial_params(filtered_input, cfg: MapConfig, planned: Optional["PlannedLattice"] = None) -> dict[str, Any]:
     """Resolves mosaic_spacing_deg / support_radius_deg / smoothing_fwhm_deg when left None, from THIS
     campaign's OWN point spacing (median nearest-neighbour angular separation among the points being mapped)
     - never from beam_fwhm_deg. Using the reported beam FWHM to size these was the root cause a real deployed
@@ -231,15 +231,25 @@ def auto_spatial_params(filtered_input, cfg: MapConfig) -> dict[str, float]:
     for the leave-one-out cross-validation that found them statistically indistinguishable) and confounded
     "denser raster" with "differently smoothed" in a way that made B and C hard to compare honestly. B and C
     now share this one kernel; only their raster density (interp_factor_b/interp_factor_c) differs.
+
+    The board pitch (mosaic_spacing_deg) is the campaign plan's own nominal spacing when `planned` is given:
+    the nearest-neighbour median of a wide field is a projection-shrunk measure of it (1.5638 vs the planned
+    1.5789 deg on a real 30x30 deg campaign). Support and smoothing stay tied to the measured spacing.
     """
     nn_median = _median_nearest_neighbor_spacing_deg(filtered_input.points)
     if nn_median is None:
         nn_median = cfg.beam_fwhm_deg   # nothing to space out - no better number available than the beam scale
 
-    mosaic_spacing_deg = cfg.mosaic_spacing_deg if cfg.mosaic_spacing_deg is not None else nn_median
+    if cfg.mosaic_spacing_deg is not None:
+        mosaic_spacing_deg, spacing_source = cfg.mosaic_spacing_deg, "explicit"
+    elif planned is not None:
+        mosaic_spacing_deg, spacing_source = planned.spacing_deg, "campaign_plan"
+    else:
+        mosaic_spacing_deg, spacing_source = nn_median, "median_nearest_neighbor"
     support_radius_deg = cfg.support_radius_deg if cfg.support_radius_deg is not None else 1.25 * nn_median
     smoothing_fwhm_deg = cfg.smoothing_fwhm_deg if cfg.smoothing_fwhm_deg is not None else nn_median
     return {"nearest_neighbor_spacing_deg": nn_median, "mosaic_spacing_deg": mosaic_spacing_deg,
+           "mosaic_spacing_source": spacing_source,
            "support_radius_deg": support_radius_deg, "smoothing_fwhm_deg": smoothing_fwhm_deg}
 
 
@@ -268,6 +278,163 @@ class MosaicShapeError(ValueError):
     spacing (e.g. two points would land in the same cell) - an honest failure, never a silent mis-placement."""
 
 
+@dataclass(frozen=True)
+class PlannedLattice:
+    """The campaign's OWN planned pointing lattice (grid_metadata.json + mosaic.csv of the OBSERVE session the
+    REDUCE session was built from): which (row, col) each point was planned at, the planned spacing and the
+    plan's tangent point. When present it - not a re-clustering of positions - defines the board: a 20x20
+    lattice 30 deg wide laid out in the plan's own tangent plane does NOT stay rectangular in
+    science_engine.spatial's linear (dRA cos dec0, dDec) projection (a real 400-point campaign at dec -33 had
+    one planned column spread over 5.2 deg = 3.3 cells there), so gap clustering of projected positions
+    cannot recover its rows/columns at any spacing."""
+    campaign_dir: str
+    n_rows: int
+    n_cols: int
+    spacing_deg: float
+    center_ra_deg: float
+    center_dec_deg: float
+    cell_by_point: dict
+    target_by_point: dict
+
+
+def load_planned_lattice(filtered_input) -> Optional[PlannedLattice]:
+    """The planned lattice of the campaign behind this REDUCE session, or None when there is none to read (no
+    source_campaign_root, a synthetic session, or a campaign without grid_metadata.json / grid_row+grid_col).
+    A plan that IS there but contradicts itself raises MosaicShapeError - never a silent fallback to
+    clustering."""
+    import csv
+    manifest_path = Path(filtered_input.reduce_session_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    root = json.loads(manifest_path.read_text()).get("source_campaign_root")
+    if not root or root.startswith("<"):
+        return None
+    campaign = Path(root)
+    if not campaign.is_absolute() and not campaign.is_dir():
+        campaign = Path(__file__).resolve().parent / root
+    meta_path, csv_path = campaign / "grid_metadata.json", campaign / "mosaic.csv"
+    if not (meta_path.is_file() and csv_path.is_file()):
+        return None
+    grid = json.loads(meta_path.read_text()).get("grid") or {}
+    with csv_path.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows or not {"point_number", "grid_row", "grid_col"} <= set(rows[0]):
+        return None
+    try:
+        n_rows, n_cols = int(grid["rows"]), int(grid["columns"])
+        spacing = float(grid["nominal_spacing_deg"])
+        center_ra_deg = float(grid["center_ra_hours"]) * 15.0
+        center_dec_deg = float(grid["center_dec_degrees"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MosaicShapeError(f"campaign plan {meta_path} lacks rows/columns/nominal_spacing_deg/center: {exc}")
+    cell_by_point: dict[int, tuple[int, int]] = {}
+    target_by_point: dict[int, tuple[float, float]] = {}
+    for row in rows:
+        idx, cell = int(row["point_number"]), (int(row["grid_row"]), int(row["grid_col"]))
+        if idx in cell_by_point:
+            raise MosaicShapeError(f"campaign plan {csv_path} lists point_number {idx} twice")
+        if not (0 <= cell[0] < n_rows and 0 <= cell[1] < n_cols):
+            raise MosaicShapeError(f"campaign plan {csv_path}: point {idx} planned at {cell}, outside the "
+                                   f"{n_rows}x{n_cols} lattice of grid_metadata.json")
+        cell_by_point[idx] = cell
+        ra_h = row.get("target_ra_hours") or row.get("ra")
+        dec = row.get("target_dec_degrees") or row.get("dec")
+        target_by_point[idx] = (float(ra_h) * 15.0, float(dec))
+    if len(set(cell_by_point.values())) != len(cell_by_point):
+        raise MosaicShapeError(f"campaign plan {csv_path} assigns the same (grid_row, grid_col) to two points")
+    return PlannedLattice(campaign_dir=str(root), n_rows=n_rows, n_cols=n_cols, spacing_deg=spacing,
+                          center_ra_deg=center_ra_deg, center_dec_deg=center_dec_deg,
+                          cell_by_point=cell_by_point, target_by_point=target_by_point)
+
+
+def _board_from_plan(filtered_input, spacing_deg: float, planned: PlannedLattice):
+    """build_mosaic_grid() for a campaign with a planned lattice: rows/cols come from the plan's own indices,
+    the board is centred on the plan's tangent point at the plan's spacing. Each point's REDUCE coordinates
+    stay exactly as measured (build_cube() weights from them); they are only CHECKED against the plan - the
+    point must sit within a quarter cell of its planned target, and the planned rows/columns must keep their
+    orientation in science_engine's projection - so a plan that does not describe these points fails loudly."""
+    from science_engine.models import ScienceGrid
+    from science_engine.spatial import angular_separation_deg, tangent_plane_offsets_deg
+
+    if abs(spacing_deg - planned.spacing_deg) > 1e-6 * planned.spacing_deg:
+        raise MosaicShapeError(
+            f"mosaic_spacing_deg={spacing_deg:.6g} contradicts the campaign plan ({planned.campaign_dir}: "
+            f"nominal_spacing_deg={planned.spacing_deg:.6g}); leave it unset to use the plan's spacing")
+    points = filtered_input.points
+    missing = [p.point_index for p in points if p.point_index not in planned.cell_by_point]
+    if missing:
+        raise MosaicShapeError(f"{len(missing)} point(s) are not in the campaign plan {planned.campaign_dir} "
+                               f"(e.g. point {missing[0]})")
+    ra = np.array([p.ra_deg for p in points])
+    dec = np.array([p.dec_degrees for p in points])
+    target = np.array([planned.target_by_point[p.point_index] for p in points])
+    offset = angular_separation_deg(ra, dec, target[:, 0], target[:, 1])
+    worst = int(np.argmax(offset))
+    if offset[worst] > 0.25 * planned.spacing_deg:
+        raise MosaicShapeError(
+            f"point {points[worst].point_index} is {offset[worst]:.3f} deg from its planned target in "
+            f"{planned.campaign_dir} (more than a quarter of the {planned.spacing_deg:.4g} deg spacing) - the "
+            f"plan does not describe this REDUCE session's points")
+    point_cell = {p.point_index: planned.cell_by_point[p.point_index] for p in points}
+    rc = np.array([point_cell[p.point_index] for p in points])
+    x, y = tangent_plane_offsets_deg(ra, dec, planned.center_ra_deg, planned.center_dec_deg)
+    for axis, line_idx, step_idx, v in (("column", 0, 1, x), ("row", 1, 0, y)):
+        for k in np.unique(rc[:, line_idx]):
+            sel = rc[:, line_idx] == k
+            order = np.argsort(rc[sel, step_idx])
+            if np.any(np.diff(v[sel][order]) <= 0):
+                raise MosaicShapeError(
+                    f"planned {axis} order is not monotonic on the sky along {'row' if axis == 'column' else 'column'} "
+                    f"{int(k)} - the plan's grid_row/grid_col do not match the points' positions")
+    grid = ScienceGrid(frame="icrs", center_ra_deg=planned.center_ra_deg % 360.0,
+                       center_dec_deg=planned.center_dec_deg, width_deg=planned.n_cols * spacing_deg,
+                       height_deg=planned.n_rows * spacing_deg, pixel_scale_deg=spacing_deg,
+                       nx=planned.n_cols, ny=planned.n_rows)
+    return grid, point_cell, planned.n_rows, planned.n_cols
+
+
+def mosaic_geometry_summary(filtered_input, board_grid, point_cell, planned: Optional[PlannedLattice],
+                            support_radius_deg: float, raster_factors: tuple[int, ...]) -> dict[str, Any]:
+    """How the board sits on the sky, from the real positions - reported, never used to move a point.
+    - point_to_planned_target_max_deg: REDUCE coordinates vs the plan's targets (None without a plan).
+    - board_cell_center_offset_max_deg: a point's own position vs its board cell's centre, both in
+      science_engine's linear projection. A wide field at high |dec| makes this large at the corners: map A
+      shows the point in its planned cell, while B/C put its contribution at its real position.
+    - raster coverage per factor: the largest point-to-nearest-pixel distance vs support_radius_deg. A point
+      beyond it would silently drop out of B/C, so callers BLOCK on uncovered_points."""
+    from science_engine.grid import pixel_centers_deg
+    from science_engine.spatial import angular_separation_deg, tangent_plane_offsets_deg
+
+    points = filtered_input.points
+    ra = np.array([p.ra_deg for p in points])
+    dec = np.array([p.dec_degrees for p in points])
+    x, y = tangent_plane_offsets_deg(ra, dec, board_grid.center_ra_deg, board_grid.center_dec_deg)
+    rc = np.array([point_cell[p.point_index] for p in points], dtype=float)
+    cx = (rc[:, 1] + 0.5) * board_grid.pixel_scale_deg - board_grid.width_deg / 2
+    cy = (rc[:, 0] + 0.5) * board_grid.pixel_scale_deg - board_grid.height_deg / 2
+    cell_offset = np.hypot(x - cx, y - cy)
+    out: dict[str, Any] = {
+        "lattice_source": "campaign_plan" if planned else "measured_positions",
+        "campaign_plan": planned.campaign_dir if planned else None,
+        "point_to_planned_target_max_deg": None,
+        "board_cell_center_offset_max_deg": float(cell_offset.max()),
+        "board_cell_center_offset_max_cells": float(cell_offset.max() / board_grid.pixel_scale_deg),
+        "raster_coverage": {},
+    }
+    if planned:
+        target = np.array([planned.target_by_point[p.point_index] for p in points])
+        out["point_to_planned_target_max_deg"] = float(angular_separation_deg(ra, dec, target[:, 0], target[:, 1]).max())
+    for factor in raster_factors:
+        grid = board_grid if factor == 1 else build_fine_grid(board_grid, factor)
+        pra, pdec = (a.ravel() for a in pixel_centers_deg(grid))
+        nearest = np.array([angular_separation_deg(np.full(pra.size, a), np.full(pra.size, d), pra, pdec).min()
+                            for a, d in zip(ra, dec)])
+        out["raster_coverage"][str(factor)] = {
+            "max_point_to_nearest_pixel_deg": float(nearest.max()), "support_radius_deg": float(support_radius_deg),
+            "uncovered_points": [p.point_index for p, n in zip(points, nearest) if n > support_radius_deg]}
+    return out
+
+
 def _cluster_1d(values: np.ndarray, gap_threshold: float) -> tuple[np.ndarray, int, np.ndarray]:
     """Groups 1D values into clusters by GAP, not by rounding to a fixed multiple of a nominal spacing - a
     real 36-point mosaic's own tangent-plane RA offsets were measured to drift ~6% row-to-row (a real,
@@ -293,7 +460,7 @@ def _cluster_1d(values: np.ndarray, gap_threshold: float) -> tuple[np.ndarray, i
     return cluster, n_clusters, centroids
 
 
-def build_mosaic_grid(filtered_input, spacing_deg: float):
+def build_mosaic_grid(filtered_input, spacing_deg: float, planned: Optional[PlannedLattice] = None):
     """A ScienceGrid whose pixel centers coincide with the campaign's OWN real pointing lattice - rows/cols
     derived from the real point positions and `spacing_deg` (via _cluster_1d's gap-based clustering, robust
     to real per-row/per-column projection drift - see its own docstring), never a hardcoded shape and never
@@ -313,6 +480,9 @@ def build_mosaic_grid(filtered_input, spacing_deg: float):
     smaller, real mosaic (nothing here observes an un-sampled row/column) - a real limitation, not silently
     hidden: n_rows/n_cols are always exactly what the OBSERVED positions imply, at the declared/derived
     spacing_deg.
+
+    With `planned` (load_planned_lattice()), none of the above clustering runs: the plan's own grid_row/
+    grid_col, spacing and tangent point define the board (see _board_from_plan()).
     """
     from science_engine.models import ScienceGrid
     from science_engine.spatial import tangent_plane_offsets_deg
@@ -320,6 +490,8 @@ def build_mosaic_grid(filtered_input, spacing_deg: float):
     points = filtered_input.points
     if not points:
         raise ValueError("cannot build a mosaic grid from zero input points")
+    if planned is not None:
+        return _board_from_plan(filtered_input, spacing_deg, planned)
     ra = np.array([p.ra_deg for p in points])
     dec = np.array([p.dec_degrees for p in points])
     center_ra0 = float(np.degrees(np.arctan2(
@@ -891,7 +1063,8 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     from science_engine.integration import integrated_map
     from science_engine.quality import assess_science_quality
 
-    spatial = auto_spatial_params(filtered_input, cfg)
+    planned = load_planned_lattice(filtered_input)
+    spatial = auto_spatial_params(filtered_input, cfg, planned)
     support_radius_deg = spatial["support_radius_deg"]
     smoothing_fwhm_deg = spatial["smoothing_fwhm_deg"]
 
@@ -899,7 +1072,13 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     # raster and never sized from the reported instrument beam (cfg.beam_fwhm_deg), which is what produced a
     # 65x65 deg, 14x14px grid for a real ~6x5 deg, 36-point (6x6) mosaic on a real deployed run (beam_fwhm_deg
     # =20 from observer_config.json vs ~1 deg real point spacing - see auto_spatial_params's docstring).
-    board_grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered_input, spatial["mosaic_spacing_deg"])
+    board_grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered_input, spatial["mosaic_spacing_deg"], planned)
+    geometry = mosaic_geometry_summary(filtered_input, board_grid, point_cell, planned, support_radius_deg,
+                                       (cfg.interp_factor_b, cfg.interp_factor_c))
+    uncovered = sorted({i for cov in geometry["raster_coverage"].values() for i in cov["uncovered_points"]})
+    if uncovered:
+        raise ValueError(f"BLOCKED: {len(uncovered)} point(s) lie beyond support_radius_deg of every B/C pixel "
+                         f"(e.g. point {uncovered[0]}) and would silently drop out of B/C")
 
     # B and C: interpolated panels on a FINER raster than the board - genuinely NEW pixel positions between
     # the real measurements (request: "deben aparecer píxeles nuevos entre las posiciones medidas"; an even
@@ -967,7 +1146,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     return {
         "sc": sc, "beam": beam,
         "board_grid": board_grid, "grid_b": grid_b, "grid_c": grid_c, "spatial_params": spatial,
-        "n_rows": n_rows, "n_cols": n_cols, "point_cell": point_cell,
+        "n_rows": n_rows, "n_cols": n_cols, "point_cell": point_cell, "mosaic_geometry": geometry,
         "velocity_axis": velocity_axis, "map_b": map_b, "map_c": map_c,
         "map_a_value": map_a_value, "map_a_uncertainty": map_a_uncertainty, "map_a_valid": map_a_valid,
         "map_a_point_index": map_a_point_index,
@@ -1469,15 +1648,22 @@ def cmd_plan(args) -> int:
     cfg = _config_from_args(args)
     filtered, counts, _ = load_filtered_input(cfg.reduce_session_dir, cfg.calibration_level_filter)
     from science_engine.cube import canonical_velocity_axis
-    spatial = auto_spatial_params(filtered, cfg)
-    grid_b = grid_c = None
+    grid_b = grid_c = geometry = None
     try:
-        board, point_cell, n_rows, n_cols = build_mosaic_grid(filtered, spatial["mosaic_spacing_deg"])
+        planned = load_planned_lattice(filtered)
+        spatial = auto_spatial_params(filtered, cfg, planned)
+        board, point_cell, n_rows, n_cols = build_mosaic_grid(filtered, spatial["mosaic_spacing_deg"], planned)
         mosaic_ok = True
-        mosaic_detail = f"{n_rows}x{n_cols} board, {len(point_cell)} point(s) placed"
+        mosaic_detail = (f"{n_rows}x{n_cols} board, {len(point_cell)} point(s) placed, lattice from "
+                         + (f"the campaign plan's grid_row/grid_col ({planned.campaign_dir})" if planned
+                            else "clustered measured positions")
+                         + f", spacing {spatial['mosaic_spacing_deg']:.6g} deg ({spatial['mosaic_spacing_source']})")
         grid_b = build_fine_grid(board, cfg.interp_factor_b)
         grid_c = build_fine_grid(board, cfg.interp_factor_c)
+        geometry = mosaic_geometry_summary(filtered, board, point_cell, planned, spatial["support_radius_deg"],
+                                           (cfg.interp_factor_b, cfg.interp_factor_c))
     except MosaicShapeError as exc:
+        spatial = auto_spatial_params(filtered, cfg)
         board, n_rows, n_cols = None, None, None
         mosaic_ok, mosaic_detail = False, str(exc)
     velocity_axis = canonical_velocity_axis(filtered)
@@ -1492,6 +1678,14 @@ def cmd_plan(args) -> int:
                   f"[{velocity_axis.min():.0f}, {velocity_axis.max():.0f}] m/s"},
         {"name": "mosaic_board_buildable", "ok": mosaic_ok, "detail": mosaic_detail},
     ]
+    if geometry:
+        cov = geometry["raster_coverage"]
+        uncovered = sorted({i for c in cov.values() for i in c["uncovered_points"]})
+        checks.append({"name": "bc_rasters_cover_all_points", "ok": not uncovered, "detail": (
+            "every point is within support_radius_deg of a B and a C pixel (largest gap "
+            + ", ".join(f"{k}x: {c['max_point_to_nearest_pixel_deg']:.3f}" for k, c in cov.items())
+            + f" vs support {spatial['support_radius_deg']:.3f} deg)" if not uncovered else
+            f"{len(uncovered)} point(s) beyond support_radius_deg of every B/C pixel: {uncovered[:10]}")})
     if mosaic_ok:
         # RUN allocates a cube for grid_b THEN (separately) grid_c - grid_c is the larger of the two, so both
         # are checked here, not just the (much smaller) board.
@@ -1505,7 +1699,7 @@ def cmd_plan(args) -> int:
         "config": cfg.to_dict(), "config_hash": cfg.config_hash(), "calibration_level_counts": counts,
         "board_grid": board.to_dict() if board else None,
         "grid_b": grid_b.to_dict() if grid_b else None, "grid_c": grid_c.to_dict() if grid_c else None,
-        "n_rows": n_rows, "n_cols": n_cols,
+        "n_rows": n_rows, "n_cols": n_cols, "mosaic_geometry": geometry,
         "spatial_params": spatial, "real_instrument_beam_fwhm_deg": cfg.beam_fwhm_deg,
         "n_velocity_channels": int(velocity_axis.shape[0]),
         "checks": checks, "blocked": blocked,
@@ -1580,6 +1774,7 @@ def cmd_run(args) -> int:
         "grid_c": built["grid_c"].to_dict(),
         "grid_dims": {"a": [built["n_rows"], built["n_cols"]], "b": list(built["map_b"].value.shape),
                      "c": list(built["map_c"].value.shape)},
+        "mosaic_geometry": built["mosaic_geometry"],
         "velocity_window_m_s": [cfg.velocity_window_min_m_s, cfg.velocity_window_max_m_s],
         "n_velocity_channels": int(built["velocity_axis"].shape[0]),
         "color_vmin": built["color_vmin"], "color_vmax": built["color_vmax"],
