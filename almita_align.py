@@ -3,8 +3,8 @@
 
 Every subcommand does argument parsing and printing only; every decision
 (state transitions, fitting, sync eligibility) happens inside
-alignment_engine, importable and callable the exact same way a future
-:8090 API would call it - nothing here is science logic.
+alignment_engine, importable and callable the exact same way the
+:8088 web API calls it - nothing here is science logic.
 
 --json switches every subcommand's stdout to a single JSON document (never
 mixed with human-readable text) so this CLI is scriptable/automatable

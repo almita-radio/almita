@@ -1,23 +1,30 @@
 # ALMITA web: architecture
 
-Two resident HTTP processes, both **plain HTTP on the LAN with no authentication and no TLS** (documented, unchanged): the web is an
-interface to the instrument, never the owner of its logic. Every number and every permission comes from the backend; the browser only makes the
-real state visible and makes it hard to operate the instrument wrongly.
+ONE resident HTTP process on ONE port: `almita-observe-api.service` runs `almita_orchestrator_server.py --port 8088` and serves the
+Field Console (MONITOR, `/`), every operating page, the JSON API, `/runtime/*.json`, `/version.json`, result files and the mount-camera MJPEG
+stream. Every request needs HTTP Basic auth (single user; see [WEB_OPERATIONS.md](WEB_OPERATIONS.md)); plain HTTP on the LAN, no TLS. The web is
+an interface to the instrument, never the owner of its logic. Every number and every permission comes from the backend; the browser only makes
+the real state visible and makes it hard to operate the instrument wrongly. Pages use relative URLs (`/api/...`, `/observe.html`), so they work
+through whatever host name reaches port 8088.
 
-| | Field Console | Observe API + pages |
-|---|---|---|
-| port | `8088` | `8090` |
-| unit | `almita-console-web.service` (+ `almita-console-watcher.service`) | `almita-observe-api.service` |
-| entrypoint | `almita_console_server.py` (read-only static server: `serve_dashboard.py`) | `almita_orchestrator_server.py` (`ThreadingHTTPServer`) |
-| writes | none (GET/HEAD only; POST/PUT/DELETE/PATCH -> 405) | JSON POSTs that call the existing OBSERVE / ALIGN / CALIBRATE functions |
-| content | `/` monitor (`console/index.html`, `app.js`, `spectral_stack_3d.js`, vendored three.js), `/runtime/*.json` (symlink to `data/runtime/`), `/version.json` | `/observe.html`, `/align.html`, `/calibrate.html`, `/status.html`, `/common.js`, `/styles.css`, JSON API |
+| | ALMITA web (unified) |
+|---|---|
+| port | `8088` |
+| unit | `almita-observe-api.service` (+ `almita-console-watcher.service`, `almita-system-blackbox.service`) |
+| entrypoint | `almita_orchestrator_server.py` (`ThreadingHTTPServer`) |
+| writes | authenticated JSON POSTs that call the existing OBSERVE / ALIGN / CALIBRATE / REDUCE / SCIENCE functions (CSRF-guarded) |
+| content | `/` monitor (`console/index.html`, `app.js`, `spectral_stack_3d.js`, vendored three.js), every page and script in `console/`, JSON API, `/runtime/*.json`, `/version.json`, MJPEG stream |
+
+History (not operational): until 2026-10-01 there were two processes - an unauthenticated read-only Field Console on 8088
+(`almita-console-web.service`, `almita_console_server.py`) and the Observe API + pages on **8090**. Both were replaced by the unified server;
+the old unit stays disabled and port 8090 is no longer used by anything.
 
 Other pieces: `almita_console_watcher.py` (read-only status writer, every 2 s, produces `data/runtime/almita_status.json`),
 `almita_web_align.py` / `almita_web_calibrate.py` (route glue to `almita_align.py` / `almita_calibrate.py`, simulation only),
 `almita_web_common.py` (envelope, MAIN-SDR ownership check, job registry), `almita_web_system.py` (health + version, new), and the legacy static
 `dashboard/` (built by `dashboard/build_dashboard.py`, served by `serve_dashboard.py`; not a running service).
 
-## Routes (8090)
+## Routes (unified server, 8088)
 
 | route | method | what | contract |
 |---|---|---|---|
@@ -60,7 +67,7 @@ Other pieces: `almita_console_watcher.py` (read-only status writer, every 2 s, p
 
 ## Front end
 
-No framework, no external request, no CDN, no font service. `console/common.js` (`window.AlmitaUI`) is shared by the 8090 pages (and loaded, optionally, by the console):
+No framework, no external request, no CDN, no font service. `console/common.js` (`window.AlmitaUI`) is shared by every page, MONITOR included:
 
 * `api()` never throws: explicit `timeout / network / http / parse` errors with endpoint, message, retry hint and request id; per-call timeouts (default 15 s;
   START 130 s, STOP 150 s, PLAN 120 s: real long operations are not cut short).
@@ -87,9 +94,9 @@ No framework, no external request, no CDN, no font service. `console/common.js` 
 | INDI | starts and serves; `indi DOWN`, operational `NOT_READY` (health strip shows it) |
 | rtl_tcp / MAIN SDR | starts; `main_sdr DOWN` (or `BUSY` during an observation) |
 | console watcher | Field Console shows `STALE`/`DISCONNECTED`; health `DEGRADED` |
-| the API (8090) | pages show `LINK DISCONNECTED` and a "backend not reachable" banner; they recover on their own when it returns; the running observation is independent of the API (KillMode=process) |
+| the web server (8088) | pages show `LINK DISCONNECTED` and a "backend not reachable" banner; they recover on their own when it returns; the running observation is independent of the API (KillMode=process) |
 | a runtime file is unreadable | that row is `UNKNOWN`, the rest of the view survives; API routes answer 503 with a request id |
-| port 8088 / 8090 already taken | the server exits with a clear message (`port already in use`); nothing is killed; systemd retries every 5 s |
+| port 8088 already taken | the server exits with a clear message (`port already in use`); nothing is killed; systemd retries every 5 s |
 
 ## Known limitations
 

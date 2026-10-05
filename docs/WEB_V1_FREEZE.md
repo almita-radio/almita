@@ -1,5 +1,8 @@
 # WEB V1: FREEZE
 
+> Historical record of the V1 freeze. Port 8090 and `almita-console-web.service` are retired since 2026-10-01: everything below
+> that names 8090 is now served by the unified authenticated server on 8088 (docs/WEB_OPERATIONS.md, docs/WEB_ARCHITECTURE.md).
+
 Status: **FROZEN / PASS.** This file closes the web hardening and polish pass. Detail lives in `WEB_ARCHITECTURE.md` (design and routes), `WEB_OPERATIONS.md`
 (running it) and `WEB_TEST_REPORT.md` (evidence). After this freeze the web layer changes only for a demonstrated bug, a security finding, or an explicit new feature.
 

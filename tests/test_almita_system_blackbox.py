@@ -104,13 +104,13 @@ def test_read_tcp_sockets_counts_and_flags_almita_ports(tmp_path):
     assert total == 2
     assert listening[8088] is True
     assert listening[1234] is False
-    assert listening[8090] is False
+    assert 8090 not in listening          # retired port: no longer watched (single web server on 8088)
 
 
 def test_read_tcp_sockets_missing_tables_returns_none_total(tmp_path):
     total, listening = bb.read_tcp_sockets(tmp_path)
     assert total is None
-    assert listening == {1234: False, 8088: False, 8090: False}
+    assert listening == {1234: False, 8088: False}
 
 
 def test_read_psi_missing_returns_none(tmp_path):
@@ -167,8 +167,9 @@ def test_build_sample_line_has_expected_keys_and_is_single_line(monkeypatch):
     for key in ("uptime_s", "load1", "cpu_pct", "threads_total", "procs", "mem_avail_kb",
                 "swap_used_kb", "cpu_temp_c", "nvme_temp_c", "throttled",
                 "psi_cpu_avg10", "fds_open", "tcp_sockets", "rootfs_free_gb",
-                "port_1234", "port_8088", "port_8090"):
+                "port_1234", "port_8088"):
         assert key in fields, f"missing field {key} in line: {line}"
+    assert "port_8090" not in fields
 
 
 def test_build_sample_all_readers_failing_still_produces_line_of_nas(monkeypatch):
@@ -181,7 +182,7 @@ def test_build_sample_all_readers_failing_still_produces_line_of_nas(monkeypatch
     monkeypatch.setattr(bb, "read_psi", lambda resource: None)
     monkeypatch.setattr(bb, "read_process_count", lambda: None)
     monkeypatch.setattr(bb, "read_open_fds", lambda: None)
-    monkeypatch.setattr(bb, "read_tcp_sockets", lambda: (None, {1234: False, 8088: False, 8090: False}))
+    monkeypatch.setattr(bb, "read_tcp_sockets", lambda: (None, {1234: False, 8088: False}))
     monkeypatch.setattr(bb, "read_rootfs_free_gb", lambda: None)
     monkeypatch.setattr(bb, "read_throttled", lambda: None)
     _, line, _ = bb.build_sample(prev_cpu_stat=None, sample_index=0, cached_throttled=None)
@@ -216,7 +217,7 @@ def _stub_all_readers(monkeypatch, skip=()):
         "read_psi": lambda resource: None,
         "read_process_count": lambda: 227,
         "read_open_fds": lambda: 4992,
-        "read_tcp_sockets": lambda: (42, {1234: True, 8088: True, 8090: False}),
+        "read_tcp_sockets": lambda: (42, {1234: True, 8088: True}),
         "read_rootfs_free_gb": lambda: 380.6,
         "read_throttled": lambda: "0x0",
     }
@@ -315,7 +316,7 @@ def test_cli_short_real_run_produces_samples_and_clean_shutdown(tmp_path):
     assert 2 <= len(lines) <= 6
     for line in lines:
         assert line.count(" ") > 10  # sanity: many key=value fields present
-        assert "port_1234=" in line and "port_8088=" in line and "port_8090=" in line
+        assert "port_1234=" in line and "port_8088=" in line and "port_8090=" not in line
 
 
 # ---------------------------------------------------------------- Wi-Fi/SDIO integration

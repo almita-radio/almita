@@ -47,7 +47,8 @@ DEFAULT_PLAN = "examples/science_forensics_experiment.yaml"
 BENCH_ROOT = "data/science_forensics_bench"
 SCIENCE_PATHS = ("data/mosaic", "data/reduced", "data/iq", "data/IQ", "data/science_forensics_field", "data/science", "data/afc00", "data/e2e",
                  "data/calibration", "data/science_forensics", "data/science_forensics_experiment")
-PORTS = {"MAIN rtl_tcp": 1234, "RFI_REF rtl_tcp": 1235, "INDI": 7624, "OBSERVE API": 8090, "Field Console": 8088}
+# One web server on 8088 serves the console, API and stream (the former :8090 Observe API port is retired).
+PORTS = {"MAIN rtl_tcp": 1234, "RFI_REF rtl_tcp": 1235, "INDI": 7624, "ALMITA web": 8088}
 SERVICES = ("rtl_tcp.service", "almita-observe-api.service", "almita-console-web.service", "almita-console-watcher.service")
 ALLOWED_RTL_COMMANDS = {0x01: "SET FREQUENCY", 0x02: "SET SAMPLE RATE", 0x03: "SET GAIN MODE", 0x04: "SET GAIN"}   # receiver tuner only, as capture.py
 RTL_RECV_BYTES = 262144                 # one large recv per call: the hot loop does no processing (metrics are computed after the read)
@@ -985,7 +986,7 @@ def run_checks(b: Bench, plan: dict, *, live_indi=False, with_sdr=False, sdr_sec
     ck.add("MAIN SDR USB device present", "PASS" if ps["main_usb_present"] else "FAIL", "serial 00000001 in /sys/bus/usb" if ps["main_usb_present"] else "serial 00000001 not found", "soft")
     ck.add("INDI endpoint (passive)", "PASS" if p["INDI"]["listening"] else "FAIL", f"127.0.0.1:7624 listening={p['INDI']['listening']}", "soft")
     ck.add("RFI_REF second SDR (informational)", "PASS" if ps["rfi_ref"]["usb_present"] else "WARN", f"{ps['rfi_ref']['status']} (serial {ps['rfi_ref']['serial_expected']}); not required by the bench", "info")
-    ck.add("other services/ports (informational)", "PASS", f"OBSERVE API :8090 listening={p['OBSERVE API']['listening']}, Field Console :8088 listening={p['Field Console']['listening']}", "info")
+    ck.add("other services/ports (informational)", "PASS", f"ALMITA web (console + API + stream) :8088 listening={p['ALMITA web']['listening']}", "info")
     sdr_cfg = sdr_config_report(b, plan)
     svp = sdr_cfg.get("service_vs_plan")
     ck.add("MAIN service config vs plan (serial, gain, rate, Bias-T)", "PASS" if svp and svp["gain_db_equal"] and svp["sample_rate_equal"] and svp["bias_tee_matches_plan"] else "WARN",

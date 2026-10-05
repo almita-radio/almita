@@ -1,4 +1,4 @@
-"""WEB HARDENING: the :8090 API/pages and the :8088 console, exercised over real HTTP on ephemeral ports with every hardware-touching
+"""WEB HARDENING: the unified :8088 server (API, pages and console; the former :8090 port is retired), exercised over real HTTP on ephemeral ports with every hardware-touching
 dependency mocked (no INDI, no SDR, no capture.py, no mount). Covers health layering, error contract (status codes, request ids, no
 tracebacks, NaN), input validation, path safety, conflicts/double submit, static assets, offline dependencies and shutdown."""
 import contextlib
@@ -86,7 +86,7 @@ _REAL_COLLECT = web_system.collect_health
 
 class Fake:
     """Injectable collaborators for web_system.collect_health."""
-    def __init__(self, ports=(8088, 1234, 7624, 8090), usb=("00000001",), status=None, orch_state="PLANNED", resource="FREE", resource_detail="no conflict",
+    def __init__(self, ports=(8088, 1234, 7624), usb=("00000001",), status=None, orch_state="PLANNED", resource="FREE", resource_detail="no conflict",
                  orch_raises=False, jobs=None):
         self.ports, self.usb = set(ports), set(usb)
         self.status = status if status is not None else {"updated_utc": NOW.isoformat(), "acquisition": {"state": "IDLE"}, "rfi_ref": {"status": "DISABLED"}}
@@ -116,7 +116,7 @@ def test_all_healthy_is_ready_and_layers_are_separate():
 
 
 def test_indi_down_service_up_but_operational_not_ready():
-    h = Fake(ports=(8088, 1234, 8090)).health()
+    h = Fake(ports=(8088, 1234)).health()
     assert h["services"]["observe_api"]["state"] == "UP"                            # service UP ...
     assert h["dependencies"]["indi"]["state"] == "DOWN"
     assert h["operational"]["level"] == "NOT_READY" and any("INDI" in r for r in h["operational"]["reasons"])   # ... operational NOT READY
@@ -125,7 +125,7 @@ def test_indi_down_service_up_but_operational_not_ready():
 def test_main_sdr_busy_down_and_unknown():
     busy = Fake(resource="CLAIMED_BY_OBSERVATION", resource_detail="orchestrator campaign is RUNNING").health()
     assert busy["dependencies"]["main_sdr"]["state"] == "BUSY" and busy["operational"]["level"] == "NOT_READY"
-    down = Fake(ports=(8088, 7624, 8090)).health()
+    down = Fake(ports=(8088, 7624)).health()
     assert down["dependencies"]["main_sdr"]["state"] == "DOWN" and down["operational"]["level"] == "NOT_READY"
     unknown = Fake(resource="UNKNOWN").health()
     assert unknown["dependencies"]["main_sdr"]["state"] == "UNKNOWN" and unknown["operational"]["level"] == "NOT_READY"
@@ -417,18 +417,39 @@ def running_console(public):
         thread.join()
 
 
-def test_every_local_reference_of_every_8090_page_resolves():
-    with running_server() as base:
-        for page in ("observe.html", "align.html", "calibrate.html", "status.html"):
+def test_every_local_reference_of_every_page_resolves(tmp_path):
+    """Every page, MONITOR included, on the ONE unified server: each local href/src resolves there, and so does
+    every link of the shared header nav (common.js NAV)."""
+    pages = ("index.html", "pipeline.html", "observe.html", "align.html", "calibrate.html", "reduce.html", "science.html", "status.html")
+    with running_console(_console_public(tmp_path)) as base:
+        nav = re.findall(r'href: (?:consoleBase\(\) \+ )?"(/[^"]*)"', (CONSOLE / "common.js").read_text())
+        assert {"/observe.html", "/calibrate.html", "/science.html", "/"} <= set(nav)
+        for ref in nav:
+            assert http_call(base, "GET", ref.split("#")[0] or "/")[0] == 200, ref
+        for page in pages:
             status, _, html = http_call(base, "GET", "/" + page)
             assert status == 200 and b"<title>ALMITA" in html                          # every page has a title
             for ref in LOCAL_REF.findall(html.decode()):
                 if ref.startswith(("http://", "https://", "mailto:", "data:")):
                     continue
                 target = "/" + ref.lstrip("/").split("?")[0]
+                if target == "/runtime":
+                    continue
                 assert http_call(base, "GET", target)[0] == 200, (page, ref)
         for asset in ("/observe.js", "/align.js", "/calibrate.js", "/status.js", "/common.js", "/styles.css"):
             assert http_call(base, "GET", asset)[0] == 200
+
+
+def test_console_uses_relative_urls_and_never_the_retired_8090_port():
+    """The browser reaches console, API and stream through whatever host answers on 8088: no absolute URL to an
+    ALMITA host/port, and nothing points at the retired :8090."""
+    for f in sorted(CONSOLE.glob("*.*")):
+        if f.suffix not in (".html", ".js", ".css"):
+            continue
+        text = f.read_text()
+        assert "8090" not in text, f.name
+        for url in re.findall(r"https?://[^\s\"'`)<]+", text):
+            assert not re.match(r"https?://(localhost|127\.0\.0\.1|192\.168\.|stellarmate)", url), (f.name, url)
 
 
 def test_single_port_serves_console_assets_and_version(tmp_path):
@@ -563,7 +584,7 @@ def test_orchestrator_server_shuts_down_cleanly_on_signal(sig, tmp_path):
 
 def test_server_starts_without_any_hardware_and_reports_dependencies_down():
     """Nothing listening on 1234/7624: the app answers and says so (no crash loop)."""
-    h = Fake(ports=(8090,), usb=()).health()
+    h = Fake(ports=(8088,), usb=()).health()
     assert h["services"]["observe_api"]["state"] == "UP" and h["dependencies"]["indi"]["state"] == "DOWN" and h["dependencies"]["main_sdr"]["state"] == "DOWN"
     assert h["operational"]["level"] == "NOT_READY"
 

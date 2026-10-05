@@ -1,5 +1,5 @@
-"""Alignment engine (Fase 5's orchestrator): the one thing CLI today and a
-future :8090 API both call. No print(), no input(), no argparse in here.
+"""Alignment engine (Fase 5's orchestrator): the one thing the CLI and the
+web API (unified server on :8088) both call. No print(), no input(), no argparse in here.
 
 MEASURE -> FIT -> SHOW RESULT -> (operator decides) -> APPLY SYNC -> VERIFY
 -> SAVE EVIDENCE is enforced by construction: run_solar()/run_hi() stop at

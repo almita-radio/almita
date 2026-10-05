@@ -169,9 +169,9 @@ class FakeSDR:
 
 def make_bench(repo, now=NOW, runner=None, **kw):
     runner = runner or Runner()
-    ctx = F.Ctx(root=repo, now=now, run=runner, listeners=lambda: {1234, 7624, 8090, 8088}, service_active=lambda u: "active",
+    ctx = F.Ctx(root=repo, now=now, run=runner, listeners=lambda: {1234, 7624, 8088}, service_active=lambda u: "active",
                 capture_procs=lambda: [], disk_free=lambda p: 10 ** 12)
-    defaults = dict(listeners=lambda: {1234, 7624, 8090, 8088}, established=lambda: set(), service_active=lambda u: "active",
+    defaults = dict(listeners=lambda: {1234, 7624, 8088}, established=lambda: set(), service_active=lambda u: "active",
                     usb=lambda: [{"product": "Blog V4", "serial": "00000001"}], meminfo=lambda: {"MemAvailable": 4 * 2 ** 30, "SwapFree": 1 << 20},
                     timedatectl=lambda: {"Timezone": "Etc/UTC", "NTPSynchronized": "yes"},
                     execstart=lambda: "/usr/bin/rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 -f 1420405000 -s 2400000 -g 40.2 -T",

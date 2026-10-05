@@ -1,5 +1,8 @@
 # ALMITA Web: ALIGN + CALIBRATE
 
+> Historical design note: written when this app ran on `:8090`. Since 2026-10-01 it is served by the unified
+> authenticated server on `:8088` (docs/WEB_OPERATIONS.md); port 8090 is retired.
+
 Extends the existing `:8090` app (`almita_orchestrator_server.py`, already
 OBSERVE's home) with two new workflows, additively - OBSERVE's own routes,
 files, and behavior are unchanged. `:8088` (Field Console) is untouched.
@@ -149,7 +152,7 @@ restart risk:
 ```bash
 sudo systemctl restart almita-observe-api.service
 sudo systemctl status almita-observe-api.service --no-pager
-curl -s http://127.0.0.1:8090/api/align/status | head -c 200
+curl -s -u <user> http://127.0.0.1:8088/api/align/status | head -c 200   # unified server (was :8090)
 ```
 
 All work was verified instead via a local dev server on an alternate

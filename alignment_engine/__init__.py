@@ -12,7 +12,7 @@ imported and reused here, not rewritten. What this package adds on top:
   - a strict MEASURE -> FIT -> SHOW RESULT -> decide -> APPLY SYNC -> VERIFY
     split (prepare_sync/apply_sync/verify_sync as separate calls, never
     fused into one run() the way alignment.py's --apply-sync flag is)
-  - a JSON-serializable progress snapshot, for a future web UI at :8090
+  - a JSON-serializable progress snapshot, for the web UI (unified server on :8088)
     to consume without any of this logic being copied or reimplemented
 
 Import boundary: this package imports pure/science functions from
