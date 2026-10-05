@@ -118,6 +118,10 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .topbar{flex-wrap:wrap;gap:8px 16px}
 .topbar h1{white-space:nowrap}
 .hdr-status{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+/* The status indicator (every page's .hdr-status, MONITOR's <dl class="hdr-status">) is its own full-width row of
+   the header, centred on the page - never pushed right/left by the title, the nav or its own changing values.
+   Fixed-width digits and a reserved height keep it (and the page below it) from jumping as values update. */
+.topbar>.hdr-status{flex:1 0 100%;order:3;justify-content:center;margin:0;min-height:26px;font-variant-numeric:tabular-nums;text-align:center}
 .chip{display:inline-flex;gap:6px;align-items:baseline;border:1px solid var(--line);padding:2px 8px;font:11px/1.4 ui-monospace,monospace}
 .chip-label{color:var(--muted);letter-spacing:.06em;font-size:10px}
 .chip-value{font-weight:700}
@@ -156,7 +160,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .obs-actions .mode-btn,.obs-actions .scenario-btn{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
 .obs-actions .mode-btn.active,.obs-actions .scenario-btn.active{background:var(--accent);color:#06121a;border-color:var(--accent)}
 .card dd{overflow-wrap:anywhere}
-@media(max-width:900px){.topbar .obs-nav{margin-left:0}}
+@media(max-width:900px){.topbar .obs-nav{margin-left:0}.topbar>.hdr-status{margin-top:8px}}
 
 /* PIPELINE (real operations) */
 .job-log{max-height:280px;overflow:auto;background:#0d1317;border:1px solid var(--line);padding:8px;margin:8px 0;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;word-break:break-all}

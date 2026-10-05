@@ -881,6 +881,48 @@ for (const p of pages) {{
         assert scroll <= avail + 1, f"{page} overflows horizontally at {avail}px (scrollWidth {scroll})"
 
 
+# ------------------------------------------------------------------ status indicator: centred on the page everywhere
+
+@pytest.mark.parametrize("width", [1280, 390])
+def test_status_indicator_is_centred_on_every_page_and_stays_centred_when_its_content_changes(tmp_path, width):
+    """The header status indicator (.hdr-status, MONITOR's <dl>) sits on its own row, its visible chips centred
+    on the page at desktop and phone widths, and still centred after its content grows (navigation re-renders
+    it, values change length)."""
+    shutil.copytree(CONSOLE, tmp_path / "console")
+    pages = ["index", "pipeline", "observe", "align", "calibrate", "reduce", "science", "status"]
+    harness = f"""<!doctype html><html><body style="margin:0"><pre id="__result"></pre>
+<script>
+const pages = {json.dumps(pages)}; const out = {{}};
+let pending = pages.length;
+function centre(doc) {{
+  const strip = doc.querySelector(".hdr-status");
+  if (!strip || !strip.children.length) return null;
+  let l = Infinity, r = -Infinity;
+  for (const c of strip.children) {{ const b = c.getBoundingClientRect(); l = Math.min(l, b.left); r = Math.max(r, b.right); }}
+  return [(l + r) / 2, doc.documentElement.clientWidth / 2];
+}}
+for (const p of pages) {{
+  const f = document.createElement("iframe"); f.style.cssText = "width:{width}px;height:900px;border:0"; f.src = "console/" + p + ".html";
+  f.onload = () => setTimeout(() => {{
+    const d = f.contentDocument; const before = centre(d);
+    const strip = d.querySelector(".hdr-status");
+    if (strip) {{ const extra = d.createElement(strip.tagName === "DL" ? "div" : "span"); extra.className = "chip";
+                  extra.textContent = "OBSERVATION RUNNING · a much longer value than before"; strip.appendChild(extra); }}
+    out[p] = {{ before, after: centre(d) }};
+    if (--pending === 0) document.getElementById("__result").textContent = JSON.stringify(out); }}, 1500);
+  document.body.appendChild(f);
+}}
+</script></body></html>"""
+    (tmp_path / "measure.html").write_text(harness)
+    out = result_of(chromium(tmp_path / "measure.html", 25000, width=width + 40))
+    assert set(out) == set(pages)
+    for page, m in out.items():
+        for when in ("before", "after"):
+            assert m[when] is not None, f"{page}: no status indicator"
+            got, mid = m[when]
+            assert abs(got - mid) <= 2, f"{page} at {width}px ({when} content change): indicator centre {got:.1f} vs page centre {mid:.1f}"
+
+
 # ------------------------------------------------------------------ long run: a dashboard left open must not grow
 
 TIMER_TRACKING = r"""
