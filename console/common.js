@@ -491,7 +491,9 @@
   };
 
   U.drawSkyView = function (canvas, data, opts) {
-    const o = Object.assign({ selected: null, onPick: null }, opts || {});
+    // Optional (backward compatible, ALIGN passes none of these): opts.colors {label: css}, opts.path [[az,alt],...]
+    // drawn as the visiting order; per area: order (number shown before the label) and warn (dashed red outline).
+    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null }, opts || {});
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
     const dpr = window.devicePixelRatio || 1;
@@ -553,7 +555,13 @@
     }
     // areas: outline circles only, clickable when onPick is set (HI A/B/C)
     canvas.__hitAreas = [];
-    const colors = { A: "#5cc8e6", B: "#9b8cf2", C: "#5ec98d", SUN: "#e6b85c" };
+    const colors = Object.assign({ A: "#5cc8e6", B: "#9b8cf2", C: "#5ec98d", SUN: "#e6b85c" }, o.colors || {});
+    const warnColor = "#e5484d";
+    if (o.path && o.path.length > 1) {                                   // visiting order, drawn under the areas
+      ctx.save(); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5; ctx.strokeStyle = muted; ctx.beginPath();
+      o.path.forEach(([az, alt], i) => { const [x, y] = toXY(az, alt); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.stroke(); ctx.restore();
+    }
     for (const area of data.areas || []) {
       const [x, y] = toXY(area.az_deg, area.alt_deg);
       const edge = toXY(area.az_deg, Math.max(-90, area.alt_deg - area.radius_deg));           // toward the horizon = a real angular radius on this projection
@@ -561,12 +569,14 @@
       const isSel = o.selected === area.label;
       ctx.strokeStyle = ringBg; ctx.lineWidth = isSel ? 5 : 3.5; ctx.setLineDash(area.alt_deg < 0 ? [4, 3] : []);
       ctx.beginPath(); ctx.arc(x, y, rPix, 0, 2 * Math.PI); ctx.stroke();                          // dark halo first so the circle reads over any colour
-      ctx.strokeStyle = colors[area.label] || fg; ctx.lineWidth = isSel ? 3 : 1.5;
+      ctx.strokeStyle = area.warn ? warnColor : (colors[area.label] || fg); ctx.lineWidth = isSel ? 3 : 1.5;
+      if (area.warn) ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.arc(x, y, rPix, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
       if (isSel) { ctx.fillStyle = (colors[area.label] || fg) + "22"; ctx.beginPath(); ctx.arc(x, y, rPix, 0, 2 * Math.PI); ctx.fill(); }
       const ly = y - rPix - 8 < -h / 2 ? y + rPix + 12 : y - rPix - 8;
-      ctx.font = "bold 11px ui-monospace,monospace"; ctx.lineWidth = 3; ctx.strokeStyle = ringBg; ctx.strokeText(area.label, x, ly);
-      ctx.fillStyle = colors[area.label] || fg; ctx.fillText(area.label, x, ly);
+      const text = (area.order != null ? area.order + " " : "") + area.label + (area.warn ? " !" : "");
+      ctx.font = "bold 11px ui-monospace,monospace"; ctx.lineWidth = 3; ctx.strokeStyle = ringBg; ctx.strokeText(text, x, ly);
+      ctx.fillStyle = area.warn ? warnColor : (colors[area.label] || fg); ctx.fillText(text, x, ly);
       canvas.__hitAreas.push({ x, y, r: rPix, label: area.label, alt_deg: area.alt_deg });
     }
     if (!canvas.__skyClickBound) {

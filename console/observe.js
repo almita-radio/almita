@@ -289,6 +289,62 @@
     renderRunStatus({ orchestrator: r.data, current_session: null });
   }, "STOP REQUESTED…");
 
+  // ------------------------------------------------------------------ calibration profile (server disk only)
+  // The backend opens quicklook.calibration_profile_path on ITS disk, so the picker lists and validates server files
+  // (/api/observe/calibration-profiles, limited to data/calibration). Manual entry stays; it is validated the same way.
+  function profileQuery(extra) {
+    const q = new URLSearchParams(extra || {});
+    for (const [key, id] of [["center_frequency_hz", "f-freq"], ["sample_rate", "f-rate"], ["gain_db", "f-gain"]]) {
+      if ($(id).value !== "") q.set(key, $(id).value);
+    }
+    return q.toString();
+  }
+  function setProfileStatus(text, cls) { const el = $("f-ql-cal-status"); el.textContent = text; el.className = "obs-summary " + (cls || ""); }
+  let profileCheckSeq = 0;
+  async function validateProfilePath() {
+    const raw = $("f-ql-cal").value.trim();
+    const seq = ++profileCheckSeq;
+    if (!raw) { setProfileStatus(""); return; }
+    setProfileStatus("checking on the server…");
+    const r = await U.api(`/api/observe/calibration-profiles/validate?${profileQuery({ path: raw })}`, { timeoutMs: 15000 });
+    if (seq !== profileCheckSeq) return;                  // a newer check superseded this one
+    if (!r.ok) { setProfileStatus(`NOT USABLE: ${r.error.message}`, "status-error"); return; }
+    const d = r.data.data, c = d.compatibility || {};
+    if (d.path !== raw) $("f-ql-cal").value = d.path;   // normalized server path (e.g. .npz -> .json)
+    const cls = c.status === "COMPATIBLE" ? "status-ok" : (c.status === "INCOMPATIBLE" ? "status-error" : "status-unknown");
+    setProfileStatus(`valid server profile · ${c.status || "UNKNOWN"} with this observation: ${c.reason || "—"}`, cls);
+  }
+  function renderProfilePicker(list) {
+    const tbody = document.querySelector("#f-ql-cal-table tbody");
+    tbody.textContent = "";
+    $("f-ql-cal-picker-note").textContent = list.profiles.length
+      ? `${list.profiles.length} profile(s) on the ALMITA server under ${list.root}/ — compatibility checked against the frequency, sample rate and gain above.`
+      : `No calibration profile found on the ALMITA server under ${list.root}/.`;
+    for (const p of list.profiles) {
+      const tr = document.createElement("tr");
+      const s = p.summary || {};
+      const c = p.compatibility || {};
+      const cells = [p.path, s.created_utc || "—", p.valid ? `${s.center_frequency_hz} / ${s.sample_rate_hz} / ${s.gain_db}` : "—",
+                     p.valid ? `${c.status}: ${c.reason}` : `INVALID: ${p.error}`];
+      for (const v of cells) { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); }
+      const td = document.createElement("td");
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = "USE"; b.disabled = !p.valid;
+      b.addEventListener("click", () => { $("f-ql-cal").value = p.path; $("f-ql-cal-picker").hidden = true; validateProfilePath(); });
+      td.appendChild(b); tr.appendChild(td);
+      if (p.valid && c.status !== "COMPATIBLE") tr.className = "row-warn";
+      tbody.appendChild(tr);
+    }
+  }
+  $("f-ql-cal-browse").addEventListener("click", U.guard($("f-ql-cal-browse"), async () => {
+    const r = await U.api(`/api/observe/calibration-profiles?${profileQuery()}`, { timeoutMs: 30000 });
+    if (!r.ok) { setProfileStatus(`could not list server profiles: ${r.error.message}`, "status-error"); return; }
+    renderProfilePicker(r.data.data);
+    $("f-ql-cal-picker").hidden = false;
+  }, "LISTING…"));
+  $("f-ql-cal").addEventListener("change", validateProfilePath);
+  for (const id of ["f-freq", "f-rate", "f-gain"]) $(id).addEventListener("change", validateProfilePath);
+
   // ------------------------------------------------------------------ defaults and startup
   async function loadDefaults() {
     const r = await U.api("/api/observe/defaults", { timeoutMs: 8000 });

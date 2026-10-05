@@ -198,6 +198,18 @@ def _quicklook_check(quicklook_cfg: Dict[str, Any]) -> Dict[str, Any]:
                        f"calibration profile unavailable ({profile_path}): {type(exc).__name__}: {exc}")
 
 
+def planned_profile_compatibility(profile: Dict[str, Any], main_cfg: Dict[str, Any]) -> Dict[str, str]:
+    """COMPATIBLE / INCOMPATIBLE / UNKNOWN for a loaded profile against an OBSERVE plan's `main` section
+    (center_frequency_hz, sample_rate, gain_db). The one decision used by this preflight AND by the web's
+    calibration-profile selector (calibration_profile_catalog), both calling the same
+    calibration_foundation.check_calibration_compatibility_values() Quicklook itself uses."""
+    topology = capture_module.INPUT_TOPOLOGIES["antenna"]  # OBSERVE's real captures are always this topology (see _capture_args())
+    return calibration_foundation.check_calibration_compatibility_values(
+        profile, center_frequency_hz=main_cfg.get("center_frequency_hz"),
+        sample_rate_hz=main_cfg.get("sample_rate"), gain_db=main_cfg.get("gain_db"), topology=topology,
+    )
+
+
 def _quicklook_calibration_match_check(quicklook_cfg: Dict[str, Any], main_cfg: Dict[str, Any]) -> Dict[str, Any]:
     """REQUIRED (can BLOCK): compares the PLANNED capture's own frequency/sample rate/gain/topology against the
     selected calibration profile - using calibration_foundation.check_calibration_compatibility_values(), the
@@ -216,11 +228,7 @@ def _quicklook_calibration_match_check(quicklook_cfg: Dict[str, Any], main_cfg: 
     except Exception:
         return _check("Quicklook / calibration match", "QUICKLOOK", OPTIONAL, PASS,
                        "profile unavailable - see the Quicklook check above")
-    topology = capture_module.INPUT_TOPOLOGIES["antenna"]  # OBSERVE's real captures are always this topology (see _capture_args())
-    result = calibration_foundation.check_calibration_compatibility_values(
-        profile, center_frequency_hz=main_cfg.get("center_frequency_hz"),
-        sample_rate_hz=main_cfg.get("sample_rate"), gain_db=main_cfg.get("gain_db"), topology=topology,
-    )
+    result = planned_profile_compatibility(profile, main_cfg)
     if result["status"] == "COMPATIBLE":
         return _check("Quicklook / calibration match", "QUICKLOOK", REQUIRED, PASS,
                       f"planned capture matches {profile_path}: {result['reason']}")

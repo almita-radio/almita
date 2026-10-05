@@ -164,3 +164,6 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .job-artifacts a{margin-right:8px}
 
 .twrap{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+
+/* CALIBRATE wizard: HI plan preview rows outside the configured limits */
+.status-table tr.row-warn td{color:var(--error)}
