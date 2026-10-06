@@ -68,3 +68,29 @@ def announce_session(runtime_dir: Path, session_id: str, **fields) -> None:
         atomic_write_json(path, merged)
     except Exception:
         pass
+
+
+# ------------------------------------------------------------------ "is capture.py running?" (process scan)
+_PYTHON_NAMES = ("python", "python3")
+
+
+def is_script_cmdline(raw_cmdline: bytes, script: str = "capture.py") -> bool:
+    """True only when this /proc/<pid>/cmdline EXECUTES `script`: argv[0] is the script itself, or argv[0] is a
+    python interpreter whose first non-option argument is the script (by file name, any directory). A plain
+    substring test also matched sdr_capture.py, pytest running tests/test_*capture*.py, `bash -c "...capture.py..."`
+    or `grep capture.py` - each a false "capture in progress" that blocked the SDR and the web gates."""
+    argv = [a.decode(errors="replace") for a in raw_cmdline.split(b"\0") if a]
+    if not argv:
+        return False
+    if os.path.basename(argv[0]) == script:
+        return True
+    exe = os.path.basename(argv[0])
+    if not (exe in _PYTHON_NAMES or (exe.startswith("python3.") and exe[8:].isdigit())):
+        return False
+    for arg in argv[1:]:
+        if arg in ("-m", "-c"):
+            return False                      # a module or inline code, never the script file
+        if arg.startswith("-"):
+            continue                          # interpreter options (-u, -B, -X ..., -W ...)
+        return os.path.basename(arg) == script
+    return False

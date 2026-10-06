@@ -18,9 +18,33 @@ import capture as capture_module
 import observation_orchestrator as orch
 import observation_preflight as pf
 
-REAL_PROFILE_PATH = "data/calibration/WIZARD-20260928-022756-139526/observe_profile/calibration_profile_v1"
-REAL_MAIN_CAPTURE = ("data/mosaic/ALMITA-OBSERVE-20260928-02:45:30/data/iq/"
-                     "ALMITA-OBSERVE-20260928-02:47:24/ALMITA-OBSERVE_0001.h5")
+# The incident's own files (WIZARD-20260928-022756-139526's profile, built at 1420405000 Hz, and a MAIN capture of
+# ALMITA-OBSERVE-20260928 at 1420405752 Hz) were generated data and are gone from data/. These fixtures rebuild
+# exactly the values that mattered - the profile's frequency/rate/gain/topology (metadata shape of a real wizard
+# profile) and the capture's recorded frequency - in a temporary directory.
+INCIDENT_PROFILE_HZ, OPERATING_HZ = 1420405000, 1420405752
+
+
+@pytest.fixture
+def incident_profile(tmp_path):
+    import numpy as np
+    stem = tmp_path / "WIZARD-20260928-022756-139526" / "observe_profile" / "calibration_profile_v1"
+    stem.parent.mkdir(parents=True)
+    meta = {"schema_version": "1.0", "calibration_level": "RELATIVE_INSTRUMENTAL", "absolute_calibration": False,
+            "temperature_kelvin": None, "antenna_temperature_kelvin": None, "flux_jy": None,
+            "reference_topology": "AMBIENT_50R_AT_LNA_INPUT_WIZARD", "instrument_chain": "LNA_FILTER_CABLING_TO_RTL_SDR",
+            "bias_t_state": "ON", "center_frequency_hz": float(INCIDENT_PROFILE_HZ), "sample_rate_hz": 2400000.0,
+            "gain_db": 40.2, "fft_size": 8192}
+    stem.with_suffix(".json").write_text(json.dumps(meta))
+    np.savez(stem.with_suffix(".npz"), reference_psd=np.ones(8192), valid_mask=np.ones(8192, bool))
+    return str(stem)
+
+
+@pytest.fixture
+def incident_capture(tmp_path):
+    from tests.conftest import write_capture
+    return str(write_capture(tmp_path / "ALMITA-OBSERVE_0001.h5", center_frequency_hz=OPERATING_HZ,
+                             rf_input=capture_module.INPUT_TOPOLOGIES["antenna"], n_complex=8192))
 
 
 # ------------------------------------------------------------------ 1. defaults synced (single source of truth)
@@ -83,8 +107,8 @@ def test_capture_args_use_the_frozen_resolved_plan_value_verbatim():
 # frequency rejected BEFORE capture.py launches - using the REAL profile and a REAL captured file from the
 # actual incident, so this is not a synthetic reproduction: it is the literal case that happened.
 
-def test_compatible_capture_is_accepted_by_the_same_function_quicklook_uses():
-    profile = cf.load_calibration_profile(REAL_PROFILE_PATH)
+def test_compatible_capture_is_accepted_by_the_same_function_quicklook_uses(incident_profile):
+    profile = cf.load_calibration_profile(incident_profile)
     result = cf.check_calibration_compatibility_values(
         profile, center_frequency_hz=1420405000.0, sample_rate_hz=2400000.0, gain_db=40.2,
         topology=capture_module.INPUT_TOPOLOGIES["antenna"],
@@ -92,27 +116,27 @@ def test_compatible_capture_is_accepted_by_the_same_function_quicklook_uses():
     assert result["status"] == "COMPATIBLE"
 
 
-def test_mismatched_frequency_is_rejected_by_the_same_function_quicklook_uses():
+def test_mismatched_frequency_is_rejected_by_the_same_function_quicklook_uses(incident_profile, incident_capture):
     """The exact real incident's numbers: the real MAIN capture's own recorded frequency (1420405752, read
     straight from the real HDF5 file) against the real WIZARD profile (1420405000)."""
-    profile = cf.load_calibration_profile(REAL_PROFILE_PATH)
-    real_capture_result = cf.check_calibration_compatibility(profile, REAL_MAIN_CAPTURE)
+    profile = cf.load_calibration_profile(incident_profile)
+    real_capture_result = cf.check_calibration_compatibility(profile, incident_capture)
     assert real_capture_result == {"status": "INCOMPATIBLE", "reason": "center frequency: 1420405752 != 1420405000.0"}
 
 
-def test_preflight_calibration_match_check_passes_for_a_compatible_plan():
-    quicklook_cfg = {"enabled": True, "calibration_profile_path": REAL_PROFILE_PATH}
+def test_preflight_calibration_match_check_passes_for_a_compatible_plan(incident_profile):
+    quicklook_cfg = {"enabled": True, "calibration_profile_path": incident_profile}
     main_cfg = {"center_frequency_hz": 1420405000.0, "sample_rate": 2400000.0, "gain_db": 40.2}
     check = pf._quicklook_calibration_match_check(quicklook_cfg, main_cfg)
     assert check["status"] == "PASS" and check["criticality"] == "REQUIRED"
 
 
-def test_preflight_calibration_match_check_blocks_before_capture_launches_for_the_real_incident_values():
+def test_preflight_calibration_match_check_blocks_before_capture_launches_for_the_real_incident_values(incident_profile):
     """The real incident, reproduced exactly: an OBSERVE plan at observer_config.json's real 1420405752 Hz
     against the real WIZARD profile built at 1420405000 Hz - must BLOCK, with both real values named, and this
     result must make the overall preflight verdict BLOCK (which is what actually stops run_observation() from
     ever calling Popen() on capture.py - see observation_orchestrator._run_observation_locked)."""
-    quicklook_cfg = {"enabled": True, "calibration_profile_path": REAL_PROFILE_PATH}
+    quicklook_cfg = {"enabled": True, "calibration_profile_path": incident_profile}
     main_cfg = {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2}
     check = pf._quicklook_calibration_match_check(quicklook_cfg, main_cfg)
     assert check["status"] == "BLOCK" and check["criticality"] == "REQUIRED"

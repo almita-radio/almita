@@ -46,7 +46,7 @@ from typing import Any, Dict, List, Optional
 import h5py
 import numpy as np
 
-from calibration_foundation import _plain, load_calibration_profile
+from calibration_foundation import ABSOLUTE_FIELDS, _plain, load_calibration_profile
 from hi_spectral_metric import dc_mask as make_dc_mask, detect_fixed_spurs, measure_dc_mask_half_width, robust_psd_from_iq
 
 SCHEMA_VERSION = "1.0"
@@ -233,7 +233,8 @@ def build_profile_from_wizard(session_dir: str | Path, output_stem: str | Path, 
 
     metadata: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION, "calibration_level": CALIBRATION_LEVEL, "absolute_calibration": False,
-        "temperature_kelvin": None, "antenna_temperature_kelvin": None, "flux_jy": None,
+        # every absolute field explicitly disabled, named by the profile contract itself (calibration_foundation)
+        **{name: None for name in sorted(ABSOLUTE_FIELDS)},
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "source": "calibration_engine.wizard_profile_converter (from a CALIBRATE reference wizard session's "
                   "real 50 ohm captures, no new capture, no mount movement)",

@@ -18,9 +18,12 @@ from quicklook_waterfall import (
 
 
 ROOT = Path(__file__).parent.parent
-PROFILE = ROOT / "data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.npz"
-SOURCE = ROOT / "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/antenna_a.h5"
-DIRECT = ROOT / "data/rf_characterization/RF-CHAIN-ISOLATION-02-20260826T210837Z/direct/rtl_direct_50ohm_gain_40.2.h5"
+# Test inputs never come from data/ (generated, operator-owned): the real V1 profile lives in tests/fixtures/,
+# the antenna / direct-50-ohm captures are synthesized once per module in a temporary directory.
+from tests.conftest import FOUNDATION_PROFILE as PROFILE, write_capture  # noqa: E402
+_CAPTURES = Path(__import__("tempfile").mkdtemp(prefix="rf_captures_"))
+SOURCE = write_capture(_CAPTURES / "antenna_a.h5")
+DIRECT = write_capture(_CAPTURES / "rtl_direct_50ohm_gain_40.2.h5", rf_input="RTL_SDR_DIRECT_50_OHM", seed=7)
 
 
 def digest(path):

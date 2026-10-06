@@ -50,9 +50,11 @@ def _post(url, body, timeout=30):
         return exc.code, json.loads(exc.read())
 
 
+from tests.conftest import transiting_ra_hours  # noqa: E402
+
 VALID_SPEC = {
     "session": {"name": "WEBTEST"},
-    "grid": {"mode": "EQUATORIAL_RECT", "placement": "FIXED_CENTER", "center_ra_hours": 6.0,
+    "grid": {"mode": "EQUATORIAL_RECT", "placement": "FIXED_CENTER", "center_ra_hours": transiting_ra_hours(),  # always visible
              "center_dec_deg": -30.0, "width_deg": 4, "height_deg": 4, "rows": 3, "cols": 3,
              "min_altitude_deg": 5, "traversal": "SERPENTINE"},
     "capture": {"seconds": 1, "settle_seconds": 0.5},
