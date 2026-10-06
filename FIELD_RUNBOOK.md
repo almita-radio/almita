@@ -264,17 +264,18 @@ No hay pasos adicionales de hardware documentados más allá de esto.
 
 ## 14. KNOWN OPEN ITEMS
 
-*(NO BLOCKER FOR CONSOLE V1 — VERIFY OPERATIONALLY DURING FIELD USE)*
+*(NO BLOCKER FOR CONSOLE V1 — VERIFY OPERATIONALLY DURING FIELD USE)* — estado revisado 2026-10-06:
 
-- `mount_control.py` `connect()` sin `await`
-- visibility TOCTOU (chequeo de elevación puede quedar desactualizado para el GOTO)
-- console header Gain/Bias-T histórico (texto fijo, no lee el valor real configurado)
-- identidad de sesión canónica global (3 IDs distintos según el artefacto)
-- CSV de sesión/mosaic no atómico
-- INDI process lock (sin exclusión mutua forzada)
-- fallback de gain en `sdr_capture.py`
-- duplicación de lectores DS18B20
-- documentación antigua (`FLUJO_COMPLETO.md`, `README.md`) con referencias desactualizadas
+- ~~`mount_control.py` `connect()` sin `await`~~ — corregido (5ee573a). Dec negativa: usar decimal (`-33.4`).
+- ~~visibility TOCTOU~~ — capture.py recalcula la altitud al momento del GOTO y difiere el punto si no cumple.
+- ~~console header Gain/Bias-T histórico~~ — ya no existe ese texto fijo.
+- ~~CSV de sesión/mosaic no atómico~~ — capture.py escribe vía `.csv.tmp` + `os.replace`.
+- identidad de sesión canónica global (3 IDs distintos según el artefacto) — **abierto**
+- INDI process lock (sin exclusión mutua forzada) — **abierto**
+- `sdr_capture.configure(gain='auto')` como valor por omisión — ningún flujo operativo lo usa (todos sintonizan
+  explícito con ganancia fija); **abierto** como limpieza
+- duplicación de lectores DS18B20 (`temperature_sensors.py` / `telemetry_summary.py`) — **abierto**
+- documentación antigua (`FLUJO_COMPLETO.md`, `README.md`) con referencias desactualizadas — **abierto**
 
 ## 15. EMERGENCY PRINCIPLE
 

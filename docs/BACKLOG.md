@@ -1,97 +1,46 @@
 # ALMITA backlog
 
-Operator requests not yet deployed. Each entry: request, status, where it lives, what is still pending.
+Operator requests and their real status, checked against the code and the commits on 2026-10-06.
+"Verified" means automated tests (no hardware) and, where stated, a run on the real preserved session. Nothing
+below was validated on the real mount or with a real capture unless it says so.
 
-## BL-001 — CALIBRATE Reference Wizard: Alt/Az preview of the planned points
+## Done and active (web-polish-v1)
 
-**Requested 2026-10-02.** Show the points the wizard plans to use on an Alt/Az map, reusing ALIGN's sky view.
-Requirements:
-- azimuth, altitude and visiting order;
-- reviewable before starting;
-- refreshed when the plan changes;
-- built from the same plan the wizard executes;
-- reference instant shown, out-of-limit points flagged;
-- never claims a zone is free of obstacles without local horizon data.
+| id | request | where | verification |
+|---|---|---|---|
+| BL-001 | CALIBRATE: HI Alt/Az map of the wizard plan | 156bfbd, 8a66860 | tests; real plan WIZARD-20261002 (preview az/alt = saved hi_plan; astropy recomputation agrees to 0.001°) |
+| BL-002 | OBSERVE: calibration profile selector | 4085ed8, 915f8fa | tests; real profiles over HTTP (COMPATIBLE at 1420405752/2400000/40.2, rejected with reason otherwise; hashes unchanged) |
+| BL-003 | Status indicator centred on every page | 03d263a | browser tests, 8 pages at 1280 / 390 px |
+| BL-004 | No operational use of the retired :8090 | 704b168 | tests; blackbox no longer logs port_8090 |
+| BL-005 | SCIENCE: A/B/C in one projection, full coverage, ≤3 GB | cf450de, 4eec7f4, 9c5c8f2 | real 400-point run SCIENCE_WEB-20261005-230737-640582: 400/400 used, quality GOOD, 394 s, measured peak RSS 1.03 GB; tiled = single cube to 1e-11 of the field scale on hostile synthetic inputs |
+| BL-006 | SCIENCE: readable exports, uniform diagnostics, hatching explained | b40e126 | tests (identical image sizes, NOTES.md sections); not yet re-rendered on the real session |
+| BL-007 | Reference Wizard: STOP / ABORT / failures / interrupted steps | adc2cac | tests (simulated 50 Ω backend, stubbed rtl_tcp, temp job dir, browser tests); **not exercised on real hardware** |
+| BL-008 | Frequency: last operational flows on the central config + ACK evidence | aae14d9 | tests; forensics bench `sdr --yes` not run on hardware |
+| BL-009 | Tests without data/ dependencies; no false capture.py conflict | fdc72e9, 8473f0c | full suite (2447 passed); the 31 failures of that run fixed and re-run green |
+| BL-010 | Git: data/ generated and ignored, fixtures in tests/fixtures/, runbook versioned | ef32d62, dbafb43 | — |
+| BL-011 | mount_control.py never awaited connect() | 5ee573a | fake-controller tests only; the tool was not run against the mount |
 
-**Status:** integrated in `web-polish-v1` (2026-10-05) and extended: ALIGN's HI4PI layer + scale at the plan's own
-instant (`hi4pi_map.sky_grid`), measured/active zones named, square centred canvases.
-- `calibration_engine/hi_plan_preview.py` re-shapes the wizard's own saved `hi_plan`. It recomputes no positions.
-- `almita_web_ops` adds `hi_plan_preview` to the wizard job facts.
-- `console/calibrate.*` draws it with the shared `U.drawSkyView`, extended with optional order, warn and path; ALIGN's drawing is unchanged.
+Activation notes: `console/` is served from the source tree (live on save); `almita-observe-api` must be
+restarted for Python changes (web ops, wizard routing, catalog, SCIENCE bridge in-process imports);
+`almita-console-watcher` for the capture.py detection change.
 
-**Pending:** live check on the CALIBRATE page after the campaign. There is no local horizon model in the
-project, so obstacles stay "NOT evaluated" until one exists.
+## Open — need the operator or a decision
 
-## BL-002 — OBSERVE: selector for "Calibration profile path"
-
-**Requested 2026-10-02.** A button that selects a calibration profile and fills the path. Requirements:
-- manual entry kept;
-- the path is validated: it exists, is a valid profile and is compatible with the observation config;
-- clear errors;
-- server disk distinguished from browser disk;
-- browsing limited to the calibration directories, with nothing sensitive exposed;
-- a browser-local file only by an explicit upload that returns a real server path.
-
-**Status:** integrated in `web-polish-v1` (2026-10-05) and replaced by a server file explorer
-(`/api/observe/calibration-profiles/browse`, BROWSE ALMITA SERVER…): folders, breadcrumbs, Hz/sps/dB and reason per file;
-an unusable QUICKLOOK profile now BLOCKs the OBSERVE preflight. The text below describes the first version.
-- `calibration_profile_catalog.py` lists and validates server profiles: only `<stem>.json` + `.npz` under
-  `data/calibration`, no symlinks or `..` escaping it, and no other directories.
-  - Validity is checked by `calibration_foundation.load_calibration_profile` (Quicklook's loader).
-  - Compatibility is checked by `observation_preflight.planned_profile_compatibility`, the same decision the
-    pre-RUN preflight now calls.
-- `almita_orchestrator_server.py` adds two read-only endpoints:
-  - `GET /api/observe/calibration-profiles` lists profiles;
-  - `GET /api/observe/calibration-profiles/validate?path=` returns 400 with an operator message.
-  Both accept the OBSERVE `center_frequency_hz` / `sample_rate` / `gain_db` as query parameters.
-- OBSERVE page: a SELECT SERVER PROFILE… picker with compatibility per row and USE. Manual entry is kept and is
-  validated on change, and again when frequency, rate or gain change. Paths from the browser's own disk
-  (`C:\…`, `fakepath`, `file:`) get an explicit error.
-
-**Not implemented (optional in the request):** uploading a profile from the browser's disk. It would need an
-explicit upload endpoint that writes under `data/calibration/uploads/` and returns that server path. Today the
-selector only accepts files already on the server.
-
-**Pending:** live check on the OBSERVE page after the campaign (server restart needed for the new endpoints).
-
-## Activating BL-001 / BL-002 (only after the running campaign has finished)
-
-Nothing here was deployed. Merging alone changes the live UI, because `console/` is served from the source
-tree on every request. Wizard and ops subprocesses also import the changed modules fresh. So merge only
-when no observation, wizard or quicklook is running.
-
-1. Check that nothing is active: `pgrep -af "capture[.]py|quicklook_live|calibrate_reference_wizard"` prints
-   nothing, and the OBSERVE page shows COMPLETED or ABORTED.
-2. On the deployment branch, from the main checkout:
-   `git merge --no-ff backlog/wizard-preview-profile-picker`
-3. Restart the web server so it loads `almita_orchestrator_server.py`, `almita_web_ops.py` and
-   `observation_preflight.py`:
-   `sudo systemctl restart almita-observe-api.service`.
-   - The BL-002 endpoints and BL-001's `hi_plan_preview` facts need this restart.
-   - The `console/` HTML/JS change on the next page load without it.
-   - `rtl_tcp`, INDI and the console watcher do not need restarting.
-4. Verify:
-   - **OBSERVE:** SELECT SERVER PROFILE… lists `data/calibration/**/calibration_profile_v1.json` with
-     COMPATIBLE/INCOMPATIBLE against the form values.
-     - USE fills the path and the status line says "valid server profile · COMPATIBLE".
-     - Typing `C:\fakepath\x.json` shows "NOT USABLE: … browser's computer".
-     - `curl -u felipe 'http://localhost:8088/api/observe/calibration-profiles/validate?path=../observer_config.json'`
-       returns 400.
-   - **CALIBRATE wizard:** after PROPOSE HI ALTO / HI BAJO ZONES the sky preview shows
-     "1 HI_ALTO" and "2 HI_BAJO" with a dashed path, the az/alt table, the reference instant and
-     "OBSTACLES NOT EVALUATED".
-     - RE-PROPOSE replaces it.
-     - READY_HI_* shows the next zone highlighted.
-     - ALIGN's sky view looks exactly as before.
-5. Tests, which need no hardware:
-   `.venv/bin/python -m pytest -q tests/test_hi_plan_preview.py tests/test_calibration_profile_catalog.py tests/test_web_frontend.py`
-
-## BL-003 — status indicator centred on every page
-
-**Requested and integrated 2026-10-05.** `.topbar > .hdr-status` (every page, and MONITOR's `<dl>`) is its own full-width,
-centred row; checked at 1280 and 390 px before and after its content changes (tests/test_web_frontend.py).
-
-## BL-004 — no operational use of the retired :8090
-
-**Requested and integrated 2026-10-05.** Blackbox, forensics bench, comments and current docs name the unified :8088;
-historical docs are marked as such; the console only uses relative URLs (tests/test_web_hardening.py).
+- **CALIBRATE with the 50 Ω termination** (physical change at the LNA input) and a real wizard run: needed to
+  validate BL-007 and to build a new profile. Not started by design.
+- **Real-hardware checks** of BL-007 (STOP during a real capture), BL-008 (bench `sdr --yes` on MAIN) and
+  BL-011 — none was run on the instrument.
+- **Re-run SCIENCE on the 400-point session** to produce the BL-006 presentation on real data (≈7 min, CPU only;
+  can be done from the web whenever convenient).
+- **BL-002 optional**: upload a profile from the browser's disk (needs a decision: where uploads go and who may
+  write under data/calibration). Not implemented.
+- **No local horizon model**: the CALIBRATE map always says "OBSTACLES NOT EVALUATED" until one exists (needs site
+  data).
+- **Known open items** (FIELD_RUNBOOK.md §14): canonical session identity, INDI process lock, `gain='auto'`
+  default in `sdr_capture.configure`, duplicate DS18B20 readers, outdated FLUJO_COMPLETO.md/README.md.
+  `mount_control.py` CLI: a negative sexagesimal Dec (`-33:24:00`) is read by argparse as an option.
+- **Untracked operator files** in the repo root (rf_chain_*, mount_slew_*, indoor_coupling_*, sun_detectability_*,
+  `*_ultima_revision.tar.gz`, `examples/block-validation-01.yaml`, a stray file named `=.9`): left untouched -
+  only the operator knows which are worth versioning.
+- `test_field_console_left_open_for_30_minutes...` failed once inside the 30-minute full run and passes alone:
+  timing-sensitive under load on the Pi.
