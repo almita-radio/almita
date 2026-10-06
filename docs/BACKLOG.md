@@ -13,7 +13,7 @@ below was validated on the real mount or with a real capture unless it says so.
 | BL-003 | Status indicator centred on every page | 03d263a | browser tests, 8 pages at 1280 / 390 px |
 | BL-004 | No operational use of the retired :8090 | 704b168 | tests; blackbox no longer logs port_8090 |
 | BL-005 | SCIENCE: A/B/C in one projection, full coverage, ≤3 GB | cf450de, 4eec7f4, 9c5c8f2 | real 400-point run SCIENCE_WEB-20261005-230737-640582: 400/400 used, quality GOOD, 394 s, measured peak RSS 1.03 GB; tiled = single cube to 1e-11 of the field scale on hostile synthetic inputs |
-| BL-006 | SCIENCE: readable exports, uniform diagnostics, hatching explained | b40e126 | tests (identical image sizes, NOTES.md sections); not yet re-rendered on the real session |
+| BL-006 | SCIENCE: readable exports, uniform diagnostics, hatching explained | b40e126 | tests (identical image sizes, NOTES.md sections); real session SCIENCE_WEB-20261006-093214-027437: 400/400 used, GOOD, 416 s, peak RSS 1.03 GB, every single-panel export 1600x1480 px |
 | BL-007 | Reference Wizard: STOP / ABORT / failures / interrupted steps | adc2cac | tests (simulated 50 Ω backend, stubbed rtl_tcp, temp job dir, browser tests); **not exercised on real hardware** |
 | BL-008 | Frequency: last operational flows on the central config + ACK evidence | aae14d9 | tests; forensics bench `sdr --yes` not run on hardware |
 | BL-009 | Tests without data/ dependencies; no false capture.py conflict | fdc72e9, 8473f0c | full suite (2447 passed); the 31 failures of that run fixed and re-run green |
@@ -30,8 +30,6 @@ restarted for Python changes (web ops, wizard routing, catalog, SCIENCE bridge i
   validate BL-007 and to build a new profile. Not started by design.
 - **Real-hardware checks** of BL-007 (STOP during a real capture), BL-008 (bench `sdr --yes` on MAIN) and
   BL-011 — none was run on the instrument.
-- **Re-run SCIENCE on the 400-point session** to produce the BL-006 presentation on real data (≈7 min, CPU only;
-  can be done from the web whenever convenient).
 - **BL-002 optional**: upload a profile from the browser's disk (needs a decision: where uploads go and who may
   write under data/calibration). Not implemented.
 - **No local horizon model**: the CALIBRATE map always says "OBSTACLES NOT EVALUATED" until one exists (needs site
