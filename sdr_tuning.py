@@ -151,6 +151,17 @@ async def tune_explicitly(sdr: Any, center_frequency_hz: float, sample_rate_hz: 
     await sdr.configure(center_freq=requested["center_frequency_hz"], sample_rate=requested["sample_rate_hz"],
                         gain=requested["gain_db"])
 
+    return await verify_acknowledged(source, requested, operating=operating, ack_timeout=ack_timeout, sleep=sleep)
+
+
+async def verify_acknowledged(source: Any, requested: Dict[str, Any], *, operating: Optional[Dict[str, Any]] = None,
+                              ack_timeout: float = ACK_TIMEOUT_SECONDS,
+                              sleep: Callable[[float], Any] = asyncio.sleep) -> Dict[str, Any]:
+    """The evidence half of tune_explicitly(), for a caller that sent the four rtl_tcp commands itself (the bench,
+    which must stay the only reader of its socket). `source.mark()` must have been called BEFORE the commands
+    were sent. Returns the tuning record; raises TuningIncoherent when the acknowledgement is missing/differs."""
+    requested = {"center_frequency_hz": int(round(requested["center_frequency_hz"])),
+                 "sample_rate_hz": int(round(requested["sample_rate_hz"])), "gain_db": float(requested["gain_db"])}
     want = {"center_frequency_hz": requested["center_frequency_hz"], "sample_rate_hz": requested["sample_rate_hz"],
             "gain_tenths_db": int(round(requested["gain_db"] * 10))}
     deadline = time.monotonic() + ack_timeout

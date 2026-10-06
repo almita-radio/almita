@@ -167,6 +167,23 @@ class FakeSDR:
         self.closed = True
 
 
+OPERATING = {"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000, "gain_db": 40.2}
+
+
+class FakeAck:
+    """rtl_tcp's acknowledgement lines, as the MAIN unit's journal shows them after the four commands."""
+    describe = "test acknowledgement"
+
+    def __init__(self, lines=("set freq 1420405752", "set sample rate 2400000", "set gain 402")):
+        self._lines, self.marked = list(lines), False
+
+    def mark(self):
+        self.marked = True
+
+    def lines(self):
+        return self._lines if self.marked else []
+
+
 def make_bench(repo, now=NOW, runner=None, **kw):
     runner = runner or Runner()
     ctx = F.Ctx(root=repo, now=now, run=runner, listeners=lambda: {1234, 7624, 8088}, service_active=lambda u: "active",
@@ -176,7 +193,7 @@ def make_bench(repo, now=NOW, runner=None, **kw):
                     timedatectl=lambda: {"Timezone": "Etc/UTC", "NTPSynchronized": "yes"},
                     execstart=lambda: "/usr/bin/rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 -f 1420405000 -s 2400000 -g 40.2 -T",
                     h5_samples=lambda: [(12_000_000, 10.0)] * 5, disk_free=lambda p: 10 ** 12, indi_factory=lambda h, p, t: FakeTransport(),
-                    sdr_factory=None)
+                    sdr_factory=None, ack_source_factory=FakeAck, operating=lambda: dict(OPERATING))
     vclock = kw.pop("sdr_clock", None) or VClock()
     defaults.update(kw)
     defaults["sdr_clock"] = vclock
@@ -842,3 +859,32 @@ def test_every_live_command_states_no_mount_movement(repo, capsys):
     assert "NO MOUNT MOVEMENT" in capsys.readouterr().out
     B.main(["status"], bench=make_bench(repo, now=NOW + timedelta(hours=3)))
     assert "READY FOR FIELD" not in capsys.readouterr().out.replace("never yields READY FOR FIELD", "")
+
+
+# ------------------------------------------------------------------ tuning evidence (sdr_tuning), like every acquisition
+
+def test_bench_records_rtl_tcp_acknowledgement_of_the_operating_frequency(repo):
+    b = make_bench(repo)
+    r = B.sdr_bench(b, B.load_plan(b), 0.2, b.trace)
+    assert r["executed"] and r["tuning"]["evidence"] == "RTL_TCP_SERVER_ACK"
+    assert r["tuning"]["applied"]["center_frequency_hz"] == 1420405752 and r["tuning"]["matches_operating"] is True
+
+
+def test_bench_reads_nothing_without_the_acknowledgement(repo, monkeypatch):
+    import sdr_tuning
+    b = make_bench(repo, ack_source_factory=lambda: FakeAck(lines=("set freq 1420405000",)))
+    real = sdr_tuning.verify_acknowledged
+
+    async def short(source, requested, **kw):
+        return await real(source, requested, ack_timeout=0.05, **{k: v for k, v in kw.items() if k != "ack_timeout"})
+    monkeypatch.setattr(sdr_tuning, "verify_acknowledged", short)
+    r = B.sdr_bench(b, B.load_plan(b), 0.2, b.trace)
+    assert "did not acknowledge" in r["error"] and "metrics" not in r
+
+
+def test_bench_refuses_a_plan_frequency_other_than_the_operating_one(repo):
+    touched = []
+    b = make_bench(repo, operating=lambda: {**OPERATING, "center_frequency_hz": 1420405000},
+                   sdr_factory=lambda **k: touched.append(1) or FakeSDR())
+    r = B.sdr_bench(b, B.load_plan(b), 0.2, b.trace)
+    assert r["executed"] is False and "not the operating" in r["reason"] and touched == []

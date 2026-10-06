@@ -60,7 +60,26 @@ _ALLOWED = {
     "reduce_single_capture.py",        # detects sdr_capture's historic placeholder value in OLD captures
     "science_forensics/experiment/plan.py",   # audited record of what a 2026-09-02 campaign actually used
     "reduce_engine/simulation.py",     # REDUCE V1 frozen at 2afc4c5: synthetic-capture default only, never tunes
+    # historical audit: OLD_UNIT_STARTUP_HZ records the pre-2026-10-01 unit argv; narrowed by the test below
+    "scripts/calibration/audit_frequency_declared_vs_actual.py",
 }
+
+
+def test_the_frequency_audit_holds_only_the_historical_startup_literal():
+    rel = "scripts/calibration/audit_frequency_declared_vs_actual.py"
+    source = (ROOT / rel).read_text()
+    found = [(tok.start[0], tok.string) for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+             if tok.type == tokenize.NUMBER and _is_forbidden(tok.string)]
+    assert [s for _, s in found] == ["1420405000"]
+    line = source.splitlines()[found[0][0] - 1]
+    assert line.startswith("OLD_UNIT_STARTUP_HZ = ")
+
+
+def _is_forbidden(text):
+    try:
+        return float(text.replace("_", "")) in _FORBIDDEN
+    except ValueError:
+        return False
 
 
 def _tracked_python_files():

@@ -34,9 +34,22 @@ from typing import Any, Dict, List, Optional, Tuple
 import h5py
 
 ROOT = Path(__file__).resolve().parents[2]
-OLD_UNIT_STARTUP_HZ = 1420405000              # /etc/systemd/system/rtl_tcp.service -f, until the 2026-10-01 fix
+# HISTORICAL record, not a frequency to use: what /etc/systemd/system/rtl_tcp.service started at (-f) until the
+# 2026-10-01 fix. The only frequency literal this file may hold (tests/test_sdr_tuning.py checks that).
+OLD_UNIT_STARTUP_HZ = 1420405000
 UNIT_FIX_UTC = datetime(2026, 10, 1, 22, 39, tzinfo=timezone.utc)
-NEW_UNIT_STARTUP_HZ = 1420405752
+
+
+def _versioned_unit_startup_hz() -> int:
+    """-f of the versioned unit (systemd/rtl_tcp.service), which tests/test_sdr_tuning.py keeps equal to
+    observer_config.json's operating frequency - the startup value since the fix, never a second literal."""
+    unit = (ROOT / "systemd" / "rtl_tcp.service").read_text()
+    exec_start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
+    args = exec_start.split("=", 1)[1].split()
+    return int(args[args.index("-f") + 1])
+
+
+NEW_UNIT_STARTUP_HZ = _versioned_unit_startup_hz()
 
 
 def _utc(text: str) -> datetime:

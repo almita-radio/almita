@@ -375,7 +375,7 @@ class Bench:
 
     def __init__(self, root=REPO, plan=DEFAULT_PLAN, now=None, ctx=None, trace=None, listeners=None, established=None, service_active=None,
                  usb=None, meminfo=None, timedatectl=None, execstart=None, h5_samples=None, indi_factory=None, sdr_factory=None, disk_free=None,
-                 mono=None, sleep=None, expected_plan_sha256=None, sdr_clock=None):
+                 mono=None, sleep=None, expected_plan_sha256=None, sdr_clock=None, ack_source_factory=None, operating=None):
         import science_forensics_field as F
         self.F, self.root = F, Path(root)
         self.plan_arg = plan
@@ -393,6 +393,11 @@ class Bench:
         self.disk_free = disk_free or (lambda p: __import__("shutil").disk_usage(p).free)
         self.mono, self.sleep = mono or time.monotonic, sleep or time.sleep
         self.sdr_clock = sdr_clock or time.monotonic       # the SDR read window's own clock (injectable so stream tests need no real time)
+        # rtl_tcp's acknowledgement of the four commands (sdr_tuning: the MAIN unit's journal) and the central operating
+        # config (observer_config.json) - injectable so tests need neither journalctl nor the real config
+        import sdr_tuning
+        self.ack_source_factory = ack_source_factory or sdr_tuning.JournalAckSource
+        self.operating = operating or (lambda: sdr_tuning.operating_config())
         self.expected_plan_sha256 = expected_plan_sha256 or (PINNED_PLAN_SHA256 if str(plan) == DEFAULT_PLAN else None)
         self.written = []
 
@@ -718,6 +723,12 @@ def sdr_bench(b: Bench, plan: dict, seconds: float, trace: Trace, save_sample=Fa
     if passive["state"] == "BUSY":
         res.update({"executed": False, "reason": "MAIN rtl_tcp is BUSY: not touched"})
         return res
+    import sdr_tuning
+    operating = b.operating()
+    if int(inst["sdr_center_frequency_hz"]) != operating["center_frequency_hz"]:
+        res.update({"executed": False, "reason": f"plan frequency {inst['sdr_center_frequency_hz']} Hz is not the operating "
+                                                 f"{operating['center_frequency_hz']} Hz (observer_config.json): not touched"})
+        return res
     if passive["state"] == "UNKNOWN" and "nothing listening" in passive["reason"]:
         res.update({"executed": False, "reason": passive["reason"]})
         return res
@@ -736,8 +747,14 @@ def sdr_bench(b: Bench, plan: dict, seconds: float, trace: Trace, save_sample=Fa
         trace.add("CONNECT", f"RTL MAIN {host}:{port}")
         sock = RecordingSocket(sdr.socket, trace, wire)
         sdr.socket = sock
+        source = b.ack_source_factory()
+        source.mark()                                               # before the commands: only THIS connection's acks count
         for cmd, value in rtl_config_commands(inst):               # the ONLY writes: 0x01 frequency, 0x02 rate, 0x03 gain mode, 0x04 gain
             sock.sendall(struct.pack(">BI", cmd, value))
+        # same evidence every acquisition gives (sdr_tuning): rtl_tcp must acknowledge all four, or nothing is read
+        res["tuning"] = await sdr_tuning.verify_acknowledged(
+            source, {"center_frequency_hz": inst["sdr_center_frequency_hz"], "sample_rate_hz": inst["sdr_sample_rate_hz"],
+                     "gain_db": inst["sdr_gain_db"]}, operating=operating)
         sock.settimeout(STALL_TIMEOUT_S)
         result = await asyncio.get_running_loop().run_in_executor(None, lambda: read_stream(sock, seconds=seconds, settle_s=settle, clock=b.sdr_clock))
         if result["chunks"]:
