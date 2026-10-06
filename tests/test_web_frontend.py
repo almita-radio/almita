@@ -1148,6 +1148,74 @@ out.readyNote = $w("wz-ready-sky-note").textContent;
     assert "order: 1 HI_ALTO (measured) → 2 HI_BAJO · active: HI_BAJO" in out["readyNote"]
 
 
+def _wizard_state(step, **extra):
+    return {"session_id": "WIZ-1", "session_dir": "data/calibration/WIZ-1", "step": step,
+            "config": {"n_captures": 4, "stabilize_seconds": 0}, "fifty_ohm": {"status": "PENDING_CAPTURE"},
+            "hi_references": {}, **extra}
+
+
+def test_calibrate_wizard_recovers_an_interrupted_session_and_shows_what_was_kept(tmp_path):
+    """A capture STOPPED by the operator prints no state: on reload the page still finds the session (the job's
+    output_dir), reads its REAL state with "status" and says what happened and which files were kept."""
+    state = _wizard_state("STABILIZE_50R", last_interruption={"step": "AMBIENT_50R", "kind": "STOPPED_BY_OPERATOR",
+                          "utc": "2026-10-06T00:10:00+00:00", "error": "", "files_on_disk": ["capture_000.h5", "capture_001.h5"]})
+    routes = CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { body: { ok: true, data: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } } };
+window.__routes["GET /api/ops/jobs"] = { body: { ok: true, data: [{ job_id: "J9", stage: "calibrate_wizard" }] } };
+window.__routes["GET /api/ops/job/J9"] = { body: { ok: true, data: { job_id: "J9", state: "EXITED", facts: null, stopped_by_operator: true,
+  output_dir: "data/calibration/WIZ-1", params: { action: "capture_50r", session_dir: "data/calibration/WIZ-1" } } } };
+window.__routes["POST /api/ops/start/calibrate_wizard"] = (b) => ({ body: { ok: true, data: { job_id: "S1" } } });
+window.__routes["GET /api/ops/job/S1"] = { body: { ok: true, data: { job_id: "S1", state: "EXITED", facts: %s } } };
+""" % json.dumps(state)
+    driver = r"""
+const $w = (id) => document.getElementById(id);
+await until(() => !$w("wizard-active").hidden && !$w("wz-interruption").hidden, 5000);
+out.banner = $w("wz-interruption").textContent;
+out.statusCall = window.__calls.filter((c) => c.key === "POST /api/ops/start/calibrate_wizard").map((c) => c.body.params);
+out.stopShown = !$w("wz-running").hidden;
+"""
+    out = run_page(tmp_path, "calibrate", routes, driver, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["statusCall"] == [{"action": "status", "session_dir": "data/calibration/WIZ-1"}]
+    assert "AMBIENT_50R capture STOPPED by the operator" in out["banner"] and "2 file(s) kept on disk" in out["banner"]
+    assert out["stopShown"] is False
+
+
+def test_calibrate_wizard_running_step_has_stop_and_abort_stops_it_first(tmp_path):
+    """While a capture runs on the server the page shows STOP; ABORT first stops that job (SIGINT via
+    /api/ops/stop), waits for it to end, then aborts the session and returns to the setup form."""
+    routes = CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { body: { ok: true, data: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } } };
+window.__routes["GET /api/ops/jobs"] = { body: { ok: true, data: [{ job_id: "J9", stage: "calibrate_wizard" }] } };
+window.__j9 = "RUNNING";
+window.__routes["GET /api/ops/job/J9"] = () => ({ body: { ok: true, data: { job_id: "J9", state: window.__j9, facts: window.__j9 === "RUNNING" ? null : null,
+  output_dir: "data/calibration/WIZ-1", params: { action: "capture_50r", session_dir: "data/calibration/WIZ-1" } } } });
+window.__routes["POST /api/ops/stop/J9"] = () => { window.__j9 = "EXITED"; return { body: { ok: true, data: { job_id: "J9" } } }; };
+window.__routes["POST /api/ops/start/calibrate_wizard"] = (b) => ({ body: { ok: true, data: { job_id: b.params.action === "abort" ? "A1" : "S1" } } });
+window.__routes["GET /api/ops/job/A1"] = { body: { ok: true, data: { job_id: "A1", state: "EXITED", facts: %s } } };
+window.__routes["GET /api/ops/job/S1"] = { body: { ok: true, data: { job_id: "S1", state: "EXITED", facts: %s } } };
+""" % (json.dumps(_wizard_state("ABORTED", aborted=True)), json.dumps(_wizard_state("STABILIZE_50R")))
+    driver = r"""
+const $w = (id) => document.getElementById(id);
+await until(() => !$w("wz-running").hidden, 5000);
+out.runningNote = $w("wz-running-note").textContent;
+document.getElementById("wizard-active").hidden = false;
+$w("wz-abort").click();
+await until(() => !$w("wizard-setup").hidden && $w("wizard-active").hidden, 8000);
+const keys = window.__calls.map((c) => c.key);
+out.order = keys.filter((k) => k === "POST /api/ops/stop/J9" || k === "POST /api/ops/start/calibrate_wizard");
+out.lastStart = window.__calls.filter((c) => c.key === "POST /api/ops/start/calibrate_wizard").pop().body.params;
+out.stopHidden = $w("wz-running").hidden;
+"""
+    out = run_page(tmp_path, "calibrate", routes, driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert "capture_50r (J9)" in out["runningNote"]
+    assert out["order"][0] == "POST /api/ops/stop/J9" and out["lastStart"] == {"action": "abort", "session_dir": "data/calibration/WIZ-1"}
+    assert out["stopHidden"] is True
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):

@@ -69,6 +69,51 @@ def _emit(payload: Dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
+def _preserve_previous_attempt(cap_dir: Path, state: Dict[str, Any], label: str) -> None:
+    """Files left in `cap_dir` by an earlier, interrupted attempt of this same step are MOVED to
+    cap_dir/interrupted-<UTC>/ (never overwritten by the retry's capture_000.h5...) and listed in
+    state["interrupted_attempts"]."""
+    old = sorted(p for p in cap_dir.glob("capture_*.h5") if p.is_file())
+    if not old:
+        return
+    dest = cap_dir / f"interrupted-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+    dest.mkdir()
+    for f in old:
+        f.rename(dest / f.name)
+    state.setdefault("interrupted_attempts", []).append(
+        {"step": label, "moved_utc": datetime.now(timezone.utc).isoformat(),
+         "kept_in": str(dest), "files": [f.name for f in old]})
+
+
+def _record_interruption(session_dir: Path, label: str, exc: BaseException, cap_dir: Path) -> None:
+    """A capture step that stops early (operator STOP = SIGINT, a hardware error, a lost connection) leaves the
+    step where it was - so it can be retried or the wizard aborted - and says so in the state, with the files
+    that did reach the disk (kept; a retry moves them aside, see _preserve_previous_attempt)."""
+    try:
+        state = _load_state(session_dir)
+    except SystemExit:
+        return
+    kind = "STOPPED_BY_OPERATOR" if isinstance(exc, KeyboardInterrupt) else "FAILED"
+    state["last_interruption"] = {
+        "step": label, "kind": kind, "utc": datetime.now(timezone.utc).isoformat(),
+        "error": "" if isinstance(exc, KeyboardInterrupt) else f"{type(exc).__name__}: {exc}",
+        "files_on_disk": sorted(p.name for p in cap_dir.glob("capture_*.h5")),
+    }
+    _save_state(session_dir, state)
+
+
+def _save_result_unless_aborted(session_dir: Path, state: Dict[str, Any]) -> None:
+    """A capture ends by saving its result - unless the session was ABORTED meanwhile (abort from another
+    process). Then the ABORTED state stays as it is: the capture files remain on disk, the result is not
+    written over the abort."""
+    current = _load_state(session_dir)
+    if current.get("step") == WizardStep.ABORTED.value:
+        raise SystemExit("the session was ABORTED while this capture ran - its files are kept on disk, the result "
+                         "is not recorded")
+    state.pop("last_interruption", None)
+    _save_state(session_dir, state)
+
+
 def _require_step(state: Dict[str, Any], *expected: WizardStep) -> None:
     values = {e.value for e in expected}
     if state["step"] not in values:
@@ -184,11 +229,19 @@ def cmd_capture_50r(args) -> int:
     session_dir = Path(args.session_dir)
     state = _load_state(session_dir)
     _require_step(state, WizardStep.STABILIZE_50R)
-    result = asyncio.run(_do_50r_capture(session_dir, state, args.simulate))
+    cap_dir = session_dir / "captures" / "AMBIENT_50R"
+    cap_dir.mkdir(parents=True, exist_ok=True)
+    _preserve_previous_attempt(cap_dir, state, "AMBIENT_50R")
+    _save_state(session_dir, state)
+    try:
+        result = asyncio.run(_do_50r_capture(session_dir, state, args.simulate))
+    except BaseException as exc:          # STOP (KeyboardInterrupt) or failure: record, keep files, re-raise
+        _record_interruption(session_dir, "AMBIENT_50R", exc, cap_dir)
+        raise
     state["fifty_ohm"]["status"] = "DONE"
     state["fifty_ohm_result"] = result
     state["step"] = WizardStep.RESULT_50R.value
-    _save_state(session_dir, state)
+    _save_result_unless_aborted(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
     return 0 if result["verdict"] != "FAIL" else 2
 
@@ -411,18 +464,24 @@ def cmd_capture_hi(args) -> int:
 
     cap_dir = session_dir / "captures" / label
     cap_dir.mkdir(parents=True, exist_ok=True)
-    if args.simulate:
-        capture = asyncio.run(_simulate_capture_n_at(
-            cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
-            cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir, args.simulate))
-    else:
-        try:
+    _preserve_previous_attempt(cap_dir, state, label)
+    _save_state(session_dir, state)
+    try:
+        if args.simulate:
+            capture = asyncio.run(_simulate_capture_n_at(
+                cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
+                cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir, args.simulate))
+        else:
             capture = asyncio.run(_capture_n_at(
                 cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
                 cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir))
-        except RuntimeError as exc:
-            # The step is left at READY_HI_*: nothing was captured, the operator sees why and can retry.
-            raise SystemExit(f"{label} movement FAILED: {exc}")
+    except RuntimeError as exc:
+        # The step is left at READY_HI_*: the operator sees why and can retry (files that were written are kept).
+        _record_interruption(session_dir, label, exc, cap_dir)
+        raise SystemExit(f"{label} movement FAILED: {exc}")
+    except BaseException as exc:          # STOP (KeyboardInterrupt) or any other failure: record, keep files
+        _record_interruption(session_dir, label, exc, cap_dir)
+        raise
 
     from calibration_engine.acquisition import read_capture_iq
     paths = [Path(p) for p in capture["capture_paths"]]
@@ -435,14 +494,22 @@ def cmd_capture_hi(args) -> int:
         "pre_goto_altitude_check": fresh, "confirmed_utc": datetime.now(timezone.utc).isoformat(),
     }
     state["step"] = (WizardStep.RESULT_HI_ALTO if label == "HI_ALTO" else WizardStep.RESULT_HI_BAJO).value
-    _save_state(session_dir, state)
+    _save_result_unless_aborted(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
     return 0 if quality_result["verdict"] != "FAIL" else 2
 
 
 def cmd_abort(args) -> int:
+    """Ends the session from any step. Everything already on disk (captures, results, interrupted attempts) is
+    kept; nothing is deleted. A new session can be started right after. Aborting a DONE session is refused (its
+    profile is already built) and aborting twice is a no-op."""
     session_dir = Path(args.session_dir)
     state = _load_state(session_dir)
+    if state["step"] == WizardStep.DONE.value:
+        raise SystemExit("this session is already DONE (profile built) - nothing to abort; start a new session")
+    if state["step"] != WizardStep.ABORTED.value:
+        state["aborted_from_step"] = state["step"]
+        state["aborted_utc"] = datetime.now(timezone.utc).isoformat()
     state["step"] = WizardStep.ABORTED.value
     state["aborted"] = True
     _save_state(session_dir, state)

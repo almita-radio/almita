@@ -361,12 +361,15 @@ STAGES: Dict[str, Dict[str, Any]] = {
     "align_plan": {"physical": False, "resources": ()},                      # alignment.py --dry-run: resolves the region and the pattern, moves nothing
     "align": {"physical": True, "resources": ("mount", "sdr")},
     "calibrate": {"physical": False, "resources": ("sdr",)},
-    # calibrate_wizard: one stage, many NON-MOVING actions (start/set_reference/skip_reference/capture_50r/next/
-    # confirm_antenna/plan_hi/approve_hi_plan/abort/finish/status) - every web click is one short
-    # calibrate_reference_wizard.py invocation against a session dir it persists to disk between clicks. "sdr"
-    # resource claim covers every action (even the non-capturing ones) so only one wizard step can be mid-flight
-    # at a time and it can never overlap a real align/calibrate run on MAIN.
+    # calibrate_wizard: the NON-MOVING actions that touch MAIN (start probes rtl_tcp, capture_50r captures): they
+    # claim "sdr" so they never overlap a real align/calibrate/observe run on MAIN. Every web click is one short
+    # calibrate_reference_wizard.py invocation against a session dir it persists to disk between clicks.
     "calibrate_wizard": {"physical": False, "resources": ("sdr",)},
+    # calibrate_wizard_state: the actions that only read/write the session's own wizard_state.json
+    # (set/skip_reference, next, confirm_antenna, plan_hi, approve_hi_plan, abort, finish, status). They claim
+    # nothing, so ABORT / a status read work even while MAIN is busy; start() routes them here and refuses them
+    # (except status) while another wizard step of the SAME session is running - STOP that one first.
+    "calibrate_wizard_state": {"physical": False, "resources": ()},
     # calibrate_wizard_move: the ONE action (capture_hi) that does a real GOTO for the HI ALTO/HI BAJO step -
     # physical=True gives it the SAME real-preflight + typed-MOVE-confirmation gate as ALIGN's real RUN and
     # OBSERVE's gain-pilot capture (reused unmodified below in start()); never reachable while the 50 ohm
@@ -625,12 +628,14 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
     if stage == "calibrate":
         n, secs = int(_float(p, "n_captures", 1, 20, 5)), _float(p, "capture_seconds", 0.5, 30, 2.0)
         return [PY, "calibration_operational_realtest.py", "--n-captures", str(n), "--capture-seconds", str(secs)], {"n_captures": n, "capture_seconds": secs}
-    if stage == "calibrate_wizard":
+    if stage in ("calibrate_wizard", "calibrate_wizard_state"):
         action = str(p.get("action", ""))
         valid_actions = {"start", "set_reference", "skip_reference", "capture_50r", "next", "confirm_antenna",
                          "plan_hi", "approve_hi_plan", "abort", "finish", "status"}
         if action not in valid_actions:
             raise ValueError(f"action must be one of {sorted(valid_actions)}")
+        if stage == "calibrate_wizard_state" and action in WIZARD_SDR_ACTIONS:
+            raise ValueError(f"{action} uses MAIN: it runs on the calibrate_wizard stage (with its SDR claim), not here")
         if action == "start":
             n = int(_float(p, "n_captures", 2, 20, 5))
             cs = _float(p, "capture_seconds", 0.5, 30, 2.0)
@@ -988,12 +993,40 @@ def busy_reason(resources: Tuple[str, ...] = ("mount", "sdr")) -> Optional[str]:
     return None
 
 
+WIZARD_STAGES = ("calibrate_wizard", "calibrate_wizard_state", "calibrate_wizard_move")
+WIZARD_SDR_ACTIONS = ("start", "capture_50r")
+
+
+def _running_wizard_job_on(session_rel: str) -> Optional[str]:
+    """job_id of a RUNNING wizard step on this session dir (any wizard stage; a read-only "status" never counts),
+    else None."""
+    if not OPS_DIR.is_dir():
+        return None
+    for d in OPS_DIR.iterdir():
+        try:
+            j = json.loads((d / "job.json").read_text())
+        except (OSError, ValueError):
+            continue
+        meta = j.get("meta") or {}
+        if (j.get("stage") in WIZARD_STAGES and meta.get("output_dir") == session_rel and meta.get("action") != "status"
+                and _state(j) == "RUNNING"):
+            return j["job_id"]
+    return None
+
+
 def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> Dict[str, Any]:
+    if stage == "calibrate_wizard" and str((params or {}).get("action", "")) not in WIZARD_SDR_ACTIONS:
+        stage = "calibrate_wizard_state"          # state-only wizard action: needs no SDR (see STAGES)
     if stage not in STAGES:
         raise ValueError(f"unknown stage {stage!r}")
     spec = STAGES[stage]
     job_id = f"{stage.upper()}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     argv, meta = build_command(stage, params, job_id)
+    if stage in WIZARD_STAGES and meta.get("output_dir") and meta.get("action") != "status":
+        running = _running_wizard_job_on(meta["output_dir"])
+        if running:
+            raise OpsBlocked(f"wizard step {running} is still running on this session - STOP it first, then retry "
+                             f"(its captured files are kept)")
     busy = _busy_resources()
     for r in spec["resources"]:
         if r in busy and r != "cpu":
@@ -1147,7 +1180,7 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 out["verdict"] = "PASS" if qv == "GOOD" else "PARTIAL"
                 out["detail"] = (f"real MAIN captures; quality {qv}; level {res.get('calibration_level')} (absolute_calibration={res.get('absolute_calibration')}: "
                                  "engineering/non-science, NO physical units claimed)")
-    elif stage in ("calibrate_wizard", "calibrate_wizard_move"):
+    elif stage in WIZARD_STAGES:
         # Every calibrate_reference_wizard.py subcommand prints exactly one JSON blob (session_dir + state) and
         # nothing else to stdout - extract it from the combined stdout+stderr log rather than needing a second
         # result file, the same "one script invocation, one real artifact" contract as every other stage.

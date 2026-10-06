@@ -359,10 +359,36 @@
         await new Promise((res) => setTimeout(res, 800));
       }
     }
+    // The wizard step currently running on the server (shown with a STOP button). STOP = SIGINT to that one job:
+    // the wizard keeps the step where it was, records the interruption and keeps every file already captured.
+    let runningJobId = null;
+    function setRunning(jobId, action) {
+      runningJobId = jobId;
+      $w("wz-running").hidden = !jobId;
+      $w("wz-running-note").textContent = jobId ? `running on the server: ${action || "wizard step"} (${jobId})` : "";
+    }
+    async function stopRunningStep() {
+      const id = runningJobId;
+      if (!id) return;
+      const r = await U.api(`/api/ops/stop/${id}`, { method: "POST", body: { confirm: true }, timeoutMs: 20000 });
+      if (!r.ok && !/not running/.test(U.errorText(r.error))) throw new Error(U.errorText(r.error));
+      await pollJobUntilDone(id, 180000);
+      setRunning(null);
+    }
+    async function refreshStatus() {
+      if (!sessionDir) return null;
+      const job = await startAndPoll("calibrate_wizard", { action: "status", session_dir: sessionDir }, null, 20000);
+      render(job.facts);
+      return job.facts;
+    }
     async function startAndPoll(stage, params, confirmText, timeoutMs) {
       const r = await U.api(`/api/ops/start/${stage}`, { method: "POST", body: { params, confirm: confirmText === undefined ? null : confirmText }, timeoutMs: 20000 });
       if (!r.ok) throw new Error(U.errorText(r.error));
-      const job = await pollJobUntilDone(r.data.data.job_id, timeoutMs || 60000);
+      const long = params.action === "capture_50r" || params.action === "capture_hi";
+      if (long) setRunning(r.data.data.job_id, params.action);
+      let job;
+      try { job = await pollJobUntilDone(r.data.data.job_id, timeoutMs || 60000); }
+      finally { if (long && runningJobId === r.data.data.job_id) setRunning(null); }
       if (job.state !== "EXITED" || !job.facts || !job.facts.step) {
         throw new Error(job.detail || `wizard step '${params.action}' did not return a usable state`);
       }
@@ -494,6 +520,11 @@
       const fiftyDone = state.fifty_ohm && (state.fifty_ohm.status === "DONE" || state.fifty_ohm.status === "SKIPPED");
       const hiDone = ["HI_ALTO", "HI_BAJO"].filter((k) => state.hi_references && state.hi_references[k]).length;
       $w("wz-session-note").textContent = `session ${state.session_id} · step ${state.step} · 50Ω ${fiftyDone ? "settled" : "pending"} · HI zones measured ${hiDone}/2`;
+      const li = state.last_interruption, kept = state.interrupted_attempts || [];
+      $w("wz-interruption").hidden = !li && !kept.length;
+      $w("wz-interruption").textContent = (li ? `${li.step} capture ${li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : "FAILED"} at ${li.utc}`
+          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept on disk · retry the step or ABORT. ` : "")
+        + (kept.length ? `Earlier interrupted attempts kept: ${kept.map((a) => `${a.step} → ${a.kept_in} (${a.files.length} file(s))`).join("; ")}` : "");
 
       if (state.step === "PREPARE_50R") {
         $w("wz-step-prepare").hidden = false;
@@ -617,18 +648,35 @@
     async function recoverWizard() {
       const r = await U.api("/api/ops/jobs", { timeoutMs: 15000 });
       if (!r.ok) return;
-      // /api/ops/jobs returns newest-first - the most recent job on EITHER wizard stage (non-moving or the
-      // real-GOTO capture-hi action) carries the latest state of whichever session is currently in progress.
-      const rows = (r.data.data || []).filter((x) => x.stage === "calibrate_wizard" || x.stage === "calibrate_wizard_move");
-      if (!rows.length) return;
-      const last = rows[0];
-      const jr = await U.api(`/api/ops/job/${last.job_id}`, { timeoutMs: 15000 });
-      if (!jr.ok) return;
-      const facts = jr.data.data.facts;
-      if (!facts || !facts.session_dir || !facts.step || facts.step === "DONE" || facts.step === "ABORTED") return;
-      sessionDir = facts.session_dir;
-      render(facts);
+      // /api/ops/jobs returns newest-first. The newest wizard job names the session in progress - even one that was
+      // STOPPED, failed or lost its runner and so printed no state (then its output_dir still names the session).
+      // The session's REAL current state is then read back with "status" (state-only: works while MAIN is busy).
+      const rows = (r.data.data || []).filter((x) => ["calibrate_wizard", "calibrate_wizard_state", "calibrate_wizard_move"].includes(x.stage));
+      for (const row of rows.slice(0, 10)) {
+        const jr = await U.api(`/api/ops/job/${row.job_id}`, { timeoutMs: 15000 });
+        if (!jr.ok) continue;
+        const j = jr.data.data;
+        const dir = (j.facts && j.facts.session_dir) || j.output_dir || (j.params && j.params.session_dir);
+        if (!dir) continue;
+        if (j.facts && (j.facts.step === "DONE" || j.facts.step === "ABORTED")) return;
+        sessionDir = dir;
+        if (j.state === "RUNNING") {
+          setRunning(j.job_id, (j.params && j.params.action) || j.stage);
+          pollJobUntilDone(j.job_id, 600000).then(() => { setRunning(null); return refreshStatus(); }).catch(() => {});
+          if (j.facts && j.facts.step) render(j.facts);
+          return;
+        }
+        if (j.facts && j.facts.step) { render(j.facts); return; }        // the last step printed the session's state
+        const facts = await refreshStatus();                              // it did not (stopped / failed): read it back
+        if (facts && (facts.step === "DONE" || facts.step === "ABORTED")) { sessionDir = null; $w("wizard-active").hidden = true; $w("wizard-setup").hidden = false; }
+        return;
+      }
     }
+
+    $w("wz-stop").addEventListener("click", U.guard($w("wz-stop"), async () => {
+      if (!confirm("Stop the step running on the server? Files already captured are kept; the step can be retried or the wizard aborted.")) return undefined;
+      try { await stopRunningStep(); wzErr(""); await refreshStatus(); } catch (err) { wzErr(`stop failed: ${msg(err)}`); }
+    }, "STOPPING…"));
 
     $w("wz-start").addEventListener("click", U.guard($w("wz-start"), async () => {
       try {
@@ -665,7 +713,7 @@
         const sim = $w("wz-simulate").value;
         const job = await wizardAction({ action: "capture_50r", session_dir: sessionDir, simulate: sim || undefined }, 120000);
         wzErr(""); render(job.facts);
-      } catch (err) { wzErr(`capture failed: ${msg(err)}`); }
+      } catch (err) { wzErr(`capture failed: ${msg(err)}`); refreshStatus().catch(() => {}); }
     }, "CAPTURING…"));
 
     $w("wz-next").addEventListener("click", U.guard($w("wz-next"), async () => {
@@ -710,7 +758,7 @@
       try {
         const job = await wizardMoveAction({ action: "capture_hi", session_dir: sessionDir, label }, $w("wz-hi-move-confirm").value, 180000);
         wzErr(""); render(job.facts);
-      } catch (err) { wzErr(`capture failed: ${msg(err)}`); }
+      } catch (err) { wzErr(`capture failed: ${msg(err)}`); refreshStatus().catch(() => {}); }
     }, "CAPTURING…"));
 
     $w("wz-next-hi").addEventListener("click", U.guard($w("wz-next-hi"), async () => {
@@ -728,8 +776,10 @@
     }, "FINISHING…"));
 
     $w("wz-abort").addEventListener("click", U.guard($w("wz-abort"), async () => {
-      if (!confirm("Abort the wizard? Progress already on disk is kept, but the wizard resets.")) return undefined;
+      if (!confirm("Abort the wizard? Progress already on disk is kept, but the wizard resets."
+                   + (runningJobId ? "\nThe step running now is STOPPED first (its captured files are kept)." : ""))) return undefined;
       try {
+        await stopRunningStep();
         await wizardAction({ action: "abort", session_dir: sessionDir }, 15000);
         wzErr(""); sessionDir = null; $w("wizard-active").hidden = true; $w("wizard-setup").hidden = false;
       } catch (err) { wzErr(`abort failed: ${msg(err)}`); }
