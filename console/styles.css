@@ -186,3 +186,6 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .fx-crumbs span{color:var(--muted)}
 .fx-name{overflow-wrap:anywhere}
 .fx-selected{font-family:ui-monospace,monospace;white-space:pre-line}
+/* SCIENCE: the hatched/dimmed B/C pixels, explained next to the images */
+.hatch-note{display:flex;gap:6px;align-items:center}
+.hatch-swatch{flex:0 0 22px;height:12px;border:1px solid var(--line);background:repeating-linear-gradient(135deg,#5a6670 0 3px,#d8e2e8 3px 4px)}

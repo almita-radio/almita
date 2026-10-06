@@ -985,3 +985,20 @@ def test_tiled_build_names_a_point_outside_every_tile_exactly_like_the_full_cube
     _, info, _ = swb.integrated_map_in_tiles(si, grid, beam, sc)
     assert [e for e in info["excluded"] if e["point_index"] == 999] == [{"point_index": 999, "reason": "OUTSIDE_BEAM_SUPPORT_OF_GRID"}]
     assert info["used_point_indices"] == ref_info["used_point_indices"]
+
+
+def test_exports_have_one_size_short_captions_and_notes_file(tmp_path):
+    """Every single-panel export (A, B, C and the three diagnostics) has the SAME pixel size; the technical
+    detail lives in NOTES.md (noise / consistency / leave-one-out / method / hatching), not in tiny captions."""
+    from PIL import Image
+    si = mosaic_input(n=6, spacing=1.0)
+    cfg = cfg_with(beam_fwhm_deg=20.0)
+    built = build_all_products(si, cfg)
+    exports, _ = render_all_maps(built, cfg, si.campaign_id, si.reduce_session_id, tmp_path)
+    sizes = {n: Image.open(tmp_path / f"{n}.png").size for n in
+             ("map_a_no_interp", "map_b_smooth", "map_c_heavy", "map_snr", "map_coverage_density", "map_coverage")}
+    assert len(set(sizes.values())) == 1, sizes
+    notes = (tmp_path / "NOTES.md").read_text()
+    assert exports["notes"] == ["NOTES.md"]
+    for section in ("## Noise check", "## B/C consistency", "## Method", "Hatched / dimmed B/C pixels", "## SNR map"):
+        assert section in notes, section

@@ -1413,19 +1413,17 @@ def _title_block(cfg: MapConfig, campaign_id: str, reduce_session_id: str, panel
 
 def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, reduce_session_id: str,
                     out_dir: Path) -> dict[str, list[str]]:
-    """Renders A (the real N x M board, sharp per-cell) and B/C (genuinely finer interpolated rasters - see
-    build_fine_grid) at STRICTLY increasing pixel density left to right - real NEW pixel positions between
-    the measured cells, never the same N x M cells enlarged/blurred/repainted at a different opacity (a
-    prior version of this module did exactly that and was corrected here). All three share the SAME
-    physical extent/orientation and the SAME color scale (vmin/vmax from A's own measured values) so the
-    increase in visual detail is never a colour-scale trick. Every export bakes in its own effective grid
-    dimensions in the title, plus calibration/window/caveats - not only shown in the browser. New pixels in
-    B/C are estimates BETWEEN measured positions - the caption states plainly that interpolation never
-    recovers detail the instrument did not measure, and that only panel A's real cells have a spectrum.
+    """Renders A (the real N x M board: one cell per measured point, drawn where it lies in the shared projection)
+    and B/C (finer interpolated rasters over the SAME footprint, projection and colour scale). Only A's real cells
+    have a spectrum; B/C pixels between measured positions are estimates.
 
-    Layout: the title uses fig.suptitle() (spans the FULL figure width, never clipped by the narrower axes
-    a colorbar leaves behind) and every figure reserves FIXED top/bottom margins via subplots_adjust()
-    (tight_layout() does not know about a separately-placed fig.text() caption)."""
+    Presentation: every single-panel figure has the SAME fixed size and axes box (identical pixel dimensions on
+    disk), readable fonts and a SHORT caption. The full technical notes (noise / B-C consistency / leave-one-out
+    checks, method, caveats) go to maps/NOTES.md, written next to the images, instead of tiny text baked into
+    every picture. B/C's hatching has its own legend entry: a hatched (and dimmed) pixel is backed by ONE real
+    point only - mostly the outer rim of the field, where nothing on the far side corroborates it."""
+    import textwrap
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1440,55 +1438,22 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     smoothing_fwhm_deg = spatial["smoothing_fwhm_deg"]
     vmin, vmax = built["color_vmin"], built["color_vmax"]
     cmap = plt.get_cmap("viridis").with_extremes(bad=(0, 0, 0, 0))
-    # SAME physical extent for A, B and C (build_fine_grid guarantees B/C match the base raster exactly) -
-    # request #3: "los tres paneles deben ocupar exactamente el mismo ancho y alto... misma extension espacial".
-    # imshow's extent is (x of column 0, x of the last column): column 0 IS x = -half_w (pixel_centers_deg),
-    # so it is passed in that order and the axis runs the same way. This used to be (half_w, -half_w) with
-    # an inverted xlim: the image itself was right (RA increasing to the right, as the browser canvas draws
-    # it) but every x tick label carried the wrong sign - invisible on a board, wrong for polygons drawn
-    # at their real coordinates.
+    # imshow's extent is (x of column 0, x of the last column): column 0 IS x = -half_w (pixel_centers_deg).
     half_w, half_h = board.width_deg / 2, board.height_deg / 2
     extent = (-half_w, half_w, -half_h, half_h)
     GRIDLINE = "#33414a"
-
+    FIG = (8.0, 7.4)                                   # every single-panel export: 1600 x 1480 px at 200 dpi
+    AX_RECT, CAX_RECT = [0.10, 0.21, 0.66, 0.62], [0.80, 0.21, 0.028, 0.62]
+    FS_TITLE, FS_LABEL, FS_TICK, FS_CAPTION = 12, 10.5, 9.5, 10
+    window = f"LSRK [{cfg.velocity_window_min_m_s / 1000:.0f}, {cfg.velocity_window_max_m_s / 1000:.0f}] km/s"
+    unit_label = "integrated relative intensity (dimensionless × m/s)"
     written: dict[str, list[str]] = {}
-    hi_caveat = ("INSTRUMENTAL/" + cfg.calibration_level_filter + " result - relative_intensity_dimensionless "
-                "only. No HI detection, Kelvin, Jy, N_HI or absolute flux claimed.")
-    nd = built.get("noise_dominance")
-    noise_caveat = ""
-    if nd and nd["consistent_with_pure_noise_at_point_spacing"]:
-        noise_caveat = (
-            f" NOISE CHECK: neighbouring real points differ by a median of {nd['median_nearest_neighbor_abs_value_diff']:.4g} "
-            f"(x{nd['ratio_observed_to_expected_noise']:.2g} what independent per-point noise alone predicts: "
-            f"sqrt(2) x median sigma = {nd['expected_abs_diff_if_independent_noise']:.4g}), and neighbouring values "
-            f"are essentially uncorrelated (r={nd['nearest_neighbor_value_correlation']:.2f}) - consistent with pure "
-            f"per-point noise at this spacing. ANY multi-pixel bump/dip B/C shows may be a chance grouping of that "
-            f"noise, not detected spatial structure.")
-    bcc = built.get("bc_exact_coordinate_consistency")
-    bc_caveat = ""
-    if bcc:
-        b_c, c_c = bcc["b"], bcc["c"]
-        bc_caveat = (
-            f" B/C CONSISTENCY CHECK (computational self-consistency, NOT a predictive-skill test - see the "
-            f"separate LEAVE-ONE-OUT CHECK below for that): evaluated at IDENTICAL physical coordinates via a "
-            f"small odd-ratio companion grid (never a resampled image), B's own field matches its "
-            f"{b_c['n_checked']}-point companion to max|diff|={b_c['max_abs_diff']:.2g} and C's to "
-            f"max|diff|={c_c['max_abs_diff']:.2g} over {c_c['n_checked']} points (coordinate mismatch "
-            f"{max(b_c['max_coordinate_mismatch_deg'], c_c['max_coordinate_mismatch_deg']):.1e} deg - float "
-            f"precision only) - i.e. B and C compute the SAME field at a shared coordinate; only their raster "
-            f"density differs.")
-    loo = built.get("loo_cross_validation")
-    loo_caveat = ""
-    if loo and loo.get("predicted_vs_measured_correlation") is not None:
-        r = loo["predicted_vs_measured_correlation"]
-        loo_caveat = (
-            f" LEAVE-ONE-OUT CHECK (predictive skill against REAL measurements - a DIFFERENT question from the "
-            f"B/C consistency check above): predicting each of {loo['n_predictable']} real point(s) from ONLY "
-            f"its neighbours, using this SAME kernel/support, correlates with that point's own measured value "
-            f"at r={r:.2f}" + (" (essentially no real predictive skill)" if abs(r) < 0.3 else "") +
-            f"; RMS held-out error={loo['rms']:.4g} vs this field's own point-to-point std={loo['field_value_std']:.4g}"
-            + (" - WORSE than simply guessing the field's mean" if loo["rms_worse_than_predicting_the_field_mean"] else "")
-            + ". Read any multi-pixel feature below with that in mind - it is not a verified detection.")
+    notes: list[str] = []
+    HATCH_LABEL = "hatched / dimmed: only ONE real point within support (mostly the outer rim)"
+    hatch_handle = mpatches.Patch(facecolor="#5a6670", edgecolor="white", hatch="////", label=HATCH_LABEL)
+
+    def _title(panel: str) -> str:
+        return f"{panel}\n{campaign_id} · {cfg.calibration_level_filter} · {window}"
 
     def _board_quads(ax, values, cmap_, vmin_, vmax_, linewidth=0.5):
         """Map A's cells as quadrilaterals at their real place in the shared projection (corners from
@@ -1500,102 +1465,120 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         ax.set_xlim(-half_w, half_w)   # RA (east) increases to the RIGHT, as on the browser canvas
         ax.set_ylim(-half_h, half_h)
         ax.set_aspect("equal")
+        ax.tick_params(labelsize=FS_TICK)
 
     def _local_pixel_centers(grid):
-        """(X, Y) meshgrids of each pixel's own local tangent-plane offset (degrees), SAME linspace
-        convention pixel_centers_deg() uses (and therefore the SAME positions build_cube() actually
-        weighted from) - used to align a contourf/hatch overlay exactly on top of the imshow array it
-        annotates, pixel for pixel."""
+        """(X, Y) meshgrids of each pixel's own local tangent-plane offset (degrees), SAME linspace convention
+        pixel_centers_deg() uses - aligns a contourf/hatch overlay exactly on the imshow array it annotates."""
         xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
         ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
         xc, yc = (xs[:-1] + xs[1:]) / 2, (ys[:-1] + ys[1:]) / 2
         return np.meshgrid(xc, yc)
 
     def _mark_low_confidence(ax, grid, science_map) -> np.ndarray:
-        """Honest coverage cue for an INTERPOLATED panel (request: real circular halos were traced to
-        individual points' own noise dominating their neighbourhood - see this function's caller and the
-        task's own diagnosis) - hatches every pixel whose value is NOT corroborated by more than one real
-        nearby measurement (n_pointings <= 1, the frozen GriddingAccumulator's own count of pointings with
-        nonzero weight - reused exactly as science_engine.integration.integrated_map() already computes it,
-        never re-derived). A hatched pixel's bump/dip may be that ONE point's own measurement noise, not
-        real spatial structure - this is disclosed, never blurred away or hidden. Returns the mask (for the
-        caption's own real count)."""
+        """Hatches every valid pixel backed by at most ONE real point (n_pointings <= 1, the frozen
+        GriddingAccumulator's own count): its bump/dip may be that one point's own noise, not structure.
+        Disclosed, never blurred away. Returns the mask."""
         low_conf = science_map.valid & (science_map.n_pointings <= 1)
         if low_conf.any():
             xg, yg = _local_pixel_centers(grid)
             cs = ax.contourf(xg, yg, low_conf.astype(float), levels=[0.5, 1.5], colors="none", hatches=["////"])
-            # matplotlib >=3.10 returns contourf's hatched region as ONE artist (no .collections list any
-            # more); matplotlib <3.10 returns a QuadContourSet whose hatching lives on .collections. Handle
-            # both without depending on a specific version.
-            artists = getattr(cs, "collections", None) or [cs]
-            for artist in artists:
+            for artist in (getattr(cs, "collections", None) or [cs]):   # matplotlib <3.10 / >=3.10
                 artist.set_edgecolor((1, 1, 1, 0.55))
                 artist.set_linewidth(0.0)
         return low_conf
 
-    def _finish(fig, ax, title: str, name: str, extra_caption: str, exts=("png", "svg", "pdf")) -> None:
-        ax.set_xlabel(f"x = dRA cos(dec0), deg from RA={board.center_ra_deg:.4f} (east to the right)", fontsize=7.5)
-        ax.set_ylabel(f"y = dDec, deg from Dec={board.center_dec_deg:.4f}", fontsize=7.5)
-        fig.suptitle(title, fontsize=8.5, y=0.985)
-        fig.text(0.5, 0.01, extra_caption, ha="center", va="bottom", fontsize=6.5, wrap=True)
-        # Bottom margin scales with the caption's OWN length (adding the noise-check/coverage-density
-        # paragraphs made some captions wrap to several more lines than a short one) - a fixed margin was
-        # measured to let a long caption's top line collide with the x-axis label; this stays robust to
-        # caption length instead of a new hand-tuned constant per addition.
-        chars_per_line = 145   # approx at fontsize=6.5 across this figure's width
-        n_lines = max(1, -(-len(extra_caption) // chars_per_line))
-        bottom = min(0.20 + 0.018 * n_lines, 0.45)
-        fig.subplots_adjust(top=0.80, bottom=bottom, left=0.13, right=0.99)
+    def _single(panel: str, caption: str):
+        fig = plt.figure(figsize=FIG)
+        ax = fig.add_axes(AX_RECT)
+        cax = fig.add_axes(CAX_RECT)
+        fig.suptitle(_title(panel), fontsize=FS_TITLE, y=0.975)
+        fig.text(0.5, 0.025, "\n".join(textwrap.wrap(caption, 110)), ha="center", va="bottom", fontsize=FS_CAPTION)
+        ax.set_xlabel(f"x = ΔRA·cos(δ0) [deg] from RA {board.center_ra_deg:.2f}° (east →)", fontsize=FS_LABEL)
+        ax.set_ylabel(f"y = ΔDec [deg] from Dec {board.center_dec_deg:.2f}°", fontsize=FS_LABEL)
+        return fig, ax, cax
+
+    def _save(fig, name: str, exts=("png", "svg", "pdf")) -> None:
         paths = []
         for ext in exts:
             p = out_dir / f"{name}.{ext}"
-            # bbox_inches="tight": recomputes the saved canvas from every artist's ACTUAL rendered extent
-            # (suptitle, caption, colorbar label included) - fixed margins alone were measured to still clip
-            # a long colorbar label on the right edge; this is robust to title/label length instead of
-            # requiring a new hand-tuned margin per plot.
-            fig.savefig(p, dpi=200 if ext == "png" else None, bbox_inches="tight", pad_inches=0.15)
-            paths.append(str(p.name))
+            fig.savefig(p, dpi=200 if ext == "png" else None)      # fixed canvas: same size for every panel
+            paths.append(p.name)
         plt.close(fig)
         written[name] = paths
 
-    # ---- A: the real N x M board - one cell = one real reading, sharp edges, cell-index ticks/gridlines,
-    # the ONLY panel with a spectrum-able cell. ----
+    def _colorbar(fig, im, cax, label):
+        cb = fig.colorbar(im, cax=cax)
+        cb.set_label(label, fontsize=FS_LABEL)
+        cb.ax.tick_params(labelsize=FS_TICK)
+
+    # ---- technical notes (formerly baked into every caption at 6.5 pt) ----
+    hi_caveat = (f"INSTRUMENTAL/{cfg.calibration_level_filter} result - relative_intensity_dimensionless only. No HI "
+                 "detection, Kelvin, Jy, N_HI or absolute flux claimed.")
+    nd, bcc, loo = built.get("noise_dominance"), built.get("bc_exact_coordinate_consistency"), built.get("loo_cross_validation")
+    if nd:
+        notes.append("## Noise check\n" + (
+            f"Neighbouring real points differ by a median of {nd['median_nearest_neighbor_abs_value_diff']:.4g} "
+            f"(x{nd['ratio_observed_to_expected_noise']:.2g} of what independent per-point noise alone predicts: "
+            f"sqrt(2) x median sigma = {nd['expected_abs_diff_if_independent_noise']:.4g}); neighbour correlation "
+            f"r={nd['nearest_neighbor_value_correlation']:.2f}. "
+            + ("Consistent with pure per-point noise at this spacing: any multi-pixel bump/dip in B/C may be a chance "
+               "grouping of that noise, not detected structure." if nd["consistent_with_pure_noise_at_point_spacing"]
+               else "Neighbours correlate more than pure noise would predict.")))
+    if bcc:
+        b_c, c_c = bcc["b"], bcc["c"]
+        notes.append("## B/C consistency (computational self-consistency, not predictive skill)\n"
+                     f"Evaluated at IDENTICAL coordinates via small odd-ratio companion grids: B matches its "
+                     f"{b_c['n_checked']}-point companion to max|diff|={b_c['max_abs_diff']:.2g}, C to "
+                     f"{c_c['max_abs_diff']:.2g} over {c_c['n_checked']} points (coordinate mismatch "
+                     f"{max(b_c['max_coordinate_mismatch_deg'], c_c['max_coordinate_mismatch_deg']):.1e} deg). B and C "
+                     "compute the SAME field; only raster density differs.")
+    if loo and loo.get("predicted_vs_measured_correlation") is not None:
+        notes.append("## Leave-one-out check (predictive skill against real measurements)\n"
+                     f"Predicting each of {loo['n_predictable']} real point(s) from only its neighbours (same kernel and "
+                     f"support as B/C){' - a fixed-seed subsample' if loo.get('subsampled') else ''}: r="
+                     f"{loo['predicted_vs_measured_correlation']:.2f}, RMS held-out error={loo['rms']:.4g} vs the field's "
+                     f"own point-to-point std={loo['field_value_std']:.4g}"
+                     + (" - WORSE than guessing the field's mean." if loo["rms_worse_than_predicting_the_field_mean"] else ".")
+                     + " Read any multi-pixel feature with that in mind - it is not a verified detection.")
+    notes.append("## Method\n"
+                 f"A: {n_rows}x{n_cols} cells, one per measured pointing (spacing {spatial['mosaic_spacing_deg']:.4g} deg), "
+                 "each drawn as the quadrilateral its pointing occupies in the shared projection x = ΔRA·cos(δ0), "
+                 "y = ΔDec - a wide field's cells are deformed, not squares. An unmeasured cell is transparent, "
+                 "never zero. Only A's cells have a real spectrum (click them in the web page).\n\n"
+                 f"B/C: the frozen science_engine build_cube()+integrated_map(), evaluated in tiles, on rasters "
+                 f"{cfg.interp_factor_b}x and {cfg.interp_factor_c}x the board pitch over the SAME footprint, centre "
+                 f"and colour scale as A. Inverse-variance x Gaussian kernel weighted mean of nearby real readings, "
+                 f"kernel FWHM={smoothing_fwhm_deg:.4g} deg (presentation smoothing, NOT the instrument beam), "
+                 f"support radius {support_radius_deg:.4g} deg - identical for B and C; "
+                 f"{len(built['used_point_set'])} point(s) used in both. A denser raster samples the same smoothed field "
+                 f"more finely; it is not a finer physical resolution (instrument beam FWHM {cfg.beam_fwhm_deg:.4g} deg, "
+                 f"{cfg.beam_status}, reported only). B is drawn 'nearest', C 'bilinear' - a display choice only.\n\n"
+                 f"Hatched / dimmed B/C pixels: n_pointings <= 1, i.e. a single real point within support. They sit "
+                 f"mostly on the outer rim, where no point beyond the edge corroborates the value; there the value is "
+                 f"that one point's own reading and its noise reads directly as a local bump/dip.\n\n"
+                 f"Colour limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}), shared by A, B and C.\n\n"
+                 + hi_caveat)
+
+    # ---- A ----
     n_measured = int(built["map_a_valid"].sum())
-    fig, ax = plt.subplots(figsize=(6.6, 6.0))
+    fig, ax, cax = _single(f"A: MEASURED - {n_rows}x{n_cols} cells (no interpolation)",
+                           f"{n_measured}/{n_rows * n_cols} cells measured · one point = one cell, drawn where it lies on "
+                           f"the sky · transparent = no pointing · only A has spectra · details: NOTES.md")
     masked_a = np.ma.masked_where(~built["map_a_valid"], built["map_a_value"])
     im = _board_quads(ax, masked_a, cmap, vmin, vmax)
     _extent_and_aspect(ax)
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label("integrated relative_intensity_dimensionless x m/s")
-    _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
-                                  f"A: MEASURED READINGS - {n_rows}x{n_cols} grid (no interpolation)"),
-           "map_a_no_interp",
-           f"{n_rows}x{n_cols} = {n_rows * n_cols} cells, one per real pointing (spacing "
-           f"{spatial['mosaic_spacing_deg']:.3f} deg), each drawn where its pointing lies in the SAME "
-           f"projection as B/C (a wide field's cells are deformed quadrilaterals, not squares). "
-           f"{n_measured}/{n_rows * n_cols} cells carry a real "
-           f"measurement (one point = one cell = one color, sharp edges); an unmeasured cell is left "
-           f"transparent - never zero, never interpolated. This is the ONLY panel where a cell can be "
-           f"clicked to inspect its own real spectrum. {hi_caveat}")
+    _colorbar(fig, im, cax, unit_label)
+    _save(fig, "map_a_no_interp")
 
     def _bare_export(name: str, science_map, grid_bc, masked, alpha, interp: str) -> None:
-        """A chrome-free rendering of an interpolated panel for ON-SCREEN display only: just the map pixels
-        (with the SAME dimming/hatching honesty cue), no title, colorbar, axis ticks/labels or caption baked
-        in, cropped tight to the data extent with a transparent background - matching panel A's own canvas,
-        which has never carried any of that chrome (it is drawn client-side from board.json). Request: "A
-        llena su panel, pero B y C aparecen como graficos pequenos dentro de grandes cajas" - that was this
-        exact mismatch (A: bare canvas; B/C: a full presentation figure, chrome included, squeezed into the
-        same CSS box). The full presentation PNG/SVG/PDF (with title/colorbar/caption) is UNCHANGED and
-        still written under `name` for download - this is an ADDITIONAL, separate file `{name}_bare.png`.
-        The ONE visible colour scale next to each panel is the browser's own HTML legend (board_json_payload's
-        color_stops, already shared by A/B/C) - never a second, redundant colorbar baked into this image.
-        `interp` is a DISPLAY-only choice of how imshow blends the raster's own already-computed cell values
-        at render time (never a recomputation) - see the caller's own comment for why B and C now use
-        DIFFERENT interpolation (B stayed "nearest" per explicit request; only C uses "bilinear")."""
+        """Chrome-free on-screen image (pixels + the same dimming/hatching cue, transparent, tight to the
+        footprint): the browser shows it next to A's canvas with its own HTML legend. The titled exports are
+        written separately for download."""
         fig = plt.figure(figsize=(6.0, 6.0 * (grid_bc.height_deg / grid_bc.width_deg)))
         ax = fig.add_axes([0, 0, 1, 1])
         ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
-                 extent=extent, alpha=alpha)
+                  extent=extent, alpha=alpha)
         _mark_low_confidence(ax, grid_bc, science_map)
         _extent_and_aspect(ax)
         ax.axis("off")
@@ -1604,204 +1587,121 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         plt.close(fig)
         written[f"{name}_bare"] = [p.name]
 
-    # ---- B / C: genuinely finer interpolated rasters - real NEW pixel positions between the measured cells,
-    # never the same {n_rows}x{n_cols} cells redrawn bigger/blurrier. Same physical footprint/scale as A, and
-    # now the SAME kernel too (see MapConfig.smoothing_fwhm_deg) - strictly increasing RASTER DENSITY is the
-    # only remaining difference between B and C (enforced by MapConfig.interp_factor_c > interp_factor_b). ----
-    # DISPLAY interpolation (imshow's own resampling of the already-computed array, never a recomputation) is
-    # now DIFFERENT for B and C by explicit request: an earlier round made both bilinear, which made the two
-    # panels look "casi iguales" (nearly identical) since B (18x18) and C (36x36) already carry the same
-    # kernel/support - bilinear on both erased the one visible cue (raster density) that told them apart. B
-    # goes back to "nearest" (18x18's own blockiness "estaba bien" per that request); only C keeps "bilinear",
-    # so the two remain visibly distinct while B/C's own VALUES, kernel and color scale stay identical to
-    # each other, exactly as before.
+    # ---- B / C ----
     for key, label, science_map, factor, grid_bc, interp in (
         ("map_b_smooth", "B: INTERPOLATED", built["map_b"], cfg.interp_factor_b, built["grid_b"], "nearest"),
-        ("map_c_heavy", "C: INTERPOLATED (finer raster)", built["map_c"], cfg.interp_factor_c, built["grid_c"], "bilinear"),
+        ("map_c_heavy", "C: INTERPOLATED, finer raster", built["map_c"], cfg.interp_factor_c, built["grid_c"], "bilinear"),
     ):
         ny_fine, nx_fine = science_map.value.shape
-        fig, ax = plt.subplots(figsize=(6.6, 6.0))
-        masked = np.ma.masked_where(~science_map.valid, science_map.value)
-        # A pixel dominated by exactly one nearby real point (no corroborating second measurement) is
-        # rendered DIMMER, not blurred - its own VALUE is untouched (still the real weighted-mean output of
-        # build_cube()/integrated_map()), only its visual prominence is honestly reduced so an isolated
-        # point's own noise excursion does not read as confirmed structure. See _mark_low_confidence().
         low_conf = science_map.valid & (science_map.n_pointings <= 1)
+        fig, ax, cax = _single(f"{label} - {ny_fine}x{nx_fine} raster ({factor}x the board pitch)",
+                               f"Estimates between the {n_rows * n_cols} measured points, same footprint and colour scale "
+                               f"as A · denser raster, not finer instrument resolution · "
+                               f"{int(low_conf.sum())}/{int(science_map.valid.sum())} px hatched · details: NOTES.md")
+        masked = np.ma.masked_where(~science_map.valid, science_map.value)
         alpha = np.where(low_conf, 0.45, 1.0)
         im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
                        extent=extent, alpha=alpha)
         _mark_low_confidence(ax, grid_bc, science_map)
-        _extent_and_aspect(ax)   # no cell gridlines/ticks here - this is a continuous raster, not a per-cell board
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.set_label("integrated relative_intensity_dimensionless x m/s")
-        n_low_conf = int(low_conf.sum())
-        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
-                                      f"{label} - {ny_fine}x{nx_fine} raster ({factor}x the {board.ny}x{board.nx} "
-                                      f"base raster around the {n_rows}x{n_cols} board)"),
-               key,
-               f"{ny_fine}x{nx_fine} = {ny_fine * nx_fine} raster pixels (vs {n_rows}x{n_cols}="
-               f"{n_rows * n_cols} real measurements) over the SAME physical footprint as A. A denser raster "
-               f"samples the same smoothed field more finely - it is NOT a finer physical resolution: the "
-               f"instrument resolves no more than its beam and the {spatial['mosaic_spacing_deg']:.3g} deg "
-               f"pointing spacing allow. Most pixels "
-               f"sit BETWEEN measured positions and are ESTIMATES from an inverse-variance x Gaussian-kernel "
-               f"weighted mean of nearby real readings (science_engine.gridding), kernel FWHM="
-               f"{smoothing_fwhm_deg:.4g} deg (declared presentation smoothing, NOT the instrument beam) - "
-               f"IDENTICAL for B and C (an earlier light/heavy split was dropped: leave-one-out "
-               f"cross-validation found it made no measurable difference to predictive skill - see the LOO "
-               f"check below). B and C's own computed VALUES differ only by this raster's density; this "
-               f"image additionally draws them with {interp} pixel interpolation (a DISPLAY choice - B stays "
-               f"blocky/exact-cell 'nearest', C is smoothed to 'bilinear' between the SAME cell values, so "
-               f"the two remain visually distinct) - never a change to what was computed. Real instrument "
-               f"beam FWHM={cfg.beam_fwhm_deg:.4g} deg ({cfg.beam_status}, reported only, never used for "
-               f"gridding). Spatial SUPPORT radius is the SAME {support_radius_deg:.4g} deg for B and C - "
-               f"{len(built['used_point_set'])} point(s) used identically in both. Interpolation ESTIMATES "
-               f"values between measurements; it never recovers detail the instrument did not measure, and "
-               f"no real spectrum exists for a pixel here - only the {n_rows}x{n_cols} real cells in panel A "
-               f"have one. HATCHED/DIMMED pixels ({n_low_conf}/{int(science_map.valid.sum())} valid px) are "
-               f"backed by only ONE nearby real point (no corroborating second measurement) - a bump/dip "
-               f"there may be that single point's own measurement noise, not real spatial structure. Color "
-               f"limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}).{noise_caveat}{bc_caveat}{loo_caveat} {hi_caveat}")
+        _extent_and_aspect(ax)
+        ax.legend(handles=[hatch_handle], loc="upper center", bbox_to_anchor=(0.5, -0.11), fontsize=FS_TICK, frameon=False)
+        _colorbar(fig, im, cax, unit_label)
+        _save(fig, key)
         _bare_export(key, science_map, grid_bc, masked, alpha, interp)
 
-    # ---- A + B + C combined: same physical box and colour scale, each panel's own resolution declared,
-    # increasing left to right (request: "verse juntos... poder abrirse grandes") ----
-    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.8))
+    # ---- A + B + C combined ----
+    fig = plt.figure(figsize=(18.0, 7.6))
+    axes = [fig.add_axes([0.04 + i * 0.295, 0.22, 0.27, 0.6]) for i in range(3)]
+    cax = fig.add_axes([0.935, 0.22, 0.012, 0.6])
+    b_shape, c_shape = built["map_b"].value.shape, built["map_c"].value.shape
     im = None
-    b_shape = built["map_b"].value.shape
-    c_shape = built["map_c"].value.shape
-    panels = [
-        (f"A: MEASURED ({n_rows}x{n_cols} cells)", built["map_a_value"], built["map_a_valid"], True, None, None, "nearest"),
-        (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]})", built["map_b"].value, built["map_b"].valid, False,
-         built["map_b"], built["grid_b"], "nearest"),
-        (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]})", built["map_c"].value, built["map_c"].valid, False,
-         built["map_c"], built["grid_c"], "bilinear"),
-    ]
-    for ax, (label, value, valid, is_board, science_map, grid_bc, interp) in zip(axes, panels):
-        masked = np.ma.masked_where(~valid, value)
-        alpha = 1.0
-        if not is_board:
-            low_conf = science_map.valid & (science_map.n_pointings <= 1)
-            alpha = np.where(low_conf, 0.45, 1.0)
-        # A and B both stay exact-cell "nearest" (A: real per-cell readings; B: kept blocky per explicit
-        # request, to stay visually distinct from C); only C gets the DISPLAY-only "bilinear" smoothing of
-        # its own already-computed cell values (see the B/C loop's own comment above) - so the combined
-        # export matches the same per-panel choice as the separate downloads/on-screen images.
-        if is_board:
-            im = _board_quads(ax, masked, cmap, vmin, vmax, linewidth=0.3)
+    for ax, (label, kind) in zip(axes, ((f"A: MEASURED ({n_rows}x{n_cols} cells)", "a"),
+                                        (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]} px)", "b"),
+                                        (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]} px)", "c"))):
+        if kind == "a":
+            im = _board_quads(ax, np.ma.masked_where(~built["map_a_valid"], built["map_a_value"]), cmap, vmin, vmax, linewidth=0.3)
         else:
-            im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                           interpolation=interp, extent=extent, alpha=alpha)
-            _mark_low_confidence(ax, grid_bc, science_map)
-        ax.set_title(label, fontsize=9)
+            sm, grid_bc = (built["map_b"], built["grid_b"]) if kind == "b" else (built["map_c"], built["grid_c"])
+            low_conf = sm.valid & (sm.n_pointings <= 1)
+            ax.imshow(np.ma.masked_where(~sm.valid, sm.value), origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
+                      interpolation="nearest" if kind == "b" else "bilinear", extent=extent,
+                      alpha=np.where(low_conf, 0.45, 1.0))
+            _mark_low_confidence(ax, grid_bc, sm)
+        ax.set_title(label, fontsize=FS_TITLE)
         _extent_and_aspect(ax)
-    # subplots_adjust MUST run before colorbar(ax=...): colorbar carves its own axes out of the CURRENT
-    # positions of the axes it's given - calling subplots_adjust afterward moves the 3 main axes but leaves
-    # the colorbar's already-fixed axes behind, which was measured to overlap the rightmost panel's own
-    # colorbar space.
-    fig.subplots_adjust(top=0.80, bottom=0.20, left=0.04, right=0.90)
-    cbar = fig.colorbar(im, ax=list(axes), shrink=0.85)
-    cbar.set_label("integrated relative_intensity_dimensionless x m/s")
-    fig.suptitle(_title_block(cfg, campaign_id, reduce_session_id,
-                              "A / B / C - same projection, footprint and colour scale; denser raster, not finer instrument resolution"),
-                fontsize=9, y=0.99)
-    fig.text(0.5, 0.01,
-            f"Same projection, physical footprint and color scale in all three; only RASTER density increases "
-            f"left to right ({n_rows}x{n_cols} measured cells -> {b_shape[0]}x{b_shape[1]} -> "
-            f"{c_shape[0]}x{c_shape[1]} raster pixels) - sampling of the same smoothed field, not a finer "
-            f"physical resolution of the instrument. B/C pixels "
-            f"between real positions are interpolation ESTIMATES, never new measurements - no spectrum exists "
-            f"for them. Hatched/dimmed B/C areas are backed by only ONE nearby real point - a bump/dip there "
-            f"may be that point's own measurement noise, not real structure (see map_coverage_density). B and "
-            f"C share the IDENTICAL smoothing kernel and support radius - only raster density differs."
-            f"{noise_caveat}{bc_caveat}{loo_caveat} {hi_caveat}", ha="center", va="bottom", fontsize=6.5, wrap=True)
+        ax.set_xlabel("x = ΔRA·cos(δ0) [deg] (east →)", fontsize=FS_LABEL)
+    axes[0].set_ylabel("y = ΔDec [deg]", fontsize=FS_LABEL)
+    _colorbar(fig, im, cax, unit_label)
+    fig.suptitle(f"A / B / C - same projection, footprint and colour scale · {campaign_id} · "
+                 f"{cfg.calibration_level_filter} · {window}", fontsize=FS_TITLE + 1, y=0.97)
+    fig.legend(handles=[hatch_handle], loc="lower center", bbox_to_anchor=(0.5, 0.075), fontsize=FS_CAPTION, frameon=False)
+    fig.text(0.5, 0.02, "Only the raster density grows left to right; B/C pixels between measured points are estimates "
+                        "(no spectrum) - not a finer instrument resolution. Details: NOTES.md",
+             ha="center", va="bottom", fontsize=FS_CAPTION)
     paths = []
     for ext in ("png", "svg", "pdf"):
         p = out_dir / f"map_abc_combined.{ext}"
-        fig.savefig(p, dpi=200 if ext == "png" else None, bbox_inches="tight", pad_inches=0.15)
-        paths.append(str(p.name))
+        fig.savefig(p, dpi=200 if ext == "png" else None)
+        paths.append(p.name)
     plt.close(fig)
     written["map_abc_combined"] = paths
 
-    # ---- uncertainty / SNR (from map B's own propagated sigma, at B's own raster resolution) ----
+    # ---- three diagnostics, identical figure size ----
     unc = built["map_b"].uncertainty
     if unc is not None and np.any(np.isfinite(unc)):
         with np.errstate(divide="ignore", invalid="ignore"):
             snr = np.abs(built["map_b"].value) / unc
-        masked_snr = np.ma.masked_where(~built["map_b"].valid, snr)
-        fig, ax = plt.subplots(figsize=(6.6, 6.0))
-        im = ax.imshow(masked_snr, origin="lower", cmap=plt.get_cmap("magma").with_extremes(bad=(0, 0, 0, 0)),
-                       interpolation="nearest", extent=extent)
-        _extent_and_aspect(ax)
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.set_label("SNR (dimensionless)")
         window_km_s = (cfg.velocity_window_max_m_s - cfg.velocity_window_min_m_s) / 1000.0
-        wide_window_caveat = (
-            f" CAVEAT: the {window_km_s:.0f} km/s window sums many channels; the 1-sigma formula above ASSUMES "
-            f"independent channels, so any broadband, correlated residual (baseline/continuum-like, not random "
-            f"noise) across those channels inflates this SNR well beyond what independent-noise statistics "
-            f"would justify. High SNR here is NOT evidence of a real spectral feature and must never be read "
-            f"as detection significance." if window_km_s > 150 else "")
-        _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
-                                      f"SNR = |integrated value| / propagated 1-sigma (map B, {unc.shape[0]}x{unc.shape[1]})"),
-               "map_snr",
-               "1-sigma uncertainty propagated from REDUCE per-channel sigma assuming independent channels "
-               "(see science_engine.integration docstring) - a statistical, not systematic, error bar."
-               + wide_window_caveat,
-               exts=("png", "svg"))
+        fig, ax, cax = _single(f"SNR = |value| / propagated 1σ (map B, {unc.shape[0]}x{unc.shape[1]})",
+                               "Statistical 1σ from REDUCE per-channel sigma, assuming independent channels - not a "
+                               "detection significance · details: NOTES.md")
+        im = ax.imshow(np.ma.masked_where(~built["map_b"].valid, snr), origin="lower",
+                       cmap=plt.get_cmap("magma").with_extremes(bad=(0, 0, 0, 0)), interpolation="nearest", extent=extent)
+        _extent_and_aspect(ax)
+        _colorbar(fig, im, cax, "SNR (dimensionless)")
+        _save(fig, "map_snr", exts=("png", "svg"))
+        notes.append("## SNR map\n1-sigma uncertainty propagated from REDUCE per-channel sigma assuming independent "
+                     "channels (science_engine.integration) - a statistical, not systematic, error bar."
+                     + (f" The {window_km_s:.0f} km/s window sums many channels: any broadband, correlated residual "
+                        "inflates this SNR well beyond what independent-noise statistics justify. High SNR here is NOT "
+                        "evidence of a real spectral feature." if window_km_s > 150 else ""))
         quality_kind = "uncertainty/SNR (propagated statistical 1-sigma)"
     else:
         quality_kind = "no propagable uncertainty available"
 
-    # ---- coverage DENSITY (request: "agrega una indicacion visual... de la cobertura y la incertidumbre
-    # espacial") - map B's own n_pointings (science_engine.gridding's own count of real pointings with
-    # nonzero weight at each pixel, already computed by integrated_map() - never re-derived here). This is
-    # the real, quantitative origin of the hatching on B/C: wherever this map reads 1, that pixel's B/C
-    # value is that ONE point's own reading, not a genuine multi-point average. Same support_radius_deg for
-    # B and C, so this pattern applies equivalently to C (a finer raster just samples the same underlying
-    # coverage more densely - see the caption). ----
     n_pt = built["map_b"].n_pointings.astype(float)
     n_pt_masked = np.ma.masked_where(~built["map_b"].valid, n_pt)
-    fig, ax = plt.subplots(figsize=(6.6, 6.0))
-    n_pt_cmap = plt.get_cmap("cividis").with_extremes(bad=(0, 0, 0, 0))
-    im = ax.imshow(n_pt_masked, origin="lower", cmap=n_pt_cmap, vmin=1, vmax=max(3, int(np.nanmax(n_pt_masked)) if n_pt_masked.count() else 3),
-                   interpolation="nearest", extent=extent)
-    _extent_and_aspect(ax)
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label("real points with nonzero weight at this pixel (n_pointings)")
     n1 = int((built["map_b"].valid & (built["map_b"].n_pointings <= 1)).sum())
-    _finish(fig, ax, _title_block(cfg, campaign_id, reduce_session_id,
-                                  f"COVERAGE DENSITY - how many real points back each B pixel ({n_pt.shape[0]}x{n_pt.shape[1]})"),
-           "map_coverage_density",
-           f"n_pointings = 1 (darkest) means that pixel's B/C value comes from a SINGLE nearby real "
-           f"measurement - no second point to cross-check it against, so its own noise reads directly as a "
-           f"local bump/dip (the hatched/dimmed areas on B/C). {n1}/{int(built['map_b'].valid.sum())} valid "
-           f"pixels here are single-point-only. Same support_radius_deg for B and C, so this coverage pattern "
-           f"applies to both - a finer raster (C) only samples it more densely, it does not add real "
-           f"corroborating measurements. {hi_caveat}",
-           exts=("png", "svg"))
+    fig, ax, cax = _single(f"COVERAGE DENSITY - real points behind each B pixel ({n_pt.shape[0]}x{n_pt.shape[1]})",
+                           f"1 (darkest) = a single real point: these are B/C's hatched pixels ({n1}/"
+                           f"{int(built['map_b'].valid.sum())} valid px) · details: NOTES.md")
+    im = ax.imshow(n_pt_masked, origin="lower", cmap=plt.get_cmap("cividis").with_extremes(bad=(0, 0, 0, 0)), vmin=1,
+                   vmax=max(3, int(np.nanmax(n_pt_masked)) if n_pt_masked.count() else 3), interpolation="nearest", extent=extent)
+    _extent_and_aspect(ax)
+    _colorbar(fig, im, cax, "real points with nonzero weight (n_pointings)")
+    _save(fig, "map_coverage_density", exts=("png", "svg"))
 
-    # ---- coverage: the real N x M board, categorical (no point planned there / used / excluded) ----
     point_cell = built["point_cell"]
     code = np.zeros((n_rows, n_cols), dtype=int)   # 0 = no point at all for this mosaic position
     for row in built["point_rows"]:
         r, c = point_cell[row["point_index"]]
-        code[r, c] = 1 if row["status"] == "USED" else 2   # 1 = used, 2 = excluded (real point, real reason)
-    fig, ax = plt.subplots(figsize=(6.6, 6.0))
-    cov_cmap = ListedColormap(["#0d1317", "#2e8b3d", "#b23b3b"])
-    _board_quads(ax, code, cov_cmap, 0, 2)
+        code[r, c] = 1 if row["status"] == "USED" else 2
+    n_used, n_excl = int((code == 1).sum()), int((code == 2).sum())
+    fig, ax, cax = _single(f"COVERAGE - measured cells used vs excluded ({n_rows}x{n_cols})",
+                           f"{n_used} used · {n_excl} excluded (reason per point in points.csv) · "
+                           f"{n_rows * n_cols - n_used - n_excl} without pointing · same cells as A")
+    _board_quads(ax, code, ListedColormap(["#0d1317", "#2e8b3d", "#b23b3b"]), 0, 2)
     _extent_and_aspect(ax)
-    ax.legend(handles=[mpatches.Patch(color="#2e8b3d", label="used in A/B/C"),
-                       mpatches.Patch(color="#b23b3b", label="excluded (real reason in points.csv)"),
-                       mpatches.Patch(color="#0d1317", label="no pointing at this mosaic position")],
-             loc="upper right", fontsize=6.5)
-    _finish(fig, ax, f"{campaign_id} / {reduce_session_id} - coverage: measured cells used vs excluded "
-                    f"({n_rows}x{n_cols})",
-           "map_coverage",
-           f"SAME {n_rows}x{n_cols} board and cells as A. green = used; red = a real point exists but was "
-           f"excluded (see points.csv/manifest for its own reason); dark = no pointing at all at this mosaic "
-           f"position.",
-           exts=("png", "svg"))
+    cax.axis("off")
+    cax.legend(handles=[mpatches.Patch(color="#2e8b3d", label="used"), mpatches.Patch(color="#b23b3b", label="excluded"),
+                        mpatches.Patch(color="#0d1317", label="no pointing")], loc="center left", fontsize=FS_TICK, frameon=False)
+    _save(fig, "map_coverage", exts=("png", "svg"))
+
+    (out_dir / "NOTES.md").write_text(
+        f"# {campaign_id} / {reduce_session_id} - SCIENCE map notes\n\n"
+        f"Integrated relative intensity, {window}, {cfg.calibration_level_filter}. Units: relative_intensity_dimensionless "
+        "x m/s (fractional excess - no Kelvin/Jy/N_HI claimed).\n\n" + "\n\n".join(notes) + "\n")
+    written["notes"] = ["NOTES.md"]
     return written, quality_kind
 
 

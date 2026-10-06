@@ -123,7 +123,8 @@
             ONLY panel where a click opens a spectrum — a new pixel in B/C was never observed.</div>
           <details><summary>¿Qué muestra esta imagen?</summary>
             <p>Esta imagen contiene únicamente las lecturas reales del mosaico: una celda por posición
-            observada por el instrumento. Cada color representa la medición real de esa posición — no hay
+            observada por el instrumento, dibujada donde esa posición queda en el cielo con la misma proyección
+            que B y C (en un campo amplio las celdas se ven deformadas, no cuadradas). Cada color representa la medición real de esa posición — no hay
             ningún valor estimado, promediado o inventado entre celdas. Una celda sin color no fue medida.</p></details>
         </figure>
         <figure class="board-panel" id="panel-b">
@@ -133,6 +134,9 @@
             <div class="board-legend" id="legend-b"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
+          <div class="obs-summary hatch-note"><span class="hatch-swatch" aria-hidden="true"></span> Hatched / dimmed
+            border: pixels backed by only ONE real point within the support radius — mostly the outer rim of the
+            field, where nothing beyond the edge corroborates the value.</div>
           <div class="obs-summary">Not clickable — every pixel here (real position or not) is a smoothed
             estimate, never a stand-in for an individual measurement. See the LEAVE-ONE-OUT CHECK above: a
             multi-pixel bump/dip here is not automatically a verified detection.</div>
@@ -155,6 +159,8 @@
             <div class="board-legend" id="legend-c"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
+          <div class="obs-summary hatch-note"><span class="hatch-swatch" aria-hidden="true"></span> Hatched / dimmed:
+            same meaning as in B — one real point only (a finer raster adds no measurement).</div>
           <div class="obs-summary">Not clickable — same reason as B. Uses the IDENTICAL smoothing kernel and
             support radius as B; the only difference is a denser raster.</div>
           <details><summary>¿Qué muestra esta imagen?</summary>
