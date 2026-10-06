@@ -879,3 +879,109 @@ def test_no_campaign_plan_falls_back_to_measured_positions():
     si = mosaic_input(n=6, spacing=1.0)
     assert load_planned_lattice(si) is None
     assert auto_spatial_params(si, cfg_with())["mosaic_spacing_source"] == "median_nearest_neighbor"
+
+
+# ---------------------------------------------------------------- tiled B/C vs ONE full cube: hostile inputs
+# The tiled build must reproduce the frozen single-cube build_cube()+integrated_map() whatever the per-channel
+# structure: masks that differ per point AND per channel, sigmas that vary per channel and per point, non-finite
+# values, LSRK-shifted axes (resampling), points sitting on the support limit, and tile edges cutting through
+# the field at awkward places.
+#
+# Tolerance: a tile's pixel centres equal the full grid's to float rounding (~1e-13 deg, see _tile_grid). That
+# moves each beam weight by a relative ~1e-13, so values/sigmas agree to ~1e-14 of the field's own scale
+# (measured on the real 400-point session: 1.2e-14). 1e-11 of the scale leaves margin without hiding any real
+# difference: a genuinely different weighting (e.g. integrate-first) differs by ~1e-1 of the scale. Everything
+# discrete - valid, n_pointings, used/excluded points, quality state and reasons - must be identical.
+
+def _hostile_input(n=6, spacing=1.0, n_channels=192, seed=7):
+    import dataclasses
+    from science_engine.simulation import SyntheticPointSpec
+    rng = np.random.default_rng(seed)
+    specs = []
+    base = rectangular_grid_specs(12.0, -30.0, n, n, spacing_deg=spacing, calibration_level="UNCALIBRATED")
+    for s in base:
+        specs.append(SyntheticPointSpec(point_index=s.point_index, ra_hours=s.ra_hours, dec_degrees=s.dec_degrees,
+                                        calibration_level="UNCALIBRATED",
+                                        velocity_offset_m_s=float(rng.uniform(-5000, 5000)),   # resampled axes
+                                        noise_sigma=float(rng.uniform(0.01, 0.05))))
+    si = build_synthetic_science_input(specs, n_channels=n_channels, noise_sigma=0.02,
+                                       line_amplitude_fn=lambda ra, dec: 0.3 + 0.1 * np.sin(ra) * np.cos(dec))
+    points = []
+    for p in si.points:
+        mask = np.array(p.mask, copy=True)
+        mask[rng.random(n_channels) < 0.06] = 4                       # MaskFlag.RFI on different channels per point
+        unc = np.asarray(p.uncertainty, dtype=float) * rng.uniform(0.4, 2.0, n_channels)   # per-channel sigma
+        val = np.array(p.relative_intensity, dtype=float, copy=True)
+        val[rng.integers(0, n_channels, 2)] = np.nan                  # non-finite values must never contribute
+        points.append(dataclasses.replace(p, mask=mask, uncertainty=unc, relative_intensity=val))
+    return dataclasses.replace(si, points=points)
+
+
+@pytest.mark.parametrize("tile_shape", [[1, 1], [3, 5], [7, 4], [18, 2]])
+def test_tiled_map_equals_one_full_cube_with_hostile_masks_sigmas_and_tile_edges(monkeypatch, tile_shape):
+    import science_web_bridge as swb
+    from science_engine.cube import build_cube
+    from science_engine.grid import build_beam_model
+    from science_engine.integration import integrated_map
+    from science_engine.quality import assess_science_quality
+    si = _hostile_input()
+    cfg = cfg_with(velocity_window_min_m_s=-60_000.0, velocity_window_max_m_s=60_000.0)
+    spatial = auto_spatial_params(si, cfg)
+    sc = swb._kernel_science_config(cfg, spatial["smoothing_fwhm_deg"],
+                                    spatial["support_radius_deg"] / spatial["smoothing_fwhm_deg"], "test")
+    beam = build_beam_model(sc)
+    board, _, _, _ = build_mosaic_grid(si, spatial["mosaic_spacing_deg"])
+    # widen the raster beyond the points so its rim lies OUTSIDE every point's support (invalid pixels) and some
+    # pixels sit right at the support limit
+    from science_engine.models import ScienceGrid
+    wide = ScienceGrid(frame="icrs", center_ra_deg=board.center_ra_deg, center_dec_deg=board.center_dec_deg,
+                       width_deg=board.width_deg + 6 * spatial["support_radius_deg"], height_deg=board.height_deg + 6 * spatial["support_radius_deg"],
+                       pixel_scale_deg=board.pixel_scale_deg / 3, nx=board.nx * 3 + 18, ny=board.ny * 3 + 18)
+    cube = build_cube(si, wide, beam, sc)
+    ref = integrated_map(cube, sc)
+    ref_quality = assess_science_quality(si, cube, sc, ref)
+    assert ref.valid.any() and not ref.valid.all(), "the rim must really be outside support"
+    real_plan = swb.tile_plan
+    monkeypatch.setattr(swb, "tile_plan", lambda *a, **k: {**real_plan(*a, **k), "tile_shape": tile_shape})
+    tiled, info, qcube = swb.integrated_map_in_tiles(si, wide, beam, sc, keep_quality_inputs=True)
+    for name in ("value", "uncertainty", "spectral_coverage", "weight_sum"):
+        a, b = getattr(tiled, name), getattr(ref, name)
+        assert np.array_equal(np.isnan(a), np.isnan(b)), name
+        scale = np.nanmax(np.abs(b))
+        assert np.nanmax(np.abs(a - b)) <= 1e-11 * scale, (name, np.nanmax(np.abs(a - b)) / scale)
+    assert np.array_equal(tiled.valid, ref.valid) and np.array_equal(tiled.n_pointings, ref.n_pointings)
+    assert info["used_point_indices"] == cube.build_info["used_point_indices"]
+    assert sorted((e["point_index"], e["reason"]) for e in info["excluded"]) == \
+        sorted((e["point_index"], e["reason"]) for e in cube.build_info["excluded"])
+    quality = assess_science_quality(si, qcube, sc, tiled)
+    assert (quality.state, quality.reasons, quality.limitations) == (ref_quality.state, ref_quality.reasons, ref_quality.limitations)
+    for key, ref_value in ref_quality.metrics.items():
+        if isinstance(ref_value, float):
+            assert quality.metrics[key] == pytest.approx(ref_value, rel=1e-12, abs=1e-15), key
+        else:
+            assert quality.metrics[key] == ref_value, key
+
+
+def test_tiled_build_names_a_point_outside_every_tile_exactly_like_the_full_cube(monkeypatch):
+    """A point whose support reaches no pixel of the grid is OUTSIDE_BEAM_SUPPORT_OF_GRID once - not once per tile,
+    and never while another tile used it."""
+    import dataclasses
+    import science_web_bridge as swb
+    from science_engine.cube import build_cube
+    from science_engine.grid import build_beam_model
+    si = mosaic_input(n=6, spacing=1.0)
+    far = dataclasses.replace(si.points[0], point_index=999, ra_deg=si.points[0].ra_deg + 40.0,
+                              ra_hours=si.points[0].ra_hours + 40.0 / 15.0)
+    si = dataclasses.replace(si, points=list(si.points) + [far])
+    cfg = cfg_with()
+    spatial = auto_spatial_params(si, cfg)
+    sc = swb._kernel_science_config(cfg, spatial["smoothing_fwhm_deg"], 1.25, "test")
+    beam = build_beam_model(sc)
+    board, _, _, _ = build_mosaic_grid(dataclasses.replace(si, points=si.points[:-1]), 1.0)
+    grid = build_fine_grid(board, 3)
+    ref_info = build_cube(si, grid, beam, sc).build_info
+    real_plan = swb.tile_plan
+    monkeypatch.setattr(swb, "tile_plan", lambda *a, **k: {**real_plan(*a, **k), "tile_shape": [5, 5]})
+    _, info, _ = swb.integrated_map_in_tiles(si, grid, beam, sc)
+    assert [e for e in info["excluded"] if e["point_index"] == 999] == [{"point_index": 999, "reason": "OUTSIDE_BEAM_SUPPORT_OF_GRID"}]
+    assert info["used_point_indices"] == ref_info["used_point_indices"]
