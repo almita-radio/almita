@@ -13,6 +13,8 @@ import json
 import subprocess
 
 import pytest
+
+from tests.conftest import transiting_ra_hours
 from astropy.time import Time
 
 import observation_plan as pl
@@ -129,7 +131,8 @@ def test_resolve_eastmost_safe_never_touches_indi_or_subprocess(monkeypatch):
 
 @pytest.fixture(scope="module")
 def fixed_center_plan(tmp_path_factory):
-    spec = _valid_spec(grid={"placement": "FIXED_CENTER", "center_ra_hours": 6.0, "center_dec_deg": -30.0})
+    ra = transiting_ra_hours()               # always visible when the test runs (a fixed 6h is below the horizon at some hours)
+    spec = _valid_spec(grid={"placement": "FIXED_CENTER", "center_ra_hours": ra, "center_dec_deg": -30.0})
     data_dir = tmp_path_factory.mktemp("fixed_center")
     plan = pl.plan_observation(spec, observer_config_path=TEST_OBSERVER_CONFIG,
                                 data_dir=str(data_dir), run_preflight=False)
@@ -139,7 +142,7 @@ def fixed_center_plan(tmp_path_factory):
 def test_fixed_center_resolution_artifacts_and_hash(fixed_center_plan):
     data_dir, plan = fixed_center_plan
 
-    assert plan["resolved"]["center_ra_hours"] == 6.0
+    assert plan["resolved"]["center_ra_hours"] == plan["requested"]["grid"]["center_ra_hours"]
     assert plan["resolved"]["center_dec_deg"] == -30.0
     assert plan["resolved"]["placement_reasoning"].startswith("Center RA/Dec taken verbatim")
     assert plan["resolved"]["point_count"] == 9

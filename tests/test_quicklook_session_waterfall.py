@@ -8,8 +8,9 @@ from quicklook_session_waterfall import update_session_waterfall
 from quicklook_spectrum import generate_quicklook
 
 ROOT = Path(__file__).parent.parent
-PROFILE = ROOT / "data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.npz"
-SOURCE = ROOT / "data/rf_characterization/INDOOR-ANTENNA-COUPLING-CHECK-01-20260827T003104Z/antenna_a.h5"
+# inputs never come from data/: real V1 profile in tests/fixtures/, a synthetic antenna capture in tmp
+from tests.conftest import FOUNDATION_PROFILE as PROFILE, write_capture  # noqa: E402
+SOURCE = write_capture(Path(__import__("tempfile").mkdtemp(prefix="rf_captures_")) / "antenna_a.h5")
 
 
 @pytest.fixture(scope="module")
