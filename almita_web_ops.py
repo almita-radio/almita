@@ -1494,7 +1494,22 @@ def campaigns(limit: int = 40) -> Dict[str, List[Dict[str, Any]]]:
         return sorted(rows, key=lambda r: -r["mtime"])[:limit]
     profiles = sorted(SERVE_ROOTS["calibration"].glob("**/calibration_profile*.json"), key=lambda q: -q.stat().st_mtime)[:limit] if SERVE_ROOTS["calibration"].is_dir() else []
     return {"campaigns": newest(SERVE_ROOTS["mosaic"], 1, "observation_resolved.json"), "reduce_sessions": newest(SERVE_ROOTS["reduced"], 2, "manifest.json"),
-            "science_sessions": newest(SERVE_ROOTS["science"], 2, "manifest.json"), "profiles": [{"path": str(q.relative_to(ROOT)), "name": q.name} for q in profiles]}
+            "science_sessions": newest(SERVE_ROOTS["science"], 2, "manifest.json"), "profiles": [_profile_listing(q) for q in profiles]}
+
+
+def _profile_listing(q: Path) -> Dict[str, Any]:
+    """A profile row a person can tell apart from another one with the same file name (every wizard session writes
+    observe_profile/calibration_profile_v1.json): the session folder it belongs to, when it was created and the
+    receiver settings it was built at - read from its own JSON, never guessed."""
+    rel = q.relative_to(SERVE_ROOTS["calibration"])
+    row: Dict[str, Any] = {"path": str(q.relative_to(ROOT)), "name": q.name, "session": rel.parts[0] if len(rel.parts) > 1 else "",
+                           "created_utc": None, "center_frequency_hz": None, "sample_rate_hz": None, "gain_db": None}
+    try:
+        meta = json.loads(q.read_text()) if q.stat().st_size < 2_000_000 else {}
+        row.update({k: meta.get(k) for k in ("created_utc", "center_frequency_hz", "sample_rate_hz", "gain_db")})
+    except (OSError, ValueError):
+        pass
+    return row
 
 
 # ------------------------------------------------------------------ REDUCE: discovery + metadata preview + compatibility (all read-only, no hardware)

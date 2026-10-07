@@ -290,6 +290,63 @@
     info.textContent = v ? ` · build ${v.git_short_sha || "unknown"} · started ${U.utc(v.started_utc)} · ${v.transport || "HTTP LAN"}` : " · build unknown (version unavailable)";
   };
 
+  // ------------------------------------------------------------------ calibration profile explorer (server disk)
+  // One explorer for every page that picks a calibration profile (OBSERVE, REDUCE): one directory of the SERVER's
+  // data/calibration at a time (/api/observe/calibration-profiles/browse), breadcrumbs, folders, each profile with
+  // its Hz / sps / dB and compatibility, why a file cannot be selected. Read-only: nothing is copied or overwritten.
+  // Elements: <prefix>-browse, -picker, -crumbs, -picker-note, -table (tbody), -close.
+  // opts: query(extra) -> URLSearchParams string with the values to compare against; currentPath() -> the
+  // selection (opens its folder); onSelect(file); onError(text); against: words for the note ("this observation").
+  U.fmtProfileValues = (s) => (s ? `${s.center_frequency_hz} Hz · ${s.sample_rate_hz} sps · ${s.gain_db} dB` : "—");
+  U.mountProfileExplorer = function (prefix, opts) {
+    const el = (id) => document.getElementById(`${prefix}-${id}`);
+    const cell = (tr, text, cls) => { const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; };
+    function render(view) {
+      const crumbs = el("crumbs"); crumbs.textContent = "";
+      view.breadcrumbs.forEach((b, i) => {
+        if (i) { const sep = document.createElement("span"); sep.textContent = "/"; crumbs.appendChild(sep); }
+        const btn = document.createElement("button"); btn.type = "button"; btn.textContent = i === 0 ? view.root : b.name;
+        btn.addEventListener("click", () => browse(b.path)); crumbs.appendChild(btn);
+      });
+      const nProfiles = view.files.filter((f) => f.type === "profile").length;
+      el("picker-note").textContent = `${view.dir}/ on the ALMITA server — ${view.dirs.length} folder(s), ${nProfiles} profile(s). `
+        + `Compatibility is checked against ${opts.against || "the values above"}. Selecting never copies or overwrites a file.`;
+      const tbody = el("table").querySelector("tbody"); tbody.textContent = "";
+      const open = (label, path) => {
+        const tr = document.createElement("tr"); cell(tr, label, "fx-name"); cell(tr, ""); cell(tr, "folder");
+        const b = document.createElement("button"); b.type = "button"; b.textContent = "OPEN"; b.addEventListener("click", () => browse(path));
+        cell(tr, "").appendChild(b); tbody.appendChild(tr);
+      };
+      if (view.parent) open("../", view.parent);
+      for (const d of view.dirs) open(d.name + "/", d.path);
+      for (const f of view.files) {
+        const tr = document.createElement("tr"); const c = f.compatibility || {};
+        cell(tr, f.name + (f.summary && f.summary.created_utc ? `\ncreated ${U.utc(f.summary.created_utc)}` : ""), "fx-name");
+        cell(tr, f.valid ? U.fmtProfileValues(f.summary) : "—");
+        cell(tr, !f.valid ? `REJECTED: ${f.error}` : (c.status === "INCOMPATIBLE" ? `REJECTED: ${c.reason}` : `${c.status}: ${c.reason}`));
+        const b = document.createElement("button"); b.type = "button"; b.textContent = "SELECT"; b.disabled = !f.selectable;
+        b.addEventListener("click", () => { el("picker").hidden = true; opts.onSelect(f); });
+        cell(tr, "").appendChild(b);
+        if (!f.selectable) tr.className = "row-warn";
+        tbody.appendChild(tr);
+      }
+    }
+    async function browse(dir) {
+      const r = await U.api(`/api/observe/calibration-profiles/browse?${opts.query({ dir: dir || "" })}`, { timeoutMs: 30000 });
+      if (!r.ok) { if (opts.onError) opts.onError(`could not browse the server: ${r.error.message}`); return false; }
+      render(r.data.data);
+      el("picker").hidden = false;
+      return true;
+    }
+    el("browse").addEventListener("click", U.guard(el("browse"), async () => {
+      const cur = (opts.currentPath() || "").trim();        // open where the current selection lives, else the root
+      const dir = cur.startsWith("data/calibration/") ? cur.slice(0, cur.lastIndexOf("/")) : "";
+      if (!(await browse(dir)) && dir) await browse("");
+    }, "OPENING…"));
+    el("close").addEventListener("click", () => { el("picker").hidden = true; });
+    return { browse };
+  };
+
   // ------------------------------------------------------------------ REAL operations (shared by PIPELINE, ALIGN and CALIBRATE)
   // Every job is a real ALMITA command started by /api/ops/*; the backend decides PASS / PARTIAL / FAIL from its exit code and result files.
   function mk(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }

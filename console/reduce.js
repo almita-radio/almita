@@ -88,8 +88,11 @@
     const keepProfile = profSel.value;
     profSel.textContent = "";
     profSel.appendChild(new Option("(none — run UNCALIBRATED)", ""));
-    if (campRes.ok) for (const pr of campRes.data.data.profiles || []) profSel.appendChild(new Option(pr.name, pr.path));
+    // Every wizard session writes observe_profile/calibration_profile_v1.json - the file name alone cannot tell two
+    // profiles apart: the label carries the session folder, creation time and receiver settings (from the JSON).
+    if (campRes.ok) for (const pr of campRes.data.data.profiles || []) profSel.appendChild(new Option(profileLabel(pr), pr.path));
     if (keepProfile) profSel.value = keepProfile;
+    renderSelectedProfile();
 
     $("input-note").textContent = capRes.ok && campListRes.ok
       ? `${capRes.data.data.length} standalone capture(s) · ${usableCampaigns.length} campaign(s) with usable data `
@@ -242,8 +245,45 @@
   }
 
   // ------------------------------------------------------------------ 3) profile + compatibility
+  function profileLabel(pr) {
+    const parts = [pr.session || pr.path, pr.created_utc ? `created ${U.utc(pr.created_utc)}` : null,
+                   pr.center_frequency_hz != null ? U.fmtProfileValues(pr) : null];
+    return parts.filter(Boolean).join(" · ");
+  }
+  function renderSelectedProfile() {
+    const v = $("in-profile").value;
+    if (!v) { $("rd-cal-selected").textContent = ""; return; }
+    const cut = v.lastIndexOf("/");
+    const opt = $("in-profile").selectedOptions[0];
+    $("rd-cal-selected").textContent = `SERVER directory: ${v.slice(0, cut)}/\nfile: ${v.slice(cut + 1)}` + (opt ? `\n${opt.textContent}` : "");
+  }
+  // Values the explorer compares each profile against: the selected capture / the campaign's validated sample point.
+  function readingSettings() {
+    const m = lastMetadata || {};
+    const sm = mode === "capture" ? m : (m.sample_point_metadata && !m.sample_point_metadata.error ? m.sample_point_metadata : {});
+    return { center_frequency_hz: sm.center_frequency_hz_nominal, sample_rate: sm.sample_rate_hz, gain_db: sm.gain_db_requested };
+  }
+  U.mountProfileExplorer("rd-cal", {
+    against: "the selected capture / campaign (its validated sample point)",
+    query: (extra) => {
+      const q = new URLSearchParams(extra || {});
+      for (const [k, v] of Object.entries(readingSettings())) if (v != null) q.set(k, v);
+      return q.toString();
+    },
+    currentPath: () => $("in-profile").value,
+    onSelect: (f) => {
+      const sel = $("in-profile");
+      if (![...sel.options].some((o) => o.value === f.path)) {
+        sel.appendChild(new Option(profileLabel({ path: f.path, session: f.dir, ...(f.summary || {}) }), f.path));
+      }
+      sel.value = f.path;
+      sel.dispatchEvent(new Event("change"));
+    },
+    onError: (text) => showError(text),
+  });
   $("in-profile").addEventListener("change", () => {
     selectedProfile = $("in-profile").value;
+    renderSelectedProfile();
     const mySeq = ++selectionSeq;   // supersedes any compatibility fetch still in flight for the previous profile
     invalidateDownstream();
     refreshCompatibility(mySeq);

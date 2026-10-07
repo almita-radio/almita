@@ -1264,6 +1264,52 @@ out.captureStartsLater = window.__calls.filter((c) => c.key === "POST /api/ops/s
     assert out["captureStarts"] == out["captureStartsLater"] == 1
 
 
+def test_reduce_profiles_with_the_same_file_name_are_told_apart_and_picked_from_the_server_explorer(tmp_path):
+    """Every wizard session writes observe_profile/calibration_profile_v1.json, so REDUCE listed two identical names.
+    The list now names each profile's session, creation time and Hz/sps/dB; BROWSE ALMITA SERVER opens the shared
+    explorer, compares against the campaign's validated sample point and SELECT sets the profile REDUCE will use."""
+    a = "data/calibration/WIZARD-20261002-013321-160933/observe_profile/calibration_profile_v1.json"
+    b = "data/calibration/WIZARD-20261007-010706-387765/observe_profile/calibration_profile_v1.json"
+    routes = r"""
+window.__routes["GET /api/ops/reduce/captures"] = { body: { ok: true, data: [] } };
+window.__routes["GET /api/ops/reduce/campaigns"] = { body: { ok: true, data: { campaigns: [{ campaign_dir: "data/mosaic/C1", completeness: "COMPLETA",
+  points_usable: 676, points_expected: 676, session_label: "20261007-02:00:15", name: "C1" }], no_data: [] } } };
+window.__routes["GET /api/ops/campaigns"] = { body: { ok: true, data: { profiles: [
+  { path: "%(b)s", name: "calibration_profile_v1.json", session: "WIZARD-20261007-010706-387765", created_utc: "2026-10-07T01:20:11+00:00", center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 },
+  { path: "%(a)s", name: "calibration_profile_v1.json", session: "WIZARD-20261002-013321-160933", created_utc: "2026-10-02T01:39:58+00:00", center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } ] } } };
+window.__routes["GET /api/ops/reduce/inspect_campaign"] = { body: { ok: true, data: { campaign_id: "ALMITA-OBSERVE", session: "20261007-02:00:15",
+  completeness: "COMPLETA", points_usable: 676, points_expected: 676, points_deferred: 0, points_missing_or_invalid: 0, grid: null, observer: { name: "Santiago" },
+  sample_point_index: 1, sample_point_metadata: { center_frequency_hz_nominal: 1420405752, sample_rate_hz: 2400000, gain_db_requested: 40.2, topology: "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR" } } } };
+window.__routes["GET /api/ops/reduce/campaign_calibration_preview"] = { body: { ok: true, data: { all_compatible: true, counts: { COMPATIBLE: 676 }, total_accepted_points: 676, points: [] } } };
+window.__routes["GET /api/observe/calibration-profiles/browse"] = { body: { ok: true, data: { disk: "server", root: "data/calibration",
+  dir: "data/calibration/WIZARD-20261007-010706-387765/observe_profile", parent: "data/calibration/WIZARD-20261007-010706-387765",
+  breadcrumbs: [{ name: "calibration", path: "data/calibration" }], dirs: [],
+  files: [{ type: "profile", name: "calibration_profile_v1.json", dir: "data/calibration/WIZARD-20261007-010706-387765/observe_profile", path: "%(b)s",
+            valid: true, selectable: true, summary: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2, created_utc: "2026-10-07T01:20:11+00:00" },
+            compatibility: { status: "COMPATIBLE", reason: "frequency, sample rate, gain and topology match" } }] } } };
+""" % {"a": a, "b": b}
+    driver = r"""
+$("mode-campaign").click();
+await until(() => $("in-campaign").options.length > 1, 4000);
+$("in-campaign").value = "data/mosaic/C1"; $("in-campaign").dispatchEvent(new Event("change"));
+await until(() => !$("profile-panel").hidden, 4000);
+out.options = [...$("in-profile").options].map((o) => o.textContent);
+$("rd-cal-browse").click();
+await until(() => !$("rd-cal-picker").hidden, 4000);
+out.browseQuery = window.__calls.filter((c) => c.key === "GET /api/observe/calibration-profiles/browse").length;
+[...document.querySelectorAll("#rd-cal-table tbody button")].find((x) => x.textContent === "SELECT").click();
+await until(() => $("in-profile").value !== "", 3000);
+out.value = $("in-profile").value; out.selected = $("rd-cal-selected").textContent; out.pickerHidden = $("rd-cal-picker").hidden;
+"""
+    out = run_page(tmp_path, "reduce", routes, driver, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["options"][1].startswith("WIZARD-20261007-010706-387765 · created") and "1420405752 Hz · 2400000 sps · 40.2 dB" in out["options"][1]
+    assert out["options"][2].startswith("WIZARD-20261002-013321-160933 · created") and out["options"][1] != out["options"][2]
+    assert out["value"] == b and out["pickerHidden"] is True
+    assert "SERVER directory: data/calibration/WIZARD-20261007-010706-387765/observe_profile/" in out["selected"]
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):

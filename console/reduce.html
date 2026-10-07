@@ -51,6 +51,13 @@
       <header><h2 id="h-profile">3 · RELATIVE CALIBRATION PROFILE</h2></header>
       <div class="obs-row"><label for="in-profile">PROFILE (from CALIBRATE, or none)</label>
         <select id="in-profile"><option value="">(none — run UNCALIBRATED)</option></select></div>
+      <div class="obs-actions"><button type="button" id="rd-cal-browse">BROWSE ALMITA SERVER…</button></div>
+      <div class="obs-summary fx-selected" id="rd-cal-selected"></div>
+      <div id="rd-cal-picker" class="file-explorer" hidden>
+        <div class="fx-head"><span class="fx-disk">ALMITA SERVER</span><nav id="rd-cal-crumbs" class="fx-crumbs" aria-label="server directory"></nav><button type="button" id="rd-cal-close">CLOSE</button></div>
+        <div class="obs-summary" id="rd-cal-picker-note"></div>
+        <div class="twrap"><table id="rd-cal-table" class="status-table"><thead><tr><th>name</th><th>Hz / sps / dB</th><th>vs this capture/campaign</th><th></th></tr></thead><tbody></tbody></table></div>
+      </div>
       <div class="banner" id="compat-banner" style="font-weight:700" hidden></div>
       <div class="obs-summary" id="compat-detail"></div>
       <div id="campaign-calibration-preview" hidden>

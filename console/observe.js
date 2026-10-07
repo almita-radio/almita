@@ -301,7 +301,7 @@
     }
     return q.toString();
   }
-  const fmtValues = (s) => (s ? `${s.center_frequency_hz} Hz · ${s.sample_rate_hz} sps · ${s.gain_db} dB` : "—");
+  const fmtValues = U.fmtProfileValues;
   function setProfileStatus(text, cls) { const el = $("f-ql-cal-status"); el.textContent = text; el.className = "obs-summary " + (cls || ""); }
   function setSelected(d) {
     if (!d) { $("f-ql-cal-selected").textContent = ""; return; }
@@ -324,49 +324,11 @@
     setProfileStatus(`valid server profile · ${c.status || "UNKNOWN"} with this observation: ${c.reason || "—"}`,
                      c.status === "COMPATIBLE" ? "status-ok" : "status-unknown");
   }
-  function cell(tr, text, cls) { const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; }
-  function renderExplorer(view) {
-    const crumbs = $("f-ql-cal-crumbs"); crumbs.textContent = "";
-    view.breadcrumbs.forEach((b, i) => {
-      if (i) { const sep = document.createElement("span"); sep.textContent = "/"; crumbs.appendChild(sep); }
-      const btn = document.createElement("button"); btn.type = "button"; btn.textContent = i === 0 ? view.root : b.name;
-      btn.addEventListener("click", () => browse(b.path)); crumbs.appendChild(btn);
-    });
-    const nProfiles = view.files.filter((f) => f.type === "profile").length;
-    $("f-ql-cal-picker-note").textContent = `${view.dir}/ on the ALMITA server — ${view.dirs.length} folder(s), ${nProfiles} profile(s). `
-      + "Compatibility is checked against the frequency, sample rate and gain above. Selecting never copies or overwrites a file.";
-    const tbody = document.querySelector("#f-ql-cal-table tbody"); tbody.textContent = "";
-    const open = (label, path) => {
-      const tr = document.createElement("tr"); cell(tr, label, "fx-name"); cell(tr, ""); cell(tr, "folder");
-      const b = document.createElement("button"); b.type = "button"; b.textContent = "OPEN"; b.addEventListener("click", () => browse(path));
-      cell(tr, "").appendChild(b); tbody.appendChild(tr);
-    };
-    if (view.parent) open("../", view.parent);
-    for (const d of view.dirs) open(d.name + "/", d.path);
-    for (const f of view.files) {
-      const tr = document.createElement("tr"); const c = f.compatibility || {};
-      cell(tr, f.name, "fx-name"); cell(tr, f.valid ? fmtValues(f.summary) : "—");
-      cell(tr, !f.valid ? `REJECTED: ${f.error}` : (c.status === "INCOMPATIBLE" ? `REJECTED: ${c.reason}` : `${c.status}: ${c.reason}`));
-      const b = document.createElement("button"); b.type = "button"; b.textContent = "SELECT"; b.disabled = !f.selectable;
-      b.addEventListener("click", () => { $("f-ql-cal").value = f.path; $("f-ql-cal-picker").hidden = true; validateProfilePath(); });
-      cell(tr, "").appendChild(b);
-      if (!f.selectable) tr.className = "row-warn";
-      tbody.appendChild(tr);
-    }
-  }
-  async function browse(dir) {
-    const r = await U.api(`/api/observe/calibration-profiles/browse?${profileQuery({ dir: dir || "" })}`, { timeoutMs: 30000 });
-    if (!r.ok) { setProfileStatus(`could not browse the server: ${r.error.message}`, "status-error"); return false; }
-    renderExplorer(r.data.data);
-    $("f-ql-cal-picker").hidden = false;
-    return true;
-  }
-  $("f-ql-cal-browse").addEventListener("click", U.guard($("f-ql-cal-browse"), async () => {
-    const cur = $("f-ql-cal").value.trim();           // open where the current selection lives, else the root
-    const dir = cur.startsWith("data/calibration/") ? cur.slice(0, cur.lastIndexOf("/")) : "";
-    if (!(await browse(dir)) && dir) await browse("");
-  }, "OPENING…"));
-  $("f-ql-cal-close").addEventListener("click", () => { $("f-ql-cal-picker").hidden = true; });
+  U.mountProfileExplorer("f-ql-cal", {
+    query: profileQuery, currentPath: () => $("f-ql-cal").value, against: "the frequency, sample rate and gain above",
+    onSelect: (f) => { $("f-ql-cal").value = f.path; validateProfilePath(); },
+    onError: (text) => setProfileStatus(text, "status-error"),
+  });
   $("f-ql-cal").addEventListener("change", validateProfilePath);
   for (const id of ["f-freq", "f-rate", "f-gain"]) $(id).addEventListener("change", validateProfilePath);
 

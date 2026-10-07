@@ -227,3 +227,17 @@ def test_preflight_blocks_an_unusable_quicklook_profile_and_passes_the_selected_
                      ("../secret.json", "only profiles under")):
         res = pf._quicklook_check({"enabled": True, "calibration_profile_path": bad})
         assert (res["status"], res["criticality"]) == (pf.BLOCK, pf.REQUIRED) and why in res["detail"], res
+
+
+def test_campaigns_listing_tells_same_named_profiles_apart(repo, monkeypatch):
+    """Every wizard session writes observe_profile/calibration_profile_v1.json: the listing REDUCE uses carries each
+    profile's session folder, creation time and receiver settings, read from its own JSON."""
+    root, cal = repo
+    monkeypatch.setitem(ops.SERVE_ROOTS, "calibration", cal)
+    for key in ("mosaic", "reduced", "science"):                       # nothing else of the real data/ is listed
+        monkeypatch.setitem(ops.SERVE_ROOTS, key, root / "data" / key)
+    monkeypatch.setattr(ops, "ROOT", root)
+    rows = {r["session"]: r for r in ops.campaigns()["profiles"] if r["name"] == "calibration_profile_v1.json"}
+    assert {"WIZARD-A", "WIZARD-OLD"} <= set(rows)
+    assert (rows["WIZARD-A"]["created_utc"], rows["WIZARD-A"]["center_frequency_hz"]) == ("2026-10-02T01:40:00Z", 1420405752)
+    assert rows["WIZARD-OLD"]["center_frequency_hz"] == 1420405000

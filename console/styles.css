@@ -184,7 +184,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .fx-crumbs{display:flex;flex-wrap:wrap;gap:2px;flex:1}
 .fx-crumbs button{background:none;border:0;color:var(--text);padding:0 2px;font:inherit;cursor:pointer;text-decoration:underline}
 .fx-crumbs span{color:var(--muted)}
-.fx-name{overflow-wrap:anywhere}
+.fx-name{overflow-wrap:anywhere;white-space:pre-line}
 .fx-selected{font-family:ui-monospace,monospace;white-space:pre-line}
 /* SCIENCE: the hatched/dimmed B/C pixels, explained next to the images */
 .hatch-note{display:flex;gap:6px;align-items:center}
