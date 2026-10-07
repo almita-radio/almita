@@ -23,6 +23,9 @@ def _stub_sdr_tuning(request, monkeypatch):
                 "evidence_detail": "tests/conftest.py stub - no rtl_tcp", "pll_not_locked_count": 0,
                 "tuned_utc": "1970-01-01T00:00:00+00:00"}
     monkeypatch.setattr(sdr_tuning, "tune_explicitly", _stub)
+    # the stale-device check reads the REAL kernel journal / rtl_tcp unit: never let the machine's own state
+    # decide a test (opt out with real_tuning, like the tuning stub above)
+    monkeypatch.setattr(sdr_tuning, "main_device_reenumerated_since_rtl_tcp_start", lambda *a, **k: None)
 
     import rfi_monitor
 

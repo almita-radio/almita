@@ -401,6 +401,20 @@
     $w("wz-cp").addEventListener("change", updateCpExplain);
     updateCpExplain();
 
+    let countdownKey = null;
+    // The step's own failure box: kind, reason, web job and time of the last attempt of THIS step that did not
+    // complete (state.last_interruption, written by calibrate_reference_wizard.py). Returns whether it is shown.
+    function showStepFailure(elId, state, stepLabel) {
+      const li = state.last_interruption;
+      const shown = !!(li && li.step === stepLabel);
+      $w(elId).hidden = !shown;
+      if (shown) {
+        const what = li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : li.kind === "TIMEOUT" ? "TIMED OUT" : "FAILED";
+        $w(elId).textContent = `LAST ${stepLabel} CAPTURE ${what} at ${li.utc}${li.job_id ? ` (job ${li.job_id})` : ""}`
+          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept · fix the cause, then retry or ABORT`;
+      }
+      return shown;
+    }
     function startCountdown(seconds) {
       if (countdownTimer) clearInterval(countdownTimer);
       let remaining = Math.round(seconds);
@@ -532,7 +546,16 @@
       } else if (state.step === "STABILIZE_50R") {
         $w("wz-step-stabilize").hidden = false;
         $w("wz-stabilize-note").textContent = `50 Ω termination connected. Let it settle (suggested ${state.config.stabilize_seconds}s) — capture only starts on your CAPTURE NOW click.`;
-        startCountdown(state.config.stabilize_seconds);
+        const failed = showStepFailure("wz-50r-failure", state, "AMBIENT_50R");
+        $w("wz-capture").textContent = failed ? "RETRY CAPTURE (after fixing the cause)" : "CAPTURE NOW";
+        if (failed) {
+          if (countdownTimer) clearInterval(countdownTimer);
+          $w("wz-countdown").textContent = "the last capture did not complete - nothing was recorded as done; it is NOT retried automatically";
+        } else {
+          // once per stabilization (session + connection time), never restarted by a re-render / status refresh
+          const key = `${state.session_id}|${state.fifty_ohm && state.fifty_ohm.confirmed_utc}`;
+          if (countdownKey !== key) { countdownKey = key; startCountdown(state.config.stabilize_seconds); }
+        }
       } else if (state.step === "RESULT_50R") {
         $w("wz-step-result").hidden = false;
         const result = state.fifty_ohm_result;
@@ -556,6 +579,7 @@
         }
       } else if (state.step === "READY_HI_ALTO" || state.step === "READY_HI_BAJO") {
         const label = state.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+        showStepFailure("wz-hi-failure", state, label);
         const cand = state.hi_plan.candidates[label];
         $w("wz-step-ready-hi").hidden = false;
         $w("wz-ready-hi-label").textContent = `${label} — RA ${cand.ra_hours.toFixed(4)} h, Dec ${cand.dec_deg.toFixed(3)}°`;

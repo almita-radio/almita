@@ -86,7 +86,7 @@ def test_stop_during_50r_capture_keeps_step_and_files_then_retry_never_overwrite
 def test_failed_50r_capture_is_recorded_as_failed_with_the_error(session, monkeypatch):
     d = session()
     _interrupt_capture_after(monkeypatch, 1, ConnectionError("rtl_tcp went away"))
-    with pytest.raises(ConnectionError):
+    with pytest.raises(SystemExit, match="AMBIENT_50R capture FAILED .*rtl_tcp went away"):    # explicit, readable exit
         _capture_50r(d)
     li = _state(d)["last_interruption"]
     assert (li["kind"], li["step"], li["files_on_disk"]) == ("FAILED", "AMBIENT_50R", ["capture_000.h5"])
@@ -211,3 +211,74 @@ def test_a_running_step_must_be_stopped_before_another_action_on_the_same_sessio
     ops.start("calibrate_wizard", {"action": "status", "session_dir": "data/calibration/WIZ-1"})   # reading is fine
     (tmp_path / "data" / "calibration" / "WIZ-2").mkdir()
     ops.start("calibrate_wizard", {"action": "abort", "session_dir": "data/calibration/WIZ-2"})    # another session too
+
+
+# ------------------------------------------------------------------ 2026-10-07 incident: real 50 ohm capture failures
+
+def test_successful_50r_capture_completes_the_step_with_no_failure_left(session):
+    d = session()
+    assert _capture_50r(d) in (0, 2)
+    st = _state(d)
+    assert st["step"] == "RESULT_50R" and st["fifty_ohm"]["status"] == "DONE" and st["fifty_ohm_result"]
+    assert "last_interruption" not in st
+
+
+def test_a_capture_that_never_finishes_times_out_is_recorded_and_not_retried(session, monkeypatch):
+    import asyncio
+    d = session()
+    monkeypatch.setattr(wiz, "capture_step_timeout_seconds", lambda *a, **k: 0.3)
+
+    async def hang(self, **kw):
+        await asyncio.sleep(30)
+    monkeypatch.setattr(acquisition.SimulatedCalibrationAcquisitionBackend, "capture", hang)
+    monkeypatch.setenv("ALMITA_JOB_ID", "CALIBRATE_WIZARD-TEST-0001")
+    with pytest.raises(SystemExit, match="AMBIENT_50R capture TIMEOUT .*no result within 0 s"):
+        _capture_50r(d)
+    st = _state(d)
+    assert st["step"] == "STABILIZE_50R" and st["fifty_ohm"]["status"] == "PENDING_CAPTURE"
+    assert (st["last_interruption"]["kind"], st["last_interruption"]["job_id"]) == ("TIMEOUT", "CALIBRATE_WIZARD-TEST-0001")
+
+
+def test_a_stale_main_device_fails_before_touching_the_sdr_with_the_reason(session, monkeypatch):
+    import sdr_tuning
+    d = session()
+    monkeypatch.setattr(sdr_tuning, "main_device_reenumerated_since_rtl_tcp_start",
+                        lambda *a, **k: "the MAIN SDR (USB serial 00000001) was re-attached by the kernel at X")
+    touched = []
+    monkeypatch.setattr(acquisition, "RealCalibrationAcquisitionBackend", lambda **k: touched.append(1))
+    with pytest.raises(SystemExit, match="AMBIENT_50R capture FAILED .*re-attached by the kernel"):
+        wiz.cmd_capture_50r(SimpleNamespace(session_dir=str(d), simulate=None))
+    assert touched == [] and _state(d)["last_interruption"]["kind"] == "FAILED"
+
+
+def test_web_start_and_preflight_block_a_stale_main_device(jobs, monkeypatch):
+    import almita_web_common
+    import sdr_tuning
+
+    class Free:
+        status = SimpleNamespace(value="FREE")
+        detail = ""
+    monkeypatch.setattr(almita_web_common, "get_sdr_resource_status", lambda: Free())
+    monkeypatch.setattr(sdr_tuning, "main_device_reenumerated_since_rtl_tcp_start", lambda *a, **k: "re-attached at X")
+    with pytest.raises(ops.OpsBlocked, match="MAIN SDR cannot be driven: re-attached at X"):
+        ops.start("calibrate_wizard", {"action": "capture_50r", "session_dir": "data/calibration/WIZ-1"})
+    check = ops.main_sdr_device_handle_check()
+    assert (check["status"], check["detail"]) == ("BLOCK", "re-attached at X")
+
+
+def test_the_job_facts_carry_the_failure_so_the_page_can_show_it(tmp_path, monkeypatch):
+    """The status job prints the session state; its facts must include last_interruption (it was dropped, so the
+    page never showed why a capture had failed)."""
+    state = {"session_id": "WIZ-1", "step": "STABILIZE_50R", "config": {}, "fifty_ohm": {"status": "PENDING_CAPTURE"},
+             "last_interruption": {"step": "AMBIENT_50R", "kind": "FAILED", "utc": "2026-10-07T00:14:14Z",
+                                   "error": "SDRDisconnected: Connection reset by peer", "files_on_disk": [],
+                                   "job_id": "CALIBRATE_WIZARD-20261007-001408-816a"}}
+    log = tmp_path / "job.log"
+    log.write_text(json.dumps({"session_dir": "data/calibration/WIZ-1", "state": state}, indent=2))
+    monkeypatch.setattr(ops, "ROOT", tmp_path)
+    (tmp_path / "data" / "calibration" / "WIZ-1").mkdir(parents=True)
+    job = {"job_id": "S1", "stage": "calibrate_wizard_state", "meta": {"action": "status", "output_dir": "data/calibration/WIZ-1"},
+           "log": str(log), "exit_code": 0, "argv": [], "params": {}, "physical": False, "started_utc": "2026-10-07T00:15:00+00:00"}
+    facts = ops.classify(job)["facts"]
+    assert facts["last_interruption"]["job_id"] == "CALIBRATE_WIZARD-20261007-001408-816a"
+    assert facts["last_interruption"]["error"].startswith("SDRDisconnected")

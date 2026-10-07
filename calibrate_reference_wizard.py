@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,13 +94,30 @@ def _record_interruption(session_dir: Path, label: str, exc: BaseException, cap_
         state = _load_state(session_dir)
     except SystemExit:
         return
-    kind = "STOPPED_BY_OPERATOR" if isinstance(exc, KeyboardInterrupt) else "FAILED"
+    kind = ("STOPPED_BY_OPERATOR" if isinstance(exc, KeyboardInterrupt)
+            else "TIMEOUT" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else "FAILED")
     state["last_interruption"] = {
         "step": label, "kind": kind, "utc": datetime.now(timezone.utc).isoformat(),
         "error": "" if isinstance(exc, KeyboardInterrupt) else f"{type(exc).__name__}: {exc}",
         "files_on_disk": sorted(p.name for p in cap_dir.glob("capture_*.h5")),
+        "job_id": os.environ.get("ALMITA_JOB_ID"),     # the web job that ran this step (None from a shell)
     }
     _save_state(session_dir, state)
+
+
+def capture_step_timeout_seconds(n_captures: int, capture_seconds: float, extra_seconds: float = 0.0) -> float:
+    """Upper bound for a whole capture step: connect + explicit tuning (ACK wait) + n captures (each with its own
+    stall detection) + HDF5 writes, with generous slack. A step still running past it is stopped and recorded as
+    TIMEOUT - never an unbounded wait."""
+    return 60.0 + extra_seconds + n_captures * (3.0 * capture_seconds + 15.0)
+
+
+def _main_device_check_or_raise() -> None:
+    """Real captures only: refuse before touching MAIN when rtl_tcp holds a stale USB handle (see
+    sdr_tuning.main_device_reenumerated_since_rtl_tcp_start) - the failure is then explicit, not a stream reset."""
+    stale = sdr_tuning.main_device_reenumerated_since_rtl_tcp_start()
+    if stale:
+        raise RuntimeError(f"MAIN SDR cannot be driven: {stale}")
 
 
 def _save_result_unless_aborted(session_dir: Path, state: Dict[str, Any]) -> None:
@@ -233,11 +251,19 @@ def cmd_capture_50r(args) -> int:
     cap_dir.mkdir(parents=True, exist_ok=True)
     _preserve_previous_attempt(cap_dir, state, "AMBIENT_50R")
     _save_state(session_dir, state)
+    cfg = WizardConfig.from_dict(state["config"])
+    timeout = capture_step_timeout_seconds(cfg.n_captures, cfg.capture_seconds)
     try:
-        result = asyncio.run(_do_50r_capture(session_dir, state, args.simulate))
-    except BaseException as exc:          # STOP (KeyboardInterrupt) or failure: record, keep files, re-raise
+        if not args.simulate:
+            _main_device_check_or_raise()
+        result = asyncio.run(asyncio.wait_for(_do_50r_capture(session_dir, state, args.simulate), timeout))
+    except BaseException as exc:          # STOP (KeyboardInterrupt), failure or TIMEOUT: record, keep files
         _record_interruption(session_dir, "AMBIENT_50R", exc, cap_dir)
-        raise
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        kind = "TIMEOUT" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else "FAILED"
+        what = f"no result within {timeout:.0f} s" if kind == "TIMEOUT" else f"{type(exc).__name__}: {exc}"
+        raise SystemExit(f"AMBIENT_50R capture {kind} (step stays STABILIZE_50R, nothing recorded as done): {what}") from exc
     state["fifty_ohm"]["status"] = "DONE"
     state["fifty_ohm_result"] = result
     state["step"] = WizardStep.RESULT_50R.value
@@ -466,15 +492,18 @@ def cmd_capture_hi(args) -> int:
     cap_dir.mkdir(parents=True, exist_ok=True)
     _preserve_previous_attempt(cap_dir, state, label)
     _save_state(session_dir, state)
+    # GOTO + settle + hold on top of the captures themselves
+    timeout = capture_step_timeout_seconds(cfg.n_captures, cfg.capture_seconds, extra_seconds=600.0 + cfg.hi_settle_seconds)
     try:
         if args.simulate:
             capture = asyncio.run(_simulate_capture_n_at(
                 cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
                 cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir, args.simulate))
         else:
-            capture = asyncio.run(_capture_n_at(
+            _main_device_check_or_raise()
+            capture = asyncio.run(asyncio.wait_for(_capture_n_at(
                 cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
-                cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir))
+                cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir), timeout))
     except RuntimeError as exc:
         # The step is left at READY_HI_*: the operator sees why and can retry (files that were written are kept).
         _record_interruption(session_dir, label, exc, cap_dir)

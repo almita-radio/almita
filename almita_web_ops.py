@@ -221,6 +221,17 @@ def onstep_clock_check(log: Path = ONSTEP_CLOCK_LOG, now: Optional[datetime] = N
     return _check(name, "PASS", detail, "clock")
 
 
+def main_sdr_device_handle_check() -> Dict[str, str]:
+    """BLOCK when the MAIN dongle was re-attached by the kernel after rtl_tcp started (it then holds a dead
+    handle: every command fails with -4 and every stream dies - the 2026-10-07 wizard incident)."""
+    import sdr_tuning
+    name = "MAIN SDR device handle (rtl_tcp vs USB)"
+    reason = sdr_tuning.main_device_reenumerated_since_rtl_tcp_start()
+    if reason:
+        return _check(name, "BLOCK", reason, "hardware")
+    return _check(name, "PASS", "no re-attachment of the MAIN dongle since rtl_tcp.service started (kernel journal)", "hardware")
+
+
 def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/proc")) -> Dict[str, str]:
     """MAIN rtl_tcp must run line-buffered (stdbuf -oL): its "set freq N" acknowledgements are the tuning
     evidence every acquisition waits for (sdr_tuning) - without them every capture is blocked, so BLOCK here.
@@ -332,6 +343,7 @@ def preflight() -> Dict[str, Any]:
         checks.append(_check("system clock", "WARNING", f"timedatectl unavailable: {exc}", "clock"))
     checks.append(onstep_clock_check())
     checks.append(main_rtl_tcp_tuning_check())
+    checks.append(main_sdr_device_handle_check())
     try:
         cfg = json.loads((ROOT / "observer_config.json").read_text())
         obs = cfg.get("observer", {})
@@ -1038,6 +1050,10 @@ def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> 
         res = get_sdr_resource_status()
         if res.status.value != "FREE":
             raise OpsBlocked(f"MAIN SDR is not free: {res.status.value}: {res.detail}")
+        import sdr_tuning
+        stale = sdr_tuning.main_device_reenumerated_since_rtl_tcp_start()
+        if stale:
+            raise OpsBlocked(f"MAIN SDR cannot be driven: {stale}")
     pf = None
     if spec["physical"]:
         if confirm != "MOVE":
@@ -1213,7 +1229,12 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                             # automatically from this session's real 50R captures (or why it could not) -
                             # deliberately a separate field from profile_path (the operational DRAFT above),
                             # so the web UI can never present one as if it were the other.
-                            "observe_profile": st.get("observe_profile")}
+                            "observe_profile": st.get("observe_profile"),
+                            # what went wrong last (STOP / FAILED / TIMEOUT, reason, job, files kept) - the page
+                            # shows it in the step itself; without these the failure was invisible on the web
+                            "last_interruption": st.get("last_interruption"),
+                            "interrupted_attempts": st.get("interrupted_attempts"),
+                            "aborted_from_step": st.get("aborted_from_step")}
             if action == "capture_50r" and st.get("fifty_ohm_result"):
                 out["facts"]["last_reference_result"] = st["fifty_ohm_result"]
             elif action == "capture_hi" and meta.get("label") and st.get("hi_references", {}).get(meta["label"]):
@@ -1981,7 +2002,8 @@ def _runner(job_path: str) -> int:
     log = open(job["log"], "ab", buffering=0)
     log.write(f"[{_utc()}] $ {' '.join(job['argv'])}\n".encode())
     state = {"stopped": False}
-    child = subprocess.Popen(job["argv"], cwd=job["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+    child = subprocess.Popen(job["argv"], cwd=job["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                             env={**os.environ, "ALMITA_JOB_ID": job["job_id"]})   # the command can name its own job
     job = json.loads(p.read_text())
     job.update(child_pid=child.pid, runner_pid=os.getpid())
     _write_json(p, job)

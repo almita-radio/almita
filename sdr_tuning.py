@@ -41,6 +41,11 @@ _ACK_PATTERNS = {
     "gain_tenths_db": re.compile(r"\bset gain (\d+)\b"),
 }
 _PLL_NOT_LOCKED = re.compile(r"PLL not locked")
+# librtlsdr failures rtl_tcp prints right AFTER its "set freq/sample rate/gain" lines when the dongle cannot be driven
+# (e.g. -4 = LIBUSB_ERROR_NO_DEVICE: the USB device re-enumerated under a running rtl_tcp). rtl_tcp prints the "set"
+# line before calling librtlsdr, so the acknowledgement alone does not prove the setting was applied.
+_DEVICE_FAILURE = re.compile(r"failed with -\d+|failed=-\d+|Failed to submit transfer|No such device|"
+                             r"usb_claim_interface error|Failed to open rtlsdr device")
 
 
 class OperatingConfigError(RuntimeError):
@@ -118,8 +123,10 @@ class LogFileAckSource:
 
 def parse_acks(lines: List[str]) -> Dict[str, Any]:
     """The LAST acknowledged value of each setting, plus the PLL-not-locked count, from rtl_tcp output."""
-    acks: Dict[str, Any] = {"pll_not_locked_count": 0}
+    acks: Dict[str, Any] = {"pll_not_locked_count": 0, "device_failures": []}
     for line in lines:
+        if _DEVICE_FAILURE.search(line):
+            acks["device_failures"].append(line.strip())
         for key, pattern in _ACK_PATTERNS.items():
             m = pattern.search(line)
             if m:
@@ -186,6 +193,14 @@ async def verify_acknowledged(source: Any, requested: Dict[str, Any], *, operati
     if operating is not None:
         record["operating_center_frequency_hz"] = operating["center_frequency_hz"]
         record["matches_operating"] = requested["center_frequency_hz"] == operating["center_frequency_hz"]
+    failures = acks.get("device_failures") or []
+    if failures:
+        record["evidence"] = "NONE"
+        record["device_failures"] = failures[:8]
+        raise TuningIncoherent(f"rtl_tcp received the settings but librtlsdr FAILED to apply them ({len(failures)} error "
+                               f"line(s), first: {failures[0]!r}) via {source.describe} - the MAIN dongle cannot be "
+                               f"driven by this rtl_tcp (USB device lost or re-enumerated?): restart rtl_tcp.service - "
+                               f"NO capture taken")
     mismatched = [k for k, v in want.items() if acks.get(k) != v]
     if mismatched:
         record["evidence"] = "NONE"
@@ -193,6 +208,28 @@ async def verify_acknowledged(source: Any, requested: Dict[str, Any], *, operati
                                f"{ack_timeout:g} s (requested {requested}, acknowledged {applied}) via "
                                f"{source.describe} - NO capture taken")
     return record
+
+
+def main_device_reenumerated_since_rtl_tcp_start(serial: str = "00000001", unit: str = MAIN_RTL_TCP_UNIT,
+                                                run: Callable[..., Any] = subprocess.run) -> Optional[str]:
+    """Reason when the MAIN dongle (USB serial `serial`) was (re)attached by the kernel AFTER the running rtl_tcp
+    process started - rtl_tcp then holds a handle to a device that no longer exists and every command fails (-4).
+    None when not detected. Read-only: the unit's start time and the kernel journal."""
+    try:
+        started = run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit], capture_output=True,
+                      text=True, timeout=10).stdout.strip()
+        if not started:
+            return None
+        kernel = run(["journalctl", "-k", "--since", started, "-o", "short-iso", "--no-pager"], capture_output=True,
+                     text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    hits = [line for line in kernel.splitlines() if f"SerialNumber: {serial}" in line]
+    if not hits:
+        return None
+    return (f"the MAIN SDR (USB serial {serial}) was re-attached by the kernel at {hits[-1].split()[0]}, after "
+            f"{unit} started ({started}): rtl_tcp still holds the previous device handle and cannot drive the dongle - "
+            f"restart {unit} (no capture may be running) before capturing")
 
 
 def tuning_attrs(record: Dict[str, Any]) -> Dict[str, Any]:

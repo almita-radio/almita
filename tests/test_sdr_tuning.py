@@ -199,7 +199,7 @@ def test_parse_acks_reads_real_rtl_tcp_journal_lines():
     lines = ["client accepted! localhost 52554", "set freq 1420405752", "set sample rate 2400000",
              "set gain mode 1", "set gain 402", "[R82XX] PLL not locked!"]
     assert sdr_tuning.parse_acks(lines) == {"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000,
-                                            "gain_tenths_db": 402, "pll_not_locked_count": 1}
+                                            "gain_tenths_db": 402, "pll_not_locked_count": 1, "device_failures": []}
 
 
 # ------------------------------------------------------------------ every acquisition path tunes explicitly
@@ -213,3 +213,50 @@ def test_acquisition_paths_never_configure_without_evidence(rel):
             if re.search(r"\.configure\(", line) and "probe.configure" not in line]
     assert bare == [], f"{rel}: bare configure() at lines {bare}"
     assert "tune_explicitly" in source or "backend.tune(" in source or ".tune(" in source
+
+
+# ------------------------------------------------------------------ 2026-10-07 incident: "set freq" printed, librtlsdr failed
+
+def _failing(source):
+    def log(freq, rate, gain):        # the real rtl_tcp journal of the incident (USB device re-enumerated: -4)
+        source.all += [f"set freq {freq}", "rtlsdr_demod_write_reg failed with -4", "r82xx_set_freq: failed=-4",
+                       f"set sample rate {rate}", "set gain mode 1", f"set gain {int(round(gain * 10))}",
+                       "r82xx_write: i2c wr failed=-4 reg=05 len=1"]
+    return log
+
+
+def test_acknowledged_settings_that_librtlsdr_failed_to_apply_block_the_capture():
+    source = _FakeAckSource()
+    sdr = _FakeSDR(_failing(source))
+    with pytest.raises(sdr_tuning.TuningIncoherent, match="librtlsdr FAILED to apply them .*restart rtl_tcp.service - NO capture taken"):
+        asyncio.run(sdr_tuning.tune_explicitly(sdr, 1420405752, 2400000, 40.2, ack_source=source, ack_timeout=0.3))
+
+
+def test_zero_copy_fallback_warning_alone_is_not_a_failure():
+    source = _FakeAckSource()
+
+    def log(freq, rate, gain):
+        source.all += ["Allocating 15 zero-copy buffers", "Failed to allocate zero-copy buffer for transfer 0",
+                       "Falling back to buffers in userspace", f"set freq {freq}", f"set sample rate {rate}",
+                       f"set gain {int(round(gain * 10))}"]
+    rec = asyncio.run(sdr_tuning.tune_explicitly(_FakeSDR(log), 1420405752, 2400000, 40.2, ack_source=source, ack_timeout=0.3))
+    assert rec["evidence"] == sdr_tuning.EVIDENCE_SERVER_ACK
+
+
+class _Run:
+    def __init__(self, started, kernel):
+        self.started, self.kernel = started, kernel
+
+    def __call__(self, argv, **kw):
+        from types import SimpleNamespace
+        return SimpleNamespace(stdout=self.started if argv[0] == "systemctl" else self.kernel)
+
+
+def test_a_main_dongle_reattached_after_rtl_tcp_started_is_reported():
+    kernel = ("2026-10-07T00:11:57+0000 stellarmate kernel: usb 1-1: USB disconnect, device number 2\n"
+              "2026-10-07T00:11:58+0000 stellarmate kernel: usb 1-1: SerialNumber: 00000001\n")
+    reason = sdr_tuning.main_device_reenumerated_since_rtl_tcp_start(run=_Run("Fri 2026-10-02 21:29:46 UTC", kernel))
+    assert "re-attached by the kernel at 2026-10-07T00:11:58+0000" in reason and "restart rtl_tcp.service" in reason
+    assert sdr_tuning.main_device_reenumerated_since_rtl_tcp_start(run=_Run("Wed 2026-10-07 00:20:00 UTC", "")) is None
+    other = "2026-10-07T00:11:58+0000 stellarmate kernel: usb 3-1: SerialNumber: 00000002\n"   # the RFI dongle
+    assert sdr_tuning.main_device_reenumerated_since_rtl_tcp_start(run=_Run("x", other)) is None

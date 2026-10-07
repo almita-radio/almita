@@ -1216,6 +1216,52 @@ out.stopHidden = $w("wz-running").hidden;
     assert out["stopHidden"] is True
 
 
+def test_calibrate_wizard_failed_50r_capture_is_shown_in_the_step_and_never_silently_reset(tmp_path):
+    """The 2026-10-07 incident, as the page saw it: CAPTURE NOW -> the job exits 1 (rtl_tcp reset) -> the session is
+    still STABILIZE_50R. The step itself must say the capture FAILED, with the reason and the job; the button turns
+    into RETRY; the stabilization countdown is not restarted; nothing is re-run automatically."""
+    li = {"step": "AMBIENT_50R", "kind": "FAILED", "utc": "2026-10-07T00:14:14+00:00", "files_on_disk": [],
+          "error": "SDRDisconnected: SDR_DISCONNECTED: rtl_tcp socket error: [Errno 104] Connection reset by peer",
+          "job_id": "CALIBRATE_WIZARD-20261007-001408-816a"}
+    before = _wizard_state("STABILIZE_50R", fifty_ohm={"status": "PENDING_CAPTURE", "confirmed_utc": "2026-10-07T00:12:32Z"},
+                           config={"n_captures": 5, "stabilize_seconds": 20})
+    after = dict(before, last_interruption=li)
+    routes = CAL_ROUTES + r"""
+window.__routes["GET /api/ops/calibrate/wizard_defaults"] = { body: { ok: true, data: { center_frequency_hz: 1420405752, sample_rate_hz: 2400000, gain_db: 40.2 } } };
+window.__routes["GET /api/ops/jobs"] = { body: { ok: true, data: [{ job_id: "J0", stage: "calibrate_wizard_state" }] } };
+window.__routes["GET /api/ops/job/J0"] = { body: { ok: true, data: { job_id: "J0", state: "EXITED", facts: %s } } };
+window.__routes["POST /api/ops/start/calibrate_wizard"] = (b) => ({ body: { ok: true, data: { job_id: b.params.action === "capture_50r" ? "CAP" : "STATUS" } } });
+window.__routes["GET /api/ops/job/CAP"] = { body: { ok: true, data: { job_id: "CAP", state: "EXITED", exit_code: 1, facts: null,
+  detail: "exit 1; AMBIENT_50R capture FAILED (step stays STABILIZE_50R, nothing recorded as done): SDRDisconnected: ...", output_dir: "data/calibration/WIZ-1" } } };
+window.__routes["GET /api/ops/job/STATUS"] = { body: { ok: true, data: { job_id: "STATUS", state: "EXITED", facts: %s } } };
+""" % (json.dumps(before), json.dumps(after))
+    driver = r"""
+const $w = (id) => document.getElementById(id);
+await until(() => !$w("wz-step-stabilize").hidden, 5000);
+out.countdownBefore = $w("wz-countdown").textContent;
+$w("wz-capture").click();
+await until(() => !$w("wz-50r-failure").hidden, 6000);
+out.failure = $w("wz-50r-failure").textContent;
+out.topError = document.getElementById("error-banner").textContent;
+out.button = $w("wz-capture").textContent;
+out.countdownAfter = $w("wz-countdown").textContent;
+out.step = !$w("wz-step-stabilize").hidden;
+out.captureStarts = window.__calls.filter((c) => c.key === "POST /api/ops/start/calibrate_wizard" && c.body.params.action === "capture_50r").length;
+await new Promise((r) => setTimeout(r, 1500));
+out.captureStartsLater = window.__calls.filter((c) => c.key === "POST /api/ops/start/calibrate_wizard" && c.body.params.action === "capture_50r").length;
+"""
+    out = run_page(tmp_path, "calibrate", routes, driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert "suggested stabilization" in out["countdownBefore"]
+    assert "LAST AMBIENT_50R CAPTURE FAILED" in out["failure"] and "job CALIBRATE_WIZARD-20261007-001408-816a" in out["failure"]
+    assert "Connection reset by peer" in out["failure"]
+    assert "capture failed: exit 1; AMBIENT_50R capture FAILED" in out["topError"]
+    assert out["button"].startswith("RETRY CAPTURE") and out["step"] is True
+    assert "NOT retried automatically" in out["countdownAfter"]
+    assert out["captureStarts"] == out["captureStartsLater"] == 1
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):
