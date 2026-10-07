@@ -1169,8 +1169,9 @@ window.__routes["GET /api/ops/job/S1"] = { body: { ok: true, data: { job_id: "S1
 """ % json.dumps(state)
     driver = r"""
 const $w = (id) => document.getElementById(id);
-await until(() => !$w("wizard-active").hidden && !$w("wz-interruption").hidden, 5000);
-out.banner = $w("wz-interruption").textContent;
+await until(() => !$w("wizard-active").hidden && !$w("wz-50r-failure").hidden, 5000);
+out.banner = $w("wz-50r-failure").textContent;
+out.globalBannerHidden = $w("wz-interruption").hidden;            // same interruption: shown once, in the step
 out.statusCall = window.__calls.filter((c) => c.key === "POST /api/ops/start/calibrate_wizard").map((c) => c.body.params);
 out.stopShown = !$w("wz-running").hidden;
 """
@@ -1178,7 +1179,8 @@ out.stopShown = !$w("wz-running").hidden;
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
     assert out["statusCall"] == [{"action": "status", "session_dir": "data/calibration/WIZ-1"}]
-    assert "AMBIENT_50R capture STOPPED by the operator" in out["banner"] and "2 file(s) kept on disk" in out["banner"]
+    assert "LAST AMBIENT_50R CAPTURE STOPPED by the operator" in out["banner"] and "2 file(s) kept" in out["banner"]
+    assert out["globalBannerHidden"] is True
     assert out["stopShown"] is False
 
 

@@ -939,13 +939,20 @@ def _load(job_id: str) -> Dict[str, Any]:
 def list_jobs(limit: int = 30) -> List[Dict[str, Any]]:
     if not OPS_DIR.is_dir():
         return []
-    names = sorted((d.name for d in OPS_DIR.iterdir() if d.is_dir() and (d / "job.json").exists()), reverse=True)[:limit]
-    rows = []
-    for n in names:
+    # Newest first BY START TIME. Sorting by job id (STAGE-YYYYmmdd-...) is only chronological within one stage:
+    # "CALIBRATE_WIZARD_STATE-..." sorts after every "CALIBRATE_WIZARD-..." ('_' > '-'), so the page took an older
+    # state-only job for "the latest" and showed a stale wizard step (2026-10-07: RESULT_50R shown as STABILIZE_50R).
+    loaded = []
+    for d in OPS_DIR.iterdir():
+        if not (d.is_dir() and (d / "job.json").exists()):
+            continue
         try:
-            j = _load(n)
+            loaded.append((d.name, _load(d.name)))
         except (OSError, ValueError):
             continue
+    loaded.sort(key=lambda item: (float(item[1].get("started_epoch") or 0.0), item[0]), reverse=True)
+    rows = []
+    for n, j in loaded[:limit]:
         rows.append({"job_id": n, "stage": j["stage"], "state": _state(j), "started_utc": j.get("started_utc"), "ended_utc": j.get("ended_utc"), "exit_code": j.get("exit_code"),
                      "verdict": classify(j)["verdict"]})
     return rows

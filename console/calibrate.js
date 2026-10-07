@@ -534,10 +534,15 @@
       const fiftyDone = state.fifty_ohm && (state.fifty_ohm.status === "DONE" || state.fifty_ohm.status === "SKIPPED");
       const hiDone = ["HI_ALTO", "HI_BAJO"].filter((k) => state.hi_references && state.hi_references[k]).length;
       $w("wz-session-note").textContent = `session ${state.session_id} · step ${state.step} · 50Ω ${fiftyDone ? "settled" : "pending"} · HI zones measured ${hiDone}/2`;
-      const li = state.last_interruption, kept = state.interrupted_attempts || [];
+      // The step's own failure box (showStepFailure) reports the last interruption of the step on screen; this
+      // session-level banner only adds what it does not: an interruption of ANOTHER step, and the earlier
+      // interrupted attempts whose files were set aside.
+      const kept = state.interrupted_attempts || [];
+      const ownStep = { STABILIZE_50R: "AMBIENT_50R", READY_HI_ALTO: "HI_ALTO", READY_HI_BAJO: "HI_BAJO" }[state.step];
+      const li = state.last_interruption && state.last_interruption.step !== ownStep ? state.last_interruption : null;
       $w("wz-interruption").hidden = !li && !kept.length;
-      $w("wz-interruption").textContent = (li ? `${li.step} capture ${li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : "FAILED"} at ${li.utc}`
-          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept on disk · retry the step or ABORT. ` : "")
+      $w("wz-interruption").textContent = (li ? `${li.step} capture ${li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : li.kind === "TIMEOUT" ? "TIMED OUT" : "FAILED"} at ${li.utc}`
+          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept on disk. ` : "")
         + (kept.length ? `Earlier interrupted attempts kept: ${kept.map((a) => `${a.step} → ${a.kept_in} (${a.files.length} file(s))`).join("; ")}` : "");
 
       if (state.step === "PREPARE_50R") {

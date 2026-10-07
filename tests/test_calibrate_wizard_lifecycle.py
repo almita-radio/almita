@@ -282,3 +282,18 @@ def test_the_job_facts_carry_the_failure_so_the_page_can_show_it(tmp_path, monke
     facts = ops.classify(job)["facts"]
     assert facts["last_interruption"]["job_id"] == "CALIBRATE_WIZARD-20261007-001408-816a"
     assert facts["last_interruption"]["error"].startswith("SDRDisconnected")
+
+
+def test_jobs_are_listed_newest_first_by_start_time_across_stages(jobs):
+    """2026-10-07: the page took the newest job for the wizard's current state, but list_jobs sorted by job id, so
+    every CALIBRATE_WIZARD_STATE-* came before a newer CALIBRATE_WIZARD-* and a successful capture was hidden."""
+    for name, stage, epoch in (("CALIBRATE_WIZARD_STATE-20261007-001415-6e58", "calibrate_wizard_state", 100.0),
+                               ("CALIBRATE_WIZARD-20261007-002617-dc9d", "calibrate_wizard", 200.0),
+                               ("REDUCE-20261007-000000-aaaa", "reduce", 50.0)):
+        d = ops.OPS_DIR / name
+        d.mkdir(parents=True)
+        (d / "job.json").write_text(json.dumps({"job_id": name, "stage": stage, "started_epoch": epoch, "exit_code": 0,
+                                                "log": str(d / "job.log"), "argv": [], "meta": {}, "params": {}}))
+    assert [r["job_id"] for r in ops.list_jobs()] == ["CALIBRATE_WIZARD-20261007-002617-dc9d",
+                                                      "CALIBRATE_WIZARD_STATE-20261007-001415-6e58",
+                                                      "REDUCE-20261007-000000-aaaa"]
