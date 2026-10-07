@@ -544,6 +544,15 @@ function initMountCamera(){
   const badge=document.getElementById("mount-camera-badge"),kv=document.getElementById("mount-camera-kv");
   const retryBtn=document.getElementById("mount-camera-retry");
   const urlInput=document.getElementById("mount-camera-url"),saveBtn=document.getElementById("mount-camera-save"),note=document.getElementById("mount-camera-config-note");
+  const rotationSelect=document.getElementById("mount-camera-rotation");
+  // Display rotation only (the relayed MJPEG is untouched); 90/270 swap the picture's axes, so it is scaled to
+  // stay inside the 3:2 frame.
+  function applyRotation(deg){
+    const d=[0,90,180,270].includes(Number(deg))?Number(deg):0;
+    img.style.transform=d===0?"":(d===180?"rotate(180deg)":`rotate(${d}deg) scale(0.6667)`);
+    img.dataset.rotation=String(d);
+    if(rotationSelect&&document.activeElement!==rotationSelect)rotationSelect.value=String(d);
+  }
   if(!img||!badge)return;   // page variant without this tile - nothing to do
 
   function loadStream(){
@@ -567,6 +576,7 @@ function initMountCamera(){
       badge.textContent=s.state||"—";badge.className="badge status-"+String(s.state||"unknown").toLowerCase();
       kv.innerHTML=[pair("VIEWERS (this ALMITA process)",s.viewers),pair("SOURCE",s.configured_url),s.last_error?pair("LAST ERROR",s.last_error):""].join("");
       if(urlInput&&document.activeElement!==urlInput)urlInput.value=s.configured_url||s.default_url||"";
+      applyRotation(s.rotation_deg);
       if(urlInput&&!urlInput.value)urlInput.placeholder=s.default_url||"";
     }catch(err){
       badge.textContent="UNKNOWN";badge.className="badge status-unknown";
@@ -579,10 +589,13 @@ function initMountCamera(){
     try{
       const url=(urlInput&&urlInput.value||"").trim();
       note.textContent="saving…";
-      const response=await fetch("/mount_camera/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stream_url:url})});
+      const body={stream_url:url};
+      if(rotationSelect)body.rotation_deg=Number(rotationSelect.value);
+      const response=await fetch("/mount_camera/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       const data=await response.json().catch(()=>({}));
       if(!response.ok||!data.ok){note.textContent="save failed: "+(data.error||("HTTP "+response.status));return}
-      note.textContent="saved — will be used on the next (re)connect";
+      note.textContent="saved — rotation applies now; a new URL on the next (re)connect";
+      applyRotation(data.rotation_deg);
       loadStream();refreshStatus();
     }catch(err){note.textContent="save failed: "+String(err&&err.message||err)}
   });

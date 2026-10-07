@@ -43,6 +43,8 @@
         <details id="mount-camera-config">
           <summary>Configure stream URL</summary>
           <div class="obs-row"><label for="mount-camera-url">STREAM URL</label><input type="text" id="mount-camera-url" placeholder="e.g. 192.168.1.164:81/stream — full URL with its scheme (http or https)"></div>
+          <div class="obs-row"><label for="mount-camera-rotation">ROTATION</label><select id="mount-camera-rotation">
+            <option value="0">0°</option><option value="90">90°</option><option value="180">180° (camera mounted upside down)</option><option value="270">270°</option></select></div>
           <div class="obs-actions"><button type="button" id="mount-camera-save">SAVE</button></div>
           <div id="mount-camera-config-note" class="muted"></div>
         </details>

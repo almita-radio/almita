@@ -49,6 +49,9 @@ def _write_config(cfg: Dict[str, Any]) -> None:
     tmp.replace(CONFIG_PATH)
 
 
+ROTATIONS = (0, 90, 180, 270)      # display rotation of the picture (the camera is mounted upside down: 180)
+
+
 def valid_stream_url(url: str) -> bool:
     return isinstance(url, str) and 8 <= len(url) <= 500 and (url.startswith("http://") or url.startswith("https://"))
 
@@ -105,6 +108,20 @@ class MountCameraRelay:
     def get_url(self) -> str:
         return _read_config().get("stream_url") or DEFAULT_STREAM_URL
 
+    def get_rotation(self) -> int:
+        """Clockwise display rotation in degrees the web applies to the picture (the MJPEG bytes are relayed
+        untouched). Persisted next to the stream URL; anything invalid reads as 0."""
+        value = _read_config().get("rotation_deg", 0)
+        return value if value in ROTATIONS else 0
+
+    def set_rotation(self, degrees: int) -> None:
+        if degrees not in ROTATIONS:
+            raise ValueError(f"rotation_deg must be one of {ROTATIONS}")
+        cfg = _read_config()
+        cfg["rotation_deg"] = degrees
+        cfg["updated_utc"] = datetime.now(timezone.utc).isoformat()
+        _write_config(cfg)
+
     def set_url(self, url: str) -> None:
         cfg = _read_config()
         cfg["stream_url"] = url
@@ -118,6 +135,7 @@ class MountCameraRelay:
         with self._lock:
             return {"state": self._state, "last_error": self._last_error, "viewers": len(self._subscribers),
                     "configured_url": self.get_url(), "default_url": DEFAULT_STREAM_URL,
+                    "rotation_deg": self.get_rotation(),
                     "last_connect_attempt_utc": self._last_connect_attempt_utc, "last_frame_utc": self._last_frame_utc}
 
     @property

@@ -53,7 +53,8 @@ class ConsoleHandler(ReadOnlyHandler):
         if path == _MOUNT_CAMERA_STATUS_PATH:
             return self._json_ok(mount_camera.RELAY.status())
         if path == _MOUNT_CAMERA_CONFIG_PATH:
-            return self._json_ok({"stream_url": mount_camera.RELAY.get_url(), "default_url": mount_camera.DEFAULT_STREAM_URL})
+            return self._json_ok({"stream_url": mount_camera.RELAY.get_url(), "default_url": mount_camera.DEFAULT_STREAM_URL,
+                                  "rotation_deg": mount_camera.RELAY.get_rotation()})
         return super().do_GET()
 
     def do_POST(self):  # noqa: N802
@@ -84,11 +85,19 @@ class ConsoleHandler(ReadOnlyHandler):
             body = json.loads(self.rfile.read(length).decode("utf-8"))
         except (OSError, ValueError, UnicodeDecodeError):
             return self._json(400, {"ok": False, "error": "invalid JSON body"})
-        url = str(body.get("stream_url", "")).strip()
-        if not mount_camera.valid_stream_url(url):
+        if not isinstance(body, dict) or not ({"stream_url", "rotation_deg"} & set(body)):
+            return self._json(400, {"ok": False, "error": "send stream_url and/or rotation_deg"})
+        rotation = body.get("rotation_deg")
+        if rotation is not None and (isinstance(rotation, bool) or rotation not in mount_camera.ROTATIONS):
+            return self._json(400, {"ok": False, "error": f"rotation_deg must be one of {list(mount_camera.ROTATIONS)}"})
+        url = str(body.get("stream_url", "")).strip() if "stream_url" in body else None
+        if url is not None and not mount_camera.valid_stream_url(url):
             return self._json(400, {"ok": False, "error": "stream_url must be an http:// or https:// URL, 8-500 characters"})
-        mount_camera.RELAY.set_url(url)
-        return self._json(200, {"ok": True, "stream_url": url})
+        if url is not None:
+            mount_camera.RELAY.set_url(url)
+        if rotation is not None:
+            mount_camera.RELAY.set_rotation(rotation)
+        return self._json(200, {"ok": True, "stream_url": mount_camera.RELAY.get_url(), "rotation_deg": mount_camera.RELAY.get_rotation()})
 
     def _mount_camera_stream(self) -> None:
         """One subscriber to the shared relay per viewer connection - never a second upstream camera
