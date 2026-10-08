@@ -187,7 +187,9 @@ def _observe_defaults() -> Dict[str, Any]:
             "min_altitude_deg": defaults.get("min_altitude_deg", 30.0),
             "traversal": "SERPENTINE",
         },
-        "rfi_ref": {"serial": "00000002", "gain_db": 25.0},
+        # Antenna B has an in-line LNA powered through SDR 00000002's Bias-T (operator confirmation 2026-10-08): the
+        # form starts with RFI_REF Bias-T ON. The spec schema default stays false so archived plans revalidate unchanged.
+        "rfi_ref": {"serial": "00000002", "gain_db": 25.0, "bias_tee": True},
         "observer": config.get("observer", {}),
     }
 

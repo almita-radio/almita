@@ -276,6 +276,36 @@ out.err500 = $("error-banner").textContent;
     assert "unexpected error (KeyError)" in out["err500"] and "[request r500]" in out["err500"]
 
 
+def _observe_rfi_bias_tee_run(tmp_path, server_bias_tee):
+    routes = OBSERVE_ROUTES + r"""
+window.__routes["GET /api/observe/defaults"] = { body: { main: { center_frequency_hz: 1420405752, sample_rate: 2400000, gain_db: 40.2, bias_tee: true },
+  grid: { min_altitude_deg: 10 }, rfi_ref: { serial: "00000002", gain_db: 25, bias_tee: SERVER_BIAS_TEE } } };
+""".replace("SERVER_BIAS_TEE", "true" if server_bias_tee else "false")
+    driver = r"""
+await until(() => window.__count("GET /api/observe/defaults") > 0, 3000); await sleep(100);
+out.checked = $("f-rfi-bias-tee").checked;
+$("observe-form").requestSubmit(); await until(() => !$("plan-result").hidden, 3000);
+$("btn-replan").click(); $("f-gain").value = 42.1; $("observe-form").requestSubmit(); await until(() => !$("plan-result").hidden, 3000);
+out.posted = window.__calls.filter((c) => c.key === "POST /api/observe/plan").map((c) => c.body.rfi_ref);
+""".strip()
+    out = run_page(tmp_path, "observe", routes, driver, budget=12000)
+    assert "driver_error" not in out, out.get("driver_error")
+    return out
+
+
+def test_observe_rfi_ref_bias_tee_follows_server_default_and_survives_replan(tmp_path):
+    """2026-10-08: antenna B has an LNA powered by RFI_REF's Bias-T. The form takes Bias-T from the server's
+    effective defaults (ON), sends it in the plan, and a RE-PLAN (here at another gain) keeps it."""
+    out = _observe_rfi_bias_tee_run(tmp_path, True)
+    assert out["checked"] is True
+    assert len(out["posted"]) == 2 and all(r["enabled"] is True and r["bias_tee"] is True for r in out["posted"])
+
+
+def test_observe_rfi_ref_bias_tee_checkbox_is_driven_by_the_server_not_the_static_html(tmp_path):
+    out = _observe_rfi_bias_tee_run(tmp_path, False)
+    assert out["checked"] is False and all(r["bias_tee"] is False for r in out["posted"])
+
+
 def test_observe_page_start_timeout_is_not_reported_as_not_started(tmp_path):
     routes = OBSERVE_ROUTES + r"""
 window.__routes["POST /api/observe/start"] = () => { window.__state = RUNNING; return "network-error"; };

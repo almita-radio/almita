@@ -39,7 +39,8 @@ Contexto general: [PROJECT_BRIEF.md](PROJECT_BRIEF.md).
 | BL-021 | Manual cortapalos (PDF) | 71e70d2 y siguientes | revisado contra el código; recorrido completo pendiente |
 | BL-022 | ALIGN: SYNC (Sol y HI) con control de confianza y offset máximo; offset siempre visible | 4012330 | [C] montura falsa; **sin probar en la montura real** |
 | BL-023 | Gain pilot avisa antes de aprobar una ganancia sin perfil; etiqueta topocentric corregida | 8f7ab05 | [C] |
-| BL-024 | Brief del proyecto + sincronización de Git | este commit | — |
+| BL-024 | Brief del proyecto + sincronización de Git | fd8a962 | — |
+| BL-025 | RFI REF: Bias-T encendido por defecto (la antena B tiene LNA, confirmado por el operador); el formulario sigue la configuración del servidor y se conserva al RE-PLAN | este commit | [C]; sesiones del 2026-10-08 ya lo pedían ON; alimentación del LNA sin medir |
 
 Activación:
 - `console/` se sirve en vivo.
@@ -55,7 +56,9 @@ Comprobaciones físicas (agrupables en una sesión):
 - **STOP CURRENT STEP** del wizard durante una captura real (BL-007).
 - **Fallas provocadas:** desconectar el USB de MAIN y apagar INDI, y ver el BLOCK y la recuperación.
 - **Bench `sdr --yes`** en MAIN (BL-008) y la CLI de `mount_control.py` (BL-011).
-- **Antena B:** ¿tiene un LNA que necesite el Bias-T de RFI REF?
+- **Antena B — alimentación del LNA:** el operador confirmó el 2026-10-08 que la antena B tiene un LNA alimentado
+  por el Bias-T de RFI REF (pregunta resuelta). Falta comprobar en hardware que el LNA recibe alimentación con
+  BIAS-T marcado (ruido de RFI REF ON vs OFF, o tensión en el conector).
 - **Ekos:** dejar escrito el procedimiento real de alineación, hora y sitio para el manual.
 - **Recorrido completo** siguiendo el manual cortapalos.
 - **Medir el haz** (FWHM): hoy es provisional (20° en la configuración, 14° como placeholder en `alignment.py`).

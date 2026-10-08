@@ -116,7 +116,9 @@ Alcance: 33 archivos y unas 1.8 mil líneas desde 8dfb3ab (`git diff --stat 8dfb
 
 - **Cadena MAIN:** antena → Nooelec SAWbird H1 (LNA + filtro, alimentado por Bias-T) → RTL-SDR Blog V4 con
   **serial 00000001**.
-- **RFI REF:** antena B → RTL-SDR con **serial 00000002** (opcional).
+- **RFI REF:** antena B → LNA (alimentado por el Bias-T del SDR de RFI REF; confirmado por el operador el
+  2026-10-08) → RTL-SDR con **serial 00000002** (opcional). La web trae el Bias-T de RFI REF encendido por
+  defecto y `capture.py` lo pasa como `-T` al `rtl_tcp` de :1235. Que el LNA reciba alimentación no está medido.
 - **Montura:** OnStep, driver INDI «LX200 OnStep».
 - **Otros:** sensores DS18B20 (temperatura del SDR y del LNA) y una cámara de montura (stream en MONITOR).
 
@@ -277,6 +279,7 @@ Duración real medida: unos 32 s por punto con capturas de 10 s, y unos 23 s por
 6. Bench `sdr --yes` (BL-008) y la CLI de `mount_control.py` (BL-011).
 7. El aviso nuevo del gain pilot, visto en una sesión real.
 8. Un recorrido completo siguiendo el manual.
+9. Antena B: medir que su LNA recibe alimentación con el Bias-T de RFI REF (que tiene LNA ya está confirmado).
 
 ---
 

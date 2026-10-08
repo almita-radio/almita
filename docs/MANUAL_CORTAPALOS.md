@@ -58,7 +58,8 @@ Qué depende de qué en el código actual:
 1. **Cadena principal (MAIN):** antena → Nooelec SAWbird H1 (LNA + filtro) → RTL-SDR Blog V4 con **serial
     00000001**, por USB al Pi. El LNA se alimenta por el Bias-T del SDR.
 
-2. **Antena B (RFI REF, opcional):** antena B → RTL-SDR con **serial 00000002**, por USB.
+2. **Antena B (RFI REF, opcional):** antena B → LNA → RTL-SDR con **serial 00000002**, por USB. El LNA se
+    alimenta por el Bias-T de ese SDR (confirmado por el operador el 2026-10-08). **[C]**
 3. **Montura:** OnStep (LX200 OnStep) conectada al Pi. Revisa el trípode, los contrapesos, el recorrido libre de
     cables y que no haya nadie en el camino del GOTO.
 
@@ -79,6 +80,10 @@ Qué depende de qué en el código actual:
 
 3. **Bias-T de MAIN:** lo enciende `rtl_tcp` al arrancar (opción `-T`) y alimenta el LNA. En OBSERVE aparece
     marcado y no se puede apagar. **No lo cambies.** **[C][H indirecto: hubo señal HI en las sesiones reales]**
+
+    **Bias-T de RFI REF:** lo enciende `capture.py` en el `rtl_tcp` de la antena B (puerto 1235) cuando RFI REF
+    está activado con BIAS-T marcado. La web lo trae **marcado por defecto**. **[C]** Que el LNA reciba
+    alimentación de verdad aún no está medido **[P]** (Anexo C).
 
 4. Frecuencia, muestreo y ganancia **no se escriben a mano**. Salen de `observer_config.json` →
     `observation_defaults` (hoy **1420405752 Hz / 2400000 sps / 40.2 dB**) y la web rellena los campos sola.
@@ -240,7 +245,8 @@ Página **OBSERVE**, sección **OBSERVATION SPECIFICATION**. Los valores están 
 6. **MAIN:** Frequency, Sample rate y Gain vienen rellenos. Cambia la ganancia solo si tienes un perfil para esa
     ganancia, o mediante el gain pilot. El Bias-T siempre está encendido.
 
-7. **RFI_REF / ANTENNA B:** **Enabled**, Gain 25 dB, BIAS-T marcado si la antena B tiene un LNA alimentado.
+7. **RFI_REF / ANTENNA B:** **Enabled**, Gain 25 dB, **BIAS-T marcado** (viene así por defecto): alimenta el LNA
+    de la antena B. Se conserva al hacer RE-PLAN. Solo se aplica con RFI REF activado.
 8. **QUICKLOOK:** **Enabled**, **Native Grid** e **Interpolated Preview**. Elige el perfil con **BROWSE ALMITA
     SERVER…**. Ese perfil es el que recibe QUICKLOOK.
 
@@ -373,7 +379,7 @@ Hay una sola tarea REDUCE o SCIENCE a la vez en el Pi.
 | Altura mínima | MIN PLANNING ALTITUDE | Por defecto 10°. **Recomendado 20–30°**: la última sesión usó 30. | Más bajo da más cielo, pero más suelo en los lóbulos y obstáculos sin evaluar. |
 | Duración por punto | CAPTURE (s) | **10 s** para mapas; 1–2 s para pruebas | El ruido baja con √t: 10 s es unas 3 veces menos ruido que 1 s. |
 | Estabilización | SETTLE (s) | **2 s** | Súbelo si la montura vibra al terminar el GOTO. |
-| RFI REF | Antena B y SDR 00000002 | Enabled, 25 dB, Bias-T según la antena B | Desactívalo si la antena B no está. MAIN no se afecta. Hoy solo sirve de monitoreo: REDUCE no lo usa. |
+| RFI REF | Antena B, su LNA y SDR 00000002 | Enabled, 25 dB, **Bias-T encendido** (alimenta el LNA de la antena B) | Desactívalo si la antena B no está. MAIN no se afecta. Hoy solo sirve de monitoreo: REDUCE no lo usa. |
 | QUICKLOOK | Vista previa en vivo | Enabled + Native Grid + Interpolated Preview | Desactívalo si no hay perfil compatible. Los datos no dependen de él. |
 | Perfil | `…/observe_profile/calibration_profile_v1.json` | El más reciente a **la misma ganancia** | Cuando cambie la ganancia, la cadena RF o el punto de conexión. |
 
@@ -453,7 +459,10 @@ Agrupadas para hacerlas en una misma sesión con el operador:
 3. **Ekos:** dejar escrito el procedimiento real de alineación (nombres de menús, plate solving o estrellas,
     SYNC) y cómo se sincronizan la hora y el sitio con OnStep.
 
-4. **Antena B:** confirmar si tiene un LNA que necesite el Bias-T de RFI REF.
+4. **Antena B — ¿tiene LNA que necesite el Bias-T de RFI REF?** **Resuelto el 2026-10-08:** sí, lo confirma el
+    operador. Falta comprobar que el LNA **recibe alimentación** con el Bias-T encendido (por ejemplo, nivel de ruido
+    de RFI REF con BIAS-T marcado frente a desmarcado, o medir tensión en el conector). La confirmación del
+    operador no lo demuestra.
 5. **Fallos simulados a mano:** desconectar el USB de MAIN y comprobar el BLOCK y la recuperación de `rtl_tcp`;
     apagar o desconectar INDI y comprobar el BLOCK `INDI/mount`.
 
