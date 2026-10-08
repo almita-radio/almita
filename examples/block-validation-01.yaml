@@ -1,0 +1,46 @@
+# Real-hardware validation run for the ALMITA Observation Orchestrator's
+# safety gate: expected to BLOCK at RUN-time preflight due to the OnStep
+# clock drift found during PLAN-time preflight (see AFC-OBS-ORCH-01
+# validation notes). Tiny 2x2 grid, RFI_REF/Quicklook disabled — this run
+# is specifically exercising the BLOCK path, not the full happy path.
+
+session:
+  name: ALMITA-OBS-BLOCK-VALIDATION-01
+
+grid:
+  mode: EQUATORIAL_RECT
+  placement: EASTMOST_SAFE
+  width_deg: 4
+  height_deg: 4
+  rows: 2
+  cols: 2
+  min_altitude_deg: 20
+  traversal: SERPENTINE
+
+capture:
+  seconds: 2
+  settle_seconds: 1
+
+main:
+  center_frequency_hz: 1420405752
+  sample_rate: 2400000
+  gain_db: 40.2
+  bias_tee: true
+
+rfi_ref:
+  enabled: false
+  serial: "00000002"
+  gain_db: 25.0
+  bias_tee: false
+
+quicklook:
+  enabled: false
+  native_grid: true
+  interpolated_preview: false
+  calibration_profile_path: null
+
+console:
+  enabled: true
+
+execution:
+  unattended: true
