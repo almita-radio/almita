@@ -1310,6 +1310,28 @@ out.value = $("in-profile").value; out.selected = $("rd-cal-selected").textConte
     assert "SERVER directory: data/calibration/WIZARD-20261007-010706-387765/observe_profile/" in out["selected"]
 
 
+def test_observe_shows_a_session_that_ended_on_its_own_as_completed_not_running(tmp_path):
+    """2026-10-08 report: the session finished at 05:44 (676/676) but OBSERVE kept saying RUNNING, because the
+    orchestrator label is only closed by STOP. The page acts on the server's effective_state."""
+    status = {"orchestrator": {"orchestrator_state": "RUNNING", "effective_state": "COMPLETED", "session_id": "20261007_020101",
+                               "capture_pid": 647203, "quicklook_pid": 647431, "capture_process_alive": False,
+                               "effective_note": "the capture ended on its own (COMPLETED at 2026-10-07T05:44:20Z); the orchestrator label RUNNING is only closed by STOP, so it was never updated - nothing is running"},
+              "current_session": {"session_id": "20261007_020101", "state": "COMPLETED", "session_name": "ALMITA-OBSERVE", "point_current": 676,
+                                  "points_total": 676, "points_success": 676, "points_failed": 0, "points_deferred": 0,
+                                  "started_utc": "2026-10-07T02:01:01Z", "updated_utc": "2026-10-07T05:44:20Z"}}
+    routes = OBSERVE_ROUTES + '\nwindow.__routes["GET /api/observe/status"] = { body: %s };\n' % json.dumps(status)
+    driver = r"""
+await until(() => !$("run-status").hidden && $("run-badge").textContent !== "", 4000);
+out.badge = $("run-badge").textContent; out.kind = $("run-kind").textContent; out.summary = $("run-summary").textContent;
+out.stopDisabled = $("btn-stop").disabled;
+"""
+    out = run_page(tmp_path, "observe", routes, driver, budget=12000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["badge"] == "COMPLETED" and out["kind"].startswith("LAST RUN — SUCCESS")
+    assert "orchestrator_state: RUNNING   →   effective: COMPLETED" in out["summary"] and "nothing is running" in out["summary"]
+    assert "STALE" not in out["summary"] and out["stopDisabled"] is True
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):

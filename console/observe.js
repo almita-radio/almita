@@ -22,6 +22,9 @@
   };
 
   let lastPlan = null;
+  // The state the page acts on: the server's effective_state (a live label whose capture process is gone resolves
+  // to the session's own end state - see almita_web_ops.reconcile_observation_status), else the recorded label.
+  const stateOf = (orch) => (orch && (orch.effective_state || orch.orchestrator_state)) || "UNKNOWN";
   let planDeadlineMs = null;
   let observationState = null;      // last orchestrator_state seen from the backend
   let stopRequestedAt = null;
@@ -178,11 +181,13 @@
     const orch = status.orchestrator || {};
     const cs = status.current_session || null;
     const lines = [
-      `orchestrator_state: ${orch.orchestrator_state || "UNKNOWN"}`,
+      `orchestrator_state: ${orch.orchestrator_state || "UNKNOWN"}` + (orch.effective_state && orch.effective_state !== orch.orchestrator_state
+        ? `   →   effective: ${orch.effective_state}` : ""),
       `session_id: ${orch.session_id || "—"}`,
       `capture_pid: ${orch.capture_pid || "—"}   quicklook_pid: ${orch.quicklook_pid || "—"}`,
     ];
-    if (orch.capture_process_alive === false && ACTIVE.includes(orch.orchestrator_state)) lines.push("WARNING: the recorded capture process is NOT alive");
+    if (orch.effective_note) lines.push(`note: ${orch.effective_note}`);
+    else if (orch.capture_process_alive === false && ACTIVE.includes(orch.orchestrator_state)) lines.push("WARNING: the recorded capture process is NOT alive");
     if (orch.note) lines.push(`note: ${orch.note}`);
     if (cs) {
       const done = Number(cs.point_current), total = Number(cs.points_total), ok = Number(cs.points_success);
@@ -193,7 +198,7 @@
         `  last completed point: ${cs.last_successful_point_id || "—"} at ${U.utc(cs.last_capture_utc)}`,
         `  started: ${U.utc(cs.started_utc)}   updated: ${U.utc(cs.updated_utc)}`);
       const started = Date.parse(cs.started_utc);
-      const live = ACTIVE.includes(orch.orchestrator_state);
+      const live = ACTIVE.includes(stateOf(orch));
       if (Number.isFinite(started)) {
         const elapsed = ((live ? Date.now() : Date.parse(cs.updated_utc) || Date.now()) - started) / 1000;
         lines.push(`  elapsed: ${U.hms(elapsed)}`);
@@ -208,7 +213,7 @@
 
   function renderRunStatus(status) {
     const orch = status.orchestrator || {};
-    const state = orch.orchestrator_state || "UNKNOWN";
+    const state = stateOf(orch);
     observationState = state;
     U.setBadge($("run-badge"), state);
     const cs = status.current_session || {};
@@ -361,8 +366,8 @@
   (async function recover() {
     const r = await U.api("/api/observe/status", { timeoutMs: 8000 });
     if (!r.ok) { showError(r.error); return; }
-    const state = ((r.data || {}).orchestrator || {}).orchestrator_state;
-    observationState = state || null;
+    const state = stateOf((r.data || {}).orchestrator);
+    observationState = state === "UNKNOWN" ? null : state;
     if (ACTIVE.includes(state) || state === "DEGRADED") { showRunPanel(); pollRun(); }
     else if (TERMINAL.includes(state)) { $("run-status").hidden = false; renderRunStatus(r.data); }
     updateStartButton();

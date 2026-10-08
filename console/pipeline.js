@@ -258,8 +258,11 @@
     const r = await U.api("/api/observe/status", { timeoutMs: 10000 });
     if (!r.ok) { U.setBadge($("observe-badge"), "UNREADABLE"); return false; }
     const s = r.data, o = s.orchestrator || {}, cs = s.current_session || {};
-    U.setBadge($("observe-badge"), o.orchestrator_state || "UNKNOWN");
-    const lines = [`orchestrator_state: ${o.orchestrator_state || "UNKNOWN"}   session: ${o.session_id || "—"}   capture_pid: ${o.capture_pid || "—"}`];
+    U.setBadge($("observe-badge"), o.effective_state || o.orchestrator_state || "UNKNOWN");   // effective: see reconcile_observation_status
+    const lines = [`orchestrator_state: ${o.orchestrator_state || "UNKNOWN"}`
+      + (o.effective_state && o.effective_state !== o.orchestrator_state ? ` → effective: ${o.effective_state}` : "")
+      + `   session: ${o.session_id || "—"}   capture_pid: ${o.capture_pid || "—"}`];
+    if (o.effective_note) lines.push(`note: ${o.effective_note}`);
     if (cs && cs.state) {
       lines.push(`acquisition: ${cs.state}   point ${cs.point_current ?? "—"} / ${cs.points_total ?? "—"}   current id ${cs.current_point_id || "—"}`,
         `succeeded ${cs.points_success ?? 0}   failed ${cs.points_failed ?? 0}   deferred ${cs.points_deferred ?? 0}   last capture ${U.utc(cs.last_capture_utc)}`,

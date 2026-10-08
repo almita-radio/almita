@@ -290,6 +290,35 @@ def _hi_plan_sky(hi_plan: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+_LIVE_LABELS = ("READY", "RUNNING", "STOPPING")
+_END_STATES = ("COMPLETED", "ABORTED", "FAILED")
+
+
+def reconcile_observation_status(status: Dict[str, Any]) -> Dict[str, Any]:
+    """Adds orchestrator.effective_state / effective_note for the web (read-only, nothing written). The orchestrator
+    closes its own RUNNING label only on STOP: a session that finishes on its own (2026-10-07: 676/676 at 05:44 UTC)
+    kept showing RUNNING forever. When the label is live but the recorded capture process is gone, the effective
+    state is the end state the SAME session reported (COMPLETED / ABORTED / FAILED); with no such report it is
+    DEGRADED. observation_orchestrator (frozen) is not changed; its own gates already use the real process."""
+    orch = dict(status.get("orchestrator") or {})
+    raw = orch.get("orchestrator_state")
+    effective, note = raw, None
+    if raw in _LIVE_LABELS and orch.get("capture_pid") is not None and orch.get("capture_process_alive") is False:
+        cs = status.get("current_session") or {}
+        same = bool(cs) and cs.get("session_id") == orch.get("session_id")
+        end = cs.get("state") if same else None
+        if end in _END_STATES:
+            effective = end
+            note = (f"the capture ended on its own ({end} at {cs.get('updated_utc')}); the orchestrator label {raw} is "
+                    f"only closed by STOP, so it was never updated - nothing is running")
+        else:
+            effective = "DEGRADED"
+            note = (f"orchestrator label {raw} but the recorded capture process (pid {orch.get('capture_pid')}) is not "
+                    f"alive and the session reported no end state - check the session before starting another")
+    orch["effective_state"], orch["effective_note"] = effective, note
+    return {**status, "orchestrator": orch}
+
+
 def _hi_plan_preview(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     from calibration_engine.hi_plan_preview import build_preview
     step = state.get("step") or ""

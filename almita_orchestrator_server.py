@@ -297,7 +297,7 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                         "/api/observe/calibration-profiles/browse"):
                 return self._handle_calibration_profiles(path)
             if path == "/api/observe/status":
-                status = observation_orchestrator.get_status()
+                status = almita_web_ops.reconcile_observation_status(observation_orchestrator.get_status())
                 return _json_response(self, 200, status)
             if path == "/api/align/status":
                 return _json_response(self, 200, almita_web_align.get_status())
