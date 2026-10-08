@@ -407,7 +407,20 @@
     gpFetchStatus(plan.grid_session_dir).catch(() => {});
   }
 
+  // Every gain-pilot action reports its own failure inside the panel (a refused start, a failed or timed-out job):
+  // it used to be thrown out of a click handler with no catch, so a refused capture looked like "nothing happens".
+  function gpError(text) { $("gp-error").textContent = text || ""; $("gp-error").hidden = !text; }
   async function gpJobAction(stage, params, timeoutMs, confirm) {
+    try {
+      const job = await gpJobActionRaw(stage, params, timeoutMs, confirm);
+      gpError("");
+      return job;
+    } catch (err) {
+      gpError(`${params.action || stage} FAILED — ${(err && err.message) || err}`);
+      throw err;
+    }
+  }
+  async function gpJobActionRaw(stage, params, timeoutMs, confirm) {
     const r = await U.api(`/api/ops/start/${stage}`, { method: "POST", body: { params, confirm: confirm || null }, timeoutMs: timeoutMs || 20000 });
     if (!r.ok) throw new Error(U.errorText(r.error));
     const jobId = r.data.data.job_id;
@@ -427,7 +440,7 @@
 
   async function gpFetchStatus(sessionDir) {
     try {
-      const job = await gpJobAction("observe_gain_pilot_admin", { action: "status", session_dir: sessionDir }, 15000);
+      const job = await gpJobActionRaw("observe_gain_pilot_admin", { action: "status", session_dir: sessionDir }, 15000);   // silent: see below
       gpRender(job.facts, sessionDir);
     } catch (err) { /* no gain_pilot_state.json yet for this grid session - stay at NOT PLANNED, not an error */ }
   }
@@ -481,7 +494,7 @@
         if (!gpRequireMoveConfirm()) return;
         const action = facts.step === "PREPARE_HIGH" ? "capture_high" : "capture_low";
         if (!window.confirm(`Real GOTO + capture at the ${label} point now. The mount WILL move. Confirm physically: free travel, cables, antenna, nobody in the way.\nProceed?`)) return;
-        const job = await gpJobAction("observe_gain_pilot_capture", { action, session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+        const job = await gpJobAction("observe_gain_pilot_capture", { action, session_dir: sessionDir }, 300000, $("gp-move-confirm").value);
         gpRender(job.facts, sessionDir);
       }, "CAPTURING…");
     } else if (facts.step === "GAIN_DECISION") {
@@ -506,7 +519,7 @@
           lowBtn.onclick = U.guard(lowBtn, async () => {
             if (!gpRequireMoveConfirm()) return;
             if (!window.confirm("Real GOTO + capture at the LOW point (optional extra information). The mount WILL move.\nProceed?")) return;
-            const job = await gpJobAction("observe_gain_pilot_capture", { action: "capture_low", session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+            const job = await gpJobAction("observe_gain_pilot_capture", { action: "capture_low", session_dir: sessionDir }, 300000, $("gp-move-confirm").value);
             gpRender(job.facts, sessionDir);
           }, "CAPTURING…");
         }
@@ -516,7 +529,7 @@
       $("gp-verify-btn").onclick = U.guard($("gp-verify-btn"), async () => {
         if (!gpRequireMoveConfirm()) return;
         if (!window.confirm("Real GOTO + capture to verify the new gain. The mount WILL move.\nProceed?")) return;
-        const job = await gpJobAction("observe_gain_pilot_capture", { action: "verify_gain", session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+        const job = await gpJobAction("observe_gain_pilot_capture", { action: "verify_gain", session_dir: sessionDir }, 300000, $("gp-move-confirm").value);
         gpRender(job.facts, sessionDir);
       }, "VERIFYING…");
     } else if (facts.step === "READY") {

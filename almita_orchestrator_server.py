@@ -104,7 +104,8 @@ _CALIBRATE_SESSION_RE = re.compile(r"^/api/calibrate/session/(?P<id>[^/]+)$")
 _ALIGN_MODE_ACTION_RE = re.compile(r"^/api/align/(?P<action>plan|preflight|run)/(?P<mode>solar|hi)$")
 _ALIGN_SYNC_RE = re.compile(r"^/api/align/sync/(?P<step>prepare|apply)/(?P<mode>solar|hi)$")
 _OPS_JOB_RE = re.compile(r"^/api/ops/job/(?P<id>[A-Za-z0-9_-]{6,64})$")
-_OPS_START_RE = re.compile(r"^/api/ops/start/(?P<stage>[a-z_]{3,24})$")
+# up to 40: "observe_gain_pilot_capture" (26) did not match the former {3,24} and every real pilot capture got a 404
+_OPS_START_RE = re.compile(r"^/api/ops/start/(?P<stage>[a-z_]{3,40})$")
 _OPS_STOP_RE = re.compile(r"^/api/ops/stop/(?P<id>[A-Za-z0-9_-]{6,64})$")
 
 

@@ -1332,6 +1332,33 @@ out.stopDisabled = $("btn-stop").disabled;
     assert "STALE" not in out["summary"] and out["stopDisabled"] is True
 
 
+def test_gain_pilot_capture_failure_is_shown_in_the_panel(tmp_path):
+    """2026-10-08: CAPTURE PILOT NOW got a 404 (start route too short for observe_gain_pilot_capture) and the page
+    showed nothing - the handler had no catch. Any refused/failed pilot action is now reported inside the panel."""
+    facts = {"step": "PREPARE_HIGH", "observation_name": "WEBTEST", "estimated_extra_points": 2, "estimated_duration_s": 36,
+             "min_elevation_deg": 5, "initial_gain_db": 40.2,
+             "candidates": {"HIGH": {"label": "HIGH", "point_id": 24, "ra_hours": 2.9511, "dec_deg": -18.174, "predicted_altitude_deg": 13.4,
+                                     "real_time_altitude_check": {"worst_case_altitude_deg": 10.3, "margin_deg": 5.3}, "n_hi_1e20cm2": 2.783}}}
+    routes = OBSERVE_ROUTES + r"""
+window.__routes["POST /api/ops/start/observe_gain_pilot_admin"] = { body: { ok: true, data: { job_id: "GPS" } } };
+window.__routes["GET /api/ops/job/GPS"] = { body: { ok: true, data: { job_id: "GPS", state: "EXITED", facts: %s } } };
+window.__routes["POST /api/ops/start/observe_gain_pilot_capture"] = { status: 404, body: { ok: false, error: "not found" } };
+""" % json.dumps(facts)
+    driver = r"""
+$("observe-form").requestSubmit();
+await until(() => !$("gain-pilot-panel").hidden && !$("gp-step-prepare").hidden, 6000);
+out.errorBefore = $("gp-error").hidden;
+$("gp-move-confirm").value = "MOVE";
+$("gp-capture-btn").click();
+await until(() => !$("gp-error").hidden, 4000);
+out.error = $("gp-error").textContent;
+"""
+    out = run_page(tmp_path, "observe", routes, driver, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errorBefore"] is True                       # a silent status lookup never shows a false error
+    assert out["error"].startswith("capture_high FAILED") and "not found" in out["error"]
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):

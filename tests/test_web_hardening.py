@@ -644,3 +644,10 @@ def test_rfi_failure_of_an_ended_session_does_not_freeze_the_dongle_down():
     assert present["state"] == "AVAILABLE" and "last session RFI_REF FAILED" in present["detail"]
     absent = Fake(usb=("00000001",), status=ended).health()["dependencies"]["rfi_sdr"]
     assert absent["state"] == "DOWN"
+
+
+def test_every_ops_stage_is_reachable_through_the_start_route():
+    """observe_gain_pilot_capture (26 chars) did not match the start route's former [a-z_]{3,24}: every real gain-pilot
+    capture from the web got a 404 and the mount never moved. Every stage the backend defines must be startable."""
+    import almita_web_ops
+    assert [s for s in almita_web_ops.STAGES if not server_mod._OPS_START_RE.match(f"/api/ops/start/{s}")] == []
