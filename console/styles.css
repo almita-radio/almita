@@ -131,6 +131,7 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .site-footer a{color:var(--accent)}
 .reason{padding:0 11px 8px;color:var(--warn);font-size:11px;min-height:0}
 .reason:empty{display:none}
+.banner.warn{background:#2b2410;color:var(--warn);border-color:#6a5524;white-space:pre-wrap}
 .banner.info{background:#10222b;color:var(--accent);border-color:#24506a}
 .run-kind{padding:8px 11px;font:700 12px/1.4 ui-monospace,monospace;letter-spacing:.04em}
 .progress-wrap{display:flex;align-items:center;gap:10px;padding:0 11px 8px}

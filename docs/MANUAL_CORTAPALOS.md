@@ -282,8 +282,9 @@ Mide con 1 o 2 capturas reales si la ganancia satura (clipping) antes de lanzar 
     nuevo pide una sola recaptura de control.
 
 > ⚠ **Ojo con el perfil.** Si la ganancia aprobada es distinta de la del perfil de QUICKLOOK, el nuevo PLAN queda
-> **BLOCKED** en `Quicklook / calibration match`, y REDUCE tampoco podrá calibrar esos puntos. Tienes tres
-> opciones:
+> **BLOCKED** en `Quicklook / calibration match`, y REDUCE tampoco podrá calibrar esos puntos. **La web lo avisa
+> antes de APPROVE THIS GAIN**, con un recuadro amarillo que lista los perfiles del servidor que ya sirven para esa
+> ganancia. Es solo un aviso: no impide aprobar. **[C]** Tienes tres opciones:
 >
 > - quedarte con la ganancia del perfil (**ABORT GAIN PILOT**);
 > - crear un perfil a la nueva ganancia (Ruta B), que es lo que se hizo el 2026-10-08 a 42.1 dB;

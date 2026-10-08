@@ -468,8 +468,46 @@
     return true;
   }
 
+  // A gain the pilot would approve that the selected QUICKLOOK profile does not cover makes the next grid PLAN BLOCK
+  // (preflight "Quicklook / calibration match") and leaves REDUCE without RELATIVE calibration for those points -
+  // found only after the real pilot captures (2026-10-08: 42.1 dB vs a 40.2 dB profile). Warn BEFORE approving,
+  // with the server's own compatibility decision (the same /validate the profile selector uses) and the profiles
+  // that already match that gain. A warning only: approving stays possible.
+  let gpProfileSeq = 0;
+  async function gpCheckProfileForGain(gain) {
+    const box = $("gp-profile-warning");
+    const seq = ++gpProfileSeq;
+    const ql = (lastPlan && lastPlan.quicklook) || { enabled: $("f-ql-enabled").checked, calibration_profile_path: $("f-ql-cal").value || null };
+    const main = (lastPlan && lastPlan.main) || {};
+    if (!ql.enabled || !ql.calibration_profile_path || !Number.isFinite(gain)) { box.hidden = true; return; }
+    const q = new URLSearchParams({ center_frequency_hz: main.center_frequency_hz != null ? main.center_frequency_hz : $("f-freq").value,
+                                    sample_rate: main.sample_rate != null ? main.sample_rate : $("f-rate").value, gain_db: gain });
+    const r = await U.api(`/api/observe/calibration-profiles/validate?${q}&path=${encodeURIComponent(ql.calibration_profile_path)}`, { timeoutMs: 15000 });
+    if (seq !== gpProfileSeq) return;
+    if (!r.ok) { box.textContent = `Could not check the QUICKLOOK profile against ${gain} dB: ${r.error.message}`; box.hidden = false; return; }
+    const c = r.data.data.compatibility || {};
+    if (c.status === "COMPATIBLE") { box.hidden = true; return; }
+    const list = await U.api(`/api/observe/calibration-profiles?${q}`, { timeoutMs: 15000 });
+    if (seq !== gpProfileSeq) return;
+    const matching = list.ok ? (list.data.data.profiles || []).filter((p) => p.compatibility && p.compatibility.status === "COMPATIBLE").map((p) => p.path) : null;
+    box.textContent = [
+      `⚠ ${gain} dB does not match the QUICKLOOK calibration profile of this plan (${c.status}: ${c.reason || "—"}).`,
+      `   ${ql.calibration_profile_path}`,
+      "If you approve it, the re-planned grid will be BLOCKED by \"Quicklook / calibration match\", and REDUCE will not apply",
+      "RELATIVE calibration to those points. Options:",
+      "  1. keep the profile's gain (approve that value instead, or ABORT GAIN PILOT);",
+      "  2. create a profile at this gain first: CALIBRATE → REFERENCE WIZARD with GAIN = " + gain + " dB;",
+      "  3. or disable QUICKLOOK in the form above (data are captured the same, without the live preview).",
+      matching === null ? "Could not list the server's profiles." :
+        matching.length ? `Profiles on the server that already match ${gain} dB (select one in QUICKLOOK and re-plan):\n` + matching.slice(0, 5).map((p) => "   · " + p).join("\n")
+          : `No profile on the server matches ${gain} dB yet.`,
+    ].join("\n");
+    box.hidden = false;
+  }
+
   function gpRender(facts, sessionDir) {
     gpState = facts;
+    $("gp-profile-warning").hidden = true;
     U.setBadge($("gp-badge"), facts.step);
     for (const id of ["gp-plan-result", "gp-step-prepare", "gp-step-decision", "gp-step-verify", "gp-step-ready", "gp-final-check-panel"]) $(id).hidden = true;
     $("gp-stale").hidden = true;
@@ -523,6 +561,8 @@
         `  ${k}: clipping=${ev.clipping.status}, headroom margin ${ev.clipping.percentile_margin_codes != null ? ev.clipping.percentile_margin_codes.toFixed(1) : "?"} codes, usable band ${ev.usable_band_fraction != null ? ev.usable_band_fraction.toFixed(2) : "?"}${ev.rfi_flag ? " (RFI proxy flagged)" : ""}`);
       $("gp-decision-summary").textContent = `${need.reason || ""}\n${evLines.join("\n")}\n\nRecommended: ${rec.recommended_gain_db} dB (was ${rec.current_gain_db} dB) — ${rec.reason || ""}`;
       $("gp-approve-gain").value = rec.recommended_gain_db != null ? rec.recommended_gain_db : facts.initial_gain_db;
+      gpCheckProfileForGain(Number($("gp-approve-gain").value));
+      $("gp-approve-gain").oninput = () => gpCheckProfileForGain(Number($("gp-approve-gain").value));
       $("gp-approve-btn").onclick = U.guard($("gp-approve-btn"), async () => {
         const job = await gpJobAction("observe_gain_pilot_admin", { action: "set_gain", session_dir: sessionDir, gain_db: Number($("gp-approve-gain").value) }, 15000);
         gpRender(job.facts, sessionDir);
@@ -556,6 +596,7 @@
       const gridGain = lastPlan && (lastPlan.main || {}).gain_db;
       const mismatch = facts.verified_gain_db != null && gridGain != null && Math.abs(facts.verified_gain_db - gridGain) > 1e-6;
       $("gp-replan-row").hidden = !mismatch;
+      if (mismatch) gpCheckProfileForGain(Number(facts.verified_gain_db));
       if (mismatch) {
         $("gp-ready-summary").textContent += ` The grid plan is at ${gridGain} dB: RE-PLAN the grid at ${facts.verified_gain_db} dB (button below) - the new grid gets one quick re-check.`;
         $("gp-replan-btn").textContent = `RE-PLAN GRID AT ${facts.verified_gain_db} dB`;

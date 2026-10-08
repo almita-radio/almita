@@ -35,7 +35,7 @@ window.fetch = (url, opts) => {
   return new Promise((resolve, reject) => {
     if (opts.signal) opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
     if (!h) { resolve(__mk(404, { error: "no stub route " + key })); return; }
-    const r = typeof h === "function" ? h(opts.body ? JSON.parse(opts.body) : null) : h;
+    const r = typeof h === "function" ? h(opts.body ? JSON.parse(opts.body) : null, String(url)) : h;
     if (r === "network-error") { setTimeout(() => reject(new TypeError("Failed to fetch")), 1); return; }
     setTimeout(() => resolve(__mk(r.status || 200, r.body, r.headers)), r.delay || 0);
   });
@@ -1441,6 +1441,46 @@ out.startWithoutPilot = $("btn-start").disabled;
     assert (out["maxPilots"], out["gpGain"]) == ("1", "42.1") and out["gpError"] is True
     assert out["startBlocked"][0] is True and "re-check it on this grid" in out["startBlocked"][1]
     assert out["startWithoutPilot"] is False
+
+
+def test_gain_pilot_warns_before_approving_a_gain_the_quicklook_profile_does_not_cover(tmp_path):
+    """2026-10-08: the pilot approved 42.1 dB with a 40.2 dB QUICKLOOK profile and the re-planned grid was BLOCKED
+    only afterwards. GAIN_DECISION now asks the server (/validate, same compatibility as the PLAN preflight) and
+    warns before APPROVE, listing profiles that already match; editing back to the profile's gain clears it."""
+    decision = {"step": "GAIN_DECISION", "observation_name": "WEBTEST", "estimated_extra_points": 2, "estimated_duration_s": 36,
+                "initial_gain_db": 40.2, "candidates": {}, "evaluations": {},
+                "gain_recommendation": {"recommended_gain_db": 42.1, "current_gain_db": 40.2, "reason": "headroom"}}
+    routes = OBSERVE_ROUTES + r"""
+const P40 = "data/calibration/WIZARD-40/observe_profile/calibration_profile_v1.json";
+const P42 = "data/calibration/WIZARD-42/observe_profile/calibration_profile_v1.json";
+window.__routes["POST /api/observe/plan"] = () => ({ body: { ...PLAN, quicklook: { enabled: true, calibration_profile_path: P40 } } });
+const gainOf = (url) => Number(new URL(url, "http://x").searchParams.get("gain_db"));
+window.__routes["GET /api/observe/calibration-profiles/validate"] = (b, url) => ({ body: { ok: true, data: { path: P40, summary: { gain_db: 40.2 },
+  compatibility: gainOf(url) === 40.2 ? { status: "COMPATIBLE", reason: "match" } : { status: "INCOMPATIBLE", reason: "gain " + gainOf(url) + " != 40.2" } } } });
+window.__routes["GET /api/observe/calibration-profiles"] = (b, url) => ({ body: { ok: true, data: { profiles: [
+  { path: P42, valid: true, compatibility: { status: gainOf(url) === 42.1 ? "COMPATIBLE" : "INCOMPATIBLE" } },
+  { path: P40, valid: true, compatibility: { status: gainOf(url) === 40.2 ? "COMPATIBLE" : "INCOMPATIBLE" } } ] } } });
+window.__routes["POST /api/ops/start/observe_gain_pilot_admin"] = { body: { ok: true, data: { job_id: "GPD" } } };
+window.__routes["GET /api/ops/job/GPD"] = { body: { ok: true, data: { job_id: "GPD", state: "EXITED", facts: %s } } };
+""" % json.dumps(decision)
+    driver = r"""
+$("observe-form").requestSubmit();
+await until(() => !$("gp-step-decision").hidden && !$("gp-profile-warning").hidden, 6000);
+out.warning = $("gp-profile-warning").textContent;
+out.approveEnabled = !$("gp-approve-btn").disabled;
+$("gp-approve-gain").value = "40.2"; $("gp-approve-gain").dispatchEvent(new Event("input"));
+await until(() => $("gp-profile-warning").hidden, 4000);
+out.clearedAt402 = $("gp-profile-warning").hidden;
+"""
+    out = run_page(tmp_path, "observe", routes, driver, budget=15000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    w = out["warning"]
+    assert w.startswith("⚠ 42.1 dB does not match the QUICKLOOK calibration profile") and "INCOMPATIBLE: gain 42.1 != 40.2" in w
+    assert "BLOCKED by \"Quicklook / calibration match\"" in w and "REFERENCE WIZARD with GAIN = 42.1 dB" in w
+    assert "WIZARD-42/observe_profile/calibration_profile_v1.json" in w and "WIZARD-40/observe" not in w.split("already match")[1]
+    assert out["approveEnabled"] is True                    # a warning, never a block
+    assert out["clearedAt402"] is True
 
 
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
