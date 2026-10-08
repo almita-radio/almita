@@ -188,8 +188,8 @@
     }
     if (result.quality) lines.push("", "POINTING QUALITY (bootstrap):", `  verdict: ${result.quality.verdict}`);
     $("result-summary").textContent = lines.join("\n");
-    $("sync-status").textContent = mode === "hi" ? "SYNC BLOCKED — FIRST_LIGHT_HI requires physical repeatability before correction"
-                                                 : "SYNC BLOCKED — real solar SYNC not yet authorized";
+    // This section is the simulation engine; the real SYNC (Sun and HI) is the checkbox in REAL ALIGNMENT above.
+    $("sync-status").textContent = "SYNC not available in simulation — the real SYNC is the option in REAL ALIGNMENT (top of this page)";
   }
 
   async function doReplay() {
@@ -290,6 +290,8 @@
       $("real-capture-time").value = d.capture_time_s;
       $("real-beam-fwhm").value = d.beam_fwhm_deg;
       $("real-min-elevation").value = d.min_elevation_deg;
+      if (d.max_sync_offset_deg != null) $("real-max-sync").value = d.max_sync_offset_deg;
+      if (d.confidence_threshold != null) $("real-sync-threshold").textContent = d.confidence_threshold;
       $("real-beam-note").textContent = `source: ${d.beam_fwhm_source}. ${d.beam_fwhm_note}`;
       updateReal();
     }
@@ -380,8 +382,29 @@
       return acquire + analysis;
     }
 
+    // The result of the last real RUN, always shown at the end: the estimated offset (or why there is none) and
+    // what happened to SYNC - straight from alignment_result.json via the job's facts, never computed here.
+    function renderOffset(r) {
+      const box = $("real-offset");
+      if (!r || r.stage !== "align" || r.state !== "EXITED" || !r.facts) { box.hidden = true; return; }
+      const o = r.facts.offset, sd = r.facts.sync_decision || {};
+      const lines = [`ALIGNMENT RESULT — ${r.facts.result_status || "?"} (${U.utc(r.ended_utc)})`];
+      if (o) {
+        lines.push(`OFFSET   ΔRA (east) ${o.offset_ra_deg >= 0 ? "+" : ""}${o.offset_ra_deg.toFixed(3)}°   ΔDec ${o.offset_dec_deg >= 0 ? "+" : ""}${o.offset_dec_deg.toFixed(3)}°   total ${o.separation_deg.toFixed(3)}°`);
+        lines.push(`confidence ${o.confidence.toFixed(3)} (threshold ${sd.confidence_threshold != null ? sd.confidence_threshold : "?"}) · residual ${o.residual.toFixed(3)} · ${o.samples} samples`);
+      } else {
+        lines.push("OFFSET   none estimated (see the result above: not enough valid/robust positions)");
+      }
+      lines.push(r.facts.sync_applied ? "SYNC     APPLIED — the mount now uses this correction"
+        : `SYNC     NOT SENT${sd.reason ? " — " + sd.reason : ""}`);
+      box.textContent = lines.join("\n");
+      box.className = "align-offset " + (r.facts.sync_applied ? "ok" : o ? "warn" : "muted");
+      box.hidden = false;
+    }
+
     function updateReal() {
       const p = planJob.last, r = runJob.last;
+      renderOffset(r);
       const exited = p && p.state === "EXITED";
       // Whether the last PLAN's own recorded request params (server-side, verbatim) still match what's currently
       // configured/selected - independent of whether that PLAN PASSed or FAILed (e.g. on its own temporal check).
@@ -532,12 +555,16 @@
         (mode === "hi" && f && f.center ? `Approved centre: RA ${Number(f.center.ra_hours).toFixed(3)} h, Dec ${Number(f.center.dec_deg).toFixed(2)}° (exactly what RUN will use).\n`
           : mode === "solar" ? "The Sun's position is recomputed fresh at RUN time (it moves); the reference (Sun) and pattern are exactly what was approved.\n" : "") +
         (mode === "solar" ? "RUN will switch OnStep to SOLAR tracking rate and verify it before moving; it restores the previous tracking mode when done or stopped.\n" : "") +
-        "SYNC is never sent.\nConfirm physically: free travel, cables, antenna, nobody in the way.\nProceed?");
+        ($("real-sync").checked
+          ? `SYNC at the end: YES, only if confidence ≥ ${$("real-sync-threshold").textContent} and the offset ≤ ${$("real-max-sync").value}° (the mount will GOTO the corrected position and SYNC there).\n`
+          : "SYNC at the end: NO (the offset is only shown).\n") +
+        "Confirm physically: free travel, cables, antenna, nobody in the way.\nProceed?");
       if (!ok || !j) return undefined;
       // Send the PLAN job's OWN recorded params verbatim (never a fresh live planParams()/comparisonParams()) -
       // this is the actual approved target; it must be exactly what RUN executes, unaffected by anything that
       // happened on screen since PLAN completed.
-      return runJob.start("align", { ...j.params, approved_plan_dir: j.output_dir }, $("real-confirm").value);
+      return runJob.start("align", { ...j.params, approved_plan_dir: j.output_dir, sync: $("real-sync").checked,
+                                     max_sync_offset_deg: Number($("real-max-sync").value) }, $("real-confirm").value);
     }, "STARTING…"));
     planJob.recover("align_plan"); runJob.recover("align");
     loadDefaults().then(() => { setMode("hi"); });

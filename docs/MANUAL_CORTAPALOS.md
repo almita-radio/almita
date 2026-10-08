@@ -27,7 +27,7 @@ siguiendo este manual.**
 ```
 1  Equipo + servicios
 2  Montura en Ekos: conectar, desaparcar, ALINEAR
-3  (opcional) ALIGN de ALMITA: comprobar el apuntado con HI
+3  ALIGN de ALMITA: medir el offset con señal (Sol de día, HI de noche) y SYNC si es confiable
 4  ¿Perfil válido a la ganancia que vas a usar?   sí → Ruta A   ·   no → Ruta B (CALIBRATE)
 5  OBSERVE: PLAN → PREFLIGHT → (gain pilot) → START → COMPLETED
 6  REDUCE → SCIENCE
@@ -35,13 +35,13 @@ siguiendo este manual.**
 
 Qué depende de qué en el código actual:
 
-- **La alineación de la montura se hace en Ekos/OnStep, no en ALMITA.** El ALIGN de la web nunca envía SYNC: la
-  web lo lanza siempre con `--no-sync` y los botones SYNC están bloqueados por política. Todo lo que hace GOTO
-  depende de que la montura apunte bien: las zonas HI del wizard, el gain pilot, ALIGN y OBSERVE. Por eso Ekos
-  va primero.
-- **ALIGN de ALMITA es solo una comprobación de apuntado con señal HI.** No cambia la montura, no usa el perfil
-  de calibración y ningún otro paso usa su resultado. Por eso es opcional y puede ir antes o después de
-  CALIBRATE. **[C]**
+- **La alineación base de la montura se hace en Ekos/OnStep.** ALIGN de ALMITA arranca desde ahí: necesita que la
+  montura ya apunte razonablemente bien, porque su búsqueda de offset cubre unos ±6°. Todo lo que hace GOTO
+  depende del apuntado: las zonas HI del wizard, el gain pilot, ALIGN y OBSERVE. Por eso Ekos va primero.
+- **ALIGN de ALMITA mide el error de apuntado con la señal de radio y puede corregirlo con SYNC**, tanto con el Sol
+  como con HI. Solo envía SYNC si la confianza llega al umbral y el offset no supera el máximo. No usa el perfil
+  de calibración, así que puede ir antes o después de CALIBRATE. Conviene hacerlo antes de OBSERVE.
+  **[C; SYNC nunca probado en hardware]**
 - **CALIBRATE no depende de ALIGN.** La parte de 50 Ω no mueve nada. HI ALTO y HI BAJO hacen GOTO a zonas
   amplias (haz de unos 20°), así que solo necesitan la alineación de Ekos. Hay un orden práctico: haz el 50 Ω
   cuando ya no vayas a tocar los cables de la antena. **[C]**
@@ -105,40 +105,59 @@ Qué depende de qué en el código actual:
 en estado `Idle` o `Tracking`. Toda acción que mueve la montura exige esto, además de escribir **MOVE** en
 mayúsculas. **[C][H]**
 
-### 4. ALIGN — comprobar el apuntado con HI (opcional)
+### 4. ALIGN — medir el offset y corregirlo con SYNC
 
 Distingue dos cosas:
 
-- **Alinear la montura** (Ekos, paso 3): corrige hacia dónde apunta la montura. Es obligatorio.
-- **ALIGN de ALMITA** (página **ALIGN**, sección **REAL ALIGNMENT**): mide la señal HI en anillos alrededor de
-  una zona y comprueba si la estructura cae donde se espera. **No corrige nada** y **nunca envía SYNC**.
+- **Alineación base** (Ekos, paso 3): deja la montura apuntando razonablemente bien. Es obligatoria.
+- **ALIGN de ALMITA** (página **ALIGN**, sección **REAL ALIGNMENT**): mide la señal en anillos alrededor de una
+  referencia, estima el error de apuntado (offset) y, si es confiable, corrige la montura con **SYNC**.
 
 Pasos:
 
-1. Elige el modo **HI (night)**. El modo **SOLAR (day)** existe en la web, pero nunca se ha probado desde ella
-    **[P]**.
+1. Elige el modo:
+    - **SOLAR (day)**: el Sol es la referencia más fuerte y puntual, la mejor para medir el offset. El modo
+      cambia OnStep a seguimiento solar y al terminar restaura el anterior. **[P: nunca corrido desde la web]**
+    - **HI (night)**: usa la estructura HI del cielo. Es más débil y a menudo no alcanza para estimar el
+      offset. **[H 2026-10-07: sin estimación]**
 
-2. Pulsa **REFRESH SKY VIEW** y elige una zona candidata (A, B o C) en el mapa.
+2. **HI:** pulsa **REFRESH SKY VIEW** y elige una zona candidata (A, B o C). **SOLAR:** el Sol tiene que estar
+    sobre el horizonte.
 3. Deja los valores sugeridos: **RING RADII** `5,2,0.6`, **POINTS PER RING** `8` (25 posiciones), **CAPTURE TIME
     PER POSITION** sugerido, **BEAM FWHM** `20` (de `observer_config.json`) y **MIN ELEVATION** `20`.
 
 4. Pulsa **REAL PREFLIGHT** y después **PLAN (real, moves nothing)**. El plan comprueba que todo el patrón se
     mantenga sobre la altura mínima durante la corrida y caduca pasado un tiempo. Si caduca, vuelve a pulsar PLAN.
 
-5. Escribe **MOVE** y pulsa **RUN REAL ALIGNMENT**.
+5. **SYNC THE MOUNT AT THE END** viene marcado. Con **MAX SYNC OFFSET** (5° por defecto) fijas el offset máximo
+    que se acepta corregir. Si desmarcas la casilla, solo se mide.
+6. Escribe **MOVE** y pulsa **RUN REAL ALIGNMENT**.
 
-Cómo leer el resultado:
+**Resultado:** al terminar, el recuadro **ALIGNMENT RESULT** muestra siempre:
 
-- `PARTIAL` con posiciones válidas: hubo movimiento y capturas reales. El resultado es un diagnóstico; no se
-  afirma ningún offset.
-- `NO DEFENDIBLE DIFFERENTIAL HI STRUCTURE` (lo que salió el 2026-10-07, con 25 posiciones) significa que la
-  señal HI no tiene estructura suficiente para estimar un error de apuntado. No es una falla del equipo.
-- `FAIL` o `INSUFFICIENT VALID POSITIONS` significa que faltaron capturas válidas. Revisa el SDR y la montura y
-  repite.
+- el offset (ΔRA hacia el este, ΔDec y el total en grados);
+- la confianza y el umbral (0.65);
+- si se envió SYNC o por qué no.
 
-**¿SYNC o repetir?** No hagas SYNC por el resultado de ALIGN. Si el apuntado te parece malo (zonas fuera de
-lugar, GOTO que no converge), **repite la alineación en Ekos** y vuelve a pasar por ALIGN si quieres confirmarlo.
-**[H 2026-10-07 HI; C para SYNC bloqueado]**
+Cuándo se envía SYNC: solo si se cumplen las cuatro condiciones.
+
+1. La casilla está marcada.
+2. Hay offset estimado.
+3. La confianza es ≥ 0.65.
+4. El offset es ≤ MAX SYNC OFFSET.
+
+El SYNC lleva la montura a la posición corregida, la sincroniza con la referencia y mide la repetibilidad
+(sale 2° y vuelve).
+
+| resultado | qué significa | qué hacer |
+|---|---|---|
+| `PASS` + **SYNC APPLIED** | Offset confiable, corregido. | Listo. Puedes repetir ALIGN para confirmar que el nuevo offset sale cercano a 0. |
+| `PASS` + SYNC NOT SENT (offset > máximo) | Offset grande. Más probable que sea un mal ajuste que un error real. | Revisa la alineación en Ekos y repite. No subas el máximo a la ligera. |
+| `LOW CONFIDENCE` | El ajuste no es confiable. No se corrige. | Repite. Con HI, prueba otra zona o el Sol de día. |
+| `NO DEFENDIBLE DIFFERENTIAL HI STRUCTURE` | La señal HI no alcanza para estimar el offset (lo que salió el 2026-10-07). | Usa el Sol de día, o sigue solo con la alineación de Ekos. |
+| `FAIL` / `INSUFFICIENT VALID POSITIONS` | Faltaron capturas válidas. | Revisa el SDR y la montura, y repite. |
+
+**[C: tests; SYNC real pendiente en hardware]**
 
 ---
 
@@ -437,5 +456,6 @@ Agrupadas para hacerlas en una misma sesión con el operador:
 5. **Fallos simulados a mano:** desconectar el USB de MAIN y comprobar el BLOCK y la recuperación de `rtl_tcp`;
     apagar o desconectar INDI y comprobar el BLOCK `INDI/mount`.
 
-6. **ALIGN SOLAR desde la web** (de día), que nunca se ha corrido.
+6. **ALIGN SOLAR con SYNC desde la web** (de día): primero con la casilla de SYNC desmarcada para ver el offset;
+    después con SYNC, y repetir ALIGN para confirmar que el offset queda cerca de 0.
 7. **Recorrido completo de una vez siguiendo este manual,** anotando dónde se aparta de la realidad.

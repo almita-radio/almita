@@ -2,7 +2,8 @@
 
 This module launches the EXISTING ALMITA command lines as detached subprocesses and reports what they really did. It reimplements nothing:
 
-    ALIGN      alignment.py                      (real INDI + real MAIN SDR; --no-sync always; --dry-run = the plan preview)
+    ALIGN      alignment.py                      (real INDI + real MAIN SDR; SYNC only on RUN with the operator's sync=true, under
+                                                  alignment.py's confidence + max-offset guards; --dry-run = the plan preview)
     CALIBRATE  calibration_operational_realtest.py (real MAIN captures, read-only receiver config, no mount movement)
     REDUCE     almita_reduce.py  plan | run       (REDUCE V1, frozen)
     SCIENCE    almita_science.py plan | run       (SCIENCE V1, frozen)
@@ -154,6 +155,20 @@ def read_mount(host: str = "localhost", port: int = 7624, timeout: float = 3.0) 
 # other, safer way: it blocks real movement whatever it happens to be called, an unrecognised/new OnStep status
 # string, AND a genuinely absent one (None) - never assuming "not a known movement word" means "safe to GOTO".
 _MOUNT_REST_STATES = ("Idle", "Tracking")
+
+
+def _align_offset(res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The offset alignment.py estimated (None when it estimated none), for the web: always shown at the end."""
+    o = res.get("offsets")
+    if not o:
+        return None
+    keys = ("offset_ra_deg", "offset_dec_deg", "separation_deg", "confidence", "residual", "samples")
+    return {k: o.get(k) for k in keys}
+
+
+def _offset_text(o: Dict[str, Any]) -> str:
+    return (f"offset dRA(east) {o['offset_ra_deg']:+.3f} deg, dDec {o['offset_dec_deg']:+.3f} deg, "
+            f"total {o['separation_deg']:.3f} deg, confidence {o['confidence']:.3f}")
 
 
 def mount_idle_problems(m: Dict[str, Any]) -> List[str]:
@@ -665,6 +680,14 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
                                   "(timed on the server from when that PLAN's own job finished, not the browser's clock) - PLAN again before RUN")
             argv += ["--approved-plan", str(approved.relative_to(ROOT))]
             meta["approved_plan_dir"] = plan_rel
+            # SYNC (operator decision 2026-10-08: Sun and HI): only when RUN explicitly asks for it. alignment.py
+            # still refuses it unless confidence >= its threshold and the offset <= max_sync_offset_deg.
+            if p.get("sync") is True:
+                max_off = _float(p, "max_sync_offset_deg", 0.1, 10, 5.0)
+                argv[argv.index("--no-sync")] = "--apply-sync"
+                argv += ["--max-sync-offset-deg", str(max_off)]
+                meta["sync_requested"] = True
+                meta["max_sync_offset_deg"] = max_off
         return argv, meta
     if stage == "calibrate":
         n, secs = int(_float(p, "n_captures", 1, 20, 5)), _float(p, "capture_seconds", 0.5, 30, 2.0)
@@ -1176,7 +1199,8 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
             planned = res.get("planned_positions") or []
             sel = (res.get("expected_template_metric") or {}).get("selection") or {}
             out["facts"] = {"reference": res.get("reference"), "result_status": res.get("result_status"), "center": res.get("center_coordinates"), "positions": len(recs), "valid_positions": valid,
-                            "sync_applied": res.get("sync_applied"), "pattern_config": pc or None, "run_config": res.get("run_config"),
+                            "sync_applied": res.get("sync_applied"), "sync_decision": res.get("sync_decision"),
+                            "offset": _align_offset(res), "pattern_config": pc or None, "run_config": res.get("run_config"),
                             "approved_plan_path": (res.get("run_config") or {}).get("approved_plan_path"),
                             "solar_track_mode_previous": sel.get("solar_track_mode_previous"), "solar_track_mode_confirmed": sel.get("solar_track_mode_confirmed"),
                             "solar_track_mode_readback": sel.get("solar_track_mode_readback"),
@@ -1212,8 +1236,12 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 elif v == 0 or st.startswith("INSUFFICIENT"):
                     out["verdict"], out["detail"] = "FAIL", f"real run finished but {st} ({v} valid positions)"
                 else:
-                    out["verdict"], out["detail"] = "PARTIAL", (f"real motion + capture done ({v} valid positions); alignment result: {st}. The HI template is non-observational: "
-                                                                "no alignment offset is claimed and SYNC was never sent")
+                    off, sd = out["facts"]["offset"], res.get("sync_decision") or {}
+                    sync_ok = res.get("sync_applied") or not sd.get("requested")
+                    out["verdict"] = "PASS" if st == "PASS" and sync_ok else "PARTIAL"
+                    out["detail"] = (f"{st} ({v} valid positions) - " + (_offset_text(off) if off else "no offset estimated")
+                                     + f" - SYNC {'APPLIED' if res.get('sync_applied') else 'NOT SENT'}"
+                                     + (f": {sd['reason']}" if sd.get("reason") and not res.get("sync_applied") else ""))
     elif stage == "calibrate":
         sd = grab(r"^Session evidence:\s+(.+)$")
         cdir = Path(sd) if sd else None
@@ -1924,6 +1952,8 @@ def align_defaults() -> Dict[str, Any]:
             # server-side for the "align" stage, so the displayed countdown and the real deadline can never drift.
             "plan_validity_seconds": PLAN_VALIDITY_SECONDS,
             "beam_fwhm_deg": beam_fwhm, "beam_fwhm_source": beam_source,
+            "confidence_threshold": alignment.DEFAULT_CONFIDENCE_THRESHOLD,
+            "max_sync_offset_deg": alignment.DEFAULT_MAX_SYNC_OFFSET_DEG,
             "beam_fwhm_note": "alignment.py's own PROVISIONAL_BEAM_FWHM_DEG=14.0 and observer_config.json's beam_fwhm_deg=20.0 disagree "
                              "(documented in alignment_engine/config.py and docs/SCIENCE_SCOPE.md); neither is a measured physical beam. "
                              "This suggests observer_config.json's value, the same preference alignment_engine/config.py's own resolver uses.",

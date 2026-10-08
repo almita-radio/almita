@@ -192,3 +192,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .hatch-note{display:flex;gap:6px;align-items:center}
 .hatch-swatch{flex:0 0 22px;height:12px;border:1px solid var(--line);background:repeating-linear-gradient(135deg,#5a6670 0 3px,#d8e2e8 3px 4px)}
 .wz-step-failure{background:#2a1214;color:#ffb4b4;border-color:#7a2a2f;font-weight:700;white-space:normal;overflow-wrap:anywhere}
+/* ALIGN: the result of the last real RUN - offset and SYNC outcome, always shown at the end */
+.align-offset{margin:10px 11px;padding:10px 12px;border:2px solid var(--line);border-radius:8px;white-space:pre-wrap;font:600 13px/1.6 ui-monospace,monospace}
+.align-offset.ok{border-color:var(--ok)}
+.align-offset.warn{border-color:var(--warn)}
+.align-offset.muted{color:var(--muted)}
+.align-offset[hidden]{display:none}

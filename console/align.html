@@ -7,7 +7,7 @@
 
   <main id="app">
     <section class="panel" id="real-panel" aria-labelledby="h-real">
-      <header><h2 id="h-real">REAL ALIGNMENT <span class="muted">(alignment.py · real INDI mount + real MAIN SDR · SYNC is never sent)</span></h2><span id="real-badge" class="badge">—</span></header>
+      <header><h2 id="h-real">REAL ALIGNMENT <span class="muted">(alignment.py · real INDI mount + real MAIN SDR · SYNC only if ticked below, Sun and HI)</span></h2><span id="real-badge" class="badge">—</span></header>
       <div class="obs-summary">This runs the real command on the real mount. Nothing here is simulated. The mount will slew and capture; the operator confirms physically by typing MOVE.</div>
       <dl class="kv" id="real-mount-kv"></dl><div class="obs-actions"><span>MOUNT</span><span id="real-mount-badge" class="badge">—</span></div>
 
@@ -40,9 +40,12 @@
         <div class="obs-summary" id="real-preview-temporal" hidden></div>
         <div class="twrap"><table id="real-preview-table" class="status-table"><thead><tr><th>idx</th><th>ring</th><th>RA (h)</th><th>Dec (deg)</th><th>sep. from center (deg)</th><th>est. capture time (UTC)</th><th>alt at capture (min)</th></tr></thead><tbody></tbody></table></div>
       </div>
+      <div class="obs-row"><label><input type="checkbox" id="real-sync" checked> SYNC THE MOUNT AT THE END — only if confidence ≥ <b id="real-sync-threshold">0.65</b> and the offset ≤ MAX SYNC OFFSET (otherwise the offset is only shown)</label></div>
+      <div class="obs-row"><label for="real-max-sync">MAX SYNC OFFSET (deg — a larger estimate is never synced)</label><input type="number" id="real-max-sync" min="0.1" max="10" step="0.1" value="5"></div>
       <div class="obs-row"><label for="real-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="real-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
       <div class="obs-actions"><button type="button" id="real-run">RUN REAL ALIGNMENT</button></div>
       <div class="reason" data-for="real-run" role="status"></div>
+      <div id="real-offset" class="align-offset" role="status" hidden></div>
       <div id="real-job-align_plan"></div><div id="real-job-align"></div>
     </section>
 

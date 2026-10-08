@@ -503,6 +503,44 @@ out.sentParams = call.body.params;
     assert out["sentParams"]["center_ra_hours"] != out["liveAreaA"]["ra_hours"]
 
 
+def test_align_real_run_sends_sync_choice_and_always_shows_the_offset(tmp_path):
+    """RUN sends the SYNC checkbox (ticked by default) and MAX SYNC OFFSET; when the run ends, the offset box shows
+    the estimated offset and whether SYNC was sent, from the job's own facts."""
+    routes = REAL_ALIGN_ROUTES + r"""
+window.__routes["POST /api/ops/start/align"] = (body) => {
+  window.__jobs["run-1"] = { job_id: "run-1", stage: "align", state: "EXITED", verdict: "PARTIAL", exit_code: 0, elapsed_s: 1,
+    params: body.params, output_dir: "data/align/RUN-1", started_utc: new Date().toISOString(), ended_utc: new Date().toISOString(), log_tail: "",
+    facts: { result_status: "PASS", sync_applied: false,
+      offset: { offset_ra_deg: 0.812, offset_dec_deg: -0.5, separation_deg: 0.95, confidence: 0.71, residual: 0.2, samples: 17 },
+      sync_decision: { requested: true, applied: false, confidence_threshold: 0.65, reason: "offset 0.950 deg larger than the 0.5 deg SYNC limit" } } };
+  return { body: { data: { job_id: "run-1" } } };
+};
+"""
+    driver = (_PICK_AREA_JS + r"""
+await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3, 5000);
+out.syncDefault = $("real-sync").checked;
+$("real-max-sync").value = "0.5";
+$("real-confirm").value = "MOVE"; $("real-confirm").dispatchEvent(new Event("input"));
+pick("A");
+$("real-plan").click();
+await until(() => $("real-job-align_plan").textContent.includes("PASS"), 5000);
+await sleep(1100);
+$("real-run").click();
+await until(() => window.__count("POST /api/ops/start/align") >= 1, 5000);
+out.sentParams = window.__calls.find((c) => c.key === "POST /api/ops/start/align").body.params;
+await until(() => !$("real-offset").hidden, 5000);
+out.offsetText = $("real-offset").textContent;
+""").strip()
+    out = run_page(tmp_path, "align", routes, driver, budget=40000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["syncDefault"] is True
+    assert out["sentParams"]["sync"] is True and out["sentParams"]["max_sync_offset_deg"] == 0.5
+    assert "ΔRA (east) +0.812°" in out["offsetText"] and "ΔDec -0.500°" in out["offsetText"]
+    assert "confidence 0.710 (threshold 0.65)" in out["offsetText"]
+    assert "SYNC     NOT SENT — offset 0.950 deg larger" in out["offsetText"]
+
+
 # ------------------------------------------------------------------ ALIGN: REAL ALIGNMENT panel - PLAN validity
 # window (180s from when PLAN itself finished with PASS, server-recorded). window.__planAgeAtCreationS
 # backdates a fixture PLAN's own ended_utc so these can exercise both sides of the boundary without a real

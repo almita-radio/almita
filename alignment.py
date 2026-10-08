@@ -33,6 +33,7 @@ HI_REST_HZ = METRIC_HI_REST_HZ
 DEFAULT_GAIN_DB = 40.2
 DEFAULT_SUN_GAIN_DB = 20.0
 DEFAULT_CONFIDENCE_THRESHOLD = 0.65
+DEFAULT_MAX_SYNC_OFFSET_DEG = 5.0   # a larger "offset" after a normal Ekos alignment is far more likely a bad fit
 HI_VELOCITY_WINDOW_KM_S = 200.0
 HI_SNR_THRESHOLD = 5.0
 DEFAULT_HI_INTEGRATION_SECONDS = 20.0
@@ -869,7 +870,6 @@ class AlignmentRunner:
                 analysis["integration_candidate_validation_status"] = HI_INTEGRATION_VALIDATION_STATUS
                 analysis["template_type"] = "SYNTHETIC"
                 analysis["template_ground_truth"] = False
-                analysis["sync_eligible"] = False
                 analysis["snr_threshold"] = HI_SNR_THRESHOLD
                 analysis["replay_mode"] = bool(self.args.replay_dir)
                 analysis["replay_comparison"] = (self.replay_comparison(records)
@@ -895,19 +895,24 @@ class AlignmentRunner:
                         valid_positions, center, estimate.offset_ra_deg, estimate.offset_dec_deg))
                     for record, expected in zip(valid, expected_best):
                         record["expected_template_metric"] = float(expected)
-                    status = "NON-OBSERVATIONAL TEMPLATE — SYNC BLOCKED"
-                if self.args.apply_sync:
-                    print("SYNC           BLOCKED: HI TEMPLATE IS NON-OBSERVATIONAL")
-                self.save(reference, center, records, estimate, selection, False, status, analysis)
-                if estimate: self.print_result(estimate, False, status)
+                    # The HI template is synthetic (HI4PI catalog through the provisional beam, template_ground_truth
+                    # False above): the same confidence threshold as the Sun decides PASS, and SYNC goes through the
+                    # same guards (operator opt-in, confidence, maximum offset) - operator decision 2026-10-08.
+                    status = "PASS" if estimate.confidence >= self.args.confidence_threshold else "LOW CONFIDENCE"
+                analysis["sync_eligible"] = bool(estimate is not None
+                                                 and estimate.confidence >= self.args.confidence_threshold
+                                                 and estimate.separation_deg <= self.args.max_sync_offset_deg)
+                sync_applied = (await self.maybe_sync(center, estimate, selection)
+                                if replay_records is None else False)
+                self.save(reference, center, records, estimate, selection, sync_applied, status, analysis)
+                if estimate: self.print_result(estimate, sync_applied, status)
                 else:
                     print(f"Samples        {len(valid)}\nRobust |SNR|≥5 {len(robust)}")
                     print(f"SYNC           NO\nResult         {status}")
                 if self.args.replay_dir and status in (
-                        "NO DEFENDIBLE DIFFERENTIAL HI STRUCTURE",
-                        "NON-OBSERVATIONAL TEMPLATE — SYNC BLOCKED"):
+                        "NO DEFENDIBLE DIFFERENTIAL HI STRUCTURE", "PASS", "LOW CONFIDENCE"):
                     return 0
-                return 2
+                return 0 if status == "PASS" else 2
             else:
                 if replay_records is not None:
                     records = replay_records
@@ -948,37 +953,7 @@ class AlignmentRunner:
             for record, expected in zip(valid, expected_best):
                 record["expected_template_metric"] = float(expected)
             status = "PASS" if estimate.confidence >= self.args.confidence_threshold else "LOW CONFIDENCE"
-            sync_applied = False
-            if self.args.apply_sync:
-                if not sync_allowed(True, estimate.confidence, self.args.confidence_threshold):
-                    print("SYNC           BLOCKED BY CONFIDENCE GUARD")
-                else:
-                    # If actual sky = commanded + estimated offset, command the
-                    # inverse offset so the beam is physically on the reference.
-                    compensated = offset_coordinates(
-                        center, [-estimate.offset_ra_deg], [-estimate.offset_dec_deg])[0]
-                    if not await self.telescope.goto(compensated.ra.hour, compensated.dec.deg):
-                        raise RuntimeError("pre-SYNC compensated GOTO failed")
-                    await asyncio.sleep(self.args.settle)
-                    pre = await self.telescope.get_coordinates(force_refresh=True)
-                    sync_applied = bool(await self.telescope.sync(center.ra.hour, center.dec.deg))
-                    post = await self.telescope.get_coordinates(force_refresh=True)
-                    selection["sync_coordinates"] = {"pre": pre, "post": post,
-                        "compensated_command_ra_hours": compensated.ra.hour,
-                        "compensated_command_dec_deg": compensated.dec.deg,
-                        "reference_ra_hours": center.ra.hour, "reference_dec_deg": center.dec.deg}
-                    if sync_applied:
-                        outside = offset_coordinates(center, [2.0], [0.0])[0]
-                        await self.telescope.goto(outside.ra.hour, outside.dec.deg)
-                        await asyncio.sleep(self.args.settle)
-                        await self.telescope.goto(center.ra.hour, center.dec.deg)
-                        await asyncio.sleep(self.args.settle)
-                        repeat_ra, repeat_dec = await self.telescope.get_coordinates(force_refresh=True)
-                        repeat = SkyCoord(ra=repeat_ra * u.hourangle, dec=repeat_dec * u.deg)
-                        selection["post_sync_repeatability"] = {
-                            "ra_hours": repeat_ra, "dec_deg": repeat_dec,
-                            "residual_deg": float(center.separation(repeat).deg),
-                        }
+            sync_applied = await self.maybe_sync(center, estimate, selection)
             self.save(reference, center, records, estimate, selection, sync_applied, status, {})
             self.print_result(estimate, sync_applied, status)
             return 0 if status == "PASS" else 2
@@ -992,6 +967,65 @@ class AlignmentRunner:
                 print(f"Tracking       restore {'confirmed' if restored else 'NOT CONFIRMED - check the mount manually'}")
             if self.sdr: await self.sdr.close()
             if self.telescope: await self.telescope.disconnect()
+
+    async def maybe_sync(self, center, estimate, selection) -> bool:
+        """The one SYNC path for both references (Sun and HI). SYNC is sent only when ALL hold, and the decision
+        and its reason are always recorded in self.sync_decision (saved in alignment_result.json):
+          - the operator asked for it (--apply-sync; the web's SYNC checkbox),
+          - an offset was actually estimated,
+          - confidence >= --confidence-threshold,
+          - the offset's size <= --max-sync-offset-deg (an estimate that large is far more likely a bad fit than a
+            real pointing error after a normal Ekos alignment - never applied automatically).
+        Procedure (unchanged from the original solar path): GOTO the compensated position so the beam is
+        physically on the reference, SYNC the mount to the reference coordinates, then leave 2 deg and come back to
+        measure the post-SYNC repeatability."""
+        thr, max_off = self.args.confidence_threshold, self.args.max_sync_offset_deg
+        decision = {"requested": bool(self.args.apply_sync), "applied": False, "confidence_threshold": thr,
+                    "max_sync_offset_deg": max_off}
+        self.sync_decision = decision
+        if not self.args.apply_sync:
+            decision["reason"] = "not requested (SYNC option off)"
+        elif estimate is None:
+            decision["reason"] = "no offset estimated"
+        elif not sync_allowed(True, estimate.confidence, thr):
+            decision["reason"] = f"confidence {estimate.confidence:.3f} below threshold {thr:.2f}"
+        elif estimate.separation_deg > max_off:
+            decision["reason"] = f"offset {estimate.separation_deg:.3f} deg larger than the {max_off:g} deg SYNC limit"
+        if "reason" in decision:
+            print(f"SYNC           NOT SENT: {decision['reason']}")
+            return False
+        # If actual sky = commanded + estimated offset, command the inverse offset so the beam is physically on
+        # the reference.
+        compensated = offset_coordinates(center, [-estimate.offset_ra_deg], [-estimate.offset_dec_deg])[0]
+        if not await self.telescope.goto(compensated.ra.hour, compensated.dec.deg):
+            decision["reason"] = "pre-SYNC compensated GOTO failed - SYNC not sent"
+            print(f"SYNC           NOT SENT: {decision['reason']}")
+            return False
+        await asyncio.sleep(self.args.settle)
+        pre = await self.telescope.get_coordinates(force_refresh=True)
+        sync_applied = bool(await self.telescope.sync(center.ra.hour, center.dec.deg))
+        post = await self.telescope.get_coordinates(force_refresh=True)
+        selection["sync_coordinates"] = {"pre": pre, "post": post,
+            "compensated_command_ra_hours": compensated.ra.hour,
+            "compensated_command_dec_deg": compensated.dec.deg,
+            "reference_ra_hours": center.ra.hour, "reference_dec_deg": center.dec.deg}
+        if sync_applied:
+            outside = offset_coordinates(center, [2.0], [0.0])[0]
+            await self.telescope.goto(outside.ra.hour, outside.dec.deg)
+            await asyncio.sleep(self.args.settle)
+            await self.telescope.goto(center.ra.hour, center.dec.deg)
+            await asyncio.sleep(self.args.settle)
+            repeat_ra, repeat_dec = await self.telescope.get_coordinates(force_refresh=True)
+            repeat = SkyCoord(ra=repeat_ra * u.hourangle, dec=repeat_dec * u.deg)
+            selection["post_sync_repeatability"] = {
+                "ra_hours": repeat_ra, "dec_deg": repeat_dec,
+                "residual_deg": float(center.separation(repeat).deg),
+            }
+            decision.update(applied=True, reason="sent: confidence and offset within limits")
+        else:
+            decision["reason"] = "the mount rejected the SYNC command"
+        print(f"SYNC           {'APPLIED' if sync_applied else 'NOT APPLIED: ' + decision['reason']}")
+        return sync_applied
 
     def save(self, reference, center, records, estimate, selection, sync_applied, status,
              analysis_metadata=None):
@@ -1016,6 +1050,11 @@ class AlignmentRunner:
                   "run_config": {"capture_time_s": self.args.integration_seconds, "settle_s": self.args.settle,
                                 "min_elevation_deg": self.args.min_elevation, "approved_plan_path": self.args.approved_plan},
                   "sync_applied": sync_applied, "sync_executed": sync_applied,
+                  "sync_decision": getattr(self, "sync_decision", None) or {
+                      "requested": bool(self.args.apply_sync), "applied": False,
+                      "confidence_threshold": self.args.confidence_threshold,
+                      "max_sync_offset_deg": self.args.max_sync_offset_deg,
+                      "reason": "no offset estimated" if estimate is None else "not evaluated"},
                   "status": status, "result_status": status,
                   **analysis_metadata}
         (self.output_dir / "alignment_result.json").write_text(json.dumps(result, indent=2))
@@ -1074,6 +1113,8 @@ class AlignmentRunner:
         print(f"Offset DEC     {e.offset_dec_deg:+.3f} deg (tangent north)\nSeparation     {e.separation_deg:.3f} deg")
         print(f"Confidence     {e.confidence:.3f}\nResidual       {e.residual:.3f}")
         print(f"SYNC           {'APPLIED' if sync else 'NO'}\nResult         {status}")
+        print(f"OFFSET RESULT  dRA(east) {e.offset_ra_deg:+.3f} deg, dDec {e.offset_dec_deg:+.3f} deg, "
+              f"total {e.separation_deg:.3f} deg, confidence {e.confidence:.3f}")
 
 
 def parse_args(argv=None):
@@ -1084,6 +1125,8 @@ def parse_args(argv=None):
     p.add_argument("--gain", type=float, default=DEFAULT_GAIN_DB); p.add_argument("--sun-gain", type=float, default=DEFAULT_SUN_GAIN_DB)
     p.add_argument("--beam-fwhm", type=float, default=PROVISIONAL_BEAM_FWHM_DEG)
     p.add_argument("--confidence-threshold", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD)
+    p.add_argument("--max-sync-offset-deg", type=float, default=DEFAULT_MAX_SYNC_OFFSET_DEG,
+                   help="never SYNC an estimated offset larger than this (deg); default %(default)s")
     p.add_argument("--capture-time", type=float); p.add_argument("--integration-seconds", type=float)
     p.add_argument("--settle", type=float, default=2)
     p.add_argument("--min-elevation", type=float, default=20); p.add_argument("--max-clipping", type=float, default=.01)
@@ -1130,6 +1173,8 @@ def parse_args(argv=None):
     if args.beam_fwhm <= 0 or args.gain < 0 or args.sun_gain < 0: p.error("beam/gains must be fixed valid values")
     if args.integration_seconds <= 0 or (args.capture_time is not None and args.capture_time <= 0):
         p.error("integration/capture time must be positive")
+    if not (0 < args.max_sync_offset_deg <= 10):
+        p.error("--max-sync-offset-deg must be in (0, 10]")
     if args.minimum_valid_positions < 4 or args.minimum_robust_positions < 2:
         p.error("minimum position guards are too small")
     if args.replay_dir:
