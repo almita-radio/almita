@@ -3,6 +3,11 @@
 *Actualizado 2026-10-06: servidor web único :8088, CALIBRATE (wizard 50 Ω + HI), OBSERVE con explorador de
 perfiles, SCIENCE por bloques. Las secciones 16–18 son nuevas.*
 
+**Paso a paso de una observación completa (equipo → ALIGN → CALIBRATE → OBSERVE → REDUCE → SCIENCE):**
+[docs/MANUAL_CORTAPALOS.pdf](docs/MANUAL_CORTAPALOS.pdf) (fuente editable: [docs/MANUAL_CORTAPALOS.md](docs/MANUAL_CORTAPALOS.md);
+se regenera con `/usr/bin/python3 scripts/build_manual_pdf.py`). Este runbook queda como referencia de servicios y
+recuperación.
+
 One page. Read before touching hardware. If a command's output doesn't match
 "Esperado", stop and think before continuing.
 
