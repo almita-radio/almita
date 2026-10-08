@@ -50,6 +50,17 @@
     return hi > lo ? { lo, hi } : { lo: lo - 1, hi: hi + 1 };
   }
 
+  // The vertical scale (and colour) of the stack: the FULL range of the data, exactly what the 2D session waterfall's
+  // colour bar spans (quicklook_session_waterfall.py: imshow without vmin/vmax). The robust 2-98% range used before
+  // made the box only ~0.35 dB tall on real data, so a +0.68 dB band-edge value rose 2.3x above it and read as a huge
+  // peak the spectrum and waterfall do not show. Nothing exceeds the box now; heights stay proportional to the dB.
+  function dataLimits(rows) {
+    let lo = Infinity, hi = -Infinity;
+    for (const row of rows) for (const v of row.values) if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (!Number.isFinite(lo)) return { lo: -1, hi: 1 };
+    return hi > lo ? { lo, hi } : { lo: lo - 1, hi: hi + 1 };
+  }
+
   function parseDocument(doc, sessionId) {
     if (!doc || doc.session_id !== sessionId) return null;
     const freq = Array.isArray(doc.frequency_mhz) ? doc.frequency_mhz : [];
@@ -66,8 +77,8 @@
   }
 
   class SpectralStack3D {
-    constructor({ canvas, viewport, tooltip, message, badge, resetButton }) {
-      this.canvas = canvas; this.viewport = viewport; this.tooltip = tooltip;
+    constructor({ canvas, viewport, tooltip, message, badge, resetButton, scale }) {
+      this.canvas = canvas; this.viewport = viewport; this.tooltip = tooltip; this.scale = scale || null;
       this.message = message; this.badge = badge; this.resetButton = resetButton;
       this.lastSessionId = null; this.lastUpdatedUtc = null; this.lastFetchFailed = false;
       this.fetchInFlight = false;
@@ -165,8 +176,13 @@
     _buildGeometry(freq, rows) {
       this._clearGeometry();
       if (!rows.length || !freq.length) return;
-      const { lo, hi } = robustLimits(rows);
+      const { lo, hi } = dataLimits(rows);
       const span = hi - lo || 1;
+      if (this.scale) {
+        this.scale.hidden = false;
+        this.scale.textContent = `height & colour: relative PSD ${lo.toFixed(2)} … ${hi >= 0 ? "+" : ""}${hi.toFixed(2)} dB `
+          + "(full data range, as in the session waterfall)";
+      }
       const scanOrders = rows.map((r) => r.scanOrder);
       const minScan = Math.min(...scanOrders), maxScan = Math.max(...scanOrders);
       const scanSpan = (maxScan - minScan) || 1;
@@ -352,6 +368,7 @@
       message: document.getElementById("spectral-stack-message"),
       badge: document.getElementById("spectral-stack-badge"),
       resetButton: document.getElementById("spectral-stack-reset"),
+      scale: document.getElementById("spectral-stack-scale"),
     });
     window.SpectralStack3D = instance;
   }
@@ -359,5 +376,5 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
 
-  window.AlmitaSpectralStack3D = { colormap, robustLimits, parseDocument };
+  window.AlmitaSpectralStack3D = { colormap, robustLimits, dataLimits, parseDocument };
 })();

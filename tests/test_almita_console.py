@@ -1216,7 +1216,7 @@ def test_60_spectral_stack_pure_functions(tmp_path):
     harness = """<!doctype html><html><body><pre id="out"></pre>
 <script src="spectral_stack_3d.js"></script>
 <script>
-const {colormap, robustLimits, parseDocument} = window.AlmitaSpectralStack3D;
+const {colormap, robustLimits, dataLimits, parseDocument} = window.AlmitaSpectralStack3D;
 const lines = [];
 function check(name, cond) { lines.push((cond ? "ok: " : "FAIL: ") + name); }
 
@@ -1227,6 +1227,11 @@ const values = Array.from({length:100}, (_,i)=>i+1).concat([-10000, 10000]);
 const limits = robustLimits([{values}]);
 check("robustLimits clips low outlier", limits.lo > -100);
 check("robustLimits clips high outlier", limits.hi < 200);
+// the stack's own scale: the full range, like the waterfall colour bar - a value can never rise above the box
+const real = [{values:[-0.121, 0.0, 0.224, 0.676, -0.442, null]}];
+const full = dataLimits(real);
+check("dataLimits spans the full data range (as the session waterfall)", full.lo === -0.442 && full.hi === 0.676);
+check("dataLimits handles all-null", Number.isFinite(dataLimits([{values:[null]}]).lo));
 const nullLimits = robustLimits([{values:[null,null]}]);
 check("robustLimits handles all-null", Number.isFinite(nullLimits.lo) && Number.isFinite(nullLimits.hi));
 
