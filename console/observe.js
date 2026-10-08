@@ -379,13 +379,23 @@
   // nested) so updateStartButton() above can call gainPilotBlockReason() directly.
   let gpState = null;           // last gain_pilot_state.json content (via the job's own facts), or null if never planned for this grid session
 
+  // A READY gain pilot whose approved gain differs from the grid's: the grid is re-planned at that gain (a NEW grid
+  // session, new pilot points). The approval is carried here so the new grid's pilot panel is prepared for one
+  // re-check at that gain and START is not silently run at another gain meanwhile.
+  let gpCarry = null;   // { gain_db, from_grid, approved_utc }
   function gainPilotBlockReason() {
     // Mirrors observation_gain_pilot.check_ready_for_grid_start() exactly: gpState is null whenever the gain
     // pilot was never actually planned for THIS grid session (no gain_pilot_state.json - the "gp-enabled"
     // checkbox alone does not create one, it only shows/hides the panel), which is "unchanged OBSERVE
     // behaviour", never a block. Gating on the checkbox's checked-by-default state here used to block every
     // fresh plan's START button before the operator had touched gain pilot at all.
-    if (!gpState) return null;
+    if (!gpState) {
+      if (gpCarry && $("gp-enabled").checked && lastPlan && lastPlan.grid_session_dir !== gpCarry.from_grid) {
+        return `the gain pilot approved ${gpCarry.gain_db} dB on the previous grid (${gpCarry.from_grid}); re-check it on this grid `
+          + "(PLAN GAIN PILOT, one HIGH capture) - or untick the gain-pilot stage to start without it";
+      }
+      return null;
+    }
     if (gpState.step === "ABORTED") return null;                // operator explicitly chose not to use it after all
     if (gpState.step !== "READY") return `gain pilot is not READY yet (currently at ${gpState.step})`;
     if (lastPlan && gpState.grid_config_hash !== lastPlan.observation_config_sha256) return "the grid plan changed since the gain pilot was checked - PLAN the gain pilot again";
@@ -400,6 +410,14 @@
     gpState = null;
     $("gain-pilot-panel").hidden = false;
     $("gp-gain").value = (plan.main || {}).gain_db != null ? plan.main.gain_db : 40.2;
+    const carried = gpCarry && Math.abs(((plan.main || {}).gain_db) - gpCarry.gain_db) < 1e-6 && plan.grid_session_dir !== gpCarry.from_grid;
+    if (gpCarry && !carried) gpCarry = null;                  // re-planned at another gain: the approval does not apply
+    $("gp-carry-note").hidden = !carried;
+    if (carried) {
+      $("gp-max-pilots").value = 1;
+      $("gp-carry-note").textContent = `Grid re-planned at ${gpCarry.gain_db} dB, the gain approved by the gain pilot of ${gpCarry.from_grid}. `
+        + "This grid has its own pilot points: PLAN GAIN PILOT, then ONE HIGH capture re-checks that gain here before START.";
+    }
     for (const id of ["gp-plan-result", "gp-step-prepare", "gp-step-decision", "gp-step-verify", "gp-step-ready", "gp-final-check-panel", "gp-stale"]) $(id).hidden = true;
     $("gp-config").hidden = false;
     U.setBadge($("gp-badge"), "NOT PLANNED");
@@ -535,13 +553,25 @@
     } else if (facts.step === "READY") {
       $("gp-step-ready").hidden = false;
       $("gp-ready-summary").textContent = `READY — verified gain ${facts.verified_gain_db} dB. START will use this gain for every grid capture (a single effective gain for the whole grid).`;
+      const gridGain = lastPlan && (lastPlan.main || {}).gain_db;
+      const mismatch = facts.verified_gain_db != null && gridGain != null && Math.abs(facts.verified_gain_db - gridGain) > 1e-6;
+      $("gp-replan-row").hidden = !mismatch;
+      if (mismatch) {
+        $("gp-ready-summary").textContent += ` The grid plan is at ${gridGain} dB: RE-PLAN the grid at ${facts.verified_gain_db} dB (button below) - the new grid gets one quick re-check.`;
+        $("gp-replan-btn").textContent = `RE-PLAN GRID AT ${facts.verified_gain_db} dB`;
+        $("gp-replan-btn").onclick = () => {
+          gpCarry = { gain_db: facts.verified_gain_db, from_grid: sessionDir, approved_utc: facts.updated_utc || null };
+          $("f-gain").value = facts.verified_gain_db;
+          $("observe-form").requestSubmit();
+        };
+      }
       if (facts.config && facts.config.final_check_enabled) {
         $("gp-final-check-panel").hidden = false;
         $("gp-final-summary").textContent = "Optional: repeat a pilot capture (same point/conditions as the initial HIGH pilot) to check for drift. Best run AFTER the grid observation finishes. Relative stability only — not an absolute calibration.";
         $("gp-final-btn").onclick = U.guard($("gp-final-btn"), async () => {
           if (!gpRequireMoveConfirm()) return;
           if (!window.confirm("Real GOTO + capture for the final stability check. The mount WILL move.\nProceed?")) return;
-          const job = await gpJobAction("observe_gain_pilot_capture", { action: "final_check", session_dir: sessionDir }, 60000, $("gp-move-confirm").value);
+          const job = await gpJobAction("observe_gain_pilot_capture", { action: "final_check", session_dir: sessionDir }, 300000, $("gp-move-confirm").value);
           gpRender(job.facts, sessionDir);
           const fc = job.facts.final_check;
           if (fc && fc.evaluation != null) {

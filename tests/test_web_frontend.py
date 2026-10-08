@@ -1359,6 +1359,52 @@ out.error = $("gp-error").textContent;
     assert out["error"].startswith("capture_high FAILED") and "not found" in out["error"]
 
 
+def test_gain_pilot_approved_gain_replans_the_grid_and_prepares_one_recheck_instead_of_looping(tmp_path):
+    """2026-10-08 report: gain pilot READY at 42.1 dB, grid planned at 40.2 -> START said re-plan; re-planning made a
+    new grid whose pilot panel was NOT PLANNED, and the new plan was still 40.2 (START would have ignored the pilot)."""
+    ready = {"step": "READY", "verified_gain_db": 42.1, "grid_config_hash": "HASH-A", "observation_name": "WEBTEST",
+             "estimated_extra_points": 2, "estimated_duration_s": 36, "candidates": {}, "config": {"final_check_enabled": False}}
+    routes = OBSERVE_ROUTES + r"""
+window.__planN = 0;
+window.__routes["POST /api/observe/plan"] = (body) => {
+  window.__planN += 1;
+  const second = window.__planN > 1;
+  return { delay: 50, body: { ...PLAN, observation_config_sha256: second ? "HASH-B" : "HASH-A",
+    grid_session_dir: second ? "data/mosaic/WEBTEST-B" : "data/mosaic/WEBTEST-A",
+    _resolved_plan_path: second ? "data/mosaic/WEBTEST-B/observation_resolved.json" : "data/mosaic/WEBTEST-A/observation_resolved.json",
+    main: { ...PLAN.main, gain_db: body.main.gain_db } } };
+};
+window.__routes["POST /api/ops/start/observe_gain_pilot_admin"] = (b) => ({ body: { ok: true, data: { job_id: b.params.session_dir.endsWith("-A") ? "GPA" : "GPB" } } });
+window.__routes["GET /api/ops/job/GPA"] = { body: { ok: true, data: { job_id: "GPA", state: "EXITED", facts: %s } } };
+window.__routes["GET /api/ops/job/GPB"] = { body: { ok: true, data: { job_id: "GPB", state: "EXITED", exit_code: 1, facts: null, detail: "no gain_pilot_state.json" } } };
+""" % json.dumps(ready)
+    driver = r"""
+$("f-gain").value = 40.2;
+$("observe-form").requestSubmit();
+await until(() => !$("gp-step-ready").hidden && !$("gp-replan-row").hidden, 6000);
+out.startBefore = $("btn-start").title;
+out.replanLabel = $("gp-replan-btn").textContent;
+$("gp-replan-btn").click();
+await until(() => window.__planN === 2 && !$("gp-carry-note").hidden, 6000);
+out.secondPlanGain = window.__calls.filter((c) => c.key === "POST /api/observe/plan").pop().body.main.gain_db;
+out.carry = $("gp-carry-note").textContent; out.maxPilots = $("gp-max-pilots").value; out.gpGain = $("gp-gain").value;
+out.startBlocked = [$("btn-start").disabled, $("btn-start").title];
+out.gpError = $("gp-error").hidden;
+$("gp-enabled").click();
+await sleep(50);
+out.startWithoutPilot = $("btn-start").disabled;
+"""
+    out = run_page(tmp_path, "observe", routes, driver, budget=20000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert "verified 42.1 dB but the grid plan uses 40.2 dB" in out["startBefore"]
+    assert out["replanLabel"] == "RE-PLAN GRID AT 42.1 dB"
+    assert out["secondPlanGain"] == 42.1
+    assert "re-planned at 42.1 dB" in out["carry"] and "data/mosaic/WEBTEST-A" in out["carry"]
+    assert (out["maxPilots"], out["gpGain"]) == ("1", "42.1") and out["gpError"] is True
+    assert out["startBlocked"][0] is True and "re-check it on this grid" in out["startBlocked"][1]
+    assert out["startWithoutPilot"] is False
+
+
 # ------------------------------------------------------------------ OBSERVE: calibration profile selector (server disk)
 
 def test_observe_calibration_profile_explorer_browses_server_dirs_selects_and_rejects(tmp_path):
