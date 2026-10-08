@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def _print(payload: Dict[str, Any], as_json: bool, human_lines) -> None:
@@ -30,6 +32,88 @@ def _print(payload: Dict[str, Any], as_json: bool, human_lines) -> None:
     else:
         for line in human_lines:
             print(line)
+
+
+class _ProgressFollower(threading.Thread):
+    """Prints one stderr line per processed point while reduce_campaign() runs, so the web job log shows real
+    progress. It only READS the logs/events.jsonl that the frozen ReduceSession itself appends to (the new
+    session dir under output_root/campaign_id) - reduce_engine is not touched or patched. Lines carry no
+    braces: the web parses the final JSON result as the first '{' .. last '}' of the log."""
+
+    def __init__(self, session_parent: Path, total: int, stream=None, poll_s: float = 1.0):
+        super().__init__(daemon=True)
+        self.parent, self.total, self.poll_s = session_parent, total, poll_s
+        self.stream = stream or sys.stderr
+        self.before = set(session_parent.iterdir()) if session_parent.is_dir() else set()
+        self.stop_event = threading.Event()
+        self.started = time.monotonic()
+        self.done = 0
+        self.counts: Dict[str, int] = {}
+        self._offset = 0
+        self._events: Optional[Path] = None
+
+    def _find_events(self) -> Optional[Path]:
+        if not self.parent.is_dir():
+            return None
+        new = [d for d in self.parent.iterdir() if d not in self.before and (d / "logs" / "events.jsonl").exists()]
+        return max(new, key=lambda d: d.stat().st_mtime) / "logs" / "events.jsonl" if new else None
+
+    def _emit(self, text: str) -> None:
+        print(f"[REDUCE] {text.replace('{', '(').replace('}', ')')}", file=self.stream, flush=True)
+
+    def _drain(self) -> None:
+        if self._events is None:
+            self._events = self._find_events()
+            if self._events is None:
+                return
+        with self._events.open("rb") as fh:
+            fh.seek(self._offset)
+            chunk = fh.read()
+        complete = chunk[:chunk.rfind(b"\n") + 1]            # never parse a half-written last line
+        self._offset += len(complete)
+        for raw in complete.splitlines():
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            if ev.get("event") == "POINT_PROCESSED":
+                self.done += 1
+                status = str(ev.get("status") or "?").split(".")[-1]
+                self.counts[status] = self.counts.get(status, 0) + 1
+                timing = ev.get("timing") or {}
+                took = sum(v for v in timing.values() if isinstance(v, (int, float)))
+                elapsed = time.monotonic() - self.started
+                eta = elapsed / self.done * (self.total - self.done) if self.done and self.total else None
+                line = (f"point {ev.get('point_index')} - {self.done}/{self.total} - {status} ({took:.1f} s) - "
+                        f"elapsed {_hms(elapsed)}" + (f" - remaining ~{_hms(eta)}" if eta is not None else ""))
+                if ev.get("reason"):
+                    line += f" - {ev['reason']}"
+                self._emit(line)
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._drain()
+            except OSError:
+                pass
+            self.stop_event.wait(self.poll_s)
+
+    def finish(self) -> None:
+        self.stop_event.set()
+        if self.ident is not None:                             # started (finish() is safe either way)
+            self.join(timeout=5)
+        try:
+            self._drain()                                     # the last points written after the final poll
+        except OSError:
+            pass
+        summary = ", ".join(f"{k} {v}" for k, v in sorted(self.counts.items())) or "no points"
+        self._emit(f"done: {self.done}/{self.total} points processed ({summary}) in "
+                   f"{_hms(time.monotonic() - self.started)} - writing the result")
+
+
+def _hms(seconds: float) -> str:
+    s = int(round(seconds))
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
 def cmd_run(args) -> int:
@@ -55,8 +139,15 @@ def cmd_run(args) -> int:
         [(pt.point_index, pt.resolved_path) for pt in manifest.accepted_points()],
     )
 
-    report = reduce_campaign(manifest, config, output_root=args.output_root,
-                             calibration_profile_path=args.calibration_profile)
+    follower = _ProgressFollower(Path(args.output_root).resolve() / manifest.campaign_id, len(manifest.points))
+    print(f"[REDUCE] starting: {len(manifest.points)} points, velocity frame {args.velocity_frame}",
+          file=sys.stderr, flush=True)
+    follower.start()
+    try:
+        report = reduce_campaign(manifest, config, output_root=args.output_root,
+                                 calibration_profile_path=args.calibration_profile)
+    finally:
+        follower.finish()
     record_path = calrecord.write_record(report.output_dir, record)
 
     payload = dict(report.__dict__)

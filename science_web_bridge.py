@@ -77,6 +77,21 @@ from typing import Any, Optional
 
 import numpy as np
 
+_PROGRESS_T0: Optional[float] = None
+
+
+def _progress(message: str) -> None:
+    """One human progress line on stderr (the web job log shows it live). Lines carry no braces: the web reads
+    the --json result as the first '{' .. last '}' of the combined log, and stdout keeps only that JSON."""
+    import time
+    global _PROGRESS_T0
+    now = time.monotonic()
+    if _PROGRESS_T0 is None:
+        _PROGRESS_T0 = now
+    s = int(now - _PROGRESS_T0)
+    text = message.replace("{", "(").replace("}", ")")
+    print(f"[SCIENCE {s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}] {text}", file=sys.stderr, flush=True)
+
 SCHEMA_VERSION = "1.0"
 PIPELINE_VERSION = "science-web-v1.3"
 CALIBRATION_LEVELS = ("RELATIVE", "UNCALIBRATED")
@@ -552,7 +567,8 @@ def tile_plan(grid, n_velocity_channels: int, n_points: int, keep_quality_inputs
                        f"the {budget / 1024**2:.0f} MB budget")}
 
 
-def integrated_map_in_tiles(filtered_input, grid, beam, sc, *, keep_quality_inputs: bool = False):
+def integrated_map_in_tiles(filtered_input, grid, beam, sc, *, keep_quality_inputs: bool = False,
+                            label: Optional[str] = None):
     """build_cube() + integrated_map() over `grid`, one 2D tile at a time (tile_plan()), stitched into ONE
     SpatialMap on `grid`. Returns (map, build_info, quality_cube): build_info is the engine's own when one tile
     covers the grid; otherwise per-point facts are merged (used = union over tiles, OUTSIDE_BEAM_SUPPORT only
@@ -578,10 +594,15 @@ def integrated_map_in_tiles(filtered_input, grid, beam, sc, *, keep_quality_inpu
     if keep_quality_inputs:
         unc_full = np.empty((nv, ny, nx), dtype=np.float64)
         valid_full = np.empty((nv, ny, nx), dtype=bool)
+    n_tiles = -(-ny // ty) * -(-nx // tx)
+    if label:
+        _progress(f"map {label}: {ny}x{nx} px, {nv} velocity channels, {n_tiles} tile(s) of {ty}x{tx}")
     for y0 in range(0, ny, ty):
         y1 = min(ny, y0 + ty)
         for x0 in range(0, nx, tx):
             x1 = min(nx, x0 + tx)
+            if label and n_tiles > 1:
+                _progress(f"map {label}: tile {len(infos) + 1}/{n_tiles} (rows {y0}-{y1 - 1}, cols {x0}-{x1 - 1})")
             tile = grid if (y0, y1, x0, x1) == (0, ny, 0, nx) else _tile_grid(grid, y0, y1, x0, x1)
             cube = build_cube(filtered_input, tile, beam, sc)
             m = integrated_map(cube, sc)
@@ -596,6 +617,8 @@ def integrated_map_in_tiles(filtered_input, grid, beam, sc, *, keep_quality_inpu
                 valid_full[:, y0:y1, x0:x1] = cube.valid
             del cube, m
             gc.collect()
+    if label:
+        _progress(f"map {label}: done")
     stitched = SpatialMap(grid=grid, kind="integrated_relative_intensity", value=value, uncertainty=unc,
                           weight_sum=wsum, n_pointings=npt, valid=valid, units="relative_intensity_dimensionless * m/s",
                           metadata=metadata, spectral_coverage=cov)
@@ -1042,7 +1065,10 @@ def loo_cross_validation_summary(filtered_input, cfg: MapConfig, spatial: dict[s
     meas = np.empty(len(used_points))
     unc = np.empty(len(used_points))
     n_support = np.zeros(len(used_points), dtype=int)
+    _progress(f"leave-one-out check: {len(used_points)} point(s)" + (" (fixed subsample)" if subsampled else ""))
     for i, point in enumerate(used_points):
+        if i and i % 10 == 0:
+            _progress(f"leave-one-out check: {i}/{len(used_points)}")
         kept = [p for p in filtered_input.points if p.point_index != point.point_index]
         loo_input = ScienceInput(reduce_session_dir=filtered_input.reduce_session_dir,
                                  campaign_id=filtered_input.campaign_id,
@@ -1242,6 +1268,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     from science_engine.integration import integrated_map
     from science_engine.quality import assess_science_quality
 
+    _progress("building the board (map A) and the shared projection")
     planned = load_planned_lattice(filtered_input)
     spatial = auto_spatial_params(filtered_input, cfg, planned)
     support_radius_deg = spatial["support_radius_deg"]
@@ -1281,13 +1308,15 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
 
     # B and C: each built in 2D tiles (integrated_map_in_tiles) under the same 3 GB / 60%-of-MemAvailable
     # budget, one after the other - a full C cube of the real 400-point session alone needed ~6.6 GB.
-    map_b, info_b, quality_cube_b = integrated_map_in_tiles(filtered_input, grid_b, beam, sc, keep_quality_inputs=True)
+    map_b, info_b, quality_cube_b = integrated_map_in_tiles(filtered_input, grid_b, beam, sc, keep_quality_inputs=True,
+                                                                   label="B")
+    _progress("map B: quality assessment")
     quality_b = assess_science_quality(filtered_input, quality_cube_b, sc, map_b)
     used_b = set(info_b["used_point_indices"])
     del quality_cube_b
     gc.collect()
 
-    map_c, info_c, _ = integrated_map_in_tiles(filtered_input, grid_c, beam, sc)
+    map_c, info_c, _ = integrated_map_in_tiles(filtered_input, grid_c, beam, sc, label="C")
     used_c = set(info_c["used_point_indices"])
     gc.collect()
 
@@ -1297,6 +1326,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
            f"density differs) - their used-point sets matched exactly, verified: {len(used_common)} point(s), "
            f"never reconciled after the fact")
 
+    _progress("per-point integrated values (map A)")
     point_rows = per_point_integrated_values(filtered_input, sc, velocity_axis)
     for row in point_rows:
         if row["status"] == "USED" and row["point_index"] not in used_common:
@@ -1311,6 +1341,7 @@ def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
     # Direct, same-coordinate proof that B and C compute the identical field (never a resampled-image
     # comparison) - see bc_exact_coordinate_consistency_summary's own docstring for why a naive nearest-pixel
     # match (kept here only as nearest_pixel_reference, for context) is NOT this test.
+    _progress("B/C same-coordinate consistency check")
     bc_exact_coordinate_consistency = bc_exact_coordinate_consistency_summary(
         filtered_input, cfg, spatial, base_grid, sc, beam, map_b, map_c, grid_b, grid_c)
 
@@ -1814,7 +1845,9 @@ def cmd_run(args) -> int:
     from science_engine.provenance import reduce_manifest_hash
     cfg = _config_from_args(args)
     t0 = datetime.now(timezone.utc)
+    _progress(f"loading the REDUCE session (calibration level {cfg.calibration_level_filter})")
     filtered, counts, unfiltered = load_filtered_input(cfg.reduce_session_dir, cfg.calibration_level_filter)
+    _progress(f"{len(filtered.points)} point(s) pass the filter")
     built = build_all_products(filtered, cfg)
 
     root = Path(args.output_root)
@@ -1824,7 +1857,9 @@ def cmd_run(args) -> int:
     maps_dir = out_dir / "maps"
     maps_dir.mkdir()
 
+    _progress("rendering figures (A, B, C, uncertainty, exports)")
     exports, unc_kind = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
+    _progress("writing points.csv, board.json and the manifest")
     spatial_confidence = spatial_confidence_summary(built)
 
     # tabular per-point export for reproducibility (section: "exporta valores tabulares de puntos")
@@ -1889,6 +1924,7 @@ def cmd_run(args) -> int:
         "input_reduce_session_dir": str(cfg.reduce_session_dir), "config_hash": cfg.config_hash(),
         "git_commit": _git_commit(), "started_utc": manifest["started_utc"], "ended_utc": manifest["ended_utc"],
     })
+    _progress(f"done: {len(built['used_point_set'])} point(s) used, output {out_dir}")
     payload = {"status": "COMPLETED", "output_dir": str(out_dir), "session_id": session_id,
               "campaign_id": filtered.campaign_id, "n_points_used": len(built["used_point_set"]),
               "calibration_level_filter": cfg.calibration_level_filter, "exports": exports}
