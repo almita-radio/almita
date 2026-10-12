@@ -2,10 +2,11 @@
 
 **De la preparación del equipo a REDUCE y SCIENCE, con la versión instalada.**
 
-Versión del software: rama `web-polish-v1`, commit `67df4a6` (2026-10-08). El servidor web corre desde las
-00:41 UTC con el commit `f4cd4c5`. Los cambios posteriores son de la consola o de scripts que se cargan en cada
-uso, así que ya están activos. Este es un **primer borrador**. Revisado contra el código y la web actuales, y
-contra las sesiones reales guardadas en `data/`.
+Versión del software: rama `web-polish-v1`, código de producto en el commit `b6eca65` (2026-10-08). Revisado el
+2026-10-12 contra el código, la web y las sesiones reales guardadas en `data/`. El servidor web corre desde el
+reinicio del Pi del 2026-10-08 a las 20:50 UTC: tiene cargado el Python de `fd8a962` y sirve la consola de
+`b6eca65`. La única diferencia no cambia lo que ve el operador (detalle en `docs/PROJECT_BRIEF.md` §4). Este es
+un **primer borrador**.
 
 **Cómo leer las marcas de verificación**
 
@@ -59,7 +60,7 @@ Qué depende de qué en el código actual:
     00000001**, por USB al Pi. El LNA se alimenta por el Bias-T del SDR.
 
 2. **Antena B (RFI REF, opcional):** antena B → LNA → RTL-SDR con **serial 00000002**, por USB. El LNA se
-    alimenta por el Bias-T de ese SDR (confirmado por el operador el 2026-10-08). **[C]**
+    alimenta por el Bias-T de ese SDR (confirmado por el operador el 2026-10-08). **[P: alimentación sin medir]**
 3. **Montura:** OnStep (LX200 OnStep) conectada al Pi. Revisa el trípode, los contrapesos, el recorrido libre de
     cables y que no haya nadie en el camino del GOTO.
 
@@ -82,8 +83,12 @@ Qué depende de qué en el código actual:
     marcado y no se puede apagar. **No lo cambies.** **[C][H indirecto: hubo señal HI en las sesiones reales]**
 
     **Bias-T de RFI REF:** lo enciende `capture.py` en el `rtl_tcp` de la antena B (puerto 1235) cuando RFI REF
-    está activado con BIAS-T marcado. La web lo trae **marcado por defecto**. **[C]** Que el LNA reciba
-    alimentación de verdad aún no está medido **[P]** (Anexo C).
+    está activado con BIAS-T marcado. La web lo trae **marcado por defecto**. **[H: las seis sesiones reales con
+    RFI REF lanzaron ese `rtl_tcp` con `-T`, según `rfi_ref/rtl_tcp.log`]** Que el LNA reciba alimentación de
+    verdad aún no está medido **[P]** (Anexo C): no existe ninguna sesión con el Bias-T apagado para comparar.
+
+    Ojo fuera de la web: en una especificación YAML para la CLI, `rfi_ref.bias_tee` vale `false` si no se
+    escribe. Ponlo en `true` a mano, como en `examples/overnight-400.yaml`.
 
 4. Frecuencia, muestreo y ganancia **no se escriben a mano**. Salen de `observer_config.json` →
     `observation_defaults` (hoy **1420405752 Hz / 2400000 sps / 40.2 dB**) y la web rellena los campos sola.
@@ -300,7 +305,8 @@ Si no usas el gain pilot, START no lo exige.
 
 ### 9. START, seguimiento, STOP y cierre
 
-1. Pulsa **START OBSERVATION**. Lee el resumen y confírmalo. **[H: 400, 676, 25 y 100 puntos]**
+1. Pulsa **START OBSERVATION**. Lee el resumen y confírmalo. **[H: 400, 676, 100 y 25 puntos; las últimas, dos
+    sesiones de 25 puntos el 2026-10-08 a las 21:04 y 22:34 UTC]**
 2. **Seguimiento** en **MONITOR**:
     - **SESSION**: PROGRESS, CURRENT POINT, FAILED, DEFERRED, ELAPSED/REMAINING;
     - **QUICKLOOK**;
@@ -376,7 +382,7 @@ Hay una sola tarea REDUCE o SCIENCE a la vez en el Pi.
 | Centro (PLACEMENT) | Dónde cae el mosaico | `EASTMOST_SAFE`, con CENTER DEC vacío (= latitud, por el cenit) | `FIXED_CENTER` para un objetivo concreto. |
 | Extensión | WIDTH × HEIGHT | 30° × 30° | Según el objetivo. El haz es de unos 20° (provisional), así que un campo menor apenas cubre un par de haces. |
 | Separación / puntos | WIDTH/(COLS−1), igual en ambos ejes | 10×10 (3.3°, 100 puntos, ~40 min con 1 s); 20×20 (1.58°, 400 puntos, ~3.5 h con 10 s) | No separes más que **FWHM/3 ≈ 6.7°** (`beam_sampling_fraction`). Una grilla más fina no da más resolución del instrumento, porque el haz no está medido. |
-| Altura mínima | MIN PLANNING ALTITUDE | Por defecto 10°. **Recomendado 20–30°**: la última sesión usó 30. | Más bajo da más cielo, pero más suelo en los lóbulos y obstáculos sin evaluar. |
+| Altura mínima | MIN PLANNING ALTITUDE | La web rellena **30°** (valor del servidor; el 10 del HTML solo se ve si el backend no responde). **Recomendado 20–30°.** | Más bajo da más cielo, pero más suelo en los lóbulos y obstáculos sin evaluar. |
 | Duración por punto | CAPTURE (s) | **10 s** para mapas; 1–2 s para pruebas | El ruido baja con √t: 10 s es unas 3 veces menos ruido que 1 s. |
 | Estabilización | SETTLE (s) | **2 s** | Súbelo si la montura vibra al terminar el GOTO. |
 | RFI REF | Antena B, su LNA y SDR 00000002 | Enabled, 25 dB, **Bias-T encendido** (alimenta el LNA de la antena B) | Desactívalo si la antena B no está. MAIN no se afecta. Hoy solo sirve de monitoreo: REDUCE no lo usa. |

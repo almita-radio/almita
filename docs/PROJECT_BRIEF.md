@@ -1,6 +1,6 @@
 # ALMITA — Brief técnico y funcional
 
-*Estado al 2026-10-08. Rama `web-polish-v1`. Pensado para quien no estuvo en las últimas sesiones: qué hace el
+*Estado al 2026-10-12. Rama `web-polish-v1`. Pensado para quien no estuvo en las últimas sesiones: qué hace el
 producto, cómo está armado, qué está probado y dónde leer el código.*
 
 ALMITA es un radiotelescopio de la línea HI de 21 cm (1420.405 MHz) operado desde una Raspberry Pi con
@@ -13,35 +13,60 @@ Documentos hermanos:
 | documento | contenido |
 |---|---|
 | [MANUAL_CORTAPALOS.pdf](MANUAL_CORTAPALOS.pdf) ([fuente .md](MANUAL_CORTAPALOS.md)) | Operación paso a paso |
-| [BACKLOG.md](BACKLOG.md) | Estado de cada pedido |
+| [BACKLOG.md](BACKLOG.md) | Estado de cada pedido, pendientes con prioridad y orden |
 | [../FIELD_RUNBOOK.md](../FIELD_RUNBOOK.md) | Servicios y recuperación |
 
 Las guías de hardware (BOM, cableado, mecánica) están en `docs/hardware/` de la rama `main`; ver §4.
 
 ---
 
-## 1. Qué funciona hoy: el recorrido del usuario
+## 1. Qué funciona hoy
 
-Marcas de verificación:
+**En una frase:** el recorrido CALIBRATE → OBSERVE → QUICKLOOK → REDUCE → SCIENCE está hecho en el instrumento
+real y desplegado. Lo que falta es la mitad de ALIGN (Sol y SYNC), las paradas reales (STOP) y medir dos supuestos
+físicos: el haz y la alimentación del LNA de la antena B.
 
-| marca | significado |
+**Bloqueos actuales**
+
+- **La web es alcanzable desde Internet** con contraseña por HTTP sin cifrar (BL-040). Es una decisión del
+  operador y es lo único urgente.
+- **ALIGN no corrige todavía:** el SYNC nunca se envió a la montura real y ALIGN SOLAR nunca corrió (BL-026). La
+  única corrida real, con HI, no logró estimar un offset.
+- **STOP OBSERVATION nunca se probó** en una sesión real (BL-027).
+- **El haz no está medido** (BL-034): 20° en la configuración y 14° en `alignment.py`, ambos provisionales.
+- **Antena B:** el Bias-T se envía, pero nadie midió que el LNA reciba alimentación (BL-031).
+
+Ninguno impide observar como se observó el 2026-10-08.
+
+### Estado por funcionalidad
+
+Cinco niveles, y ninguno implica el siguiente:
+
+| nivel | significado |
 |---|---|
-| **[H]** | Probado en el instrumento real, con evidencia en disco. |
-| **[D]** | Corrido sobre datos reales, sin mover hardware. |
-| **[C]** | Solo código y tests. |
-| **[P]** | Pendiente. |
+| **impl** | El código está en `web-polish-v1`. |
+| **tests** | Hay tests automatizados que lo cubren. Resultados en §5. |
+| **datos** | Corrido sobre datos reales guardados, sin mover hardware. |
+| **hardware** | Hecho en el instrumento real, con evidencia en `data/`. |
+| **desplegado** | El proceso que corre hoy en el Pi ya lo tiene cargado (§4). |
 
-| etapa | qué hace | dónde (web) | estado |
-|---|---|---|---|
-| Preparación | Servicios, SDR MAIN y RFI, Bias-T, montura en Ekos/INDI. STATUS muestra servicios y dependencias. **REAL PREFLIGHT** lee la montura sin moverla. | STATUS, ALIGN/PIPELINE | [H] |
-| ALIGN | Patrón de anillos alrededor del Sol (de día) o de una zona HI (de noche). Estima el offset de apuntado y, si es confiable, hace **SYNC** (nuevo, 4012330). Siempre muestra el offset al final. | ALIGN → REAL ALIGNMENT | HI [H] sin estimación (2026-10-07); SOLAR y SYNC [C] |
-| CALIBRATE | **Reference Wizard**: 50 Ω en la entrada del LNA, reconectar la antena, zonas HI ALTO/BAJO con GOTO real, FINISH. Construye el perfil RELATIVE para OBSERVE, QUICKLOOK y REDUCE. | CALIBRATE → REFERENCE WIZARD | [H] 4 sesiones |
-| PLAN / OBSERVE | Grilla ecuatorial (EASTMOST_SAFE o FIXED_CENTER). PLAN con PREFLIGHT (BLOCK/WARNING/PASS) y **gain pilot** opcional. START lanza la captura; STOP envía SIGINT. | OBSERVE | [H] 400, 676, 25 y 100 puntos. STOP real [P]. |
-| QUICKLOOK | En vivo durante la sesión: espectro, cascada, mapa, grilla nativa, stack 3D y referencia RFI. | MONITOR | [H] |
-| REDUCE | Nivel 0 (HDF5 crudo) → nivel 1 (espectros por punto, calibración RELATIVE, eje LSRK, máscaras, calidad). | REDUCE | [D] |
-| SCIENCE | Mapas A (celdas medidas), B y C (interpolados en bloques, ≤3 GB). LOO y diagnósticos. Exportes. | SCIENCE | [D] |
+Todas las filas están implementadas y desplegadas, salvo donde se indica.
 
-Orden correcto, por dependencias reales:
+| funcionalidad | tests | datos reales | hardware | limitaciones y pendientes |
+|---|---|---|---|---|
+| **ALIGN** (anillos alrededor del Sol o de una zona HI; offset; SYNC con control) | sí: alineación y SYNC con montura falsa | — | **parcial.** HI: una corrida real de 25 posiciones el 2026-10-07 (`WEB-HI-20261007T011610Z`), sin offset estimable. SOLAR: nunca. SYNC: nunca. | BL-026. Con este haz, HI rara vez estima un offset. La sección ALIGN de PIPELINE no tiene SYNC (BL-043). |
+| **CALIBRATE** (Reference Wizard: 50 Ω, zonas HI ALTO/BAJO, perfil RELATIVE) | sí | sí: mapa de zonas con plan real | sí: tres wizards DONE (2026-10-02, 10-07, 10-08) y uno ABORTED. Perfiles a 40.2 y 42.1 dB. | STOP CURRENT STEP sin probar (BL-028). Contraste INCONCLUSIVE el 10-07 y el 10-08. Sin modelo de horizonte (BL-039). Solo RELATIVE: no hay Kelvin. |
+| **Gain pilot** (1 o 2 capturas reales para elegir ganancia; RE-PLAN) | sí | — | sí: 2026-10-08, READY a 42.1 dB y RE-PLAN usado. | El aviso de ganancia sin perfil (BL-023) no se ha visto en una sesión real (BL-032). |
+| **OBSERVE** (PLAN, PREFLIGHT, START, STOP) | sí | — | sí: 400 puntos (10-02), 676 (10-07), 100 y tres de 25 (10-08). Todas COMPLETED, 0 fallidos en las dos últimas. | **STOP real sin probar** (BL-027). Fallas provocadas sin probar (BL-029). |
+| **QUICKLOOK** (espectro, cascada, mapa, grilla nativa, vista interpolada) | sí | sí | sí: en vivo en todas las sesiones con perfil compatible; la última procesó 25/25. | Se bloquea si el perfil no coincide en ganancia. Es vista previa, no producto científico. |
+| **RFI REF** (antena B, SDR 00000002, `rtl_tcp` en :1235) | sí | — | **parcial.** Seis sesiones reales con ACK de sintonía y `-T` en el log de lanzamiento. Alimentación del LNA sin medir. | BL-031. REDUCE no lo usa (BL-037). El esquema de la CLI deja el Bias-T apagado por omisión (BL-041). |
+| **MONITOR** (sesión, quicklook, RFI, stack 3D, cámara, log) | sí: navegador headless | sí: stack 3D con datos reales | sí: usado en vivo. | El stream de la cámara respondió 503 el 2026-10-12; causa no investigada. |
+| **REDUCE** (nivel 0 → nivel 1, RELATIVE, LSRK) | sí | sí: cinco reducciones, la última el 2026-10-08 sobre la sesión de 100 puntos | — | Motor congelado. Topocentric exige los mismos metadatos que LSRK (BL-036). Las dos sesiones del 10-08 por la tarde no están reducidas. |
+| **SCIENCE** (mapas A, B y C; LOO; exportes) | sí | sí: 400/400 puntos, calidad GOOD, pico de 1.03 GB; y la sesión de 100 puntos | — | Motor congelado. B y C interpolan: más píxeles no es más resolución. Depende del haz provisional. |
+| **Servicios** (cuatro unidades systemd) | sí | — | sí: activas y habilitadas; arrancaron solas tras el reinicio del 2026-10-08. Unidades instaladas idénticas a `systemd/`. | El servidor tiene cargado un archivo anterior a HEAD (§4, BL-044). Pie de página con texto falso (BL-045). |
+| **Manual cortapalos** | — | revisado contra código y `data/` el 2026-10-12 | no: nunca se hizo el recorrido completo siguiéndolo | BL-033. Falta el procedimiento de Ekos. |
+
+Orden de operación, por dependencias reales:
 
 1. Ekos: alineación base de la montura.
 2. ALIGN, opcional pero recomendado. No usa el perfil.
@@ -54,7 +79,33 @@ Detalle y botones exactos: manual cortapalos.
 
 ---
 
-## 2. Qué cambió desde 8dfb3ab
+## 2. Qué cambió
+
+### Desde fd8a962 (2026-10-08 19:27 UTC)
+
+| fecha (UTC) | qué | evidencia |
+|---|---|---|
+| 2026-10-08 20:50 | **Reinicio del Pi.** Los cuatro servicios arrancaron solos. | `last -x`; unidades con `NRestarts=0` |
+| 2026-10-08 21:04 | OBSERVE real, 25 puntos, 30×30°, 10 s, 42.1 dB. | `data/mosaic/ALMITA-OBSERVE-20261008-21:04:06`: 25 HDF5, 0 fallidos, 15 min |
+| 2026-10-08 22:33 | **b6eca65** — RFI REF con Bias-T encendido por defecto (BL-025). | 8 archivos, +66/−8 |
+| 2026-10-08 22:35 | OBSERVE real, 25 puntos, 50×50°, 1 s, 42.1 dB, altura mínima pedida 1°. | `…20261008-22:34:35`: 25 HDF5, COMPLETED, 12 min |
+| 2026-10-12 | Revisión de estado: este brief, el backlog y el manual. `.gitignore` cubre las salidas de montura. | Commit de documentación |
+
+No hubo ALIGN, CALIBRATE, gain pilot, REDUCE ni SCIENCE después de fd8a962.
+
+**b6eca65 — Bias-T de RFI REF**
+- `/api/observe/defaults` devuelve `rfi_ref.bias_tee: true` y el formulario lo sigue y lo conserva al RE-PLAN.
+- El esquema (`observation_spec.py`) mantiene `false` por omisión, para que los planes archivados revaliden igual.
+- La parte del servidor no está cargada todavía (§4).
+
+Hallazgos de esta revisión, todos en el backlog:
+- la web recibe tráfico de Internet (BL-040);
+- un test escribe en el `data/` real (BL-046);
+- el manual daba 10° como altura mínima por defecto y la web rellena 30° (corregido);
+- las carpetas `data/alignment/SOLAR-*` no son corridas solares: son restos de tests.
+
+### Desde 8dfb3ab hasta fd8a962
+
 
 Base: **8dfb3ab** (2026-10-07). Arregla el incidente del wizard con 50 Ω:
 - detecta un handle USB de MAIN viejo (dispositivo re-enumerado después de iniciar `rtl_tcp`);
@@ -198,28 +249,46 @@ Ver `docs/REDUCE_V1_FREEZE.md`, `docs/SCIENCE_V1_FREEZE.md` y `docs/WEB_V1_FREEZ
 
 ## 4. Qué está desplegado
 
-- **Repositorio:** `git@github.com:almita-radio/almita.git` (https://github.com/almita-radio/almita).
-- **Rama de trabajo:** `web-polish-v1`. El SHA publicado está en el commit que agrega este brief; se informa al
-  entregarlo.
-- **Servidor web** (`almita-observe-api`): arrancó el 2026-10-08 a las 12:55:22 UTC.
-  - Ningún `.py` del repo cambió después de ese arranque, así que el Python cargado es el de HEAD.
-  - `console/` se sirve en vivo, así que también es HEAD.
-  - Los scripts que lanza (`alignment.py`, `reduce_campaign_run.py`, `science_web_bridge.py`, …) se cargan en
-    cada trabajo.
-  - **En la práctica corre el código de HEAD.** El SHA del pie de página se lee de Git la primera vez que se
-    consulta, así que puede mostrar un commit anterior con el mismo código.
-- **Otros servicios:**
-  - watcher: desde 2026-10-06 09:22;
-  - blackbox: desde 2026-10-05 22:40;
-  - `rtl_tcp`: desde 2026-10-07 00:25.
+Comprobado el 2026-10-12 sin reiniciar ni desplegar nada.
 
-  Su código no cambió después de esos arranques.
-- **Diferencia con `main`:**
-  - `web-polish-v1` tiene unos 82 commits que `main` no tiene.
-  - `origin/main` tiene 19 commits de documentación y sitio (licencias open hardware, `docs/hardware/` con BOM,
-    cableado y mecánica, sitio web) que esta rama no tiene.
-  - Las dos ramas solo chocan en `README.md`.
-  - No se hizo merge. Unir las ramas es una decisión del operador (PR); ver BACKLOG.
+### Qué ejecuta cada servicio
+
+Los cuatro servicios arrancaron con el reinicio del Pi, el 2026-10-08 a las 20:50:50 UTC, y no se reiniciaron
+desde entonces (`NRestarts=0`). Las unidades instaladas en `/etc/systemd/system/` son idénticas a las de
+`systemd/` del repo.
+
+| servicio | PID | código que tiene cargado | diferencia con b6eca65 |
+|---|---|---|---|
+| `almita-observe-api` (:8088) | 825 | `almita_orchestrator_server.py` como estaba en **fd8a962**: el archivo se editó a las 22:28, después del arranque. El resto de los módulos que importa no cambió desde antes del arranque. `console/` se sirve en vivo. | Una: `/api/observe/defaults` no devuelve `rfi_ref.bias_tee`. Sin efecto visible, porque la casilla ya viene marcada en el HTML. |
+| `almita-console-watcher` | 824 | `almita_console_watcher.py`, sin cambios desde el 2026-10-06 | Ninguna |
+| `almita-system-blackbox` | 679 | `almita_system_blackbox.py`, sin cambios desde el 2026-10-05 | Ninguna |
+| `rtl_tcp` | 848 | Binario del sistema: `rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 -f 1420405752 -s 2400000 -g 40.2 -T` | Ninguna; coincide con `observer_config.json` |
+
+- Los scripts que lanza la web (`alignment.py`, `capture.py`, `reduce_campaign_run.py`, `science_web_bridge.py`,
+  …) se cargan en cada trabajo, así que corren el código del árbol de trabajo.
+- Fuera de systemd: `indiserver` en :7624, levantado por Ekos el 2026-10-08 a las 20:58. `almita-console-web`
+  (la web vieja) está deshabilitada.
+- **No verificado:** el SHA que muestra el pie de página de la web. Exige iniciar sesión, y esta revisión no usó
+  las credenciales. El servidor lo lee de Git la primera vez que se consulta, así que puede decir `fd8a962` o
+  `b6eca65` según cuándo fue esa primera consulta.
+
+### Exposición de red
+
+El servidor escucha en `0.0.0.0:8088`. Entre el 2026-10-10 y el 2026-10-12 el journal registra pedidos desde 57
+direcciones públicas distintas: 76 de escáneres, rechazados con 401, y una sesión autenticada desde una dirección
+pública el 2026-10-11 a las 16:55 UTC. La autenticación es HTTP Basic sin TLS. El pie de página y el runbook
+hablan de «LAN». Ver BL-040.
+
+### Ramas
+
+- **Repositorio:** `git@github.com:almita-radio/almita.git` (https://github.com/almita-radio/almita).
+- **Rama de trabajo:** `web-polish-v1`. Local y `origin/web-polish-v1` coinciden; el SHA publicado se informa al
+  entregar este brief.
+- **`main`** (`origin/main` = `9161fe8`): base común `70b4a5c`.
+  - `web-polish-v1` tiene todo el producto actual, más de 80 commits que `main` no tiene.
+  - `main` tiene 19 commits de documentación y sitio (licencias open hardware, `docs/hardware/` con BOM, cableado
+    y mecánica, sitio web) que esta rama no tiene.
+  - Solo chocan en `README.md`. No se hizo merge: es una decisión del operador (BL-035).
 - **Ramas locales que no se suben a propósito:** `backup-antes-de-limpiar-github-20260810` y
   `respaldo-local-18-03`. Tienen historia anterior a la limpieza de GitHub y subirlas la desharía.
 - Otras ramas locales (`backlog/…`, `science/…`, `web/backlog-integration`, `science-forensics-v1`) ya están
@@ -231,27 +300,34 @@ Ver `docs/REDUCE_V1_FREEZE.md`, `docs/SCIENCE_V1_FREEZE.md` y `docs/WEB_V1_FREEZ
 
 ### Tests automatizados
 
-| conjunto | resultado |
+**Corrida completa del 2026-10-12** (23:10 a 23:43 UTC, 33 min 29 s), sobre el código de b6eca65, con
+`.venv/bin/python -m pytest tests -q`. No usa hardware: la sintonía y RFI REF están sustituidos en
+`tests/conftest.py`.
+
+| resultado | cantidad |
 |---|---|
-| SCIENCE bridge + CLI de REDUCE + progreso en el log | 76 passed, 2 skipped |
-| Alineación (HI v2, alignment v2, CLI) | 61 passed |
-| SYNC guard (montura falsa: enviar / no pedido / baja confianza / offset grande / GOTO fallido / ruta HI completa) | 8 passed |
-| Web: hardening, align/calibrate, sync_flow, frontend completo | 138 passed |
-| Frontend + preflight de observación (después de 8f7ab05) | 90 passed |
-| Stack 3D (consola) | 5 passed |
+| passed | 2540 |
+| failed | 3 |
+| skipped | 52 |
 
-Los tests de navegador usan chromium headless con la API simulada (`tests/test_web_frontend.py`).
+Las tres fallas, vueltas a correr aisladas el mismo día (corrida parcial, 3 tests, 20 s: 2 passed, 1 failed):
 
-### 5.1 Suite completa
+| test | en la corrida completa | aislado | causa |
+|---|---|---|---|
+| `test_sdr_tuning.py::test_no_frequency_literal_in_operational_python` | falla | **falla** | Real y determinista. fd8a962 versionó `rf_chain_characterization.py`, `rf_gain_control_test.py` y `sun_detectability_test.py`, que llevan el literal `1420405752`. BL-051. |
+| `test_quicklook_live.py::test_run_exits_on_its_own_once_capture_reports_the_session_ended` | falla | pasa | Depende del orden: otro test deja `quicklook_live.STOP_REQUESTED` activado. BL-047. |
+| `test_web_frontend.py::test_field_console_left_open_for_30_minutes…` | falla | pasa | Sensible al reloj con el Pi cargado. Ya conocida. BL-047. |
 
-No se volvió a correr completa en esta sincronización: tarda unos 30 min en el Pi y ningún cambio la exige.
+Cobertura que da esta corrida: todo lo que hay en `tests/` (164 archivos), incluidos alineación y SYNC con
+montura falsa, wizard, gain pilot, preflight, orquestador, quicklook, REDUCE, SCIENCE y el frontend en chromium
+headless con la API simulada.
 
-- La última corrida completa fue el 2026-10-06 (BL-009): 2447 passed, con las fallas de esa corrida corregidas y
-  vueltas a correr en verde.
-- El 2026-10-08 se lanzó una corrida completa y se detuvo a propósito al 38 %, sin ninguna falla hasta ese punto.
-- Los cambios desde entonces están cubiertos por los conjuntos de la tabla de arriba.
-- La prueba de estabilidad de la consola (`test_field_console_left_open_for_30_minutes…`) simula 30 min en
-  segundos y pasó hoy dentro de `test_web_frontend.py`.
+Efecto secundario: la corrida creó `data/alignment/SOLAR-20261012-231035` (BL-046). No se borró.
+
+No se corrió nada más: ni conjuntos parciales adicionales ni pruebas en hardware.
+
+Corridas completas anteriores, según el brief previo y sin repetir: 2026-10-06, 2447 passed; 2026-10-08,
+detenida a propósito al 38 % sin fallas.
 
 ### Hardware y sesiones reales
 
@@ -266,57 +342,65 @@ No se volvió a correr completa en esta sincronización: tarda unos 30 min en el
 | 2026-10-08 | Gain pilot real (4 sesiones) | READY a 42.1 dB; flujo RE-PLAN usado |
 | 2026-10-08 | OBSERVE 25 puntos (con pilot) y 100 puntos (`…01:50:03`), 42.1 dB | COMPLETED; QUICKLOOK y RFI REF en vivo |
 | 2026-10-08 | REDUCE y SCIENCE desde la web sobre la sesión de 100 puntos | PASS; avance en el log comprobado con datos reales |
+| 2026-10-08 | OBSERVE 25 puntos, 30×30°, 10 s, 42.1 dB (`…20261008-21:04:06`) | 25 HDF5, 0 fallidos, 15 min 00 s |
+| 2026-10-08 | OBSERVE 25 puntos, 50×50°, 1 s, 42.1 dB, altura mínima 1° (`…20261008-22:34:35`) | 25 HDF5, COMPLETED, 11 min 57 s; QUICKLOOK 25/25 |
 
-Duración real medida: unos 32 s por punto con capturas de 10 s, y unos 23 s por punto con capturas de 1 s.
+Duración real medida: unos 32 s por punto con capturas de 10 s, y unos 23 s por punto con capturas de 1 s. Las dos sesiones
+de 25 puntos dieron 36 s y 29 s por punto: son grillas más abiertas, con GOTO más largos.
+
+El 2026-10-12 se comprobó que la sesión de 400 puntos (400 HDF5, 6.1 GB), su perfil y el resguardo
+`almita_preserve_20261002` siguen intactos: mismos archivos, tamaños y fechas antes y después de esta revisión.
 
 ### Pendiente en hardware
 
-1. SYNC de ALIGN: primero SOLAR sin SYNC, después con SYNC, y luego un ALIGN de confirmación.
-2. ALIGN SOLAR desde la web, que nunca se ha corrido.
-3. STOP OBSERVATION real.
-4. STOP CURRENT STEP del wizard durante una captura real (BL-007).
-5. Fallas provocadas: desconectar MAIN y apagar INDI.
-6. Bench `sdr --yes` (BL-008) y la CLI de `mount_control.py` (BL-011).
-7. El aviso nuevo del gain pilot, visto en una sesión real.
-8. Un recorrido completo siguiendo el manual.
-9. Antena B: medir que su LNA recibe alimentación con el Bias-T de RFI REF (que tiene LNA ya está confirmado).
+La lista completa, con la evidencia que falta en cada caso, está en [BACKLOG.md §2.2](BACKLOG.md): BL-026 a
+BL-034.
 
 ---
 
-## 6. Bugs, limitaciones y backlog
+## 6. Limitaciones y archivos fuera de Git
 
-El estado completo está en [BACKLOG.md](BACKLOG.md). Lo esencial:
+Pendientes, prioridades y orden: [BACKLOG.md](BACKLOG.md).
 
 **Limitaciones conocidas**
 - El haz (FWHM 20°) es provisional: no está medido, y `alignment.py` usa 14° como placeholder.
-- ALIGN HI rara vez estima un offset con este haz. La referencia útil es el Sol.
+- ALIGN HI rara vez estima un offset con este haz. La referencia útil es el Sol, que nunca se probó.
 - RFI REF solo sirve de monitoreo: REDUCE no lo asocia a los puntos.
 - No hay modelo de horizonte: CALIBRATE muestra «OBSTACLES NOT EVALUATED».
 - Calibración solo RELATIVE: no hay Kelvin ni ganancia absoluta.
 - En REDUCE, topocentric exige los mismos metadatos que LSRK (motor congelado).
 - La sección ALIGN de PIPELINE no tiene SYNC.
-- El pie de página dice «no authentication», pero el servidor sí exige Basic Auth. Es un texto equivocado.
+- El pie de página dice «LAN, no authentication». Las dos cosas son falsas hoy.
 
-**Archivos que quedaron fuera de Git (§7)**
-- Scripts de investigación de agosto del operador.
-- Salidas de benchmarks de montura.
-- Respaldos `.tar.gz`.
-- Un archivo vacío `=.9`.
+**Fuera de Git, a propósito.** Nada de esto se borró, se movió ni se subió.
 
-Versionados en esta sincronización:
-- `rf_chain_characterization.py`, `rf_gain_control_test.py`, `sun_detectability_test.py` y su test, porque la
-  documentación y los comentarios del producto los citan como fuente de método;
-- `examples/block-validation-01.yaml`, un ejemplo de especificación.
+| qué | por qué queda fuera |
+|---|---|
+| `data/` (sesiones, perfiles, reducciones, mapas, runtime) | Datos y capturas. Ignorado, salvo `data/hi_sky_catalog_2000pts.csv`. Incluye la sesión de 400 puntos `ALMITA-OBSERVE-20261002-01:45:08` y su perfil `WIZARD-20261002-013321-160933`, intactos. |
+| `/home/stellarmate/almita_preserve_20261002/` (6.4 GB) | Resguardo, fuera del repo. Se borra solo cuando el operador lo diga. |
+| `align_ultima_revision.tar.gz`, `calib_ultima_revision.tar.gz` | Resguardos del 2026-09-28 con trabajos y perfiles de `data/`. |
+| `mount_benchmark_targeted_*/` (4 carpetas), `mount_slew_model_output/` | Salidas de campañas de montura de agosto: CSV, JSON y PNG. Desde esta revisión están en `.gitignore`, igual que las demás `mount_benchmark_*`. |
+| `mount_slew_data03.py`, `mount_slew_data03_physical.py`, `analyze_mount_slew_data03_physical.py` | Scripts de una campaña puntual de montura (agosto). Dos de ellos mueven la montura. Nada del producto los importa ni los cita. |
+| `antenna_coupling_test.py`, `indoor_antenna_coupling_check.py`, `indoor_coupling_stage.py`, `indoor_coupling_finalize.py`, `rf_chain_isolation_02.py`, `rf_chain_isolation_02_analysis.py`, `sdr_config_fix_validation.py` | Scripts de investigación de la cadena RF (agosto). Sin tests, y nada del producto los importa ni los cita. |
+| `=.9` | Archivo vacío del 2026-08-26, creado por error. |
+| `~/.config/almita/web_auth.json` | Credenciales de la web. Fuera del repo por diseño. |
+| Ramas `backup-antes-de-limpiar-github-20260810` y `respaldo-local-18-03` | Historia anterior a la limpieza de GitHub. |
+
+Qué hacer con los scripts y los resguardos es BL-042.
 
 ---
 
 ## 7. Manual cortapalos
 
-- `docs/MANUAL_CORTAPALOS.pdf` (9 páginas), con fuente editable en `docs/MANUAL_CORTAPALOS.md`.
+- `docs/MANUAL_CORTAPALOS.pdf`, con fuente editable en `docs/MANUAL_CORTAPALOS.md`.
 - Se regenera con `/usr/bin/python3 scripts/build_manual_pdf.py`, que usa el `markdown` del sistema y chromium
   headless.
 - Está enlazado al inicio de `FIELD_RUNBOOK.md`.
-- Es un primer borrador, revisado contra el código y la web, con marcas [H]/[D]/[C]/[P] por paso.
-- Ya incluye el SYNC de ALIGN y el aviso del gain pilot.
-- Su Anexo C lista las comprobaciones físicas pendientes.
-- Falta documentar el procedimiento exacto de Ekos, que hace el operador.
+- Revisado el 2026-10-12 contra el código, la web y `data/`. Cambios:
+  - la versión del encabezado, que citaba `67df4a6` y un servidor arrancado a las 00:41;
+  - la altura mínima por defecto: la web rellena 30°, no 10°;
+  - el Bias-T de RFI REF: evidencia de las seis sesiones, y el aviso sobre las especificaciones YAML;
+  - las sesiones de 25 puntos del 2026-10-08.
+- **Antena B:** el manual, este brief, la web y `examples/overnight-400.yaml` coinciden: LNA alimentado por el
+  Bias-T del SDR 00000002, encendido por defecto. La excepción es el valor por omisión del esquema (BL-041).
+- Sigue siendo un primer borrador: nadie hizo el recorrido completo siguiéndolo, y falta el procedimiento de Ekos.
