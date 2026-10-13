@@ -584,7 +584,9 @@
         }
       } else if (state.step === "READY_HI_ALTO" || state.step === "READY_HI_BAJO") {
         const label = state.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
-        showStepFailure("wz-hi-failure", state, label);
+        const hiFailed = showStepFailure("wz-hi-failure", state, label);
+        // same wording as the 50 Ω step: after an interrupted attempt the button says it is a retry
+        $w("wz-capture-hi").textContent = hiFailed ? "RETRY CAPTURE (real GOTO + capture)" : "CAPTURE NOW (real GOTO + capture)";
         const cand = state.hi_plan.candidates[label];
         $w("wz-step-ready-hi").hidden = false;
         $w("wz-ready-hi-label").textContent = `${label} — RA ${cand.ra_hours.toFixed(4)} h, Dec ${cand.dec_deg.toFixed(3)}°`;
