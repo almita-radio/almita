@@ -51,7 +51,10 @@ FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("scien
           # tuning with requested/applied/evidence attrs (26fa261). The spectral data path is unchanged.
           # observation_spec.py re-pinned from 26fa261 to 7b2eefb (2026-10-13, BL-041): rfi_ref.bias_tee defaults to true.
           # To go back: revert that commit's hunks in these two paths and restore the previous pins.
-          ("capture.py", "26fa261"), ("observation_orchestrator.py", "26fa261"), ("observation_spec.py", "7b2eefb"))
+          ("capture.py", "26fa261"),
+          # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
+          # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
+          ("observation_orchestrator.py", "0148b78"), ("observation_spec.py", "7b2eefb"))
 DEFAULT_WINDOW = (150857.0, 5607.0)          # candidate LSRK window (m/s) of the feature campaign
 MIN_ALT_DEG, HA_MARGIN_H = 30.0, 0.25        # same values the plan/`windows` use
 ENDPOINTS = {"MAIN rtl_tcp": 1234, "INDI": 7624}
