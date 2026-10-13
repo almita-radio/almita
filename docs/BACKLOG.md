@@ -1,7 +1,10 @@
 # ALMITA backlog
 
 Pedidos del operador y su estado real. Revisado contra el código, los commits, los servicios instalados y `data/`
-el 2026-10-12. Contexto general: [PROJECT_BRIEF.md](PROJECT_BRIEF.md).
+el 2026-10-12 y de nuevo el 2026-10-13. Contexto general: [PROJECT_BRIEF.md](PROJECT_BRIEF.md).
+
+Entre las dos revisiones no se cerró ningún pendiente: no hubo commits de producto, sesiones ni reinicios. La
+revisión del 13 agrega BL-052 y BL-053 y amplía la evidencia de BL-040.
 
 Un pedido tiene cinco niveles de comprobación y ninguno implica el siguiente:
 
@@ -48,7 +51,7 @@ reinicio del Pi del 2026-10-08 a las 20:50 UTC, después de todos esos commits.
 | BL-022 | ALIGN: SYNC (Sol y HI) con confianza y offset máximo | 4012330 | sí, montura falsa | — | **no: el SYNC nunca se envió a la montura real** | abierto: BL-026 |
 | BL-023 | Gain pilot avisa de ganancia sin perfil; etiqueta topocentric | 8f7ab05 | sí | — | no: ninguna sesión posterior usó el pilot | abierto: BL-032 |
 | BL-024 | Brief del proyecto + sincronización de Git | fd8a962 | — | — | — | **cerrado** |
-| BL-025 | RFI REF: Bias-T encendido por defecto | b6eca65 | sí | — | parcial: `-T` enviado en 6 sesiones reales; alimentación del LNA sin medir | abierto: BL-031 (medición), BL-044 (despliegue) |
+| BL-025 | RFI REF: Bias-T encendido por defecto | b6eca65 | sí | — | parcial: `-T` enviado en 6 sesiones reales; alimentación del LNA sin medir | abierto: BL-031 (medición), BL-044 (despliegue), BL-052 (plan de forensics) |
 
 Detalle de BL-025: la consola (HTML y JS) está activa. El cambio de `almita_orchestrator_server.py` no está cargado,
 porque el archivo se editó después del arranque del servidor. No cambia lo que ve el operador: sin ese dato, el
@@ -92,9 +95,11 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 
 | id | prioridad | decisión | contexto | opción propuesta |
 |---|---|---|---|---|
-| BL-040 | **P0** | **La web :8088 es alcanzable desde Internet.** | Del 2026-10-10 al 12 el journal registra 57 direcciones públicas distintas; 76 pedidos de escáneres rechazados con 401 y una sesión autenticada desde una IP pública el 2026-10-11 16:55 UTC. La contraseña viaja por HTTP sin cifrar (Basic Auth). Esa web puede mover la montura. No se verificó si otros puertos (22, 5900, 6080, 445) también están reenviados. | Confirmar que la sesión del 11 fue de ustedes. Cerrar el reenvío de puertos del router y entrar por VPN (Tailscale o WireGuard). Si fue ajena, cambiar la contraseña. |
+| BL-040 | **P0** | **La web :8088 es alcanzable desde Internet.** | Del 2026-10-10 al 12 el journal registra 57 direcciones públicas distintas; 76 pedidos de escáneres rechazados con 401 y una sesión autenticada desde una IP pública el 2026-10-11 16:55 UTC. La contraseña viaja por HTTP sin cifrar (Basic Auth). Esa web puede mover la montura. El 2026-10-13 siguen llegando escáneres (10 direcciones públicas más desde el 12 a las 23:45, todas rechazadas con 401 o 400; ninguna sesión autenticada). El Pi también escucha en todas las interfaces en 22, 80, 445, 5900, 6080 y 7624 (INDI: sin autenticación y mueve la montura); no se verificó cuáles reenvía el router, y desde el Pi no se puede saber. | Confirmar que la sesión del 11 fue de ustedes. Revisar en el router **todos** los reenvíos hacia el Pi, no solo :8088. Cerrarlos y entrar por VPN (Tailscale o WireGuard). Si la sesión fue ajena, cambiar la contraseña. |
 | BL-035 | P1 | Unir `web-polish-v1` con `main`. | `main` tiene 19 commits de documentación y sitio que la rama no tiene; la rama tiene más de 80 que `main` no tiene. Solo chocan en `README.md`. | Un PR `web-polish-v1` → `main` resolviendo el README, después de BL-026 y BL-027 |
 | BL-041 | P2 | `rfi_ref.bias_tee` vale `false` por omisión en el esquema (`observation_spec.py`, módulo congelado). | La web manda `true`. Una especificación YAML por CLI que no lo escriba deja el LNA de la antena B sin alimentación. `examples/overnight-400.yaml` lo trae en `true`; `examples/block-validation-01.yaml` tiene RFI REF desactivado. | Mantener el esquema (los planes archivados revalidan igual) y dejarlo advertido en el manual, que ya lo dice |
+| BL-052 | P2 | El plan del experimento de forensics lleva RFI REF activado con `bias_tee: false`. | `examples/science_forensics_experiment.yaml` y `science_forensics/experiment/plan.py` copian la configuración de la campaña de septiembre (`ALMITA-WEB-SMALL-RUN-01`), anterior a la confirmación del LNA de la antena B. Ejecutado tal cual, deja ese LNA sin alimentación. El archivo está fijado en `docs/WEB_V1_FREEZE.md` y el diseño exige «configuración idéntica a la campaña». No afecta a MAIN ni a los productos científicos: RFI REF es solo monitoreo. Encontrado el 2026-10-13. | Decidir después de BL-031. Si el LNA necesita el Bias-T, pasarlo a `true` y dejar escrita la diferencia con la campaña original; hasta entonces, el manual lo advierte |
+| BL-053 | P3 | Cadena de la antena B: la documentación no coincide. | Las guías de `main` (`docs/hardware/RF_AND_WIRING.md`, `BUILD.md`, `BOM.md`) dicen antena → filtro notch FM (Nooelec Flamingo FM) → LNA de banda ancha → SDR, y no dicen que el LNA se alimenta por Bias-T. El manual y el brief dicen antena B → LNA → SDR, sin filtro. No se puede comprobar sin mirar el equipo. Encontrado el 2026-10-13. | Que el operador confirme la cadena real; corregir el manual y el brief en esta rama y las guías al unir con `main` (BL-035) |
 | BL-036 | P3 | REDUCE topocentric sin metadatos. | Exige descongelar `reduce_engine`. Hoy solo se corrigió la etiqueta. | No hacerlo mientras SCIENCE solo acepte LSRK |
 | BL-037 | P2 | RFI REF: asociar las capturas de la antena B a cada punto en REDUCE. | La interfaz existe (`docs/REDUCE_RFI_REF_INTERFACE.md`) y hoy informa UNAVAILABLE. Toca REDUCE V1 congelado. | Decidir después de BL-031: no tiene sentido sin saber que la antena B mide bien |
 | BL-038 | P3 | Subir un perfil desde el disco del navegador (resto de BL-002). | Hay que decidir dónde se guarda y quién puede escribir. | Posponer |
@@ -117,7 +122,8 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
    el árbol listo para un solo reinicio.
 3. **BL-044:** un reinicio del servidor, autorizado por el operador, que carga b6eca65 y BL-045.
 4. **Salida a terreno de día:** BL-031 (sin mover la montura) → BL-026 (ALIGN SOLAR y SYNC) → BL-027 (STOP real)
-   → BL-029. Hacerla siguiendo el manual cubre BL-033.
+   → BL-029. Hacerla siguiendo el manual cubre BL-033. Con el equipo a la vista, confirmar la cadena de la
+   antena B (BL-053) y, con el resultado de BL-031, decidir BL-052.
 5. **Con el Sol ya medido:** BL-034 (haz). Después BL-043 y BL-049.
 6. **Noche siguiente:** BL-028 y BL-032 dentro de una sesión normal.
 7. **BL-035** (PR a `main`) cuando BL-026 y BL-027 estén cerrados.
@@ -126,7 +132,8 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 Dependencias que fijan el orden:
 
 - BL-026 antes de BL-034, BL-043 y BL-049.
-- BL-031 antes de BL-037.
+- BL-031 antes de BL-037 y de BL-052.
+- BL-053 antes de BL-035, para corregir las guías de hardware en el mismo PR.
 - BL-045 antes de BL-044, para reiniciar una sola vez.
 - BL-026 y BL-027 antes de BL-035.
 
@@ -140,5 +147,7 @@ Dependencias que fijan el orden:
 ## 5. Tests
 
 Corrida completa del 2026-10-12 sobre b6eca65: 2540 passed, 3 failed, 52 skipped, en 33 min 29 s. Las tres
-fallas son BL-051 (real) y BL-047 (dos que pasan aisladas). Detalle en
+fallas son BL-051 (real) y BL-047 (dos que pasan aisladas). Es el resultado vigente: desde entonces solo cambió
+documentación. El 2026-10-13 se lanzó otra corrida sin necesidad y se interrumpió al 19 % (556 passed, 0 failed);
+no cuenta como resultado. Detalle en
 [PROJECT_BRIEF.md §5](PROJECT_BRIEF.md#5-validación).

@@ -2,8 +2,9 @@
 
 **De la preparación del equipo a REDUCE y SCIENCE, con la versión instalada.**
 
-Versión del software: rama `web-polish-v1`, código de producto en el commit `b6eca65` (2026-10-08). Revisado el
-2026-10-12 contra el código, la web y las sesiones reales guardadas en `data/`. El servidor web corre desde el
+Versión del software: rama `web-polish-v1`, código de producto en el commit `b6eca65` (2026-10-08); los commits
+posteriores de la rama solo cambian documentación. Revisado el 2026-10-12 y el 2026-10-13 contra el código, la
+web y las sesiones reales guardadas en `data/`. El servidor web corre desde el
 reinicio del Pi del 2026-10-08 a las 20:50 UTC: tiene cargado el Python de `fd8a962` y sirve la consola de
 `b6eca65`. La única diferencia no cambia lo que ve el operador (detalle en `docs/PROJECT_BRIEF.md` §4). Este es
 un **primer borrador**.
@@ -61,6 +62,8 @@ Qué depende de qué en el código actual:
 
 2. **Antena B (RFI REF, opcional):** antena B → LNA → RTL-SDR con **serial 00000002**, por USB. El LNA se
     alimenta por el Bias-T de ese SDR (confirmado por el operador el 2026-10-08). **[P: alimentación sin medir]**
+    Las guías de hardware de la rama `main` ponen además un filtro notch FM entre la antena B y el LNA.
+    **[P: cadena real por confirmar, BL-053]**
 3. **Montura:** OnStep (LX200 OnStep) conectada al Pi. Revisa el trípode, los contrapesos, el recorrido libre de
     cables y que no haya nadie en el camino del GOTO.
 
@@ -88,7 +91,9 @@ Qué depende de qué en el código actual:
     verdad aún no está medido **[P]** (Anexo C): no existe ninguna sesión con el Bias-T apagado para comparar.
 
     Ojo fuera de la web: en una especificación YAML para la CLI, `rfi_ref.bias_tee` vale `false` si no se
-    escribe. Ponlo en `true` a mano, como en `examples/overnight-400.yaml`.
+    escribe. Ponlo en `true` a mano, como en `examples/overnight-400.yaml`. El plan del experimento de
+    forensics (`examples/science_forensics_experiment.yaml`) lo trae en `false` a propósito, porque copia la
+    campaña de septiembre: ejecutado así, el LNA de la antena B queda sin alimentación (BL-052).
 
 4. Frecuencia, muestreo y ganancia **no se escriben a mano**. Salen de `observer_config.json` →
     `observation_defaults` (hoy **1420405752 Hz / 2400000 sps / 40.2 dB**) y la web rellena los campos sola.
