@@ -197,7 +197,7 @@
     header.textContent = "";
     const brand = document.createElement("div");
     const h1 = document.createElement("h1");
-    h1.textContent = "ALMITA " + section;
+    h1.textContent = section;                     // the logo to its left already says ALMITA
     const tag = document.createElement("span");
     tag.className = "readonly";
     tag.textContent = subtitle || "";
@@ -205,7 +205,7 @@
     const nav = document.createElement("nav");
     nav.className = "obs-nav";
     nav.setAttribute("aria-label", "ALMITA sections");
-    const items = NAV.concat([{ key: "MONITOR", href: consoleBase() + "/" }, { key: "LAST SESSION", href: consoleBase() + "/#last-session" }]);
+    const items = NAV.concat([{ key: "MONITOR", href: consoleBase() + "/" }]);
     for (const it of items) {
       const a = document.createElement("a");
       a.className = "obs-nav-link" + (it.key === section ? " active" : "");

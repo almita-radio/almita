@@ -234,7 +234,7 @@ out.afterStop = [$("run-badge").textContent, $("run-kind").textContent, $("stop-
     assert out["errors"] == []
     assert out["start_initial"][0] is True and out["start_initial"][1] == "plan first" and "plan first" in out["start_initial"][2]        # disabled WITH a reason
     assert out["stop_initial"] == [True, "no observation is running"]
-    assert out["header"] == ["ALMITA OBSERVE", "OBSERVE", "page"] and "PLANNED" in out["strip"] and "AVAILABLE" in out["strip"] and "UP" in out["strip"]
+    assert out["header"] == ["OBSERVE", "OBSERVE", "page"] and "PLANNED" in out["strip"] and "AVAILABLE" in out["strip"] and "UP" in out["strip"]
     assert "Felipe Fridman" in out["footer"] and "GitHub project" in out["footer"] and "abc1234" in out["footer"]
     assert out["planPosts"] == 1 and out["planBusy"][0] is True and out["planBadge"] == "READY"
     assert out["startAfterPlan"] == [False, ""]
@@ -396,7 +396,7 @@ window.__routes["GET /api/align/status"] = "network-error"; await sleep(11000); 
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
     assert out["initial"][:4] == [True, True, False, ""]                     # REAL alignment is enabled from its own panel (typed MOVE + real plan gate it there)
-    assert out["initial"][4] == "" and "plan first" in out["initial"][5] and out["header"] == "ALMITA ALIGN"
+    assert out["initial"][4] == "" and "plan first" in out["initial"][5] and out["header"] == "ALIGN"
     assert out["planPosts"] == 1 and out["runEnabled"] is False and out["runPosts"] == 1 and out["runBtn"] == [True, "a simulation is running"] and out["simFlag"] is False
     assert out["afterJob"] == [False]
     assert "POST /api/align/plan/solar" in out["err"] and "unexpected error (OSError)" in out["err"] and "[request r7]" in out["err"]

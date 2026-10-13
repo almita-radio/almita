@@ -1443,6 +1443,9 @@ def test_capture_executor_explicit_runtime_dir_override_still_works(tmp_path):
 def test_offline_first_no_cdn_or_external_calls():
     for name in ("index.html", "styles.css", "app.js"):
         text = (CONSOLE / name).read_text()
+        # embedded images (data: URIs, e.g. the header logo) are offline by definition; their base64 text is random
+        # letters and must not be read as words such as "cdn"
+        text = re.sub(r'url\("data:[^"]*"\)', 'url("")', text)
         assert "http://" not in text and "https://" not in text
         assert "cdn" not in text.lower() and "googleapis" not in text.lower()
     server_source = (ROOT / "almita_console_server.py").read_text()

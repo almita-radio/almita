@@ -212,7 +212,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
    its height. The status indicator keeps its contract: its own row, centred on the PAGE (it spans the whole header
    and is narrower than the space between two logo widths, so it never runs under the logo; a very long status wraps). */
 @media(min-width:1220px){
-  .topbar{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto auto;column-gap:16px;row-gap:2px;align-items:center}
+  .topbar{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:2.4rem 2rem 1fr;column-gap:16px;row-gap:0;align-items:center}   /* fixed title and navigation rows: the title sits at the same height on every page, whatever the status row holds */
   .topbar::before{grid-column:1;grid-row:1/4}
   .topbar>div:first-child{grid-column:2;grid-row:1}
   .topbar>.obs-nav{grid-column:2;grid-row:2;justify-self:start;margin-left:0}

@@ -87,12 +87,12 @@ def test_observe_page_still_loads(running_server=running_server):
     with running_server() as base:
         with urllib.request.urlopen(f"{base}/observe.html", timeout=10) as r:
             assert r.status == 200
-            assert b"ALMITA OBSERVE" in r.read()
+            assert b"<h1>OBSERVE</h1>" in r.read()      # the header logo says ALMITA; the title is the section
 
 
 def test_align_and_calibrate_pages_load():
     with running_server() as base:
-        for page, title in (("align.html", b"ALMITA ALIGN"), ("calibrate.html", b"ALMITA CALIBRATE")):
+        for page, title in (("align.html", b"<h1>ALIGN</h1>"), ("calibrate.html", b"<h1>CALIBRATE</h1>")):
             with urllib.request.urlopen(f"{base}/{page}", timeout=10) as r:
                 assert r.status == 200
                 assert title in r.read()
