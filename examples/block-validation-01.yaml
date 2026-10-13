@@ -31,7 +31,7 @@ rfi_ref:
   enabled: false
   serial: "00000002"
   gain_db: 25.0
-  bias_tee: false
+  bias_tee: true   # antenna B's LNA is powered by this Bias-T; write false only for a reference chain without an LNA
 
 quicklook:
   enabled: false

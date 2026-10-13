@@ -211,13 +211,17 @@ def _validate_rfi_ref(raw: dict) -> dict:
     serial = _str(raw, "serial", where, required=False, default="00000002")
     gain_db = _num(raw, "gain_db", where, required=False, default=25.0)
     # Unlike main.bias_tee (always-on, no CLI path to disable), RFI_REF's
-    # bias-tee is genuinely optional per-field hardware (whether an LNA is
-    # wired into antenna B's chain varies by deployment). Default false:
-    # an older spec/archived resolved-plan with no opinion on this field
-    # must revalidate to the same behavior rtl_tcp has always run with for
-    # RFI_REF (no -T) rather than silently start energizing hardware that
-    # wasn't there when the config was written.
-    bias_tee = _bool(raw, "bias_tee", where, required=False, default=False)
+    # bias-tee stays a real per-chain choice: an explicit `bias_tee: false`
+    # is honoured (a reference chain with no LNA, or one that must not see
+    # DC on its input). Default TRUE since 2026-10-13 (BL-041): antenna B
+    # of this instrument has an in-line LNA powered through SDR 00000002's
+    # Bias-T (operator-confirmed 2026-10-08), so a spec that says nothing
+    # must not leave that LNA unpowered. This is the same default the web
+    # form and /api/observe/defaults already used. Consequence, on purpose:
+    # an older spec with no opinion on this field now revalidates with the
+    # Bias-T ON (until 2026-10-13 it revalidated OFF); resolved plans always
+    # carry the field explicitly and are unaffected.
+    bias_tee = _bool(raw, "bias_tee", where, required=False, default=True)
     return {"enabled": enabled, "serial": serial, "gain_db": gain_db, "bias_tee": bias_tee}
 
 

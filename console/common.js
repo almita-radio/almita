@@ -287,7 +287,7 @@
     const url = (document.body && document.body.dataset.versionUrl) || "/api/system/version";
     const r = await U.api(url, { timeoutMs: 5000 });
     const v = r.ok ? (r.data && r.data.data ? r.data.data : r.data) : null;
-    info.textContent = v ? ` · build ${v.git_short_sha || "unknown"} · started ${U.utc(v.started_utc)} · ${v.transport || "HTTP LAN"}` : " · build unknown (version unavailable)";
+    info.textContent = v ? ` · build ${v.git_short_sha || "unknown"} · started ${U.utc(v.started_utc)} · ${v.transport || "HTTP"}` : " · build unknown (version unavailable)";
   };
 
   // ------------------------------------------------------------------ calibration profile explorer (server disk)

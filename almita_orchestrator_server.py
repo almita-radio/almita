@@ -188,7 +188,8 @@ def _observe_defaults() -> Dict[str, Any]:
             "traversal": "SERPENTINE",
         },
         # Antenna B has an in-line LNA powered through SDR 00000002's Bias-T (operator confirmation 2026-10-08): the
-        # form starts with RFI_REF Bias-T ON. The spec schema default stays false so archived plans revalidate unchanged.
+        # form starts with RFI_REF Bias-T ON - the same default as the spec schema (observation_spec, BL-041). OFF stays
+        # available: the form's checkbox, or an explicit `bias_tee: false` in a YAML spec.
         "rfi_ref": {"serial": "00000002", "gain_db": 25.0, "bias_tee": True},
         "observer": config.get("observer", {}),
     }

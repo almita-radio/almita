@@ -18,8 +18,15 @@ stays coordinate-frame-agnostic and only deals in SkyCoord objects).
 
 HI eligibility: SyntheticHIReferenceProvider.is_observational is always
 False (see targets/hi_reference.py) - prepare_sync() reads that flag and
-sets eligible=False for HI unconditionally today, mirroring alignment.py's
-existing "NON-OBSERVATIONAL TEMPLATE - SYNC BLOCKED" behavior exactly.
+sets eligible=False for a synthetic HI template unconditionally.
+
+Scope note (2026-10-13, BL-049): this is the policy of THIS engine only
+(almita_align.py and the ALIGN page's engine panel). It used to mirror
+alignment.py, but since 4012330 alignment.py - the script behind the web's
+REAL ALIGNMENT - no longer hard-blocks HI: it judges HI like the Sun
+(confidence >= 0.65 and offset <= the maximum) and may send a SYNC. The two
+paths differ on purpose until a real SYNC has been validated on the mount
+(BL-026); do not "align" either one to the other before that.
 """
 from __future__ import annotations
 

@@ -11,6 +11,14 @@ import quicklook_live as ql
 from tests.conftest import FOUNDATION_PROFILE as PROFILE  # real V1 profile kept in tests/fixtures/ (not data/)
 
 
+@pytest.fixture(autouse=True)
+def _reset_stop_flag(monkeypatch):
+    """quicklook_live.STOP_REQUESTED is a module-level flag set by request_stop() (here and by any test that drives the
+    signal handler). Left set, run() exits at once in whatever test comes next - an order-dependent failure seen only
+    in full-suite runs (BL-047). Every test starts with it clear and monkeypatch restores it afterwards."""
+    monkeypatch.setattr(ql, "STOP_REQUESTED", False)
+
+
 def capture(path, topology=True):
     with h5py.File(path,"w") as f:
         f.create_dataset("iq_data",data=np.zeros(32,dtype=np.uint8))

@@ -15,6 +15,7 @@ almita_console_server.py are the entire change.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.error
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parent
+LOG = logging.getLogger("almita.mount_camera")
 CONFIG_PATH = ROOT / "data" / "runtime" / "mount_camera_config.json"
 DEFAULT_STREAM_URL = "http://192.168.1.164:81/stream"
 
@@ -98,7 +100,7 @@ class MountCameraRelay:
         self._stop_upstream = threading.Event()
         self._connected_or_failed = threading.Event()
         self._idle_timer: Optional[threading.Timer] = None
-        self._state = "IDLE"            # IDLE | CONNECTING | STREAMING | ERROR
+        self._state = "IDLE"            # IDLE | CONNECTING | STREAMING | ERROR (ERROR = gave up; a retry in progress is CONNECTING)
         self._last_error: Optional[str] = None
         self._last_connect_attempt_utc: Optional[str] = None
         self._last_frame_utc: Optional[str] = None
@@ -208,14 +210,24 @@ class MountCameraRelay:
                 if connected:
                     connect_attempt = 0     # reached STREAMING at least once - the camera later closing is not a "failure", reset the budget
                 elif connect_attempt >= MAX_CONNECT_RETRIES:
+                    LOG.warning("mount camera: giving up after %d connect attempts to %s (%s)", connect_attempt,
+                                self.get_url(), self._last_error)
                     self._connected_or_failed.set()   # giving up - only NOW signal a waiting viewer, with the final ERROR state
                     break
+                # A retry follows: this is not the final ERROR yet. _stream_once() marks every failed attempt as
+                # ERROR, and a viewer whose wait ran out between two attempts was answered 503 although the next
+                # attempt would have connected (found in the journal: 503s followed by a 200 a minute later).
+                with self._lock:
+                    self._state = "CONNECTING"
                 time.sleep(RETRY_COOLDOWN_S)
         finally:
             with self._lock:
                 self._thread = None
-                still_watching = bool(self._subscribers)
-                subs_to_close = [] if still_watching else list(self._subscribers.values())
+                # Nobody feeds these viewers once this thread is gone: close every remaining subscriber so its
+                # request ends (the picture shows STREAM UNAVAILABLE and a retry starts a fresh upstream) instead
+                # of holding an answered-200 connection open with no data. The previous expression only listed
+                # subscribers when there were none, so it never closed anything.
+                subs_to_close = list(self._subscribers.values())
             for sub in subs_to_close:
                 sub.close()
             self._connected_or_failed.set()   # safety net: never leave a waiter blocked past this thread's own end
@@ -257,6 +269,8 @@ class MountCameraRelay:
             with self._lock:
                 self._state = "ERROR"
                 self._last_error = f"{type(exc).__name__}: {exc}"
+            LOG.warning("mount camera: upstream %s failed (%s) - %s", url, "after streaming" if connected else "on connect",
+                        self._last_error)
         else:
             # Exited the read loop with no exception: either a deliberate stop (idle timeout - the state
             # really is IDLE now) or the camera closed its end on its own (state stays as-is; the caller's

@@ -1,5 +1,9 @@
 # End-to-end flow v0.1: alignment → calibration → grid → capture → spectra → plots
 
+> **Historical document (v0.1).** It describes the first command-line pipeline and no longer matches the product:
+> paths, flags and the calibration method have changed. Current operation: [MANUAL_CORTAPALOS.pdf](../MANUAL_CORTAPALOS.pdf);
+> current state: [PROJECT_BRIEF.md](../PROJECT_BRIEF.md). Kept unchanged below as a record.
+
 Author: Felipe Fridman G. (ffridman@gmail.com)
 
 This document walks through the full observing pipeline with a narrative tone so new operators can understand not only the "how" but the "why" behind each step. Paths, key flags, and technologies are spelled out so you can trace outputs and logs from start to finish. Built to bring the amateur telescope "Almita" (90 cm grid parabolic antenna + LNA + SDR + OnStep mount) into operational status.

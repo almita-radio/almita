@@ -173,8 +173,8 @@ def test_fixed_center_plan_preserves_rfi_ref_bias_tee(fixed_center_plan):
     shared plan_observation() call (see module docstring: this Pi has ~0
     free swap and cannot afford a second real grid_generator.py pass)."""
     data_dir, plan = fixed_center_plan
-    assert plan["rfi_ref"]["bias_tee"] is False  # _valid_spec()'s rfi_ref omits it -> schema default
+    assert plan["rfi_ref"]["bias_tee"] is True  # _valid_spec()'s rfi_ref omits it -> schema default (ON, BL-041)
 
     session_dir = data_dir / plan["grid_session_dir"].split("/")[-1]
     on_disk = json.loads((session_dir / "observation_resolved.json").read_text())
-    assert on_disk["rfi_ref"]["bias_tee"] is False
+    assert on_disk["rfi_ref"]["bias_tee"] is True

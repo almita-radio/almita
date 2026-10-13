@@ -41,7 +41,10 @@ for _p in (str(REPO), str(REPO / "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-PINNED_PLAN_SHA256 = "8bacb7ab79f99df2afc16213e7f3b26c2bdf832e07a04f06127ebb93cd301b4e"
+# Re-pinned 2026-10-13 (BL-052): the plan's RFI_REF Bias-T went from false to true (antenna B's LNA is powered by it) and
+# the three capture command templates gained --rfi-ref-bias-t; nothing else changed. Previous pin, valid for the plan as
+# committed up to 71af9d5: 8bacb7ab79f99df2afc16213e7f3b26c2bdf832e07a04f06127ebb93cd301b4e
+PINNED_PLAN_SHA256 = "6e7bc3cf5470553b18d710490ab9a0141ab4482fc33459da762d110cf9dd5a49"
 PINNED_OBSERVER_SHA256 = "4264bc52e7233c26cb899c8263a36a0222b3fd11f678a5db3b5b7b36667fc269"
 DEFAULT_PLAN = "examples/science_forensics_experiment.yaml"
 BENCH_ROOT = "data/science_forensics_bench"

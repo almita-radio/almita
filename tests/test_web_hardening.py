@@ -182,6 +182,9 @@ def test_health_and_version_never_leak_secrets_or_paths():
     assert "@" not in text and "password" not in text.lower() and "token" not in text.lower() and str(ROOT) not in text
     v = web_system.version_info()
     assert v["author"] == "Felipe Fridman" and v["project_url"] == "https://github.com/almita-radio/almita" and "HTTP" in v["transport"]
+    # the footer must describe the real access control and transport (it used to say "LAN, no authentication")
+    assert "Basic authentication" in v["transport"] and "no TLS" in v["transport"]
+    assert "no authentication" not in v["transport"] and "LAN" not in v["transport"]
     assert re.fullmatch(r"[0-9a-f]{4,40}|unknown", v["git_short_sha"])
 
 

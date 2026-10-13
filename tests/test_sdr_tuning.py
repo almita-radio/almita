@@ -205,7 +205,9 @@ def test_parse_acks_reads_real_rtl_tcp_journal_lines():
 # ------------------------------------------------------------------ every acquisition path tunes explicitly
 @pytest.mark.parametrize("rel", ["capture.py", "alignment.py", "alignment_engine/hi/acquisition.py",
                                  "observation_gain_pilot.py", "calibrate_reference_wizard.py",
-                                 "calibration_engine/acquisition.py", "calibrate.py"])
+                                 "calibration_engine/acquisition.py", "calibrate.py",
+                                 # versioned evidence scripts (BL-051): same rule as the product paths
+                                 "rf_chain_characterization.py", "sun_detectability_test.py"])
 def test_acquisition_paths_never_configure_without_evidence(rel):
     """Real acquisition code tunes through sdr_tuning.tune_explicitly(), never a bare sdr.configure()."""
     source = (ROOT / rel).read_text()

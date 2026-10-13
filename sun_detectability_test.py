@@ -15,6 +15,7 @@ import numpy as np
 from astropy.coordinates import AltAz, SkyCoord, SkyOffsetFrame
 from astropy.time import Time
 
+import sdr_tuning
 from alignment import sun_eod
 from indi_telescope_control import INDITelescopeControl
 from sdr_capture import SDRCapture
@@ -161,12 +162,19 @@ class DetectabilityCampaign:
         self.telescope = INDITelescopeControl(self.args.host, self.args.port, self.args.device, self.args.verbose)
         self.sdr = SDRCapture("network", self.args.sdr_host, self.args.sdr_port, verbose=self.args.verbose)
         records = []
+        operating = sdr_tuning.operating_config(Path(self.args.observer_config))
+        # frequency and sample rate come from the central configuration unless given on the command line
+        if self.args.center_freq is None: self.args.center_freq = operating["center_frequency_hz"]
+        if self.args.sample_rate is None: self.args.sample_rate = operating["sample_rate_hz"]
+        self.tuning = {}
         try:
             if not await self.telescope.connect(): raise RuntimeError("INDI connection failed")
             await self.sdr.connect()
             index = 0
             for gain in self.args.gains:
-                await self.sdr.configure(self.args.center_freq, self.args.sample_rate, gain=gain)
+                # explicit tuning with rtl_tcp's acknowledgement as evidence: no capture follows an unproven tune
+                self.tuning[str(gain)] = await sdr_tuning.tune_explicitly(
+                    self.sdr, self.args.center_freq, self.args.sample_rate, gain, operating=operating)
                 for name in SEQUENCE:
                     index += 1
                     current_sun = sun_eod(Time.now())
@@ -188,7 +196,7 @@ class DetectabilityCampaign:
         result = {"test": "ALMITA-ALIGNMENT-V2-SUN-HARDWARE-TEST-02-PHASE-A",
                   "timestamp_utc": datetime.now(timezone.utc).isoformat(), "geometry": geometry,
                   "sequence": list(SEQUENCE), "records": records, "gain_summary": summaries,
-                  "candidate_gain_db": candidate,
+                  "candidate_gain_db": candidate, "sdr_tuning": self.tuning,
                   "sun_detectability": "PASS" if candidate is not None else "FAIL",
                   "technical": "PASS" if len(records) == len(self.args.gains) * len(SEQUENCE) else "FAIL",
                   "pointing": "NOT TESTED", "sync": "NO", "next_authorized": "INTEGRATION_TEST" if candidate else "NONE"}
@@ -206,8 +214,8 @@ def parse_args(argv=None):
     parser.add_argument("--output-dir", required=True); parser.add_argument("--observer-config", default="observer_config.json")
     parser.add_argument("--gains", type=float, nargs="+", default=list(GAINS)); parser.add_argument("--integration-seconds", type=float, default=1.0)
     parser.add_argument("--settle", type=float, default=2.0); parser.add_argument("--min-altitude", type=float, default=20.0)
-    parser.add_argument("--max-altitude", type=float, default=80.0); parser.add_argument("--center-freq", type=int, default=1420405752)
-    parser.add_argument("--sample-rate", type=int, default=2400000); parser.add_argument("--host", default="localhost")
+    parser.add_argument("--max-altitude", type=float, default=80.0); parser.add_argument("--center-freq", type=int, default=None)
+    parser.add_argument("--sample-rate", type=int, default=None); parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=7624); parser.add_argument("--device", default="LX200 OnStep")
     parser.add_argument("--sdr-host", default="localhost"); parser.add_argument("--sdr-port", type=int, default=1234)
     parser.add_argument("--verbose", action="store_true")

@@ -71,7 +71,7 @@ def parse_coordinates(ra_arg: str, dec_arg: str) -> Tuple[Optional[float], Optio
     return ra, dec
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Control de montura INDI (movimiento, sync, tracking)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -106,7 +106,16 @@ Nota: RA puede ingresarse como decimal (18.615) o en formato HH:MM:SS.
     group.add_argument("--track", choices=["on", "off"],
                        help="Encender/apagar tracking")
 
-    args = parser.parse_args()
+    # argparse only accepts a value starting with "-" when it looks like a plain negative number, so a southern
+    # declination in sexagesimal ("-33:27:00") was rejected as an unknown option and only the decimal form worked.
+    # Widen what counts as a negative number to the [+/-]DD:MM:SS form this CLI documents. No option of this
+    # parser looks like a number, so nothing else changes.
+    parser._negative_number_matcher = re.compile(r"^-(\d+(:\d+){0,2}(\.\d*)?|\.\d+)$")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     controller = INDITelescopeControl(
         host=args.host,

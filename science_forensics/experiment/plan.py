@@ -117,7 +117,14 @@ DEFAULT_INSTRUMENT = {  # audited 2026-09-20 from data/mosaic/ALMITA-WEB-SMALL-R
     "source": "data/mosaic/ALMITA-WEB-SMALL-RUN-01-20260902-16:16:16/observation_resolved.json", "campaign": "ALMITA-WEB-SMALL-RUN-01",
     "capture_seconds": 10.0, "settle_seconds": 2.0, "sdr_center_frequency_hz": 1420405752, "sdr_sample_rate_hz": 2400000, "sdr_gain_db": 40.2,
     "main_bias_tee": True, "input_topology": "antenna (orchestrator always passes --input-topology antenna)",
-    "rfi_ref": {"enabled": True, "serial": "00000002", "gain_db": 25.0, "bias_tee": False}, "min_altitude_deg": 10.0, "fft_size": 8192,
+    # RFI_REF Bias-T: the ONE field that deliberately differs from the feature campaign (BL-052, 2026-10-13). The campaign
+    # ran with it OFF (bias_tee_feature_campaign, audited from the resolved plan above); antenna B has since been confirmed
+    # to carry an LNA powered through SDR 00000002's Bias-T, so executing with it OFF would leave the reference chain's LNA
+    # unpowered. RFI_REF is a monitoring sidecar on its own SDR: MAIN's configuration stays identical to the campaign.
+    # To reproduce the campaign literally, set "bias_tee": False here and in the plan YAML and re-pin the plan sha256.
+    "rfi_ref": {"enabled": True, "serial": "00000002", "gain_db": 25.0, "bias_tee": True, "bias_tee_feature_campaign": False,
+                "bias_tee_note": "ON since 2026-10-13 (BL-052): antenna B LNA is powered by this Bias-T; the feature campaign ran with it OFF"},
+    "min_altitude_deg": 10.0, "fft_size": 8192,
 }
 
 

@@ -23,7 +23,9 @@ instrument_config_identical_to_feature_campaign:
     enabled: true
     serial: '00000002'
     gain_db: 25.0
-    bias_tee: false
+    bias_tee: true
+    bias_tee_feature_campaign: false
+    bias_tee_note: 'ON since 2026-10-13 (BL-052): antenna B LNA is powered by this Bias-T; the feature campaign ran with it OFF'
   min_altitude_deg: 10.0
   fft_size: 8192
   software_versions:
@@ -867,6 +869,7 @@ capture_command_template:
   - '25.0'
   - --rfi-ref-serial
   - '00000002'
+  - --rfi-ref-bias-t
   B:
   - python3
   - capture.py
@@ -891,6 +894,7 @@ capture_command_template:
   - '25.0'
   - --rfi-ref-serial
   - '00000002'
+  - --rfi-ref-bias-t
   AB:
   - python3
   - capture.py
@@ -915,3 +919,4 @@ capture_command_template:
   - '25.0'
   - --rfi-ref-serial
   - '00000002'
+  - --rfi-ref-bias-t

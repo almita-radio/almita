@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Gain-only rtl_tcp isolation test. No product pipeline or INDI usage."""
 
-import argparse, csv, json, socket, struct, time
+import argparse, asyncio, csv, json, socket, struct, time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import h5py
 import numpy as np
 
+import sdr_tuning
 from rf_chain_characterization import analyze
 
 GAINS=(0.0,8.7,20.7,29.7,40.2,49.6)
@@ -45,10 +46,14 @@ def spearman(x,y):return float(np.corrcoef(ranks(np.asarray(x)),ranks(np.asarray
 
 def main():
     p=argparse.ArgumentParser();p.add_argument("--output-dir",required=True);p.add_argument("--host",default="localhost")
-    p.add_argument("--port",type=int,default=1234);p.add_argument("--frequency",type=int,default=1420405752)
-    p.add_argument("--sample-rate",type=int,default=2400000);p.add_argument("--seconds",type=float,default=2)
+    p.add_argument("--port",type=int,default=1234);p.add_argument("--frequency",type=int,default=None)
+    p.add_argument("--sample-rate",type=int,default=None);p.add_argument("--seconds",type=float,default=2)
     p.add_argument("--settle",type=float,default=1);p.add_argument("--test-a-dir",required=True);args=p.parse_args()
+    operating=sdr_tuning.operating_config()   # central configuration; no frequency literal in this script
+    if args.frequency is None: args.frequency=operating["center_frequency_hz"]
+    if args.sample_rate is None: args.sample_rate=operating["sample_rate_hz"]
     out=Path(args.output_dir);out.mkdir(parents=True,exist_ok=False)
+    ack_source=sdr_tuning.JournalAckSource();ack_source.mark()   # marked BEFORE any command is sent
     sequence=[("ascending",g) for g in GAINS]+[("descending",g) for g in reversed(GAINS)]
     records=[];sock=socket.create_connection((args.host,args.port),timeout=10);sock.settimeout(10)
     try:
@@ -61,6 +66,10 @@ def main():
         for index,(direction,gain) in enumerate(sequence,1):
             raw_value=round(gain*10);sent=datetime.now(timezone.utc).isoformat();send_command(sock,0x04,raw_value)
             discarded=discard_for(sock,args.settle);captured=receive_exact(sock,capture_bytes)
+            # evidence after the timed settle+capture (so the measured timing is untouched) and before anything is
+            # written: an unacknowledged frequency/rate/gain raises TuningIncoherent and this step leaves no file
+            tuning=asyncio.run(sdr_tuning.verify_acknowledged(ack_source,{"center_frequency_hz":args.frequency,
+                "sample_rate_hz":args.sample_rate,"gain_db":gain},operating=operating))
             path=out/f"gain_only_{index:02d}_{direction}_{gain:04.1f}.h5"
             with h5py.File(path,"w") as h:
                 h.create_dataset("iq_data",data=np.frombuffer(captured,dtype=np.uint8),compression="gzip",compression_opts=4,shuffle=True)
@@ -69,7 +78,7 @@ def main():
                                gain_settle_seconds=args.settle,bytes_discarded_during_settle=discarded,
                                num_samples=capture_bytes//2,created_at=datetime.now(timezone.utc).isoformat())
             metric=analyze(path);record={"index":index,"timestamp_command_utc":sent,"direction":direction,
-                "gain_requested_db":gain,"gain_command_tenths_db":raw_value,"gain_settle_seconds":args.settle,
+                "gain_requested_db":gain,"gain_command_tenths_db":raw_value,"gain_settle_seconds":args.settle,"sdr_tuning":tuning,
                 "bytes_discarded_during_settle":discarded,"samples_analyzed":capture_bytes//2,"hdf5_path":str(path),**metric}
             records.append(record);print(f"GAIN_ONLY {direction} gain={gain:.1f} raw={raw_value} discard={discarded} "
                 f"std={metric['std_combined']:.6f} power={metric['broadband_power']:.6g} p001={metric['p001']:.1f} "

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import select
 import shutil
 import socket
@@ -109,6 +110,9 @@ class ConsoleHandler(ReadOnlyHandler):
             st = relay.status()
             if st["state"] == "ERROR":
                 relay.unsubscribe(sub)
+                # the cause goes to the journal too: a bare "503" line said nothing about why
+                logging.getLogger("almita.mount_camera").warning("mount camera stream answered 503: %s",
+                                                                 st["last_error"] or "camera unavailable")
                 return self._json(503, {"ok": False, "error": st["last_error"] or "camera unavailable"})
             self.send_response(200)
             self.send_header("Content-Type", relay.content_type)
@@ -204,7 +208,7 @@ def write_version_json(public_root: Path) -> Path:
         sha = "unknown"
     info = {"project": "ALMITA", "author": "Felipe Fridman", "project_url": "https://github.com/almita-radio/almita", "component": "field_console",
             "git_short_sha": sha, "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "hostname": socket.gethostname(),
-            "transport": "HTTP (LAN, no TLS), single-user Basic authentication"}
+            "transport": "HTTP (no TLS), single-user Basic authentication"}
     path = Path(public_root) / "version.json"
     path.write_text(json.dumps(info, indent=2))
     return path

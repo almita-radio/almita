@@ -4,11 +4,13 @@ Confirmed by repo audit: no real HI survey (LAB Survey, HI4PI, or any FITS)
 exists anywhere in this repo. data/hi_sky_catalog_2000pts.csv is generated
 by generate_hi_catalog.py, whose own docstring says "Estimates brightness
 temperature based on galactic distribution model" - an analytic disk model,
-not observational data. This is exactly why alignment.py's own HI path
-marks its result template_ground_truth=False and hard-blocks SYNC
-regardless of confidence (analysis["sync_eligible"] = False, status
-"NON-OBSERVATIONAL TEMPLATE - SYNC BLOCKED"). This provider preserves that
-same honesty: SyntheticHIReferenceProvider.is_observational is always False.
+not observational data. This is why alignment.py's HI path marks its result
+template_ground_truth=False. Until 4012330 it also hard-blocked SYNC
+regardless of confidence (status "NON-OBSERVATIONAL TEMPLATE - SYNC
+BLOCKED"); since then alignment.py judges HI like the Sun and may SYNC
+(see sync_flow.py's scope note, BL-049). This provider keeps the stricter
+rule for this engine: SyntheticHIReferenceProvider.is_observational is
+always False, so the engine never SYNCs from a synthetic template.
 
 A real survey integration (LAB Survey or HI4PI, as a local FITS file) is
 future work requiring explicit authorization - never an automatic download,

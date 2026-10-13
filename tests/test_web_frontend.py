@@ -941,9 +941,9 @@ def console_running(tmp_path, status):
         thread.join()
 
 
-def dom_of(url, budget=3500):
+def dom_of(url, budget=3500, timeout=60):
     run = subprocess.run(["chromium", "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", f"--virtual-time-budget={budget}", "--dump-dom", url],
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True, timeout=timeout)
     assert run.returncode == 0, run.stderr
     return run.stdout
 
@@ -1106,7 +1106,10 @@ window.__fetches = 0; const _f = window.fetch; window.fetch = (...a) => { window
  const m = () => ({ nodes: document.getElementsByTagName("*").length, timers: window.__liveTimers(), fetches: window.__fetches, heap: performance.memory ? performance.memory.usedJSHeapSize : 0 });
  await sleep(60000); out.m1 = m(); await sleep(29 * 60000); out.m2 = m(); document.getElementById("__result").textContent = JSON.stringify(out); })();</script></body>""".replace(METRICS, ""), 1)
         (tmp_path / "public" / "probe.html").write_text(html)
-        dom = dom_of(base + "/probe.html", 1_900_000)
+        # 31.7 min of VIRTUAL time, but every poll is a real request to the local server (~1000 of them): on a loaded Pi
+        # that takes longer than dom_of()'s default 60 s of wall time and the test failed on the clock, not on the
+        # page (BL-047). The assertions below are unchanged.
+        dom = dom_of(base + "/probe.html", 1_900_000, timeout=300)
     out = result_of(dom)
     m1, m2 = out["m1"], out["m2"]
     assert abs(m2["nodes"] - m1["nodes"]) <= 5 and m1["timers"] == m2["timers"] and m2["timers"] <= 8

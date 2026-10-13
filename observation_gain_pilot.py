@@ -651,7 +651,13 @@ def cmd_abort(args) -> int:
 
 def cmd_status(args) -> int:
     session_dir = Path(args.session_dir)
-    state = _load_state(session_dir)
+    state = read_json_safe(_state_path(session_dir))
+    if state is None:
+        # "Is there a pilot for this session?" answered "no" is a result, not a failure: the web asks it every time
+        # OBSERVE shows a plan, and a non-zero exit left a failed job in the list each time (BL-048). Every other
+        # command still refuses to run without a planned pilot (_load_state).
+        _emit({"session_dir": str(session_dir), "state": None, "planned": False})
+        return 0
     _emit({"session_dir": str(session_dir), "state": state})
     return 0
 

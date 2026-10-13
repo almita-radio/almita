@@ -49,6 +49,18 @@ def git_short_sha(root: Path = ROOT) -> str:
         return "unknown"
 
 
+# What the footer and STATUS say about how this web is reached. Every request needs HTTP Basic credentials
+# (almita_web_auth: missing/invalid credentials file -> every request refused) and nothing here terminates TLS,
+# so the password travels unencrypted. It does not say "LAN": the server binds wherever --host says and the
+# operator also reaches it from outside the LAN.
+TRANSPORT = "HTTP (no TLS), single-user Basic authentication"
+
+
+# Resolved once at process start, next to STARTED_UTC: "build" means the commit this process loaded. Resolving it on
+# the first request (as before) reported whatever HEAD was by then, which could be newer than the running code.
+_version_cache["git"] = git_short_sha()
+
+
 def version_info(component: str = "observe_api") -> Dict[str, Any]:
     """Build/runtime identification for the footer/status pages. No secrets, no paths, no e-mail."""
     with _version_lock:
@@ -56,7 +68,7 @@ def version_info(component: str = "observe_api") -> Dict[str, Any]:
             _version_cache["git"] = git_short_sha()
         git = _version_cache["git"]
     return {"project": "ALMITA", "author": AUTHOR, "project_url": PROJECT_URL, "component": component, "git_short_sha": git,
-            "started_utc": STARTED_UTC, "hostname": socket.gethostname(), "transport": "HTTP (LAN, no TLS, no authentication)"}
+            "started_utc": STARTED_UTC, "hostname": socket.gethostname(), "transport": TRANSPORT}
 
 
 def listening_ports() -> Set[int]:

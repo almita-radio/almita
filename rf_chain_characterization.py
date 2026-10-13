@@ -8,6 +8,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+import sdr_tuning
 from sdr_capture import SDRCapture
 from temperature_sensors import DS18B20Reader
 
@@ -41,16 +42,21 @@ def analyze(path, fft_size=8192):
 async def run(args):
     out=Path(args.output_dir);out.mkdir(parents=True,exist_ok=False)
     cfg=json.loads(Path(args.observer_config).read_text());sensors=DS18B20Reader(cfg.get("temperature_sensors",{}))
+    operating=sdr_tuning.operating_config(Path(args.observer_config))
+    # frequency and sample rate come from the central configuration unless given on the command line
+    if args.center_freq is None: args.center_freq=operating["center_frequency_hz"]
+    if args.sample_rate is None: args.sample_rate=operating["sample_rate_hz"]
     sdr=SDRCapture("network",args.host,args.port,verbose=True);rows=[]
     try:
         await sdr.connect()
         for gain in args.gains:
             print(f"RF_GAIN_REQUEST_DB={gain:.1f}",flush=True)
-            await sdr.configure(args.center_freq,args.sample_rate,gain=gain)
+            # explicit tuning with rtl_tcp's acknowledgement as evidence: no capture follows an unproven tune
+            tuning=await sdr_tuning.tune_explicitly(sdr,args.center_freq,args.sample_rate,gain,operating=operating)
             pre=sensors.read_all();path=out/f"rf_50ohm_gain_{gain:04.1f}.h5"
             await sdr.capture(args.seconds,str(path),args.sample_rate,{"gain_requested_db":gain,"rf_input":"50_OHM_AT_LNA_INPUT"})
             post=sensors.read_all();metrics=analyze(path)
-            row={"gain_requested_db":gain,"gain_effective_db":None,"hdf5_path":str(path),"temperature_pre":pre,
+            row={"gain_requested_db":gain,"gain_effective_db":None,"hdf5_path":str(path),"sdr_tuning":tuning,"temperature_pre":pre,
                  "temperature_post":post,**metrics};rows.append(row)
             print(f"RF_GAIN_RESULT gain={gain:.1f} std={metrics['std_combined']:.6f} power={metrics['broadband_power']:.6g} "
                   f"p001={metrics['p001']:.1f} p999={metrics['p999']:.1f} clip={metrics['clipping_fraction']:.3%}",flush=True)
@@ -82,7 +88,7 @@ async def run(args):
 
 def parse_args():
     p=argparse.ArgumentParser();p.add_argument("--output-dir",required=True);p.add_argument("--gains",type=float,nargs="+",default=list(GAINS))
-    p.add_argument("--seconds",type=float,default=2);p.add_argument("--center-freq",type=int,default=1420405752)
-    p.add_argument("--sample-rate",type=int,default=2400000);p.add_argument("--host",default="localhost");p.add_argument("--port",type=int,default=1234)
+    p.add_argument("--seconds",type=float,default=2);p.add_argument("--center-freq",type=int,default=None)
+    p.add_argument("--sample-rate",type=int,default=None);p.add_argument("--host",default="localhost");p.add_argument("--port",type=int,default=1234)
     p.add_argument("--observer-config",default="observer_config.json");return p.parse_args()
 if __name__=="__main__":raise SystemExit(asyncio.run(run(parse_args())))

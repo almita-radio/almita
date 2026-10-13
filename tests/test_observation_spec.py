@@ -104,11 +104,19 @@ def test_bias_tee_false_rejected_with_honest_explanation():
         sp.validate_spec_dict(raw)
 
 
-def test_rfi_ref_bias_tee_defaults_false_when_field_omitted():
+def test_rfi_ref_bias_tee_defaults_on_when_field_omitted():
+    """BL-041: antenna B has an LNA powered by SDR 00000002's Bias-T, so a spec with no opinion gets it ON."""
     raw = _valid_raw()
     assert "bias_tee" not in raw["rfi_ref"]  # historical spec, predates this field
     result = sp.validate_spec_dict(raw)
-    assert result["rfi_ref"]["bias_tee"] is False
+    assert result["rfi_ref"]["bias_tee"] is True
+
+
+def test_rfi_ref_bias_tee_explicit_false_is_kept():
+    """OFF stays a real choice for a reference chain without an LNA: an explicit false is never overridden."""
+    raw = _valid_raw()
+    raw["rfi_ref"]["bias_tee"] = False
+    assert sp.validate_spec_dict(raw)["rfi_ref"]["bias_tee"] is False
 
 
 def test_rfi_ref_bias_tee_true_accepted():
