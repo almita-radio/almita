@@ -465,6 +465,11 @@ GOTO. Detalle en `docs/BACKLOG.md` §4.1 a §4.3.
 
 ### Prueba B — STOP CURRENT STEP del Reference Wizard
 
+**Resultado real del 2026-10-13, caso B1 (50 Ω, sin movimiento): PASS [H].** STOP con 2 de 5 capturas hechas: el
+wizard se quedó en el paso, mostró «STOPPED by the operator … 2 file(s) kept» y ofreció RETRY CAPTURE. Al
+reintentar, los dos archivos pasaron a `interrupted-<UTC>/` sin sobrescribirse y el paso terminó con sus 5
+capturas nuevas. Ningún `.part`. Falta el caso B2, en un paso HI con GOTO. Detalle en `docs/BACKLOG.md` §4.4.
+
 | | |
 |---|---|
 | **Requisitos** | Ruta B (§5B) en marcha: CALIBRATE → **START WIZARD**. Para B2, zonas HI aprobadas. |

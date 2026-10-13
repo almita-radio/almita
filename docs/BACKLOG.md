@@ -106,7 +106,7 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 |---|---|---|---|---|
 | BL-026 | P1 | ALIGN SOLAR desde la web: primero sin SYNC, después con SYNC, y un ALIGN de confirmación. Guía: manual §14, prueba C. **Sin Sol disponible el 2026-10-13.** | BL-022 | `alignment_result.json` con offset y confianza; SYNC APPLIED; segundo ALIGN con offset cercano a 0. Hoy no hay ninguna corrida solar real: las carpetas `SOLAR-*` son restos de tests (BL-055). |
 | BL-027 | P1 | STOP OBSERVATION real. **Tres pruebas el 2026-10-13** (§4.1 a §4.3): tras un GOTO, durante un GOTO y durante una captura. | — | **Comprobado en hardware:** cierre en 6 a 7 s; estado `ABORTED` coherente en orquestador, API y MONITOR (desde el arreglo `0148b78`); solo `.h5` completos y validados; ningún `.part` en ninguna de las tres; SDR liberados. **Queda abierto por la montura:** tras un STOP durante un GOTO queda en seguimiento (BL-059). Se cierra cuando BL-059 esté resuelto y probado |
-| BL-028 | P2 | STOP CURRENT STEP del wizard durante una captura real, en 50 Ω y en HI (durante el GOTO y durante la captura). Guía: manual §14, prueba B. | BL-007 | Paso sin avanzar, aviso «STOPPED by the operator», archivos conservados y RETRY que los mueve a `interrupted-<UTC>/` |
+| BL-028 | P2 | STOP CURRENT STEP del wizard. **Caso sin movimiento (50 Ω) probado el 2026-10-13: PASS** (§4.4). **Falta el caso HI**, con STOP durante el GOTO y durante la captura. Guía: manual §14, prueba B. | BL-007 | En HI: paso sin avanzar, aviso «STOPPED by the operator», archivos conservados, RETRY que los aparta, y qué hace la montura (se espera lo mismo que en BL-059: termina el GOTO) |
 | BL-029 | P2 | Fallas provocadas: desconectar el USB de MAIN; apagar INDI. | — | BLOCK visible en PLAN y STATUS, y recuperación documentada |
 | BL-030 | P3 | Bench `sdr --yes` en MAIN y la CLI de `mount_control.py`. | BL-008, BL-011 | Salida del bench con ACK; un GOTO por CLI |
 | BL-031 | P1 | Antena B: medir que el LNA recibe alimentación con el Bias-T de RFI REF. | BL-025 | Nivel de ruido de RFI REF con BIAS-T marcado y desmarcado, o tensión en el conector. No se puede sacar de los datos guardados: las seis sesiones con RFI REF usaron `-T` y no hay ninguna sin él. No mueve la montura. |
@@ -207,6 +207,18 @@ Dependencias que fijan el orden:
 | Montura (lectura INDI a las 18:09:37, sin enviar órdenes) | Quieta en las coordenadas del punto 2, **seguimiento apagado**, sin error. El log no tiene esta vez el aviso «Tracking OFF could not be confirmed». No se puede distinguir desde los registros si lo apagó la limpieza de `capture.py` o el operador en Ekos |
 | Otro | Una lectura del sensor de temperatura del SDR falló por CRC a las 18:08:54 (`TEMP PRE SDR=ERR`); el sistema la descartó, como debe |
 | Resultado | **PASS** en cierre, estado, datos y SDR |
+
+## 4.4 Primera prueba real de STOP CURRENT STEP del wizard (2026-10-13): paso de 50 Ω
+
+| | |
+|---|---|
+| Sesión | `data/calibration/WIZARD-20261013-181623-230083` (5 capturas de 5 s, 40.2 dB) |
+| STOP pedido | 18:17:04 UTC, trabajo `CALIBRATE_WIZARD-20261013-181648-da0e`; terminó en ese mismo segundo |
+| Fase | Durante las capturas de 50 Ω: 2 de 5 completas, la tercera en curso. Este paso no mueve la montura |
+| Tras el STOP | El wizard siguió en `STABILIZE_50R`; interrupción registrada como `STOPPED_BY_OPERATOR` con «2 file(s) kept»; botón en RETRY CAPTURE. `capture_000.h5` y `capture_001.h5` completos y validados; nada de la tercera captura, ni `.part`. SDR MAIN liberado |
+| RETRY (18:31:48) | Los dos archivos del intento interrumpido pasaron a `captures/AMBIENT_50R/interrupted-20261013T183149220021Z/` con el mismo tamaño y la misma fecha: no se sobrescribieron. El reintento dejó 5 capturas nuevas, `capture_000` a `capture_004`. El wizard avanzó a `RESULT_50R` y la interrupción dejó de mostrarse |
+| Archivos | 7 `.h5` en total, los 7 validados (12 000 000 muestras cada uno). **0 `.part`** |
+| Resultado | **PASS** |
 
 ## 5. Tests
 
