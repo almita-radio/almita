@@ -20,6 +20,29 @@ import pytest
 import almita_orchestrator_server as server_mod
 
 
+@pytest.fixture(autouse=True)
+def _session_roots_in_tmp(tmp_path, monkeypatch):
+    """These tests run real simulated ALIGN/CALIBRATE sessions through the HTTP routes. Their session folders used
+    to be created (and then removed) inside the operator's real data/alignment and data/calibration - nothing was
+    left behind, but every run touched those directories (BL-046). Both routes now work under tmp_path: the web
+    modules' SESSION_ROOT and the alignment engine's own output_root."""
+    import almita_web_align
+    import almita_web_calibrate
+    from alignment_engine.config import AlignmentConfig
+    align_root, cal_root = tmp_path / "alignment", tmp_path / "calibration"
+    align_root.mkdir()
+    cal_root.mkdir()
+    monkeypatch.setattr(almita_web_align, "SESSION_ROOT", str(align_root))
+    monkeypatch.setattr(almita_web_calibrate, "SESSION_ROOT", str(cal_root))
+    real_load = AlignmentConfig.load.__func__
+
+    def load(cls, path=None, overrides=None):
+        config = real_load(cls, path, overrides)
+        config.global_.output_root = str(align_root)
+        return config
+    monkeypatch.setattr(AlignmentConfig, "load", classmethod(load))
+
+
 @contextlib.contextmanager
 def running_server():
     httpd = server_mod.make_server("127.0.0.1", 0, authenticator=None)  # auth exercised in test_web_auth.py
@@ -123,7 +146,7 @@ def test_align_hi_plan_preflight_run_end_to_end():
             assert final["data"]["result"] is not None
             assert final["data"]["result"]["final_fit"]["quality"]["rating"] in ("GOOD", "MARGINAL", "BAD")
         finally:
-            shutil.rmtree(Path("data/alignment") / session_id, ignore_errors=True)
+            pass   # the session lives under tmp_path (see _session_roots_in_tmp); nothing to clean in data/
 
 
 def test_align_session_not_found_reports_blocked_not_500():
@@ -199,7 +222,7 @@ def test_calibrate_status_workflow_active_is_false_once_a_run_completes():
             status, status_body = _get(f"{base}/api/calibrate/status")
             assert status_body["data"]["calibration_workflow_active"] is False
         finally:
-            shutil.rmtree(Path("data/calibration") / session_id, ignore_errors=True)
+            pass   # the session lives under tmp_path (see _session_roots_in_tmp); nothing to clean in data/
 
 
 def test_calibrate_run_simulation_end_to_end_and_quality_present():
@@ -213,7 +236,7 @@ def test_calibrate_run_simulation_end_to_end_and_quality_present():
             assert final["data"]["result"]["quality"]["verdict"] in ("GOOD", "MARGINAL", "BAD", "INCONCLUSIVE")
             assert final["data"]["result"]["absolute_calibration"] is False
         finally:
-            shutil.rmtree(Path("data/calibration") / session_id, ignore_errors=True)
+            pass   # the session lives under tmp_path (see _session_roots_in_tmp); nothing to clean in data/
 
 
 def test_calibrate_run_simulation_clipped_scenario_reports_bad():
@@ -232,7 +255,7 @@ def test_calibrate_run_simulation_clipped_scenario_reports_bad():
             final = _wait_for_session(base, "calibrate", session_id)
             assert final["data"]["result"]["quality"]["verdict"] == "BAD"
         finally:
-            shutil.rmtree(Path("data/calibration") / session_id, ignore_errors=True)
+            pass   # the session lives under tmp_path (see _session_roots_in_tmp); nothing to clean in data/
 
 
 def test_calibrate_session_not_found_reports_blocked_not_500():

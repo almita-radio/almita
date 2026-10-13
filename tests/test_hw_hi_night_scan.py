@@ -334,3 +334,19 @@ def test_insufficient_coverage_does_not_fabricate_a_fit():
     assert report["hi_pattern_detected"] == "INCONCLUSIVE"
     assert report["pointing_solution"] == "INCONCLUSIVE"
     assert fit_result_exists is False
+
+
+@requires_reference
+def test_no_usable_hi_target_at_this_hour_is_blocked_with_evidence_not_a_traceback(monkeypatch):
+    """At hours when no candidate is above the altitude floor, target selection raises; that must end as a BLOCKED
+    preflight with its evidence written (it escaped as a RuntimeError in the full run of 2026-10-13, 14:40 UTC)."""
+    def no_target(self, *args, **kwargs):
+        raise RuntimeError("no candidate target passed visibility + information-content checks (forced)")
+    monkeypatch.setattr(hns.FITSMomentMapProvider, "choose_target", no_target)
+    with tempfile.TemporaryDirectory() as tmp:
+        exit_code = asyncio.run(hns.main(_base_args(tmp)))
+        session_dir = _session_dir(tmp)
+        log_lines = _assert_evidence_logging_is_complete(session_dir)
+        report = json.loads((session_dir / "hardware_test_result.json").read_text())
+    assert exit_code == 2 and report["result"] == "BLOCKED" and "hi_target_available_now" in report["reason"]
+    assert any("BLOCKED before target selection" in line for line in log_lines)
