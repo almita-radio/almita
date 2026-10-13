@@ -258,8 +258,8 @@
     // showed PLAN OBSOLETE immediately on PASS - reproduced live on real HI-mode PLANs, never on solar (solar's
     // selectedCenter() is always null regardless of selectedArea, so this had no effect there). runJob's own
     // onChange below never touched selectedArea - this now matches that same, correct pattern.
-    const planJob = U.jobPanel($("real-job-align_plan"), null, { onError: realErr, onChange: () => updateReal() });
-    const runJob = U.jobPanel($("real-job-align"), $("real-badge"), { onError: realErr, onChange: () => updateReal() });
+    const planJob = U.jobPanel($("real-job-align_plan"), null, { onError: realErr, onChange: () => updateReal(), stopLabel: "STOP ALIGNMENT PLAN" });
+    const runJob = U.jobPanel($("real-job-align"), $("real-badge"), { onError: realErr, onChange: () => updateReal(), stopLabel: "STOP ALIGNMENT" });
     let mode = "hi";              // "hi" | "solar" - the operator's explicit choice; never switched automatically
     let selectedArea = null;      // HI only: "A" | "B" | "C" (the operator's pick); solar always uses the Sun itself
     let sky = null;               // last real /api/ops/align/sky response

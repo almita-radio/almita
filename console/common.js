@@ -368,7 +368,7 @@
     return p;
   };
   U.jobPanel = function (container, badge, opts) {
-    const o = Object.assign({ onEnd: null, onChange: null, onError: null }, opts || {});
+    const o = Object.assign({ onEnd: null, onChange: null, onError: null, stopLabel: "STOP THIS JOB" }, opts || {});
     const st = { jobId: null, poller: null, last: null };
     const fail = (err) => { if (o.onError) o.onError(err); };
     const NEAR_BOTTOM_PX = 24; // slack (~1-2 lines) so "at the bottom" survives sub-pixel rounding
@@ -398,17 +398,22 @@
         if (v === null || v === undefined || v === "") continue;
         head.append(mk("div", "muted", `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`));
       }
-      container.appendChild(head);
       if (j.state === "RUNNING") {
-        const b = mk("button", "", "STOP (SIGINT)");
+        // The stop control comes FIRST and is styled as the page's danger action: while a real job runs (it may be
+        // moving the mount) it must be the most visible thing in the panel, not a plain button under the details.
+        const bar = mk("div", "obs-actions job-stop");
+        const b = mk("button", "danger-action", o.stopLabel);
         b.type = "button";
         b.addEventListener("click", U.guard(b, async () => {
-          if (!confirm("Send a clean stop (SIGINT) to this job? A physical step may finish its current move first.")) return;
+          if (!confirm(`${o.stopLabel} now?\n\nThis sends a clean stop (SIGINT) to the running job. It does NOT brake the mount: a GOTO already `
+                       + "in progress may finish. To halt the mount itself at once, use Ekos or the hand controller.")) return;
           const r = await U.api(`/api/ops/stop/${j.job_id}`, { method: "POST", body: { confirm: true }, timeoutMs: 20000 });
           fail(r.ok ? null : r.error);
         }));
-        container.appendChild(b);
+        bar.append(b, mk("span", "obs-summary", "clean stop (SIGINT) · a GOTO in progress may finish · to halt the mount at once use Ekos or the hand controller"));
+        container.appendChild(bar);
       }
+      container.appendChild(head);
       const logPre = mk("pre", "job-log", newLogText);
       logPre.dataset.jobId = j.job_id;
       container.appendChild(logPre);
