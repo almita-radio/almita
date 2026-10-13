@@ -93,6 +93,8 @@ Los cinco bugs de esta lista (BL-045, BL-046, BL-047, BL-048 y BL-051) se cerrar
 
 | id | prioridad | qué | evidencia | quién | falta para cerrar |
 |---|---|---|---|---|---|
+| BL-057 | P2 | `capture.py` no anuncia el fin de la sesión cuando se detiene con STOP. Deja `current_session.json` en `RUNNING` y la sesión sin marcar como pausada en su índice. | Visto en la primera prueba real de STOP (2026-10-13). La interrupción llega a `capture.py` como cancelación de su tarea, no como `KeyboardInterrupt`, y el código solo anuncia `ABORTED` en el segundo caso. El resto del sistema ya lo compensa (`0148b78`): el orquestador escribe `ABORTED` y MONITOR lo muestra como parada del operador. | operador (decide) | `capture.py` es un módulo congelado: decidir si se corrige ahí (una línea en el manejo de la interrupción, más su prueba en hardware) o se deja compensado como está |
+| BL-058 | P3 | **ABORT GAIN PILOT** sin pilot planificado queda como trabajo FAIL («plan first»). | Dos casos el 2026-10-13 a las 17:48 sobre `TEST-STOP`. Es el mismo ruido que BL-048 corrigió para la consulta de estado. | autónomo | Tratarlo como «nada que abortar» |
 | BL-054 | P2 | **Cámara de montura: 503 intermitente.** La parte de software está corregida; la del equipo no se puede comprobar desde el Pi. | El journal del servidor tiene 3 respuestas 503 y 3 respuestas 200 de `/mount_camera/stream` desde el 2026-10-08, con un 200 un minuto después de un 503. La cámara es una ESP32-CAM por WiFi (`192.168.1.164:81`, un solo cliente a la vez); el 2026-10-13 respondía ping (4 a 42 ms) y tenía abiertos los puertos 80 y 81. El servidor no registraba el motivo de cada 503, así que la causa de esos tres no se puede reconstruir. Defecto encontrado: el relay marcaba ERROR en cada intento fallido y respondía 503 aunque quedara un reintento; además nunca soltaba a los espectadores cuando se rendía. Corregido en 7b2eefb, y ahora el motivo queda en el journal. No se abrió el stream de la cámara para probar, porque le habría quitado la imagen a quien la estuviera mirando. | operador | Después del reinicio (BL-044): si vuelve a aparecer «STREAM UNAVAILABLE», mirar LAST ERROR en MONITOR o `journalctl -u almita-observe-api \| grep "mount camera"` y anotar el mensaje. Con eso se distingue WiFi débil, cámara colgada u otro cliente ocupando el stream |
 
 ### 2.2 Pruebas pendientes en hardware
@@ -102,7 +104,7 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 | id | prioridad | prueba | cierra | evidencia que falta |
 |---|---|---|---|---|
 | BL-026 | P1 | ALIGN SOLAR desde la web: primero sin SYNC, después con SYNC, y un ALIGN de confirmación. Guía: manual §14, prueba C. **Sin Sol disponible el 2026-10-13.** | BL-022 | `alignment_result.json` con offset y confianza; SYNC APPLIED; segundo ALIGN con offset cercano a 0. Hoy no hay ninguna corrida solar real: las carpetas `SOLAR-*` son restos de tests (BL-055). |
-| BL-027 | P1 | STOP OBSERVATION real con una grilla corta: una vez durante una captura y otra durante un GOTO. Guía: manual §14, prueba A. | — | Estado `ABORTED`; `.h5` completos de los puntos anteriores; cantidad de `.part` (puede quedar uno si el STOP cae en la escritura: el código no promete cero); qué hizo la montura, porque el STOP no aborta el GOTO en curso |
+| BL-027 | P1 | STOP OBSERVATION real. **Primera prueba hecha el 2026-10-13** (sesión `TEST-STOP-20261013-17:47:25`): el STOP cayó en el punto 4, 1.5 s después de terminar su GOTO, antes de empezar la captura. **Falta:** repetirla con el arreglo desplegado, una vez durante una captura y otra durante un GOTO. Guía: manual §14, prueba A. | — | **Lo que pasó:** captura detenida en 6 s; 3 `.h5` completos y validados; ningún `.part`; punto 4 sin archivo y sin marcar como fallido; SDR MAIN y RFI REF liberados; montura quieta, sin seguimiento. **Lo que falló:** el sistema no reconoció que la captura había terminado, esperó 120 s y marcó `DEGRADED` con la nota falsa «did not exit within 120s»; MONITOR mostró `DEGRADED` «went silent». Causa y arreglo en `0148b78` (BL-057 es lo que queda). **Evidencia que falta:** con el arreglo, estado final `ABORTED` en segundos y coherente en OBSERVE, MONITOR y API; y los casos durante captura y durante GOTO |
 | BL-028 | P2 | STOP CURRENT STEP del wizard durante una captura real, en 50 Ω y en HI (durante el GOTO y durante la captura). Guía: manual §14, prueba B. | BL-007 | Paso sin avanzar, aviso «STOPPED by the operator», archivos conservados y RETRY que los mueve a `interrupted-<UTC>/` |
 | BL-029 | P2 | Fallas provocadas: desconectar el USB de MAIN; apagar INDI. | — | BLOCK visible en PLAN y STATUS, y recuperación documentada |
 | BL-030 | P3 | Bench `sdr --yes` en MAIN y la CLI de `mount_control.py`. | BL-008, BL-011 | Salida del bench con ACK; un GOTO por CLI |
@@ -159,6 +161,23 @@ Dependencias que fijan el orden:
 - Los cambios de Python que importa el servidor necesitan reiniciar `almita-observe-api`, y solo sin trabajos
   activos (revisarlo en un paso aparte).
 - Los scripts que lanza la web se cargan en cada trabajo.
+
+## 4.1 Primera prueba real de STOP OBSERVATION (2026-10-13)
+
+| | |
+|---|---|
+| Sesión | `data/mosaic/TEST-STOP-20261013-17:47:25` (25 puntos planificados, 10 s, 40.2 dB) |
+| STOP pedido | 17:50:39 UTC |
+| Fase | Punto 4: GOTO terminado a las 17:50:37.5; el STOP llegó 1.5 s después, en la confirmación de seguimiento o la estabilización, **antes de la captura**. No valida ni «durante captura» ni «durante GOTO» |
+| Captura detenida | 17:50:45.6 UTC, **6 s** después del STOP |
+| SDR | MAIN: cliente desconectado a las 17:50:40 y `rtl_tcp` de nuevo en «listening». RFI REF: `rtl_tcp` cerrado a las 17:50:45.6 y puerto 1235 libre (cerrado con SIGKILL tras 5 s, que es su comportamiento conocido) |
+| QUICKLOOK | Proceso terminado; último archivo a las 17:50:43 |
+| Archivos | 3 `.h5` de 12.07 MB, cada uno con 24 000 000 muestras, `file_state: complete` y evidencia de sintonía `RTL_TCP_SERVER_ACK`; validados con el mismo validador de la captura. **0 `.part`** |
+| Puntos | 3 `success`, 22 `planned` (el punto 4 quedó `planned`: nunca empezó a capturar), 0 fallidos |
+| Montura (lectura INDI, sin enviar órdenes) | Seguimiento apagado (`TRACK_OFF`), sin movimiento, sin error, desaparcada, en las coordenadas del punto 4. No hay línea en el log que diga qué apagó el seguimiento |
+| Estado mostrado | **Incorrecto.** Orquestador en `STOPPING` durante 120 s y después `DEGRADED` «did not exit within 120s of SIGINT»; MONITOR y la API en `DEGRADED` «session went silent while RUNNING». Lo esperado era `ABORTED` |
+| Resultado | **Datos: PASS. Estado y cierre: FAIL**, corregido en `0148b78` y pendiente de volver a probar |
+| Evidencia guardada | `stop_test_evidence/` dentro de la sesión: los JSON de estado tal como quedaron y los extractos del journal |
 
 ## 5. Tests
 

@@ -433,6 +433,14 @@ de mano.
 
 ### Prueba A — STOP OBSERVATION con una grilla pequeña
 
+**Primera prueba, 2026-10-13 (`TEST-STOP`): datos bien, estado mal.** El STOP cayó en el punto 4, 1.5 s después
+de terminar su GOTO y antes de la captura. La captura se detuvo en 6 s, quedaron 3 `.h5` completos, ningún `.part`,
+los SDR libres y la montura quieta sin seguimiento. **[H]** Pero la web tardó 2 minutos y terminó en
+**BLOCKED — needs operator attention** con la nota «did not exit within 120s», y MONITOR en `DEGRADED`: el
+sistema no reconocía que la captura ya había terminado. Está corregido; **hay que repetir la prueba** para ver el
+`ABORTED` en segundos, y siguen pendientes los casos A1 (durante captura) y A2 (durante GOTO). Detalle en
+`docs/BACKLOG.md` §4.1.
+
 | | |
 |---|---|
 | **Requisitos** | Pasos 1 a 3 hechos; preflight real sin BLOCK; un perfil a la ganancia del plan. Una grilla de 25 puntos (la de la prueba D sirve). |
@@ -440,7 +448,7 @@ de mano.
 | **Hazla dos veces** | **A1, durante una captura:** pulsa STOP cuando MONITOR → SESSION muestre el punto 3 o 4 en captura (la montura quieta). **A2, durante un GOTO:** en otra sesión nueva, pulsa STOP mientras la montura se mueve hacia el punto siguiente. |
 | **Resultado esperado** | El aviso «STOP REQUESTED — waiting for capture to finish» y, en menos de 2 min, OBSERVATION RUN en **PARTIAL — stopped before completion; captured points are kept** (estado `ABORTED`). Los puntos anteriores al STOP tienen su `.h5`. El punto en curso no tiene `.h5`. En A2 la montura puede completar el GOTO antes de quedar quieta. QUICKLOOK y RFI REF se detienen solos. |
 | **Evidencias** | Hora del STOP y si fue A1 o A2. Estado final en OBSERVE. `ls data/mosaic/<sesión>/data/iq/*/` con la cantidad de `.h5` y de `.part`. Las últimas 30 líneas de `data/mosaic/<sesión>/orchestrator_capture.log`. Qué hizo la montura. |
-| **Si algo sale distinto** | Si a los 2 min el estado es **BLOCKED — needs operator attention** (`DEGRADED`), el programa no terminó solo: el sistema no lo mata. Anota la nota que muestra la página y mira `ps -ef \| grep '[c]apture.py'`; si sigue vivo, detenlo con `kill -INT <pid>` (nunca `-TERM` ni `-9`). |
+| **Si algo sale distinto** | Si a los 2 min el estado es **BLOCKED — needs operator attention** (`DEGRADED`), o el programa no terminó solo (el sistema no lo mata) o volvió el fallo del 2026-10-13. Anota la nota que muestra la página y mira `ps -ef \| grep '[c]apture.py'`; si sigue vivo, detenlo con `kill -INT <pid>` (nunca `-TERM` ni `-9`). |
 | **Recuperación** | La web no reanuda una sesión interrumpida: haz **PLAN OBSERVATION** de nuevo y lanza una sesión nueva. No lances una segunda captura sobre la misma sesión. Los `.h5` ya guardados sirven para REDUCE tal como están. |
 
 ### Prueba B — STOP CURRENT STEP del Reference Wizard

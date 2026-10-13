@@ -32,7 +32,8 @@ físicos: el haz y la alimentación del LNA de la antena B.
   2026-10-13 que ese acceso es el que quiere; quedan tres comprobaciones suyas.
 - **ALIGN no corrige todavía:** el SYNC nunca se envió a la montura real y ALIGN SOLAR nunca corrió (BL-026). La
   única corrida real, con HI, no logró estimar un offset.
-- **STOP OBSERVATION nunca se probó** en una sesión real (BL-027).
+- **STOP OBSERVATION:** primera prueba real el 2026-10-13. Los datos quedaron bien; el estado y el cierre
+  fallaron y están corregidos, sin volver a probar. Faltan los casos durante captura y durante GOTO (BL-027).
 - **El haz no está medido** (BL-034): 20° en la configuración y 14° en `alignment.py`, ambos provisionales.
 - **Antena B:** el Bias-T se envía, pero nadie midió que el LNA reciba alimentación (BL-031). Desde el
   2026-10-13 toda la configuración lo trae encendido por defecto.
