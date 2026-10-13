@@ -1,0 +1,2059 @@
+#!/usr/bin/env python3
+"""ALMITA SCIENCE WEB BRIDGE - LEVEL 1 (REDUCE) -> three comparable heatmaps for the console.
+
+Reuses science_engine (frozen) for every real scientific computation - ingest/contract, beam+grid
+construction, beam-weighted cube gridding, the window-overlap integrated-intensity formula, velocity-axis
+resampling, quality assessment, and the REDUCE-manifest-hash provenance primitive. Nothing here
+re-derives a Doppler correction, re-applies the 50-ohm relative profile, or invents a physical unit -
+every array stays "relative_intensity_dimensionless" (or that times m/s for the integrated map), exactly
+as science_engine.integration's own docstring defines it.
+
+What this file adds - real gaps science_engine's own top-level run_science_session() does not cover,
+never a duplicate of its math:
+  1. An explicit, mandatory calibration-level split (RELATIVE vs UNCALIBRATED): run_science_session()
+     grids whatever load_science_input() returns, mixed levels included. This module filters the
+     ScienceInput to ONE calibration level before any gridding, so a "RELATIVE" map is only ever built
+     from RELATIVE points and an "UNCALIBRATED" (instrumental) map only from UNCALIBRATED ones - never
+     both on the same color scale.
+  2. THREE comparable products with a DELIBERATE, visible resolution progression left to right - map A is
+     the real N x M board (build_mosaic_grid(): rows/cols derived from the campaign's own point positions and
+     their median spacing, never a hardcoded shape), and maps B/C are genuinely FINER rasters
+     (build_fine_grid(): the SAME physical extent/center/orientation as the board, `interp_factor_b`/
+     `interp_factor_c` times denser per axis, interp_factor_c > interp_factor_b enforced) - real NEW pixel
+     positions between the measured cells, never the same N x M cells enlarged, blurred or repainted at a
+     different opacity (an earlier version of this module rendered B/C on the SAME board as A, which made
+     them look like a washed-out copy of A at the SAME resolution - corrected here):
+       A  no spatial interpolation at all - each USED point's own window-integrated value placed in its OWN
+          board cell, one reading = one cell = one color, sharp edges (imshow(interpolation="nearest")).
+          Cells with no real point are transparent - never zero, never interpolated. The ONLY panel with a
+          per-cell identity a browser click can resolve to one real point's own spectrum. Reuses
+          science_engine.integration.window_overlaps/bin_bounds and science_engine.resample directly - the
+          identical bin-overlap integration formula integrated_map() uses, just evaluated per point instead
+          of per output pixel.
+       B  science_engine.cube.build_cube() + science_engine.integration.integrated_map() evaluated on a
+          raster `interp_factor_b` times denser than the board - most output pixels sit BETWEEN measured
+          positions and are genuine interpolation estimates, weighted by a declared presentation-smoothing
+          kernel (NOT the instrument beam). No per-pixel click/spectrum here: a new pixel was never observed
+          by the instrument.
+       C  the SAME call again on an even denser raster (`interp_factor_c` > `interp_factor_b`), the SAME
+          kernel and the SAME hard support radius as B (see _reconcile_used_point_sets) and the SAME physical
+          footprint as A and B (no invented sky coverage, no support-radius-driven shape change) - the ONLY
+          difference from B is raster density. B and C used to carry two DIFFERENT (light/heavier) kernels,
+          which confounded "denser raster" with "more blended" and made the two hard to compare honestly; a
+          real investigation into reported circular halos (REDUCE-20260919-234712-712870) found via
+          leave-one-out cross-validation (loo_cross_validation_summary()) that the two kernel widths were
+          statistically indistinguishable in held-out predictive skill, so there was no data-driven reason to
+          keep them different - see MapConfig.smoothing_fwhm_deg's own docstring for the numbers.
+     The real, reported instrument beam (beam_fwhm_deg) is unchanged between B and C and recorded honestly
+     in the manifest, but is no longer the kernel doing either map's weighting. A/B/C share one color scale
+     (robust 2nd/98th percentile of map A's own measured per-point values - "measured points", not a
+     smoothed derivative of them) applied through ONE shared colour function (viridis_hex()) used identically
+     for every PNG/SVG/PDF export AND the browser's own interactive board.json - never a second, JS-side
+     palette. B/C's ON-SCREEN images are additionally rendered chrome-free (`_bare_export` in
+     render_all_maps() - no title/colorbar/caption baked in, just the map, cropped tight) so all three panels
+     display at the same visible size next to the SAME external HTML colour legend (board_json_payload's
+     color_stops) - the full titled/colorbar'd PNG/SVG/PDF exports remain unchanged as downloadable,
+     presentation-ready artifacts.
+  3. Presentation-ready combined exports (PNG at slide resolution, SVG, PDF) with the title, calibration
+     label, beam/cutoff/window parameters, color limits and any caveat baked into the image itself - not
+     only shown in the HTML.
+  4. Its own manifest/provenance/config under a NEW directory, data/science/<campaign_id>/
+     SCIENCE_WEB-<timestamp>/ - never a science_engine.storage.ScienceSession (a different, additive
+     location; nothing under data/reduced, data/calibration or an existing data/science/.../SCIENCE-*
+     session is ever opened for writing).
+
+100% offline: reads only an already-completed REDUCE session directory. No hardware, no mount, no SDR.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+import numpy as np
+
+_PROGRESS_T0: Optional[float] = None
+
+
+def _progress(message: str) -> None:
+    """One human progress line on stderr (the web job log shows it live). Lines carry no braces: the web reads
+    the --json result as the first '{' .. last '}' of the combined log, and stdout keeps only that JSON."""
+    import time
+    global _PROGRESS_T0
+    now = time.monotonic()
+    if _PROGRESS_T0 is None:
+        _PROGRESS_T0 = now
+    s = int(now - _PROGRESS_T0)
+    text = message.replace("{", "(").replace("}", ")")
+    print(f"[SCIENCE {s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}] {text}", file=sys.stderr, flush=True)
+
+SCHEMA_VERSION = "1.0"
+PIPELINE_VERSION = "science-web-v1.3"
+CALIBRATION_LEVELS = ("RELATIVE", "UNCALIBRATED")
+
+
+def _print(payload: dict, as_json: bool, human_lines) -> None:
+    if as_json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        for line in human_lines:
+            print(line)
+
+
+# ------------------------------------------------------------------ config
+@dataclass(frozen=True)
+class MapConfig:
+    reduce_session_dir: str
+    calibration_level_filter: str                  # "RELATIVE" | "UNCALIBRATED" - never "ALL" (section: no mixed scale)
+    beam_fwhm_deg: float
+    beam_source: str
+    beam_status: str
+    beam_source_path: Optional[str] = None
+    beam_source_field: Optional[str] = None
+    beam_source_sha256: Optional[str] = None
+    # The mosaic BOARD: one cell per real pointing lattice position (build_mosaic_grid()) - rows/cols and cell
+    # spacing are derived from the campaign's own point positions, never a hardcoded shape. mosaic_spacing_deg
+    # overrides the auto-derived (median nearest-neighbour) cell pitch; leave None for the real, measured one.
+    mosaic_spacing_deg: Optional[float] = None
+    # --- spatial SUPPORT (where it is legitimate to draw a value at all) - ONE radius, shared by B and C.
+    # This used to be `beam_cutoff_{b,c}_n_fwhm x beam_fwhm_deg`: two DIFFERENT absolute radii on the SAME
+    # (often mis-scaled - see beam_fwhm_deg's own docstring) beam, which is what let B and C disagree on
+    # which points they used (a real bug fixed in this task - see _reconcile_used_point_sets()). Support is
+    # now a single, physically-grounded number (None -> auto from the campaign's OWN point spacing - see
+    # `auto_spatial_params()`), applied identically to B and C so their used-point sets are IDENTICAL BY
+    # CONSTRUCTION, never reconciled after the fact.
+    support_radius_deg: Optional[float] = None
+    # --- presentation SMOOTHING (how much blend is applied for display, WITHIN that fixed support). A
+    # declared Gaussian kernel width, independent of the reported instrument beam (beam_fwhm_deg, kept fixed
+    # and honestly reported below, never used as a gridding kernel from here on - see build_all_products()).
+    # This USED to be two DIFFERENT widths (smoothing_fwhm_b_deg light / smoothing_fwhm_c_deg = 3x heavier),
+    # so B and C were never actually "the same field at two densities" - a real investigation into reported
+    # circular halos (REDUCE-20260919-234712-712870) found this was masking the real question ("does a denser
+    # raster alone introduce new structure?") behind a confound (kernel AND density both changing at once).
+    # Leave-one-out cross-validation on that session's own 100 real points (loo_cross_validation_summary())
+    # showed the light/heavy/1.5x kernels are statistically INDISTINGUISHABLE in held-out predictive skill
+    # (RMS 442.3/442.3/442.3, all far worse than simply predicting the field's own mean - see that function's
+    # docstring) - i.e. there was never a real reason for B and C to use different kernels; the two numbers
+    # were free parameters with no data-driven justification. ONE kernel now, shared by B and C - the ONLY
+    # remaining difference between them is raster density (interp_factor_b/interp_factor_c below), which a
+    # matched fixed-kernel control (same session, 30x30 vs 60x60) showed is a genuine, low-distortion
+    # refinement of the SAME field (r=0.946 between matched pixels) - unlike the OLD light-vs-heavy B/C pair,
+    # which only correlated at r=0.785 because it was comparing two different fields, not two densities.
+    smoothing_fwhm_deg: Optional[float] = None     # None -> auto (~ median nearest-neighbour point spacing)
+    # Interpolated panels B/C are rendered on a FINER raster than the real N x M board (real pixels BETWEEN
+    # the measured positions, not the same cells redrawn bigger/blurrier - see build_fine_grid()). Each factor
+    # is how many raster pixels replace one real board cell per axis; C must be denser than B so the visual
+    # progression (A: N x M -> B: denser -> C: densest) is unambiguous.
+    interp_factor_b: int = 3
+    interp_factor_c: int = 6
+    quality_policy: str = "STANDARD"
+    # Matches science_engine.config.ScienceConfig's own default (+/-100 km/s) - a wider +/-300 km/s window was
+    # this bridge's OWN unjustified widening (found during this task's magnitude investigation: it roughly
+    # triples the integrated value for no declared reason) and is corrected here, not inherited.
+    velocity_window_min_m_s: float = -100_000.0
+    velocity_window_max_m_s: float = 100_000.0
+    min_spectral_coverage_fraction: float = 0.5
+    uncertainty_floor_relative: float = 1e-6
+    sigma_local_floor_fraction: float = 0.1
+    sigma_local_window_channels: int = 129
+    color_vmin: Optional[float] = None              # None -> robust auto from map A's measured points
+    color_vmax: Optional[float] = None
+
+    def __post_init__(self):
+        if self.calibration_level_filter not in CALIBRATION_LEVELS:
+            raise ValueError(f"calibration_level_filter must be one of {CALIBRATION_LEVELS}, "
+                             f"got {self.calibration_level_filter!r} - a map is never built from a mix")
+        if self.support_radius_deg is not None and not (np.isfinite(self.support_radius_deg) and self.support_radius_deg > 0):
+            raise ValueError("support_radius_deg must be finite and > 0")
+        if self.smoothing_fwhm_deg is not None and not (np.isfinite(self.smoothing_fwhm_deg) and self.smoothing_fwhm_deg > 0):
+            raise ValueError("smoothing_fwhm_deg must be finite and > 0")
+        if self.interp_factor_b < 2 or self.interp_factor_c < 2:
+            raise ValueError("interp_factor_b/interp_factor_c must each be >= 2 - B and C must be genuinely "
+                             "finer rasters than the real board, not the same cells redrawn")
+        if self.interp_factor_c <= self.interp_factor_b:
+            raise ValueError("interp_factor_c must be > interp_factor_b (C must be visually denser than B)")
+        if (self.color_vmin is None) != (self.color_vmax is None):
+            raise ValueError("color_vmin/color_vmax must both be set or both left auto")
+        if self.color_vmin is not None and not (np.isfinite(self.color_vmin) and np.isfinite(self.color_vmax)
+                                                 and self.color_vmin < self.color_vmax):
+            raise ValueError("color_vmin must be finite and < color_vmax")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def config_hash(self) -> str:
+        payload = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+
+def _kernel_science_config(cfg: MapConfig, kernel_fwhm_deg: float, cutoff_n_fwhm: float, kernel_label: str):
+    """A ScienceConfig whose `beam_fwhm_deg`/`beam_cutoff_n_fwhm` are a DECLARED presentation-smoothing
+    kernel - never science_web_bridge's own honestly-reported real instrument beam (cfg.beam_fwhm_deg/
+    beam_source/beam_status, recorded separately in the manifest and never fed into build_cube() from here
+    on - see build_all_products()). pixel_scale_deg/pixels_per_beam/extent_margin_beams are irrelevant here:
+    build_cube() never reads them (only build_grid() does, and the board's grid comes from
+    build_mosaic_grid() instead - see build_all_products()); left at ScienceConfig's own inert defaults."""
+    from science_engine.config import ScienceConfig
+    return ScienceConfig(
+        reduce_session_dir=cfg.reduce_session_dir,
+        beam_fwhm_deg=kernel_fwhm_deg, beam_source=kernel_label, beam_status="CONFIGURED_OPERATIONAL",
+        beam_cutoff_n_fwhm=cutoff_n_fwhm,
+        quality_policy=cfg.quality_policy, velocity_window_min_m_s=cfg.velocity_window_min_m_s,
+        velocity_window_max_m_s=cfg.velocity_window_max_m_s,
+        min_spectral_coverage_fraction=cfg.min_spectral_coverage_fraction,
+        uncertainty_floor_relative=cfg.uncertainty_floor_relative,
+        sigma_local_floor_fraction=cfg.sigma_local_floor_fraction,
+        sigma_local_window_channels=cfg.sigma_local_window_channels,
+    )
+
+
+def _median_nearest_neighbor_spacing_deg(points) -> Optional[float]:
+    """Real, measured median nearest-neighbour angular separation among a set of points - the one number
+    every spatial default in this module is now tied to (never to beam_fwhm_deg - see auto_spatial_params
+    and build_mosaic_grid). None when fewer than 2 points (nothing to space out)."""
+    if len(points) < 2:
+        return None
+    from science_engine.spatial import angular_separation_deg
+    ra = np.array([p.ra_deg for p in points])
+    dec = np.array([p.dec_degrees for p in points])
+    nn = np.empty(len(points))
+    for i in range(len(points)):
+        d = angular_separation_deg(np.full(len(points), ra[i]), np.full(len(points), dec[i]), ra, dec)
+        d[i] = np.inf
+        nn[i] = d.min()
+    finite = nn[np.isfinite(nn)]
+    return float(np.median(finite)) if finite.size else None
+
+
+def auto_spatial_params(filtered_input, cfg: MapConfig, planned: Optional["PlannedLattice"] = None) -> dict[str, Any]:
+    """Resolves mosaic_spacing_deg / support_radius_deg / smoothing_fwhm_deg when left None, from THIS
+    campaign's OWN point spacing (median nearest-neighbour angular separation among the points being mapped)
+    - never from beam_fwhm_deg. Using the reported beam FWHM to size these was the root cause a real deployed
+    run exposed: science_engine.models.BeamModel's own docstring documents a live "14.0/20.0/1.5 discrepancy"
+    across beam-FWHM sources this repo carries, and a real UNCALIBRATED run's beam (20 deg, from
+    observer_config.json) was ~20x the real ~1 deg point spacing of its own 36-point mosaic - producing a
+    grid whose margin alone (1.5 x 20 deg per side) dwarfed the real ~6x5 deg field and a beam-weighted map
+    that barely varied across it. None of that is reproduced here: every one of these numbers is now tied to
+    where real measurements actually are.
+
+    ONE smoothing_fwhm_deg, not two: an earlier round of this task gave B and C separate light/heavy kernels,
+    which turned out to have no data-driven justification (see MapConfig.smoothing_fwhm_deg's own docstring
+    for the leave-one-out cross-validation that found them statistically indistinguishable) and confounded
+    "denser raster" with "differently smoothed" in a way that made B and C hard to compare honestly. B and C
+    now share this one kernel; only their raster density (interp_factor_b/interp_factor_c) differs.
+
+    The board pitch (mosaic_spacing_deg) is the campaign plan's own nominal spacing when `planned` is given:
+    the nearest-neighbour median of a wide field is a projection-shrunk measure of it (1.5638 vs the planned
+    1.5789 deg on a real 30x30 deg campaign). Support and smoothing stay tied to the measured spacing.
+    """
+    nn_median = _median_nearest_neighbor_spacing_deg(filtered_input.points)
+    if nn_median is None:
+        nn_median = cfg.beam_fwhm_deg   # nothing to space out - no better number available than the beam scale
+
+    if cfg.mosaic_spacing_deg is not None:
+        mosaic_spacing_deg, spacing_source = cfg.mosaic_spacing_deg, "explicit"
+    elif planned is not None:
+        mosaic_spacing_deg, spacing_source = planned.spacing_deg, "campaign_plan"
+    else:
+        mosaic_spacing_deg, spacing_source = nn_median, "median_nearest_neighbor"
+    support_radius_deg = cfg.support_radius_deg if cfg.support_radius_deg is not None else 1.25 * nn_median
+    smoothing_fwhm_deg = cfg.smoothing_fwhm_deg if cfg.smoothing_fwhm_deg is not None else nn_median
+    return {"nearest_neighbor_spacing_deg": nn_median, "mosaic_spacing_deg": mosaic_spacing_deg,
+           "mosaic_spacing_source": spacing_source,
+           "support_radius_deg": support_radius_deg, "smoothing_fwhm_deg": smoothing_fwhm_deg}
+
+
+def _reconcile_used_point_sets(used_b: set[int], used_c: set[int], support_radius_deg: float) -> set[int]:
+    """B and C are built with the SAME support_radius_deg and the SAME physical grid extent/center (see
+    build_all_products/build_fine_grid) - only their pixel DENSITY differs. A point within support_radius_deg
+    of the shared physical area is within support radius of some pixel in EITHER grid (a finer grid only adds
+    pixel centers inside the same area, it never shrinks it), so used_b == used_c is expected by construction,
+    not a coincidence to reconcile after the fact (verified in test_science_web_bridge.py on the real 6x6
+    mosaic at the shipped interp factors). A mismatch here means that expectation was violated (a real bug,
+    e.g. mismatched grid extents reaching build_cube by mistake) - this BLOCKS the comparison outright rather
+    than silently reconciling it with an intersection."""
+    if used_b != used_c:
+        only_b, only_c = sorted(used_b - used_c), sorted(used_c - used_b)
+        raise ValueError(
+            "BLOCKED: map B and map C used DIFFERENT point sets despite sharing support_radius_deg="
+            f"{support_radius_deg:.6g} (should be structurally impossible - see _reconcile_used_point_sets's "
+            f"docstring). only in B: {only_b}; only in C: {only_c}. This is a real bug, not a cosmetic "
+            "mismatch - the comparison is blocked rather than silently using an intersection."
+        )
+    return set(used_b)
+
+
+class MosaicShapeError(ValueError):
+    """Raised when the real points do not resolve to a clean rectangular lattice at the derived/declared
+    spacing (e.g. two points would land in the same cell) - an honest failure, never a silent mis-placement."""
+
+
+@dataclass(frozen=True)
+class PlannedLattice:
+    """The campaign's OWN planned pointing lattice (grid_metadata.json + mosaic.csv of the OBSERVE session the
+    REDUCE session was built from): which (row, col) each point was planned at, the planned spacing and the
+    plan's tangent point. When present it - not a re-clustering of positions - defines the board: a 20x20
+    lattice 30 deg wide laid out in the plan's own tangent plane does NOT stay rectangular in
+    science_engine.spatial's linear (dRA cos dec0, dDec) projection (a real 400-point campaign at dec -33 had
+    one planned column spread over 5.2 deg = 3.3 cells there), so gap clustering of projected positions
+    cannot recover its rows/columns at any spacing."""
+    campaign_dir: str
+    n_rows: int
+    n_cols: int
+    spacing_deg: float
+    center_ra_deg: float
+    center_dec_deg: float
+    cell_by_point: dict
+    target_by_point: dict
+
+
+def load_planned_lattice(filtered_input) -> Optional[PlannedLattice]:
+    """The planned lattice of the campaign behind this REDUCE session, or None when there is none to read (no
+    source_campaign_root, a synthetic session, or a campaign without grid_metadata.json / grid_row+grid_col).
+    A plan that IS there but contradicts itself raises MosaicShapeError - never a silent fallback to
+    clustering."""
+    import csv
+    manifest_path = Path(filtered_input.reduce_session_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    root = json.loads(manifest_path.read_text()).get("source_campaign_root")
+    if not root or root.startswith("<"):
+        return None
+    campaign = Path(root)
+    if not campaign.is_absolute() and not campaign.is_dir():
+        campaign = Path(__file__).resolve().parent / root
+    meta_path, csv_path = campaign / "grid_metadata.json", campaign / "mosaic.csv"
+    if not (meta_path.is_file() and csv_path.is_file()):
+        return None
+    grid = json.loads(meta_path.read_text()).get("grid") or {}
+    with csv_path.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows or not {"point_number", "grid_row", "grid_col"} <= set(rows[0]):
+        return None
+    try:
+        n_rows, n_cols = int(grid["rows"]), int(grid["columns"])
+        spacing = float(grid["nominal_spacing_deg"])
+        center_ra_deg = float(grid["center_ra_hours"]) * 15.0
+        center_dec_deg = float(grid["center_dec_degrees"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MosaicShapeError(f"campaign plan {meta_path} lacks rows/columns/nominal_spacing_deg/center: {exc}")
+    cell_by_point: dict[int, tuple[int, int]] = {}
+    target_by_point: dict[int, tuple[float, float]] = {}
+    for row in rows:
+        idx, cell = int(row["point_number"]), (int(row["grid_row"]), int(row["grid_col"]))
+        if idx in cell_by_point:
+            raise MosaicShapeError(f"campaign plan {csv_path} lists point_number {idx} twice")
+        if not (0 <= cell[0] < n_rows and 0 <= cell[1] < n_cols):
+            raise MosaicShapeError(f"campaign plan {csv_path}: point {idx} planned at {cell}, outside the "
+                                   f"{n_rows}x{n_cols} lattice of grid_metadata.json")
+        cell_by_point[idx] = cell
+        ra_h = row.get("target_ra_hours") or row.get("ra")
+        dec = row.get("target_dec_degrees") or row.get("dec")
+        target_by_point[idx] = (float(ra_h) * 15.0, float(dec))
+    if len(set(cell_by_point.values())) != len(cell_by_point):
+        raise MosaicShapeError(f"campaign plan {csv_path} assigns the same (grid_row, grid_col) to two points")
+    return PlannedLattice(campaign_dir=str(root), n_rows=n_rows, n_cols=n_cols, spacing_deg=spacing,
+                          center_ra_deg=center_ra_deg, center_dec_deg=center_dec_deg,
+                          cell_by_point=cell_by_point, target_by_point=target_by_point)
+
+
+def _board_from_plan(filtered_input, spacing_deg: float, planned: PlannedLattice):
+    """build_mosaic_grid() for a campaign with a planned lattice: rows/cols come from the plan's own indices,
+    the board is centred on the plan's tangent point at the plan's spacing. Each point's REDUCE coordinates
+    stay exactly as measured (build_cube() weights from them); they are only CHECKED against the plan - the
+    point must sit within a quarter cell of its planned target, and the planned rows/columns must keep their
+    orientation in science_engine's projection - so a plan that does not describe these points fails loudly."""
+    from science_engine.models import ScienceGrid
+    from science_engine.spatial import angular_separation_deg, tangent_plane_offsets_deg
+
+    if abs(spacing_deg - planned.spacing_deg) > 1e-6 * planned.spacing_deg:
+        raise MosaicShapeError(
+            f"mosaic_spacing_deg={spacing_deg:.6g} contradicts the campaign plan ({planned.campaign_dir}: "
+            f"nominal_spacing_deg={planned.spacing_deg:.6g}); leave it unset to use the plan's spacing")
+    points = filtered_input.points
+    missing = [p.point_index for p in points if p.point_index not in planned.cell_by_point]
+    if missing:
+        raise MosaicShapeError(f"{len(missing)} point(s) are not in the campaign plan {planned.campaign_dir} "
+                               f"(e.g. point {missing[0]})")
+    ra = np.array([p.ra_deg for p in points])
+    dec = np.array([p.dec_degrees for p in points])
+    target = np.array([planned.target_by_point[p.point_index] for p in points])
+    offset = angular_separation_deg(ra, dec, target[:, 0], target[:, 1])
+    worst = int(np.argmax(offset))
+    if offset[worst] > 0.25 * planned.spacing_deg:
+        raise MosaicShapeError(
+            f"point {points[worst].point_index} is {offset[worst]:.3f} deg from its planned target in "
+            f"{planned.campaign_dir} (more than a quarter of the {planned.spacing_deg:.4g} deg spacing) - the "
+            f"plan does not describe this REDUCE session's points")
+    point_cell = {p.point_index: planned.cell_by_point[p.point_index] for p in points}
+    rc = np.array([point_cell[p.point_index] for p in points])
+    x, y = tangent_plane_offsets_deg(ra, dec, planned.center_ra_deg, planned.center_dec_deg)
+    for axis, line_idx, step_idx, v in (("column", 0, 1, x), ("row", 1, 0, y)):
+        for k in np.unique(rc[:, line_idx]):
+            sel = rc[:, line_idx] == k
+            order = np.argsort(rc[sel, step_idx])
+            if np.any(np.diff(v[sel][order]) <= 0):
+                raise MosaicShapeError(
+                    f"planned {axis} order is not monotonic on the sky along {'row' if axis == 'column' else 'column'} "
+                    f"{int(k)} - the plan's grid_row/grid_col do not match the points' positions")
+    grid = ScienceGrid(frame="icrs", center_ra_deg=planned.center_ra_deg % 360.0,
+                       center_dec_deg=planned.center_dec_deg, width_deg=planned.n_cols * spacing_deg,
+                       height_deg=planned.n_rows * spacing_deg, pixel_scale_deg=spacing_deg,
+                       nx=planned.n_cols, ny=planned.n_rows)
+    return grid, point_cell, planned.n_rows, planned.n_cols
+
+
+def lattice_geometry(board_grid, n_rows: int, n_cols: int, planned: Optional[PlannedLattice]):
+    """Map A's cells in the SAME projection B/C are computed in (science_engine.grid.pixel_centers_deg:
+    x = dRA cos(dec0), y = dDec about board_grid's centre). Returns (nodes, corners):
+    - nodes (n_rows, n_cols, 2): each lattice position's (x, y). From the plan's own targets when there is a
+      plan (so a wide field's cells follow its real, non-rectangular layout); otherwise the regular board
+      centres, exactly the board as before.
+    - corners (n_rows+1, n_cols+1, 2): cell corners, each the mean of the four surrounding nodes, the outer
+      ring extrapolated linearly from the last two nodes. A regular lattice gives back its exact square cells.
+    """
+    from science_engine.spatial import tangent_plane_offsets_deg
+    s = board_grid.pixel_scale_deg
+    cc, rr = np.meshgrid(np.arange(n_cols), np.arange(n_rows))
+    nodes = np.stack([(cc + 0.5) * s - board_grid.width_deg / 2, (rr + 0.5) * s - board_grid.height_deg / 2], axis=-1)
+    if planned is not None:
+        for idx, (r, c) in planned.cell_by_point.items():
+            ra, dec = planned.target_by_point[idx]
+            x, y = tangent_plane_offsets_deg(np.array([ra]), np.array([dec]),
+                                             board_grid.center_ra_deg, board_grid.center_dec_deg)
+            nodes[r, c] = (float(x[0]), float(y[0]))
+
+    def _pad(arr, axis):
+        n = arr.shape[axis]
+        first, last = np.take(arr, [0], axis=axis), np.take(arr, [n - 1], axis=axis)
+        if n >= 2:
+            before = 2 * first - np.take(arr, [1], axis=axis)
+            after = 2 * last - np.take(arr, [n - 2], axis=axis)
+        else:   # a single row/column: one board pitch along that axis
+            step = np.zeros(2)
+            step[1 - axis] = s          # axis 0 = rows -> y; axis 1 = cols -> x
+            before, after = first - step, last + step
+        return np.concatenate([before, arr, after], axis=axis)
+
+    padded = _pad(_pad(nodes, 0), 1)
+    corners = 0.25 * (padded[:-1, :-1] + padded[1:, :-1] + padded[:-1, 1:] + padded[1:, 1:])
+    return nodes, corners
+
+
+def raster_base_grid(board_grid, corners):
+    """The base raster B/C refine: same centre (hence the same projection) as the board, at the board's
+    pitch, widened to the smallest symmetric whole-cell extent that contains every corner of every A cell.
+    For a regular board this IS the board; for a wide field it covers the corners the linear projection
+    pushes outside the board's own rectangle, so no point falls off the B/C rasters."""
+    from science_engine.models import ScienceGrid
+    s = board_grid.pixel_scale_deg
+    half_w = max(float(np.abs(corners[..., 0]).max()), board_grid.width_deg / 2)
+    half_h = max(float(np.abs(corners[..., 1]).max()), board_grid.height_deg / 2)
+    nx, ny = int(np.ceil(2 * half_w / s - 1e-9)), int(np.ceil(2 * half_h / s - 1e-9))
+    return ScienceGrid(frame="icrs", center_ra_deg=board_grid.center_ra_deg, center_dec_deg=board_grid.center_dec_deg,
+                       width_deg=nx * s, height_deg=ny * s, pixel_scale_deg=s, nx=nx, ny=ny)
+
+
+def mosaic_geometry_summary(filtered_input, base_grid, nodes, point_cell, planned: Optional[PlannedLattice],
+                            support_radius_deg: float, raster_factors: tuple[int, ...]) -> dict[str, Any]:
+    """How the board sits on the sky, from the real positions - reported, never used to move a point.
+    - point_to_planned_target_max_deg: REDUCE coordinates vs the plan's targets (None without a plan).
+    - point_to_a_cell_node_max_deg: a point's own position vs where map A draws its cell, both in the B/C
+      projection - A, B and C share one projection, so this is the plan-vs-measured difference only.
+    - regular_board_offset_max_deg: the same point vs the centre a RECTANGULAR board would give its cell -
+      the distortion map A had to absorb by deforming its cells (3.29 deg on the real 30x30 deg campaign).
+    - raster coverage per factor: the largest point-to-nearest-pixel distance vs support_radius_deg. A point
+      beyond it would drop out of B/C, so callers BLOCK on uncovered_points."""
+    from science_engine.grid import pixel_centers_deg
+    from science_engine.spatial import angular_separation_deg, tangent_plane_offsets_deg
+
+    points = filtered_input.points
+    ra = np.array([p.ra_deg for p in points])
+    dec = np.array([p.dec_degrees for p in points])
+    x, y = tangent_plane_offsets_deg(ra, dec, base_grid.center_ra_deg, base_grid.center_dec_deg)
+    rc = np.array([point_cell[p.point_index] for p in points])
+    node = nodes[rc[:, 0], rc[:, 1]]
+    n_rows, n_cols = nodes.shape[:2]
+    s = base_grid.pixel_scale_deg
+    regular = np.stack([(rc[:, 1] + 0.5) * s - n_cols * s / 2, (rc[:, 0] + 0.5) * s - n_rows * s / 2], axis=-1)
+    out: dict[str, Any] = {
+        "lattice_source": "campaign_plan" if planned else "measured_positions",
+        "campaign_plan": planned.campaign_dir if planned else None,
+        "projection": "science_engine linear tangent plane (x = dRA cos dec0, y = dDec) - shared by A, B and C",
+        "point_to_planned_target_max_deg": None,
+        "point_to_a_cell_node_max_deg": float(np.hypot(x - node[:, 0], y - node[:, 1]).max()),
+        "regular_board_offset_max_deg": float(np.hypot(x - regular[:, 0], y - regular[:, 1]).max()),
+        "raster_extent_deg": [base_grid.width_deg, base_grid.height_deg],
+        "raster_coverage": {},
+    }
+    if planned:
+        target = np.array([planned.target_by_point[p.point_index] for p in points])
+        out["point_to_planned_target_max_deg"] = float(angular_separation_deg(ra, dec, target[:, 0], target[:, 1]).max())
+    for factor in raster_factors:
+        grid = base_grid if factor == 1 else build_fine_grid(base_grid, factor)
+        pra, pdec = (a.ravel() for a in pixel_centers_deg(grid))
+        nearest = np.array([angular_separation_deg(np.full(pra.size, a), np.full(pra.size, d), pra, pdec).min()
+                            for a, d in zip(ra, dec)])
+        out["raster_coverage"][str(factor)] = {
+            "max_point_to_nearest_pixel_deg": float(nearest.max()), "support_radius_deg": float(support_radius_deg),
+            "uncovered_points": [p.point_index for p, n in zip(points, nearest) if n > support_radius_deg]}
+    return out
+
+
+# ------------------------------------------------------------------ B/C in 2D tiles: same pixels, bounded RAM and time
+# A full (Nv, Ny, Nx) cube costs science_engine.validation.PEAK_RAM_BYTES_PER_VOXEL (57 B: four float64/int64
+# accumulators, value/variance/uncertainty at finalize, valid); the real 400-point session's C raster needed one of
+# ~6.6 GB (120x120 board) / ~9.1 GB (132x150 shared-projection raster) x 8192 channels. Every voxel of build_cube()
+# depends only on its own pixel's beam weights and on the points (always summed in ascending point_index order), and
+# integrated_map() reduces each pixel over velocity alone - so the map is built one small 2D tile at a time with the
+# frozen build_cube()/integrated_map() and stitched: same values, same pixels. A tile also only accumulates the
+# points whose support reaches it (build_cube() skips the rest), which is what makes it fast: the frozen engine
+# otherwise adds every point to every voxel of the grid, most of them with a zero weight.
+QUALITY_PROXY_BYTES_PER_VOXEL = 18   # kept uncertainty (8) + valid (1); assess_science_quality's nanmedian copy (8) + isfinite (1)
+TILE_TARGET_BYTES = 256 * 1024 ** 2  # one tile's cube (57 B/voxel): small enough that few points reach it
+
+
+def _tile_grid(grid, y0: int, y1: int, x0: int, x1: int):
+    """Pixels [y0:y1, x0:x1] of `grid` as a ScienceGrid whose pixel_centers_deg() are those same pixels' centres.
+    pixel_centers_deg() computes ra = centre_ra + x / cos(centre_dec): a tile centred at another dec gets its width
+    scaled by cos(tile dec) / cos(grid dec) and its centre RA shifted by its own x offset / cos(grid dec), so every
+    pixel lands on the full grid's RA/Dec (to float rounding, ~1e-13 deg)."""
+    from science_engine.models import ScienceGrid
+    xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
+    ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
+    cos0 = np.cos(np.radians(grid.center_dec_deg))
+    tile_dec = grid.center_dec_deg + 0.5 * (ys[y0] + ys[y1])
+    x_mid = 0.5 * (xs[x0] + xs[x1])
+    scale = np.cos(np.radians(tile_dec)) / cos0
+    return ScienceGrid(frame=grid.frame, center_ra_deg=float((grid.center_ra_deg + x_mid / cos0) % 360.0),
+                       center_dec_deg=float(tile_dec), width_deg=float((xs[x1] - xs[x0]) * scale),
+                       height_deg=float(ys[y1] - ys[y0]), pixel_scale_deg=grid.pixel_scale_deg, nx=x1 - x0, ny=y1 - y0)
+
+
+def tile_plan(grid, n_velocity_channels: int, n_points: int, keep_quality_inputs: bool) -> dict[str, Any]:
+    """Tile size and the peak RAM it implies, from the allocations the tiled build really makes:
+    baseline (interpreter + imports) + the ingested spectra (48 B per point-channel) + ONE tile cube (57 B/voxel) +,
+    for map B only, the full-grid uncertainty/valid kept for assess_science_quality (18 B/voxel, see
+    QUALITY_PROXY_BYTES_PER_VOXEL). The budget is the same min(3 GB, 60% of MemAvailable) science_engine's own
+    preflight uses - never raised. ok=False only if even a one-pixel tile does not fit."""
+    from science_engine.validation import (MEMORY_FRACTION_OF_AVAILABLE, PEAK_RAM_BASELINE_BYTES,
+                                           PEAK_RAM_BYTES_PER_VOXEL, INPUT_BYTES_PER_POINT_CHANNEL,
+                                           available_memory_bytes)
+    available = available_memory_bytes()
+    cap = 3 * 1024 ** 3
+    budget = cap if available is None else min(cap, int(MEMORY_FRACTION_OF_AVAILABLE * available))
+    full_voxels = grid.nx * grid.ny * n_velocity_channels
+    fixed = (PEAK_RAM_BASELINE_BYTES + n_points * n_velocity_channels * INPUT_BYTES_PER_POINT_CHANNEL
+             + (full_voxels * QUALITY_PROXY_BYTES_PER_VOXEL if keep_quality_inputs else 0))
+    per_pixel = n_velocity_channels * PEAK_RAM_BYTES_PER_VOXEL
+    tile_bytes = max(0, min(TILE_TARGET_BYTES, budget - fixed))
+    side = int(np.sqrt(tile_bytes // per_pixel)) if tile_bytes >= per_pixel else 0
+    ty, tx = min(side, grid.ny), min(side, grid.nx)
+    n_tiles = (-(-grid.ny // ty)) * (-(-grid.nx // tx)) if side else None
+    peak = fixed + (ty * tx if side else 1) * per_pixel
+    full = full_voxels * PEAK_RAM_BYTES_PER_VOXEL + PEAK_RAM_BASELINE_BYTES + n_points * n_velocity_channels * INPUT_BYTES_PER_POINT_CHANNEL
+    return {"ok": side >= 1, "tile_shape": [ty, tx] if side else None, "n_tiles": n_tiles,
+            "estimated_peak_bytes": int(peak), "budget_bytes": int(budget), "single_cube_estimate_bytes": int(full),
+            "detail": (f"{grid.ny}x{grid.nx} x {n_velocity_channels} channels in {n_tiles} tile(s) of <= {ty}x{tx} px: "
+                       f"estimated peak ~{peak / 1024**2:.0f} MB vs budget {budget / 1024**2:.0f} MB (baseline + spectra "
+                       f"+ one tile cube{' + B quality inputs' if keep_quality_inputs else ''}; a single full cube "
+                       f"would need ~{full / 1024**2:.0f} MB)" if side else
+                       f"even one pixel ({per_pixel / 1024**2:.1f} MB) + fixed load ({fixed / 1024**2:.0f} MB) exceeds "
+                       f"the {budget / 1024**2:.0f} MB budget")}
+
+
+def integrated_map_in_tiles(filtered_input, grid, beam, sc, *, keep_quality_inputs: bool = False,
+                            label: Optional[str] = None):
+    """build_cube() + integrated_map() over `grid`, one 2D tile at a time (tile_plan()), stitched into ONE
+    SpatialMap on `grid`. Returns (map, build_info, quality_cube): build_info is the engine's own when one tile
+    covers the grid; otherwise per-point facts are merged (used = union over tiles, OUTSIDE_BEAM_SUPPORT only
+    for a point no tile used). quality_cube (keep_quality_inputs) is a ScienceCube carrying the real full-grid
+    uncertainty/valid - all assess_science_quality() reads - with the other arrays as zero-cost broadcast views,
+    never fabricated values."""
+    import gc
+    from science_engine.cube import build_cube, canonical_velocity_axis
+    from science_engine.integration import integrated_map
+    from science_engine.models import ScienceCube, SpatialMap
+
+    velocity_axis = canonical_velocity_axis(filtered_input)
+    nv = int(velocity_axis.shape[0])
+    plan = tile_plan(grid, nv, len(filtered_input.points), keep_quality_inputs)
+    if not plan["ok"]:
+        raise ValueError(f"BLOCKED before allocating {grid.ny}x{grid.nx}: {plan['detail']}")
+    ty, tx = plan["tile_shape"]
+    ny, nx = grid.ny, grid.nx
+    value = np.full((ny, nx), np.nan); unc = np.full((ny, nx), np.nan); wsum = np.zeros((ny, nx))
+    npt = np.zeros((ny, nx), dtype=np.int64); valid = np.zeros((ny, nx), dtype=bool); cov = np.zeros((ny, nx))
+    metadata, infos = None, []
+    unc_full = valid_full = None
+    if keep_quality_inputs:
+        unc_full = np.empty((nv, ny, nx), dtype=np.float64)
+        valid_full = np.empty((nv, ny, nx), dtype=bool)
+    n_tiles = -(-ny // ty) * -(-nx // tx)
+    if label:
+        _progress(f"map {label}: {ny}x{nx} px, {nv} velocity channels, {n_tiles} tile(s) of {ty}x{tx}")
+    for y0 in range(0, ny, ty):
+        y1 = min(ny, y0 + ty)
+        for x0 in range(0, nx, tx):
+            x1 = min(nx, x0 + tx)
+            if label and n_tiles > 1:
+                _progress(f"map {label}: tile {len(infos) + 1}/{n_tiles} (rows {y0}-{y1 - 1}, cols {x0}-{x1 - 1})")
+            tile = grid if (y0, y1, x0, x1) == (0, ny, 0, nx) else _tile_grid(grid, y0, y1, x0, x1)
+            cube = build_cube(filtered_input, tile, beam, sc)
+            m = integrated_map(cube, sc)
+            sl = (slice(y0, y1), slice(x0, x1))
+            value[sl], wsum[sl], npt[sl], valid[sl], cov[sl] = m.value, m.weight_sum, m.n_pointings, m.valid, m.spectral_coverage
+            if m.uncertainty is not None:
+                unc[sl] = m.uncertainty
+            metadata = metadata or dict(m.metadata)
+            infos.append(cube.build_info)
+            if keep_quality_inputs:
+                unc_full[:, y0:y1, x0:x1] = cube.uncertainty
+                valid_full[:, y0:y1, x0:x1] = cube.valid
+            del cube, m
+            gc.collect()
+    if label:
+        _progress(f"map {label}: done")
+    stitched = SpatialMap(grid=grid, kind="integrated_relative_intensity", value=value, uncertainty=unc,
+                          weight_sum=wsum, n_pointings=npt, valid=valid, units="relative_intensity_dimensionless * m/s",
+                          metadata=metadata, spectral_coverage=cov)
+    if len(infos) == 1:
+        info = infos[0]
+    else:
+        used_set = {i for inf in infos for i in inf["used_point_indices"]}
+        used = [p.point_index for p in filtered_input.points if p.point_index in used_set]
+        excluded, seen = [], set()
+        for inf in infos:
+            for e in inf["excluded"]:
+                if e.get("reason") == "OUTSIDE_BEAM_SUPPORT_OF_GRID":
+                    continue
+                key = (e.get("point_index"), e.get("reason"))
+                if key not in seen:
+                    seen.add(key)
+                    excluded.append(e)
+        otherwise_excluded = {e.get("point_index") for e in excluded}
+        excluded += [{"point_index": p.point_index, "reason": "OUTSIDE_BEAM_SUPPORT_OF_GRID"}
+                     for p in filtered_input.points
+                     if p.point_index not in used_set and p.point_index not in otherwise_excluded]
+        info = dict(infos[0])
+        info.update(used_point_indices=used, n_points_used=len(used), excluded=excluded,
+                    n_points_excluded=len(excluded),
+                    n_nonfinite_rejected=int(sum(inf["n_nonfinite_rejected"] for inf in infos)),
+                    resample={**infos[0]["resample"],
+                              "n_points_resampled": max(inf["resample"]["n_points_resampled"] for inf in infos),
+                              "note": f"per-tile statistics (max over {len(infos)} tiles); each point's own "
+                                      f"resampling does not depend on the tile"},
+                    tiles={"n_tiles": len(infos), "tile_shape": [ty, tx]})
+    quality_cube = None
+    if keep_quality_inputs:
+        zeros = np.broadcast_to(np.float64(0.0), unc_full.shape)
+        quality_cube = ScienceCube(grid=grid, velocity_lsrk_m_s=velocity_axis, relative_intensity=zeros,
+                                   uncertainty=unc_full, weight_sum=zeros,
+                                   n_pointings=np.broadcast_to(np.int64(0), unc_full.shape), valid=valid_full,
+                                   build_info=info)
+    stitched.metadata["tiles"] = {"n_tiles": len(infos), "tile_shape": [ty, tx],
+                                  "estimated_peak_bytes": plan["estimated_peak_bytes"]}
+    return stitched, info, quality_cube
+
+
+def _cluster_1d(values: np.ndarray, gap_threshold: float) -> tuple[np.ndarray, int, np.ndarray]:
+    """Groups 1D values into clusters by GAP, not by rounding to a fixed multiple of a nominal spacing - a
+    real 36-point mosaic's own tangent-plane RA offsets were measured to drift ~6% row-to-row (a real,
+    expected effect of a single global cos(dec) tangent-plane projection applied to rows at slightly
+    different real declinations, when the original mosaic was laid out in constant RA-hour steps per row -
+    not a data error), which made "round(x/spacing)" collide two real points into the same nominal cell on
+    a real deployed run. Splitting on a gap > gap_threshold between successive SORTED values is robust to
+    that smooth drift as long as within-row/within-column jitter stays well under one spacing (true here:
+    the measured drift was a few % of one spacing, gap_threshold defaults to half a spacing in
+    build_mosaic_grid). Returns (cluster_index per value, n_clusters, centroid per cluster)."""
+    order = np.argsort(values)
+    sorted_vals = values[order]
+    cluster_sorted = np.zeros(len(values), dtype=int)
+    current = 0
+    for i in range(1, len(sorted_vals)):
+        if sorted_vals[i] - sorted_vals[i - 1] > gap_threshold:
+            current += 1
+        cluster_sorted[i] = current
+    cluster = np.empty(len(values), dtype=int)
+    cluster[order] = cluster_sorted
+    n_clusters = current + 1
+    centroids = np.array([sorted_vals[cluster_sorted == k].mean() for k in range(n_clusters)])
+    return cluster, n_clusters, centroids
+
+
+def build_mosaic_grid(filtered_input, spacing_deg: float, planned: Optional[PlannedLattice] = None):
+    """A ScienceGrid whose pixel centers coincide with the campaign's OWN real pointing lattice - rows/cols
+    derived from the real point positions and `spacing_deg` (via _cluster_1d's gap-based clustering, robust
+    to real per-row/per-column projection drift - see its own docstring), never a hardcoded shape and never
+    a finer sub-cell raster. This is what makes A, B and C the SAME NxM board (request: "el mismo tablero de
+    6x6 cuadros... idénticos límites, orientación, posición de cada celda, tamaño de celda"): the exact same
+    frozen ScienceGrid type build_cube()/integrated_map() already consume, just constructed at the mosaic's
+    own native cell scale instead of a fine raster.
+
+    Returns (grid, point_cell, n_rows, n_cols) where point_cell maps point_index -> (row, col), the nearest
+    lattice cell to that point's own real position (build_cube() still weights from the point's own exact
+    RA/Dec via the frozen angular_separation_deg, never the cell's - this mapping is for DISPLAY/lookup only,
+    never fed back into the physics: a computed VALUE is always exact regardless of any grid-uniformity
+    approximation; only which nominal cell a point is DISPLAYED in could be off by a small, bounded fraction
+    of one cell width when a mosaic's real row-to-row spacing genuinely varies, as it does here).
+
+    A campaign with a whole row or column of completely missing pointings cannot be told apart from a
+    smaller, real mosaic (nothing here observes an un-sampled row/column) - a real limitation, not silently
+    hidden: n_rows/n_cols are always exactly what the OBSERVED positions imply, at the declared/derived
+    spacing_deg.
+
+    With `planned` (load_planned_lattice()), none of the above clustering runs: the plan's own grid_row/
+    grid_col, spacing and tangent point define the board (see _board_from_plan()).
+    """
+    from science_engine.models import ScienceGrid
+    from science_engine.spatial import tangent_plane_offsets_deg
+
+    points = filtered_input.points
+    if not points:
+        raise ValueError("cannot build a mosaic grid from zero input points")
+    if planned is not None:
+        return _board_from_plan(filtered_input, spacing_deg, planned)
+    ra = np.array([p.ra_deg for p in points])
+    dec = np.array([p.dec_degrees for p in points])
+    center_ra0 = float(np.degrees(np.arctan2(
+        np.mean(np.sin(np.radians(ra))), np.mean(np.cos(np.radians(ra)))))) % 360.0
+    center_dec0 = float(np.mean(dec))
+    x, y = tangent_plane_offsets_deg(ra, dec, center_ra0, center_dec0)
+
+    gap_threshold = 0.5 * spacing_deg
+    col_idx, n_cols, col_centroids = _cluster_1d(x, gap_threshold)
+    row_idx, n_rows, row_centroids = _cluster_1d(y, gap_threshold)
+
+    point_cell: dict[int, tuple[int, int]] = {}
+    for p, r, c in zip(points, row_idx, col_idx):
+        point_cell[p.point_index] = (int(r), int(c))
+    if len(set(point_cell.values())) != len(points):
+        # two real points clustered into the same cell at this spacing - the campaign is not a clean lattice
+        # at spacing_deg (wrong/stale mosaic_spacing_deg, or genuinely irregular pointings). Fail loudly
+        # rather than silently drop/overwrite one point's cell.
+        from collections import Counter
+        dupes = [cell for cell, n in Counter(point_cell.values()).items() if n > 1]
+        raise MosaicShapeError(
+            f"{len(points)} points do not form a clean rectangular lattice at spacing_deg={spacing_deg:.6g} - "
+            f"{len(dupes)} cell(s) claimed by more than one point (e.g. {dupes[0]}). Pass mosaic_spacing_deg "
+            f"explicitly if the auto-derived spacing (median nearest-neighbour) is wrong for this campaign."
+        )
+
+    mean_col_pos, mean_row_pos = float(np.mean(col_centroids)), float(np.mean(row_centroids))
+    cos_dec0 = np.cos(np.radians(center_dec0))
+    center_ra = (center_ra0 + mean_col_pos / cos_dec0) % 360.0
+    center_dec = center_dec0 + mean_row_pos
+    grid = ScienceGrid(frame="icrs", center_ra_deg=center_ra, center_dec_deg=center_dec,
+                       width_deg=n_cols * spacing_deg, height_deg=n_rows * spacing_deg,
+                       pixel_scale_deg=spacing_deg, nx=n_cols, ny=n_rows)
+    return grid, point_cell, n_rows, n_cols
+
+
+def build_fine_grid(board_grid, factor: int):
+    """A ScienceGrid covering the EXACT SAME physical extent, center and orientation as `board_grid` (the
+    real N x M mosaic board build_mosaic_grid() returned), sampled `factor` times more densely per axis -
+    genuinely NEW pixel positions BETWEEN the real measured cells, never the same cells enlarged, blurred or
+    repainted at a different opacity. Used only for the interpolated B/C panels (request: "deben aparecer
+    píxeles nuevos entre las posiciones medidas"). build_cube()/integrated_map() (frozen) do 100% of the
+    actual weighting/integration math at these new pixel centers - exactly the same call as for the real
+    board, just evaluated at more locations; this function only decides WHERE those locations sit."""
+    from science_engine.models import ScienceGrid
+    if factor < 2:
+        raise ValueError(f"build_fine_grid factor must be >= 2 (got {factor}) - it must add real pixels "
+                         f"between the measured cells, not reproduce the same board")
+    return ScienceGrid(frame="icrs", center_ra_deg=board_grid.center_ra_deg,
+                       center_dec_deg=board_grid.center_dec_deg, width_deg=board_grid.width_deg,
+                       height_deg=board_grid.height_deg, pixel_scale_deg=board_grid.pixel_scale_deg / factor,
+                       nx=board_grid.nx * factor, ny=board_grid.ny * factor)
+
+
+_VIRIDIS = None  # lazy: matplotlib import is not needed for any non-rendering path (CLI plan/inspect, tests)
+
+
+def viridis_hex(value: Optional[float], vmin: float, vmax: float) -> Optional[str]:
+    """THE single colour function - used to fill every PNG/SVG/PDF export's cells (via the same matplotlib
+    Colormap object) AND every value reported in maps/board.json for the browser's own interactive board.
+    Never a second, JS-side re-implementation of a colormap: the browser paints exactly the hex string this
+    function produced, so "el mismo valor numerico debe tener el mismo color en todas las vistas" holds by
+    construction, not by coincidence. Returns None for a non-finite value (never fabricates a colour for a
+    missing/invalid cell)."""
+    global _VIRIDIS
+    if value is None or not np.isfinite(value):
+        return None
+    if _VIRIDIS is None:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        _VIRIDIS = plt.get_cmap("viridis")
+    t = 0.0 if vmax <= vmin else max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
+    r, g, b, _ = _VIRIDIS(t)
+    return "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
+
+
+# ------------------------------------------------------------------ ingest + calibration-level filter
+def inspect_reduce_session(reduce_session_dir: str) -> dict[str, Any]:
+    """Read-only: real coverage (planned/measured/reduced/valid/excluded), calibration-level counts,
+    per-point LSRK availability - BEFORE any science_engine contract gate, so a caller sees exactly why
+    a point is missing rather than a bare contract failure."""
+    from reduce_engine.science_contract import validate_science_input
+    session_dir = Path(reduce_session_dir)
+    manifest_path = session_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"not a REDUCE session (no manifest.json): {session_dir}")
+    manifest = json.loads(manifest_path.read_text())
+    contract = validate_science_input(session_dir)
+    out: dict[str, Any] = {
+        "reduce_session_dir": str(session_dir), "campaign_id": manifest.get("campaign_id"),
+        "reduce_session_id": manifest.get("reduce_session_id"), "reduce_status": manifest.get("status"),
+        "points_planned": manifest.get("points_discovered"), "points_reduced_completed": manifest.get("points_completed"),
+        "points_reduced_blocked": manifest.get("points_blocked"), "points_reduced_failed": manifest.get("points_failed"),
+        "science_contract_ok": contract.ok, "science_contract_problems": contract.problems,
+    }
+    if not contract.ok:
+        out.update(calibration_level_counts={}, velocity_available_count=0, velocity_missing_points=[],
+                   n_points_ingestable=0, ra_deg_range=None, dec_deg_range=None)
+        return out
+    from science_engine.ingest import ScienceContractError, load_science_input
+    try:
+        si = load_science_input(session_dir)
+    except ScienceContractError as exc:
+        # validate_science_input() (the lighter, real-file-existence contract check above) passed, but
+        # load_science_input()'s own additional ingest-time checks (schema version, zero COMPLETED points
+        # ingestable, a manifest-wide identity problem) do not - a real, distinct failure mode, not a
+        # server error. Reported the same honest way as the lighter check, never a 500.
+        out.update(science_contract_ok=False, science_contract_problems=out["science_contract_problems"] + [str(exc)],
+                   calibration_level_counts={}, velocity_available_count=0, velocity_missing_points=[],
+                   n_points_ingestable=0, ra_deg_range=None, dec_deg_range=None)
+        return out
+    calib_counts: dict[str, int] = {}
+    missing_vel = []
+    for p in si.points:
+        calib_counts[p.calibration_level] = calib_counts.get(p.calibration_level, 0) + 1
+        if p.velocity_lsrk_m_s is None:
+            missing_vel.append(p.point_index)
+    ra = [p.ra_deg for p in si.points]
+    dec = [p.dec_degrees for p in si.points]
+    out.update(
+        calibration_level_counts=calib_counts, n_points_ingestable=len(si.points),
+        velocity_available_count=len(si.points) - len(missing_vel), velocity_missing_points=missing_vel,
+        ra_deg_range=[min(ra), max(ra)] if ra else None, dec_deg_range=[min(dec), max(dec)] if dec else None,
+        ingest_exclusions=si.exclusions, n_points_in_reduce_manifest=si.n_points_in_manifest,
+    )
+    return out
+
+
+def load_filtered_input(reduce_session_dir: str, calibration_level_filter: str):
+    """load_science_input() (frozen, reused) then a NEW, additive filter to one calibration level - a
+    real, separate ScienceInput copy, never mutating the frozen ingest result. Filtered-out points are
+    recorded as exclusions with a distinct, honest reason (never silently dropped)."""
+    from science_engine.ingest import load_science_input
+    from science_engine.models import ScienceInput
+    si = load_science_input(reduce_session_dir)
+    counts: dict[str, int] = {}
+    for p in si.points:
+        counts[p.calibration_level] = counts.get(p.calibration_level, 0) + 1
+    kept = [p for p in si.points if p.calibration_level == calibration_level_filter]
+    newly_excluded = [{"point_index": p.point_index,
+                       "reason": f"CALIBRATION_LEVEL_FILTER_KEEPS_ONLY_{calibration_level_filter}"}
+                      for p in si.points if p.calibration_level != calibration_level_filter]
+    if not kept:
+        raise ValueError(f"no {calibration_level_filter} points in this REDUCE session (counts: {counts}) - "
+                         f"choose the other calibration level")
+    filtered = ScienceInput(reduce_session_dir=si.reduce_session_dir, campaign_id=si.campaign_id,
+                            reduce_session_id=si.reduce_session_id, reduce_schema_version=si.reduce_schema_version,
+                            reduce_session_status=si.reduce_session_status, points=kept,
+                            contract_problems=list(si.contract_problems),
+                            exclusions=list(si.exclusions) + newly_excluded,
+                            n_points_in_manifest=si.n_points_in_manifest)
+    return filtered, counts, si
+
+
+# ------------------------------------------------------------------ map A: per-point, no spatial interpolation
+def per_point_integrated_values(filtered_input, science_config, velocity_axis: np.ndarray) -> list[dict[str, Any]]:
+    """Each USED point's own window-integrated value - the SAME bin-overlap formula
+    science_engine.integration.integrated_map() applies per pixel, applied here per point's own
+    (canonical-axis-resampled, exactly as build_cube() would) spectrum. No spatial gridding: this is
+    what map A plots directly, one footprint per point, never blended with a neighbour."""
+    from reduce_engine.models import MaskFlag
+    from science_engine.cube import _ascending
+    from science_engine.gridding import bin_validity, point_passes_quality_policy, sigma_suspect_bins
+    from science_engine.integration import window_overlaps
+    from science_engine.resample import resample_to_velocity_axis
+
+    vmin, vmax = science_config.velocity_window_min_m_s, science_config.velocity_window_max_m_s
+    channel_width = float(np.median(np.abs(np.diff(velocity_axis))))
+    overlap_full = window_overlaps(velocity_axis, vmin, vmax)
+    idx = np.flatnonzero(overlap_full > 0)
+    ov = overlap_full[idx]
+    requested_width = vmax - vmin
+
+    rows: list[dict[str, Any]] = []
+    suspect_cache: dict[bytes, np.ndarray] = {}
+    for point in filtered_input.points:
+        entry: dict[str, Any] = {
+            "point_index": point.point_index, "ra_deg": point.ra_deg, "dec_degrees": point.dec_degrees,
+            "calibration_level": point.calibration_level, "reduce_quality_state": point.reduce_quality_state,
+            "timestamp_start_utc": point.timestamp_start_utc,
+        }
+        if point.velocity_lsrk_m_s is None:
+            entry.update(status="EXCLUDED", reason="NO_VELOCITY", value=None, uncertainty=None, spectral_coverage=None)
+            rows.append(entry)
+            continue
+        if not point_passes_quality_policy(point.reduce_quality_state, science_config.quality_policy):
+            entry.update(status="EXCLUDED",
+                        reason=f"QUALITY_POLICY_{science_config.quality_policy}_EXCLUDES_{point.reduce_quality_state}",
+                        value=None, uncertainty=None, spectral_coverage=None)
+            rows.append(entry)
+            continue
+
+        v_pt, values_pt, unc_pt, mask_pt = _ascending(point.velocity_lsrk_m_s, point.relative_intensity,
+                                                       point.uncertainty, point.mask)
+        key = hashlib.blake2b(unc_pt.tobytes() + np.asarray(mask_pt).tobytes(), digest_size=16).digest()
+        if key not in suspect_cache:
+            suspect_cache[key] = sigma_suspect_bins(mask_pt, unc_pt, science_config.sigma_local_floor_fraction,
+                                                    science_config.sigma_local_window_channels)
+        suspect = suspect_cache[key]
+        if suspect.any():
+            mask_pt = np.where(suspect, MaskFlag.INVALID.value, mask_pt)
+
+        if float(np.max(np.abs(v_pt - velocity_axis))) <= 1e-3 * channel_width:
+            values, uncertainty, mask = values_pt, unc_pt, mask_pt
+        else:
+            r = resample_to_velocity_axis(v_pt, values_pt, unc_pt, mask_pt, velocity_axis)
+            values, uncertainty, mask = r.relative_intensity, r.uncertainty, r.mask
+
+        valid = bin_validity(mask, uncertainty, science_config.uncertainty_floor_relative, values)
+        valid_i = valid[idx]
+        val_i = np.where(valid_i, values[idx], 0.0)
+        unc_i = np.where(valid_i, uncertainty[idx], 0.0)
+        value = float(np.sum(ov * val_i))
+        sigma = float(np.sqrt(np.sum((ov * unc_i) ** 2)))
+        valid_width = float(np.sum(np.where(valid_i, ov, 0.0)))
+        coverage = valid_width / requested_width if requested_width > 0 else 0.0
+        is_valid = coverage >= science_config.min_spectral_coverage_fraction
+        entry.update(status=("USED" if is_valid else "EXCLUDED"),
+                    reason=(None if is_valid else f"SPECTRAL_COVERAGE_BELOW_THRESHOLD:{coverage:.3f}"),
+                    value=(value if is_valid else None), uncertainty=(sigma if is_valid else None),
+                    spectral_coverage=coverage)
+        rows.append(entry)
+    return rows
+
+
+def robust_color_limits(point_rows: list[dict[str, Any]], override_vmin, override_vmax) -> tuple[float, float, str]:
+    if override_vmin is not None and override_vmax is not None:
+        return float(override_vmin), float(override_vmax), "operator override"
+    values = np.array([r["value"] for r in point_rows if r["status"] == "USED" and r["value"] is not None])
+    if values.size == 0:
+        return -1.0, 1.0, "no usable per-point value - arbitrary [-1, 1] fallback (map will show no data anyway)"
+    if values.size < 5:
+        lo, hi = float(values.min()), float(values.max())
+        if lo == hi:
+            lo, hi = lo - 1.0, hi + 1.0
+        return lo, hi, f"min/max of {values.size} measured point(s) - too few for a percentile"
+    lo, hi = (float(v) for v in np.percentile(values, [2, 98]))
+    if lo == hi:
+        lo, hi = float(values.min()), float(values.max())
+    return lo, hi, "2nd/98th percentile of measured (map A) point values"
+
+
+def noise_dominance_summary(point_rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Real statistics answering "is there any real spatial signal here beyond pure per-point noise, at the
+    finest sampled scale" - a real deployed run's B/C showed circular halos traced back to individual noisy
+    points (see render_all_maps's own per-pixel n_pointings hatching), but a MULTI-point local cluster of
+    same-signed noise can ALSO look like a coherent blob under smoothing even with no single dominant point
+    (n_pointings alone does not catch this). This compares each USED point's value to its own real nearest
+    neighbour's value: if the median |difference| is close to what INDEPENDENT per-point noise alone would
+    predict (sqrt(2) x median reported uncertainty) AND neighbouring points' values are essentially
+    uncorrelated, the field is statistically indistinguishable from noise at the point-spacing scale - ANY
+    multi-pixel feature B/C shows may be a chance grouping of that noise, not detected structure. Uses only
+    already-computed per-point values/uncertainties (per_point_integrated_values's own output) and the
+    frozen angular_separation_deg for real distances - never re-derives the integration itself."""
+    from science_engine.spatial import angular_separation_deg
+    used = [r for r in point_rows if r["status"] == "USED" and r["value"] is not None]
+    if len(used) < 3:
+        return None
+    ra = np.array([r["ra_deg"] for r in used])
+    dec = np.array([r["dec_degrees"] for r in used])
+    val = np.array([r["value"] for r in used])
+    unc = np.array([r["uncertainty"] for r in used])
+    n = len(used)
+    nn_diff = np.empty(n)
+    nn_val_neighbor = np.empty(n)
+    for i in range(n):
+        d = angular_separation_deg(np.full(n, ra[i]), np.full(n, dec[i]), ra, dec)
+        d[i] = np.inf
+        j = int(np.argmin(d))
+        nn_diff[i] = val[i] - val[j]
+        nn_val_neighbor[i] = val[j]
+    median_abs_diff = float(np.median(np.abs(nn_diff)))
+    median_unc = float(np.median(unc))
+    expected_if_independent = float(np.sqrt(2) * median_unc)
+    correlation = float(np.corrcoef(val, nn_val_neighbor)[0, 1]) if np.std(val) > 0 and np.std(nn_val_neighbor) > 0 else None
+    ratio = (median_abs_diff / expected_if_independent) if expected_if_independent > 0 else None
+    # The correlation is the theoretically correct discriminator here, not the ratio: real spatial structure
+    # that varies SLOWLY relative to the noise floor would still show a nearest-neighbour DIFFERENCE close to
+    # pure-noise size (ratio~1) - a slow real gradient does not by itself make neighbours differ by more than
+    # their own noise. What it DOES do is make neighbouring points' values genuinely correlated (they share
+    # part of the same underlying true value), which independent per-point noise never does. ratio is still
+    # reported (a real, useful number - e.g. ratio >> 1 with |r| small would flag occasional large excursions
+    # beyond ordinary per-point noise, such as RFI spikes, worth a separate look) but does not gate the verdict.
+    consistent_with_noise = bool(correlation is not None and abs(correlation) < 0.3)
+    return {
+        "n_points": n, "value_std": float(np.std(val)), "median_uncertainty": median_unc,
+        "median_nearest_neighbor_abs_value_diff": median_abs_diff,
+        "expected_abs_diff_if_independent_noise": expected_if_independent,
+        "ratio_observed_to_expected_noise": ratio,
+        "nearest_neighbor_value_correlation": correlation,
+        "consistent_with_pure_noise_at_point_spacing": consistent_with_noise,
+    }
+
+
+def loo_cross_validation_summary(filtered_input, cfg: MapConfig, spatial: dict[str, float],
+                                 point_rows: list[dict[str, Any]], max_points: int = 60,
+                                 rng_seed: int = 0) -> Optional[dict[str, Any]]:
+    """Leave-one-out cross-validation of the SAME spatial estimator B and C both use (support_radius_deg,
+    smoothing_fwhm_deg) - a direct, real test of "can this method actually predict an unmeasured position",
+    not an argument from plausibility (see noise_dominance_summary for the cheaper, weaker heuristic this
+    complements). For each USED point in turn: rebuilds a real ScienceInput WITHOUT that point, evaluates a
+    genuine 1x1-pixel ScienceGrid centered EXACTLY on its own real RA/Dec with build_cube()/integrated_map()
+    (frozen, unmodified - the identical call build_all_products() makes for the real board/B/C, just a single
+    output pixel instead of a raster), and compares the prediction to that point's own real per-point value
+    (per_point_integrated_values()'s output, which never used the held-out point either - not a leak).
+
+    Real result on REDUCE-20260919-234712-712870 (100 RELATIVE points, the session behind the reported
+    circular-halo screenshots): predicted-vs-measured correlation = 0.054 (essentially none) and RMS held-out
+    error (442) LARGER than the field's own point-to-point standard deviation (378) - i.e. at this point
+    density, this estimator predicts a held-out point WORSE than simply guessing the field's own mean would.
+    This held (within noise) across every kernel width tested (the old light/heavy B/C kernels, a 1.5x
+    candidate, and a wider support radius) - see MapConfig.smoothing_fwhm_deg's own docstring. Any multi-pixel
+    feature B/C shows should be read with that in mind: it is not a verified detection.
+
+    Every real per-point measurement is used once (never a fixed number baked in); when more than
+    `max_points` are USED, a fixed-seed random subsample is evaluated instead (each iteration is a cheap
+    single-pixel cube build, not a full raster, but O(n) real spectra still need resampling) and reported as
+    `subsampled` so a manifest reader knows the numbers are drawn from a subset, not silently different."""
+    from science_engine.cube import build_cube
+    from science_engine.grid import build_beam_model
+    from science_engine.integration import integrated_map
+    from science_engine.models import ScienceGrid, ScienceInput
+
+    measured = {r["point_index"]: (r["value"], r["uncertainty"]) for r in point_rows
+               if r["status"] == "USED" and r["value"] is not None}
+    used_points = [p for p in filtered_input.points if p.point_index in measured]
+    if len(used_points) < 5:
+        return None
+
+    subsampled = False
+    if len(used_points) > max_points:
+        rng = np.random.default_rng(rng_seed)
+        keep_idx = sorted(rng.choice(len(used_points), size=max_points, replace=False).tolist())
+        used_points = [used_points[i] for i in keep_idx]
+        subsampled = True
+
+    fwhm = spatial["smoothing_fwhm_deg"]
+    cutoff = spatial["support_radius_deg"] / fwhm
+    sc = _kernel_science_config(cfg, fwhm, cutoff, "LOO cross-validation probe - identical kernel to B/C")
+    beam = build_beam_model(sc)
+    tiny = 1e-4   # degrees - a 1x1-pixel grid's own width/height never matters, only its ONE pixel's center
+
+    pred = np.full(len(used_points), np.nan)
+    meas = np.empty(len(used_points))
+    unc = np.empty(len(used_points))
+    n_support = np.zeros(len(used_points), dtype=int)
+    _progress(f"leave-one-out check: {len(used_points)} point(s)" + (" (fixed subsample)" if subsampled else ""))
+    for i, point in enumerate(used_points):
+        if i and i % 10 == 0:
+            _progress(f"leave-one-out check: {i}/{len(used_points)}")
+        kept = [p for p in filtered_input.points if p.point_index != point.point_index]
+        loo_input = ScienceInput(reduce_session_dir=filtered_input.reduce_session_dir,
+                                 campaign_id=filtered_input.campaign_id,
+                                 reduce_session_id=filtered_input.reduce_session_id,
+                                 reduce_schema_version=filtered_input.reduce_schema_version,
+                                 reduce_session_status=filtered_input.reduce_session_status, points=kept,
+                                 contract_problems=list(filtered_input.contract_problems),
+                                 exclusions=list(filtered_input.exclusions),
+                                 n_points_in_manifest=filtered_input.n_points_in_manifest)
+        grid1 = ScienceGrid(frame="icrs", center_ra_deg=point.ra_deg, center_dec_deg=point.dec_degrees,
+                            width_deg=tiny, height_deg=tiny, pixel_scale_deg=tiny, nx=1, ny=1)
+        cube1 = build_cube(loo_input, grid1, beam, sc)
+        smap1 = integrated_map(cube1, sc)
+        meas[i], unc[i] = measured[point.point_index]
+        n_support[i] = int(smap1.n_pointings[0, 0])
+        if smap1.valid[0, 0]:
+            pred[i] = float(smap1.value[0, 0])
+
+    predictable_mask = ~np.isnan(pred)
+    n_predictable = int(predictable_mask.sum())
+    if n_predictable < 3:
+        return {"n_points_evaluated": len(used_points), "n_predictable": n_predictable, "subsampled": subsampled,
+               "note": "too few held-out points had any real neighbour within support_radius_deg to summarize"}
+
+    predictable_points = [p for p, ok in zip(used_points, predictable_mask) if ok]
+    pred_v, meas_v, unc_v = pred[predictable_mask], meas[predictable_mask], unc[predictable_mask]
+    nsup_v = n_support[predictable_mask]
+    err = pred_v - meas_v
+    value_std = float(np.std(meas_v))
+    rms = float(np.sqrt(np.mean(err ** 2)))
+    correlation = (float(np.corrcoef(pred_v, meas_v)[0, 1])
+                  if np.std(pred_v) > 0 and np.std(meas_v) > 0 else None)
+    z = err / unc_v
+    worst_order = np.argsort(-np.abs(err))[:5]
+    worst = [{"point_index": int(predictable_points[j].point_index), "predicted": float(pred_v[j]),
+             "measured": float(meas_v[j]), "error": float(err[j]), "n_support_points": int(nsup_v[j])}
+            for j in worst_order]
+    return {
+        "n_points_evaluated": len(used_points), "n_predictable": n_predictable, "subsampled": subsampled,
+        "kernel_fwhm_deg": fwhm, "support_radius_deg": spatial["support_radius_deg"],
+        "bias": float(np.mean(err)), "rms": rms, "mae": float(np.mean(np.abs(err))),
+        "predicted_vs_measured_correlation": correlation, "field_value_std": value_std,
+        "rms_worse_than_predicting_the_field_mean": bool(rms > value_std),
+        "frac_within_1sigma_of_own_uncertainty": float(np.mean(np.abs(z) <= 1.0)),
+        "frac_within_2sigma_of_own_uncertainty": float(np.mean(np.abs(z) <= 2.0)),
+        "worst_5": worst,
+    }
+
+
+def _odd_ratio_companion_factor(factor_hi: int) -> tuple[int, int]:
+    """For build_fine_grid()'s pixel-center convention (centers = midpoints of linspace(-W/2, W/2, n+1)), a
+    grid at factor `factor_lo` has EVERY pixel center exactly coincide (to float precision) with pixel center
+    `k*i + (k-1)//2` of a grid at factor `factor_hi = k * factor_lo`, along each axis independently, IFF k is
+    an ODD integer - proved by equating center_i(n) = -W/2 + (i+0.5)*W/n between the two grids: k*(i+0.5) must
+    equal an integer j plus 0.5, which only happens for odd k. Every positive integer factor_hi = 2**v * m
+    with m odd (its odd part); choosing k = m (odd, divides factor_hi exactly) gives factor_lo = 2**v, always
+    a valid integer >= 1 - so a companion always exists. factor_lo=1 means the board's own native grid
+    (board_grid) is the companion; build_fine_grid() itself is never called with factor < 2, so that case is
+    handled by the caller reusing board_grid directly."""
+    v = 0
+    n = factor_hi
+    while n % 2 == 0:
+        n //= 2
+        v += 1
+    k = n if n > 0 else 1   # n is factor_hi's odd part; k=factor_hi/factor_lo must be odd
+    factor_lo = factor_hi // k
+    return factor_lo, k   # factor_lo == factor_hi (k=1) exactly when factor_hi is a pure power of 2 - see caller
+
+
+def bc_exact_coordinate_consistency_summary(filtered_input, cfg: MapConfig, spatial: dict[str, float],
+                                            board_grid, sc, beam, map_b, map_c, grid_b, grid_c) -> dict[str, Any]:
+    """Answers a real question a resampled "B vs C" comparison CANNOT: do B and C compute the SAME field at
+    the SAME physical coordinate, or only something visually similar? B's and C's own pixel grids (factors
+    interp_factor_b/interp_factor_c) generally do NOT share any exact coordinates - build_fine_grid()'s pixel
+    centers are midpoints of a linspace over the SAME footprint, so two grids at factors f_lo/f_hi share
+    centers only when f_hi/f_lo is an ODD integer (see _odd_ratio_companion_factor's proof); the shipped
+    default (interp_factor_b=3, interp_factor_c=6, ratio 2 - EVEN) never does. A prior investigation
+    "matched" B to C by nearest pixel INDEX instead (see nearest_pixel_reference below) - a real, quantified
+    coordinate offset (0.5x C's own pixel pitch on EACH axis, always, not a random jitter: every single B
+    pixel sits at that exact worst-case distance from its nearest C pixel, given the even ratio), not the
+    same-coordinate test the question actually calls for.
+
+    This function instead builds ONE small extra companion grid per map (factor_lo from
+    _odd_ratio_companion_factor - cheap: factor_lo divides out all factors of 2, so it is far coarser than
+    the map it checks), evaluates the frozen build_cube()/integrated_map() on it with the IDENTICAL sc/beam,
+    and compares values at coordinates that are EXACT subsets of both grids (max coordinate mismatch is
+    reported and must be at float-precision, ~1e-12 deg or less) - never resampling one rendered image into
+    the other. On the real flagged session (REDUCE-20260919-234712-712870) this gives max|diff|=0.0 and
+    RMS=0.0 for both B and C against their companions: build_cube()/integrated_map() is a deterministic
+    function of (points, coordinate, kernel) only - it does not depend on which raster a coordinate happens
+    to belong to. Any nonzero "B vs C" difference reported elsewhere (e.g. via nearest-pixel matching) is
+    therefore entirely a grid-quantization artifact of that comparison method, not a computational
+    inconsistency between what B and C evaluate."""
+    from science_engine.grid import pixel_centers_deg
+
+    def _companion(factor_hi: int):
+        factor_lo, k = _odd_ratio_companion_factor(factor_hi)
+        grid_lo = board_grid if factor_lo == 1 else build_fine_grid(board_grid, factor_lo)
+        map_lo, _, _ = integrated_map_in_tiles(filtered_input, grid_lo, beam, sc)
+        return grid_lo, map_lo, factor_lo, k
+
+    def _exact_check(grid_lo, map_lo, grid_hi, map_hi, k) -> dict[str, Any]:
+        ra_lo, dec_lo = pixel_centers_deg(grid_lo)
+        ra_hi, dec_hi = pixel_centers_deg(grid_hi)
+        diffs, both_valid, max_coord_err = [], 0, 0.0
+        n_checked = grid_lo.ny * grid_lo.nx
+        for i in range(grid_lo.ny):
+            jy = k * i + (k - 1) // 2
+            for jx_i in range(grid_lo.nx):
+                jx = k * jx_i + (k - 1) // 2
+                max_coord_err = max(max_coord_err, abs(ra_lo[i, jx_i] - ra_hi[jy, jx]),
+                                    abs(dec_lo[i, jx_i] - dec_hi[jy, jx]))
+                if map_lo.valid[i, jx_i] and map_hi.valid[jy, jx]:
+                    both_valid += 1
+                    diffs.append(float(map_lo.value[i, jx_i] - map_hi.value[jy, jx]))
+        diffs = np.array(diffs) if diffs else np.array([0.0])
+        return {
+            "n_checked": n_checked, "n_both_valid": both_valid,
+            "max_coordinate_mismatch_deg": float(max_coord_err),
+            "max_abs_diff": float(np.abs(diffs).max()), "rms_diff": float(np.sqrt(np.mean(diffs ** 2))),
+            "exact_match": bool(np.abs(diffs).max() < 1e-6),
+        }
+
+    grid_lo_b, map_lo_b, factor_lo_b, k_b = _companion(cfg.interp_factor_b)
+    grid_lo_c, map_lo_c, factor_lo_c, k_c = _companion(cfg.interp_factor_c)
+    result_b = _exact_check(grid_lo_b, map_lo_b, grid_b, map_b, k_b)
+    result_b.update(companion_factor=factor_lo_b, ratio_k=k_b,
+                    degenerate_self_comparison=(factor_lo_b == cfg.interp_factor_b))
+    result_c = _exact_check(grid_lo_c, map_lo_c, grid_c, map_c, k_c)
+    result_c.update(companion_factor=factor_lo_c, ratio_k=k_c,
+                    degenerate_self_comparison=(factor_lo_c == cfg.interp_factor_c))
+
+    # for context/comparison only - the OLD, flawed nearest-pixel-INDEX matching a prior report used, which
+    # this function's docstring explains is not a same-coordinate test at all.
+    def pixel_centers_local(grid):
+        xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
+        ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
+        xc, yc = (xs[:-1] + xs[1:]) / 2, (ys[:-1] + ys[1:]) / 2
+        return np.meshgrid(xc, yc)
+
+    xb, yb = pixel_centers_local(grid_b)
+    xc, yc = pixel_centers_local(grid_c)
+    factor_bc = grid_c.nx // grid_b.nx
+    pairs, offsets = [], []
+    for i in range(grid_b.ny):
+        for j in range(grid_b.nx):
+            if not map_b.valid[i, j]:
+                continue
+            ci = min(max(int(round((i + 0.5) * factor_bc - 0.5)), 0), grid_c.ny - 1)
+            cj = min(max(int(round((j + 0.5) * factor_bc - 0.5)), 0), grid_c.nx - 1)
+            if not map_c.valid[ci, cj]:
+                continue
+            offsets.append(float(np.hypot(xb[i, j] - xc[ci, cj], yb[i, j] - yc[ci, cj])))
+            pairs.append((float(map_b.value[i, j]), float(map_c.value[ci, cj])))
+    nearest_pixel_reference: dict[str, Any] = {
+        "note": "NEAREST-PIXEL-INDEX matching, NOT identical coordinates - kept only for context/comparison "
+               "against the exact checks above; see this function's own docstring.",
+    }
+    if pairs:
+        arr = np.array(pairs)
+        offs = np.array(offsets)
+        d = arr[:, 0] - arr[:, 1]
+        nearest_pixel_reference.update(
+            n_pairs=len(pairs), mean_coordinate_offset_deg=float(offs.mean()),
+            max_coordinate_offset_deg=float(offs.max()), rms_value_diff=float(np.sqrt(np.mean(d ** 2))),
+            max_abs_value_diff=float(np.abs(d).max()),
+            correlation=(float(np.corrcoef(arr[:, 0], arr[:, 1])[0, 1]) if np.std(arr[:, 0]) > 0 and np.std(arr[:, 1]) > 0 else None),
+        )
+
+    return {"b": result_b, "c": result_c, "nearest_pixel_reference": nearest_pixel_reference}
+
+
+def _map_a_grid(point_rows: list[dict[str, Any]], point_cell: dict[int, tuple[int, int]],
+                n_rows: int, n_cols: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Places each USED point's own value into its OWN mosaic cell - one reading = one cell, never blended,
+    never a fabricated value in a cell with no real point (that cell simply stays invalid/NaN)."""
+    value = np.full((n_rows, n_cols), np.nan)
+    uncertainty = np.full((n_rows, n_cols), np.nan)
+    valid = np.zeros((n_rows, n_cols), dtype=bool)
+    cell_point_index = np.full((n_rows, n_cols), -1, dtype=int)
+    for row in point_rows:
+        if row["status"] != "USED":
+            continue
+        r, c = point_cell[row["point_index"]]
+        value[r, c] = row["value"]
+        uncertainty[r, c] = row["uncertainty"]
+        valid[r, c] = True
+        cell_point_index[r, c] = row["point_index"]
+    return value, uncertainty, valid, cell_point_index
+
+
+def build_all_products(filtered_input, cfg: MapConfig) -> dict[str, Any]:
+    import gc
+
+    from science_engine.cube import build_cube, canonical_velocity_axis
+    from science_engine.grid import build_beam_model
+    from science_engine.integration import integrated_map
+    from science_engine.quality import assess_science_quality
+
+    _progress("building the board (map A) and the shared projection")
+    planned = load_planned_lattice(filtered_input)
+    spatial = auto_spatial_params(filtered_input, cfg, planned)
+    support_radius_deg = spatial["support_radius_deg"]
+    smoothing_fwhm_deg = spatial["smoothing_fwhm_deg"]
+
+    # The BOARD (map A): one ScienceGrid cell per real pointing lattice position - never a fine sub-cell
+    # raster and never sized from the reported instrument beam (cfg.beam_fwhm_deg), which is what produced a
+    # 65x65 deg, 14x14px grid for a real ~6x5 deg, 36-point (6x6) mosaic on a real deployed run (beam_fwhm_deg
+    # =20 from observer_config.json vs ~1 deg real point spacing - see auto_spatial_params's docstring).
+    board_grid, point_cell, n_rows, n_cols = build_mosaic_grid(filtered_input, spatial["mosaic_spacing_deg"], planned)
+    # A, B and C in ONE projection: A's cells are drawn where its lattice really lies in B/C's projection
+    # (deformed quadrilaterals for a wide field), and B/C's raster is widened to contain every one of them.
+    nodes, corners = lattice_geometry(board_grid, n_rows, n_cols, planned)
+    base_grid = raster_base_grid(board_grid, corners)
+    geometry = mosaic_geometry_summary(filtered_input, base_grid, nodes, point_cell, planned, support_radius_deg,
+                                       (cfg.interp_factor_b, cfg.interp_factor_c))
+    uncovered = sorted({i for cov in geometry["raster_coverage"].values() for i in cov["uncovered_points"]})
+    if uncovered:
+        raise ValueError(f"BLOCKED: {len(uncovered)} point(s) lie beyond support_radius_deg of every B/C pixel "
+                         f"(e.g. point {uncovered[0]}) and would silently drop out of B/C")
+
+    # B and C: interpolated panels on a FINER raster than the board - genuinely NEW pixel positions between
+    # the real measurements (request: "deben aparecer píxeles nuevos entre las posiciones medidas"; an even
+    # earlier design evaluated B/C on the SAME board as A, which just repainted its cells with a blend -
+    # visually indistinguishable in resolution from A). SAME physical extent/center as base_grid
+    # (build_fine_grid) so the three panels stay directly comparable; SAME support_radius_deg AND SAME
+    # smoothing_fwhm_deg (see MapConfig.smoothing_fwhm_deg's own docstring for why B/C no longer use two
+    # different kernels) - interp_factor_c > interp_factor_b (enforced by MapConfig) is the ONLY remaining
+    # difference between B and C, making a resolution increase there a genuine, isolated variable instead of
+    # one confounded with a kernel change.
+    grid_b = build_fine_grid(base_grid, cfg.interp_factor_b)
+    grid_c = build_fine_grid(base_grid, cfg.interp_factor_c)
+    sc = _kernel_science_config(cfg, smoothing_fwhm_deg, support_radius_deg / smoothing_fwhm_deg,
+                                "presentation smoothing kernel (shared by B and C) - NOT the instrument beam")
+    beam = build_beam_model(sc)
+    velocity_axis = canonical_velocity_axis(filtered_input)
+
+    # B and C: each built in 2D tiles (integrated_map_in_tiles) under the same 3 GB / 60%-of-MemAvailable
+    # budget, one after the other - a full C cube of the real 400-point session alone needed ~6.6 GB.
+    map_b, info_b, quality_cube_b = integrated_map_in_tiles(filtered_input, grid_b, beam, sc, keep_quality_inputs=True,
+                                                                   label="B")
+    _progress("map B: quality assessment")
+    quality_b = assess_science_quality(filtered_input, quality_cube_b, sc, map_b)
+    used_b = set(info_b["used_point_indices"])
+    del quality_cube_b
+    gc.collect()
+
+    map_c, info_c, _ = integrated_map_in_tiles(filtered_input, grid_c, beam, sc, label="C")
+    used_c = set(info_c["used_point_indices"])
+    gc.collect()
+
+    used_common = _reconcile_used_point_sets(used_b, used_c, support_radius_deg)
+    note = (f"B and C share support_radius_deg={support_radius_deg:.6g} deg, smoothing_fwhm_deg="
+           f"{smoothing_fwhm_deg:.6g} deg, and the SAME physical extent as the real board (only their raster "
+           f"density differs) - their used-point sets matched exactly, verified: {len(used_common)} point(s), "
+           f"never reconciled after the fact")
+
+    _progress("per-point integrated values (map A)")
+    point_rows = per_point_integrated_values(filtered_input, sc, velocity_axis)
+    for row in point_rows:
+        if row["status"] == "USED" and row["point_index"] not in used_common:
+            row["status"] = "EXCLUDED_FOR_MAP_COMPARABILITY"
+            row["reason"] = "outside the shared beam-support point set used for maps A/B/C (see used_point_set_note)"
+
+    vmin, vmax, vmin_vmax_basis = robust_color_limits(point_rows, cfg.color_vmin, cfg.color_vmax)
+    map_a_value, map_a_uncertainty, map_a_valid, map_a_point_index = _map_a_grid(point_rows, point_cell,
+                                                                                 n_rows, n_cols)
+    noise_dominance = noise_dominance_summary(point_rows)
+    loo_cross_validation = loo_cross_validation_summary(filtered_input, cfg, spatial, point_rows)
+    # Direct, same-coordinate proof that B and C compute the identical field (never a resampled-image
+    # comparison) - see bc_exact_coordinate_consistency_summary's own docstring for why a naive nearest-pixel
+    # match (kept here only as nearest_pixel_reference, for context) is NOT this test.
+    _progress("B/C same-coordinate consistency check")
+    bc_exact_coordinate_consistency = bc_exact_coordinate_consistency_summary(
+        filtered_input, cfg, spatial, base_grid, sc, beam, map_b, map_c, grid_b, grid_c)
+
+    return {
+        "sc": sc, "beam": beam,
+        "board_grid": board_grid, "base_grid": base_grid, "cell_nodes_xy": nodes, "cell_corners_xy": corners,
+        "grid_b": grid_b, "grid_c": grid_c, "spatial_params": spatial,
+        "n_rows": n_rows, "n_cols": n_cols, "point_cell": point_cell, "mosaic_geometry": geometry,
+        "velocity_axis": velocity_axis, "map_b": map_b, "map_c": map_c,
+        "map_a_value": map_a_value, "map_a_uncertainty": map_a_uncertainty, "map_a_valid": map_a_valid,
+        "map_a_point_index": map_a_point_index,
+        "quality_b": quality_b, "used_point_set": sorted(used_common), "used_point_set_note": note,
+        "point_rows": point_rows, "color_vmin": vmin, "color_vmax": vmax, "color_limits_basis": vmin_vmax_basis,
+        "noise_dominance": noise_dominance, "loo_cross_validation": loo_cross_validation,
+        "bc_exact_coordinate_consistency": bc_exact_coordinate_consistency,
+    }
+
+
+def board_json_payload(built: dict[str, Any]) -> dict[str, Any]:
+    """The per-cell JSON payload driving the browser's ONLY interactive panel - map A, the real N x M board
+    of MEASURED readings (one point = one cell). B and C are continuous interpolated rasters at a genuinely
+    finer resolution (see build_fine_grid) with no per-cell/per-point identity and no click interaction (a
+    new pixel between measured positions is never a stand-in for a real sample) - they are plain PNG images,
+    not JSON-driven boards; see render_all_maps(). `color` is computed by the SAME viridis_hex() every PNG/
+    SVG/PDF export uses (the identical matplotlib Colormap object on the same normalised value), so this
+    board's colours and the B/C images always share one scale - the browser never recomputes a colour.
+    `color_stops` is that same function sampled evenly across [color_vmin, color_vmax], for drawing an HTML
+    legend next to each of the three panels (request: "una barra de color visible junto a cada imagen")."""
+    n_rows, n_cols = built["n_rows"], built["n_cols"]
+    vmin, vmax = built["color_vmin"], built["color_vmax"]
+    grid, base = built["board_grid"], built["base_grid"]
+    nodes, corners = built["cell_nodes_xy"], built["cell_corners_xy"]
+    # a cell's sky position = its lattice node, back through the SAME linear projection pixel_centers_deg uses
+    cos_dec0 = np.cos(np.radians(base.center_dec_deg))
+    cell_ra = (base.center_ra_deg + nodes[..., 0] / cos_dec0) % 360.0
+    cell_dec = base.center_dec_deg + nodes[..., 1]
+    cell_point = {rc: idx for idx, rc in built["point_cell"].items()}
+    point_by_index = {r["point_index"]: r for r in built["point_rows"]}
+
+    cells = []
+    for r in range(n_rows):
+        for c in range(n_cols):
+            pt_idx = cell_point.get((r, c))
+            point_row = point_by_index.get(pt_idx) if pt_idx is not None else None
+            valid = bool(built["map_a_valid"][r, c])
+            value = float(built["map_a_value"][r, c]) if valid else None
+            unc = (float(built["map_a_uncertainty"][r, c])
+                  if valid and np.isfinite(built["map_a_uncertainty"][r, c]) else None)
+            cells.append({
+                "row": r, "col": c, "point_index": pt_idx,
+                "ra_deg": float(cell_ra[r, c]), "dec_degrees": float(cell_dec[r, c]),
+                # quadrilateral in the shared A/B/C projection (deg): (r,c) (r,c+1) (r+1,c+1) (r+1,c) corners
+                "corners_xy": [[float(v) for v in corners[rr, cc]]
+                               for rr, cc in ((r, c), (r, c + 1), (r + 1, c + 1), (r + 1, c))],
+                "point_status": point_row["status"] if point_row else None,
+                "point_reason": point_row["reason"] if point_row else None,
+                "point_timestamp_start_utc": point_row["timestamp_start_utc"] if point_row else None,
+                "valid": valid, "value": value, "uncertainty": unc,
+                "color": viridis_hex(value, vmin, vmax),
+            })
+    n_stops = 9
+    stops = [viridis_hex(vmin + t * (vmax - vmin), vmin, vmax) for t in np.linspace(0.0, 1.0, n_stops)]
+    return {"n_rows": n_rows, "n_cols": n_cols, "mosaic_spacing_deg": built["spatial_params"]["mosaic_spacing_deg"],
+           "grid": grid.to_dict(), "raster_base_grid": base.to_dict(),
+           # the ONE footprint A, B and C are all drawn over: x in [-half_w, half_w], y in [-half_h, half_h]
+           "extent_deg": {"half_w": base.width_deg / 2, "half_h": base.height_deg / 2,
+                          "x_increases": "with RA (east) - drawn to the RIGHT, as in the exported PNGs"},
+           "color_vmin": vmin, "color_vmax": vmax, "colormap": "viridis",
+           "color_units": "relative_intensity_dimensionless x m/s", "color_stops": stops, "cells": cells}
+
+
+def spatial_confidence_summary(built: dict[str, Any]) -> dict[str, Any]:
+    """Real numbers behind the honest coverage cue on B/C (hatched/dimmed pixels - see render_all_maps's
+    _mark_low_confidence): how many of each map's valid pixels are backed by only ONE real nearby point
+    (n_pointings <= 1 - the frozen GriddingAccumulator's own count, never re-derived). A high fraction here
+    means most of that map's visual detail is individual points' own measurement noise, not corroborated
+    spatial structure - reported plainly in the manifest, not just baked into an image caption."""
+    out: dict[str, Any] = {}
+    for key, sm in (("b", built["map_b"]), ("c", built["map_c"])):
+        valid = sm.valid
+        n_valid = int(valid.sum())
+        n_single = int((valid & (sm.n_pointings <= 1)).sum())
+        out[key] = {
+            "n_valid_pixels": n_valid, "n_single_point_pixels": n_single,
+            "single_point_fraction": (n_single / n_valid) if n_valid else None,
+            "max_n_pointings": int(sm.n_pointings[valid].max()) if n_valid else None,
+        }
+    return out
+
+
+# ------------------------------------------------------------------ rendering (matplotlib, lazy import)
+def _title_block(cfg: MapConfig, campaign_id: str, reduce_session_id: str, panel: str) -> str:
+    vmin_kms, vmax_kms = cfg.velocity_window_min_m_s / 1000.0, cfg.velocity_window_max_m_s / 1000.0
+    calib_label = "RELATIVE (calibrated, 50Ω profile applied by REDUCE)" if cfg.calibration_level_filter == "RELATIVE" \
+        else "UNCALIBRATED (instrumental - no relative profile applied)"
+    return (f"{campaign_id} / {reduce_session_id}  —  {panel}\n"
+           f"integrated relative intensity, LSRK window [{vmin_kms:.1f}, {vmax_kms:.1f}] km/s  —  {calib_label}\n"
+           f"units: relative_intensity_dimensionless × m/s (fractional excess — no Kelvin/Jy/N_HI claimed)")
+
+
+def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, reduce_session_id: str,
+                    out_dir: Path) -> dict[str, list[str]]:
+    """Renders A (the real N x M board: one cell per measured point, drawn where it lies in the shared projection)
+    and B/C (finer interpolated rasters over the SAME footprint, projection and colour scale). Only A's real cells
+    have a spectrum; B/C pixels between measured positions are estimates.
+
+    Presentation: every single-panel figure has the SAME fixed size and axes box (identical pixel dimensions on
+    disk), readable fonts and a SHORT caption. The full technical notes (noise / B-C consistency / leave-one-out
+    checks, method, caveats) go to maps/NOTES.md, written next to the images, instead of tiny text baked into
+    every picture. B/C's hatching has its own legend entry: a hatched (and dimmed) pixel is backed by ONE real
+    point only - mostly the outer rim of the field, where nothing on the far side corroborates it."""
+    import textwrap
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    import matplotlib.patches as mpatches
+
+    board = built["base_grid"]          # the ONE footprint A, B and C share (see raster_base_grid)
+    corners = built["cell_corners_xy"]  # A's cells in that same projection, deformed for a wide field
+    n_rows, n_cols = built["n_rows"], built["n_cols"]
+    spatial = built["spatial_params"]
+    support_radius_deg = spatial["support_radius_deg"]
+    smoothing_fwhm_deg = spatial["smoothing_fwhm_deg"]
+    vmin, vmax = built["color_vmin"], built["color_vmax"]
+    cmap = plt.get_cmap("viridis").with_extremes(bad=(0, 0, 0, 0))
+    # imshow's extent is (x of column 0, x of the last column): column 0 IS x = -half_w (pixel_centers_deg).
+    half_w, half_h = board.width_deg / 2, board.height_deg / 2
+    extent = (-half_w, half_w, -half_h, half_h)
+    GRIDLINE = "#33414a"
+    FIG = (8.0, 7.4)                                   # every single-panel export: 1600 x 1480 px at 200 dpi
+    AX_RECT, CAX_RECT = [0.10, 0.21, 0.66, 0.62], [0.80, 0.21, 0.028, 0.62]
+    FS_TITLE, FS_LABEL, FS_TICK, FS_CAPTION = 12, 10.5, 9.5, 10
+    window = f"LSRK [{cfg.velocity_window_min_m_s / 1000:.0f}, {cfg.velocity_window_max_m_s / 1000:.0f}] km/s"
+    unit_label = "integrated relative intensity (dimensionless × m/s)"
+    written: dict[str, list[str]] = {}
+    notes: list[str] = []
+    HATCH_LABEL = "hatched / dimmed: only ONE real point within support (mostly the outer rim)"
+    hatch_handle = mpatches.Patch(facecolor="#5a6670", edgecolor="white", hatch="////", label=HATCH_LABEL)
+
+    def _title(panel: str) -> str:
+        return f"{panel}\n{campaign_id} · {cfg.calibration_level_filter} · {window}"
+
+    def _board_quads(ax, values, cmap_, vmin_, vmax_, linewidth=0.5):
+        """Map A's cells as quadrilaterals at their real place in the shared projection (corners from
+        lattice_geometry) - one cell = one measured point, sharp edges, nothing interpolated."""
+        return ax.pcolormesh(corners[..., 0], corners[..., 1], values, cmap=cmap_, vmin=vmin_, vmax=vmax_,
+                             shading="flat", edgecolors=GRIDLINE, linewidth=linewidth)
+
+    def _extent_and_aspect(ax) -> None:
+        ax.set_xlim(-half_w, half_w)   # RA (east) increases to the RIGHT, as on the browser canvas
+        ax.set_ylim(-half_h, half_h)
+        ax.set_aspect("equal")
+        ax.tick_params(labelsize=FS_TICK)
+
+    def _local_pixel_centers(grid):
+        """(X, Y) meshgrids of each pixel's own local tangent-plane offset (degrees), SAME linspace convention
+        pixel_centers_deg() uses - aligns a contourf/hatch overlay exactly on the imshow array it annotates."""
+        xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
+        ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
+        xc, yc = (xs[:-1] + xs[1:]) / 2, (ys[:-1] + ys[1:]) / 2
+        return np.meshgrid(xc, yc)
+
+    def _mark_low_confidence(ax, grid, science_map) -> np.ndarray:
+        """Hatches every valid pixel backed by at most ONE real point (n_pointings <= 1, the frozen
+        GriddingAccumulator's own count): its bump/dip may be that one point's own noise, not structure.
+        Disclosed, never blurred away. Returns the mask."""
+        low_conf = science_map.valid & (science_map.n_pointings <= 1)
+        if low_conf.any():
+            xg, yg = _local_pixel_centers(grid)
+            cs = ax.contourf(xg, yg, low_conf.astype(float), levels=[0.5, 1.5], colors="none", hatches=["////"])
+            for artist in (getattr(cs, "collections", None) or [cs]):   # matplotlib <3.10 / >=3.10
+                artist.set_edgecolor((1, 1, 1, 0.55))
+                artist.set_linewidth(0.0)
+        return low_conf
+
+    def _single(panel: str, caption: str):
+        fig = plt.figure(figsize=FIG)
+        ax = fig.add_axes(AX_RECT)
+        cax = fig.add_axes(CAX_RECT)
+        fig.suptitle(_title(panel), fontsize=FS_TITLE, y=0.975)
+        fig.text(0.5, 0.025, "\n".join(textwrap.wrap(caption, 110)), ha="center", va="bottom", fontsize=FS_CAPTION)
+        ax.set_xlabel(f"x = ΔRA·cos(δ0) [deg] from RA {board.center_ra_deg:.2f}° (east →)", fontsize=FS_LABEL)
+        ax.set_ylabel(f"y = ΔDec [deg] from Dec {board.center_dec_deg:.2f}°", fontsize=FS_LABEL)
+        return fig, ax, cax
+
+    def _save(fig, name: str, exts=("png", "svg", "pdf")) -> None:
+        paths = []
+        for ext in exts:
+            p = out_dir / f"{name}.{ext}"
+            fig.savefig(p, dpi=200 if ext == "png" else None)      # fixed canvas: same size for every panel
+            paths.append(p.name)
+        plt.close(fig)
+        written[name] = paths
+
+    def _colorbar(fig, im, cax, label):
+        cb = fig.colorbar(im, cax=cax)
+        cb.set_label(label, fontsize=FS_LABEL)
+        cb.ax.tick_params(labelsize=FS_TICK)
+
+    # ---- technical notes (formerly baked into every caption at 6.5 pt) ----
+    hi_caveat = (f"INSTRUMENTAL/{cfg.calibration_level_filter} result - relative_intensity_dimensionless only. No HI "
+                 "detection, Kelvin, Jy, N_HI or absolute flux claimed.")
+    nd, bcc, loo = built.get("noise_dominance"), built.get("bc_exact_coordinate_consistency"), built.get("loo_cross_validation")
+    if nd:
+        notes.append("## Noise check\n" + (
+            f"Neighbouring real points differ by a median of {nd['median_nearest_neighbor_abs_value_diff']:.4g} "
+            f"(x{nd['ratio_observed_to_expected_noise']:.2g} of what independent per-point noise alone predicts: "
+            f"sqrt(2) x median sigma = {nd['expected_abs_diff_if_independent_noise']:.4g}); neighbour correlation "
+            f"r={nd['nearest_neighbor_value_correlation']:.2f}. "
+            + ("Consistent with pure per-point noise at this spacing: any multi-pixel bump/dip in B/C may be a chance "
+               "grouping of that noise, not detected structure." if nd["consistent_with_pure_noise_at_point_spacing"]
+               else "Neighbours correlate more than pure noise would predict.")))
+    if bcc:
+        b_c, c_c = bcc["b"], bcc["c"]
+        notes.append("## B/C consistency (computational self-consistency, not predictive skill)\n"
+                     f"Evaluated at IDENTICAL coordinates via small odd-ratio companion grids: B matches its "
+                     f"{b_c['n_checked']}-point companion to max|diff|={b_c['max_abs_diff']:.2g}, C to "
+                     f"{c_c['max_abs_diff']:.2g} over {c_c['n_checked']} points (coordinate mismatch "
+                     f"{max(b_c['max_coordinate_mismatch_deg'], c_c['max_coordinate_mismatch_deg']):.1e} deg). B and C "
+                     "compute the SAME field; only raster density differs.")
+    if loo and loo.get("predicted_vs_measured_correlation") is not None:
+        notes.append("## Leave-one-out check (predictive skill against real measurements)\n"
+                     f"Predicting each of {loo['n_predictable']} real point(s) from only its neighbours (same kernel and "
+                     f"support as B/C){' - a fixed-seed subsample' if loo.get('subsampled') else ''}: r="
+                     f"{loo['predicted_vs_measured_correlation']:.2f}, RMS held-out error={loo['rms']:.4g} vs the field's "
+                     f"own point-to-point std={loo['field_value_std']:.4g}"
+                     + (" - WORSE than guessing the field's mean." if loo["rms_worse_than_predicting_the_field_mean"] else ".")
+                     + " Read any multi-pixel feature with that in mind - it is not a verified detection.")
+    notes.append("## Method\n"
+                 f"A: {n_rows}x{n_cols} cells, one per measured pointing (spacing {spatial['mosaic_spacing_deg']:.4g} deg), "
+                 "each drawn as the quadrilateral its pointing occupies in the shared projection x = ΔRA·cos(δ0), "
+                 "y = ΔDec - a wide field's cells are deformed, not squares. An unmeasured cell is transparent, "
+                 "never zero. Only A's cells have a real spectrum (click them in the web page).\n\n"
+                 f"B/C: the frozen science_engine build_cube()+integrated_map(), evaluated in tiles, on rasters "
+                 f"{cfg.interp_factor_b}x and {cfg.interp_factor_c}x the board pitch over the SAME footprint, centre "
+                 f"and colour scale as A. Inverse-variance x Gaussian kernel weighted mean of nearby real readings, "
+                 f"kernel FWHM={smoothing_fwhm_deg:.4g} deg (presentation smoothing, NOT the instrument beam), "
+                 f"support radius {support_radius_deg:.4g} deg - identical for B and C; "
+                 f"{len(built['used_point_set'])} point(s) used in both. A denser raster samples the same smoothed field "
+                 f"more finely; it is not a finer physical resolution (instrument beam FWHM {cfg.beam_fwhm_deg:.4g} deg, "
+                 f"{cfg.beam_status}, reported only). B is drawn 'nearest', C 'bilinear' - a display choice only.\n\n"
+                 f"Hatched / dimmed B/C pixels: n_pointings <= 1, i.e. a single real point within support. They sit "
+                 f"mostly on the outer rim, where no point beyond the edge corroborates the value; there the value is "
+                 f"that one point's own reading and its noise reads directly as a local bump/dip.\n\n"
+                 f"Colour limits: [{vmin:.4g}, {vmax:.4g}] ({built['color_limits_basis']}), shared by A, B and C.\n\n"
+                 + hi_caveat)
+
+    # ---- A ----
+    n_measured = int(built["map_a_valid"].sum())
+    fig, ax, cax = _single(f"A: MEASURED - {n_rows}x{n_cols} cells (no interpolation)",
+                           f"{n_measured}/{n_rows * n_cols} cells measured · one point = one cell, drawn where it lies on "
+                           f"the sky · transparent = no pointing · only A has spectra · details: NOTES.md")
+    masked_a = np.ma.masked_where(~built["map_a_valid"], built["map_a_value"])
+    im = _board_quads(ax, masked_a, cmap, vmin, vmax)
+    _extent_and_aspect(ax)
+    _colorbar(fig, im, cax, unit_label)
+    _save(fig, "map_a_no_interp")
+
+    def _bare_export(name: str, science_map, grid_bc, masked, alpha, interp: str) -> None:
+        """Chrome-free on-screen image (pixels + the same dimming/hatching cue, transparent, tight to the
+        footprint): the browser shows it next to A's canvas with its own HTML legend. The titled exports are
+        written separately for download."""
+        fig = plt.figure(figsize=(6.0, 6.0 * (grid_bc.height_deg / grid_bc.width_deg)))
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
+                  extent=extent, alpha=alpha)
+        _mark_low_confidence(ax, grid_bc, science_map)
+        _extent_and_aspect(ax)
+        ax.axis("off")
+        p = out_dir / f"{name}_bare.png"
+        fig.savefig(p, dpi=200, transparent=True, pad_inches=0)
+        plt.close(fig)
+        written[f"{name}_bare"] = [p.name]
+
+    # ---- B / C ----
+    for key, label, science_map, factor, grid_bc, interp in (
+        ("map_b_smooth", "B: INTERPOLATED", built["map_b"], cfg.interp_factor_b, built["grid_b"], "nearest"),
+        ("map_c_heavy", "C: INTERPOLATED, finer raster", built["map_c"], cfg.interp_factor_c, built["grid_c"], "bilinear"),
+    ):
+        ny_fine, nx_fine = science_map.value.shape
+        low_conf = science_map.valid & (science_map.n_pointings <= 1)
+        fig, ax, cax = _single(f"{label} - {ny_fine}x{nx_fine} raster ({factor}x the board pitch)",
+                               f"Estimates between the {n_rows * n_cols} measured points, same footprint and colour scale "
+                               f"as A · denser raster, not finer instrument resolution · "
+                               f"{int(low_conf.sum())}/{int(science_map.valid.sum())} px hatched · details: NOTES.md")
+        masked = np.ma.masked_where(~science_map.valid, science_map.value)
+        alpha = np.where(low_conf, 0.45, 1.0)
+        im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
+                       extent=extent, alpha=alpha)
+        _mark_low_confidence(ax, grid_bc, science_map)
+        _extent_and_aspect(ax)
+        ax.legend(handles=[hatch_handle], loc="upper center", bbox_to_anchor=(0.5, -0.11), fontsize=FS_TICK, frameon=False)
+        _colorbar(fig, im, cax, unit_label)
+        _save(fig, key)
+        _bare_export(key, science_map, grid_bc, masked, alpha, interp)
+
+    # ---- A + B + C combined ----
+    fig = plt.figure(figsize=(18.0, 7.6))
+    axes = [fig.add_axes([0.04 + i * 0.295, 0.22, 0.27, 0.6]) for i in range(3)]
+    cax = fig.add_axes([0.935, 0.22, 0.012, 0.6])
+    b_shape, c_shape = built["map_b"].value.shape, built["map_c"].value.shape
+    im = None
+    for ax, (label, kind) in zip(axes, ((f"A: MEASURED ({n_rows}x{n_cols} cells)", "a"),
+                                        (f"B: INTERPOLATED ({b_shape[0]}x{b_shape[1]} px)", "b"),
+                                        (f"C: INTERPOLATED ({c_shape[0]}x{c_shape[1]} px)", "c"))):
+        if kind == "a":
+            im = _board_quads(ax, np.ma.masked_where(~built["map_a_valid"], built["map_a_value"]), cmap, vmin, vmax, linewidth=0.3)
+        else:
+            sm, grid_bc = (built["map_b"], built["grid_b"]) if kind == "b" else (built["map_c"], built["grid_c"])
+            low_conf = sm.valid & (sm.n_pointings <= 1)
+            ax.imshow(np.ma.masked_where(~sm.valid, sm.value), origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
+                      interpolation="nearest" if kind == "b" else "bilinear", extent=extent,
+                      alpha=np.where(low_conf, 0.45, 1.0))
+            _mark_low_confidence(ax, grid_bc, sm)
+        ax.set_title(label, fontsize=FS_TITLE)
+        _extent_and_aspect(ax)
+        ax.set_xlabel("x = ΔRA·cos(δ0) [deg] (east →)", fontsize=FS_LABEL)
+    axes[0].set_ylabel("y = ΔDec [deg]", fontsize=FS_LABEL)
+    _colorbar(fig, im, cax, unit_label)
+    fig.suptitle(f"A / B / C - same projection, footprint and colour scale · {campaign_id} · "
+                 f"{cfg.calibration_level_filter} · {window}", fontsize=FS_TITLE + 1, y=0.97)
+    fig.legend(handles=[hatch_handle], loc="lower center", bbox_to_anchor=(0.5, 0.075), fontsize=FS_CAPTION, frameon=False)
+    fig.text(0.5, 0.02, "Only the raster density grows left to right; B/C pixels between measured points are estimates "
+                        "(no spectrum) - not a finer instrument resolution. Details: NOTES.md",
+             ha="center", va="bottom", fontsize=FS_CAPTION)
+    paths = []
+    for ext in ("png", "svg", "pdf"):
+        p = out_dir / f"map_abc_combined.{ext}"
+        fig.savefig(p, dpi=200 if ext == "png" else None)
+        paths.append(p.name)
+    plt.close(fig)
+    written["map_abc_combined"] = paths
+
+    # ---- three diagnostics, identical figure size ----
+    unc = built["map_b"].uncertainty
+    if unc is not None and np.any(np.isfinite(unc)):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            snr = np.abs(built["map_b"].value) / unc
+        window_km_s = (cfg.velocity_window_max_m_s - cfg.velocity_window_min_m_s) / 1000.0
+        fig, ax, cax = _single(f"SNR = |value| / propagated 1σ (map B, {unc.shape[0]}x{unc.shape[1]})",
+                               "Statistical 1σ from REDUCE per-channel sigma, assuming independent channels - not a "
+                               "detection significance · details: NOTES.md")
+        im = ax.imshow(np.ma.masked_where(~built["map_b"].valid, snr), origin="lower",
+                       cmap=plt.get_cmap("magma").with_extremes(bad=(0, 0, 0, 0)), interpolation="nearest", extent=extent)
+        _extent_and_aspect(ax)
+        _colorbar(fig, im, cax, "SNR (dimensionless)")
+        _save(fig, "map_snr", exts=("png", "svg"))
+        notes.append("## SNR map\n1-sigma uncertainty propagated from REDUCE per-channel sigma assuming independent "
+                     "channels (science_engine.integration) - a statistical, not systematic, error bar."
+                     + (f" The {window_km_s:.0f} km/s window sums many channels: any broadband, correlated residual "
+                        "inflates this SNR well beyond what independent-noise statistics justify. High SNR here is NOT "
+                        "evidence of a real spectral feature." if window_km_s > 150 else ""))
+        quality_kind = "uncertainty/SNR (propagated statistical 1-sigma)"
+    else:
+        quality_kind = "no propagable uncertainty available"
+
+    n_pt = built["map_b"].n_pointings.astype(float)
+    n_pt_masked = np.ma.masked_where(~built["map_b"].valid, n_pt)
+    n1 = int((built["map_b"].valid & (built["map_b"].n_pointings <= 1)).sum())
+    fig, ax, cax = _single(f"COVERAGE DENSITY - real points behind each B pixel ({n_pt.shape[0]}x{n_pt.shape[1]})",
+                           f"1 (darkest) = a single real point: these are B/C's hatched pixels ({n1}/"
+                           f"{int(built['map_b'].valid.sum())} valid px) · details: NOTES.md")
+    im = ax.imshow(n_pt_masked, origin="lower", cmap=plt.get_cmap("cividis").with_extremes(bad=(0, 0, 0, 0)), vmin=1,
+                   vmax=max(3, int(np.nanmax(n_pt_masked)) if n_pt_masked.count() else 3), interpolation="nearest", extent=extent)
+    _extent_and_aspect(ax)
+    _colorbar(fig, im, cax, "real points with nonzero weight (n_pointings)")
+    _save(fig, "map_coverage_density", exts=("png", "svg"))
+
+    point_cell = built["point_cell"]
+    code = np.zeros((n_rows, n_cols), dtype=int)   # 0 = no point at all for this mosaic position
+    for row in built["point_rows"]:
+        r, c = point_cell[row["point_index"]]
+        code[r, c] = 1 if row["status"] == "USED" else 2
+    n_used, n_excl = int((code == 1).sum()), int((code == 2).sum())
+    fig, ax, cax = _single(f"COVERAGE - measured cells used vs excluded ({n_rows}x{n_cols})",
+                           f"{n_used} used · {n_excl} excluded (reason per point in points.csv) · "
+                           f"{n_rows * n_cols - n_used - n_excl} without pointing · same cells as A")
+    _board_quads(ax, code, ListedColormap(["#0d1317", "#2e8b3d", "#b23b3b"]), 0, 2)
+    _extent_and_aspect(ax)
+    cax.axis("off")
+    cax.legend(handles=[mpatches.Patch(color="#2e8b3d", label="used"), mpatches.Patch(color="#b23b3b", label="excluded"),
+                        mpatches.Patch(color="#0d1317", label="no pointing")], loc="center left", fontsize=FS_TICK, frameon=False)
+    _save(fig, "map_coverage", exts=("png", "svg"))
+
+    (out_dir / "NOTES.md").write_text(
+        f"# {campaign_id} / {reduce_session_id} - SCIENCE map notes\n\n"
+        f"Integrated relative intensity, {window}, {cfg.calibration_level_filter}. Units: relative_intensity_dimensionless "
+        "x m/s (fractional excess - no Kelvin/Jy/N_HI claimed).\n\n" + "\n\n".join(notes) + "\n")
+    written["notes"] = ["NOTES.md"]
+    return written, quality_kind
+
+
+# ------------------------------------------------------------------ persistence (this bridge's OWN, non-frozen)
+def _atomic_write_json(path: Path, obj: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2, default=str))
+    import os
+    os.replace(tmp, path)
+
+
+def _new_session_id() -> str:
+    return f"SCIENCE_WEB-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')}"
+
+
+def cmd_inspect(args) -> int:
+    payload = inspect_reduce_session(args.reduce_session_dir)
+    _print(payload, args.json, [
+        f"campaign: {payload['campaign_id']}  reduce_status: {payload['reduce_status']}",
+        f"points planned/completed/blocked/failed: {payload['points_planned']}/{payload['points_reduced_completed']}/"
+        f"{payload['points_reduced_blocked']}/{payload['points_reduced_failed']}",
+        f"science_contract_ok: {payload['science_contract_ok']}",
+        *([f"  problem: {p}" for p in payload['science_contract_problems']]),
+        f"calibration_level_counts: {payload.get('calibration_level_counts')}",
+        f"velocity available: {payload.get('velocity_available_count')}/{payload.get('n_points_ingestable')}  "
+        f"missing: {payload.get('velocity_missing_points')}",
+    ])
+    return 0 if payload["science_contract_ok"] else 1
+
+
+def cmd_plan(args) -> int:
+    cfg = _config_from_args(args)
+    filtered, counts, _ = load_filtered_input(cfg.reduce_session_dir, cfg.calibration_level_filter)
+    from science_engine.cube import canonical_velocity_axis
+    grid_b = grid_c = geometry = base = None
+    try:
+        planned = load_planned_lattice(filtered)
+        spatial = auto_spatial_params(filtered, cfg, planned)
+        board, point_cell, n_rows, n_cols = build_mosaic_grid(filtered, spatial["mosaic_spacing_deg"], planned)
+        mosaic_ok = True
+        mosaic_detail = (f"{n_rows}x{n_cols} board, {len(point_cell)} point(s) placed, lattice from "
+                         + (f"the campaign plan's grid_row/grid_col ({planned.campaign_dir})" if planned
+                            else "clustered measured positions")
+                         + f", spacing {spatial['mosaic_spacing_deg']:.6g} deg ({spatial['mosaic_spacing_source']})")
+        nodes, corners = lattice_geometry(board, n_rows, n_cols, planned)
+        base = raster_base_grid(board, corners)
+        grid_b = build_fine_grid(base, cfg.interp_factor_b)
+        grid_c = build_fine_grid(base, cfg.interp_factor_c)
+        geometry = mosaic_geometry_summary(filtered, base, nodes, point_cell, planned, spatial["support_radius_deg"],
+                                           (cfg.interp_factor_b, cfg.interp_factor_c))
+    except MosaicShapeError as exc:
+        spatial = auto_spatial_params(filtered, cfg)
+        board, n_rows, n_cols = None, None, None
+        mosaic_ok, mosaic_detail = False, str(exc)
+    velocity_axis = canonical_velocity_axis(filtered)
+    from science_engine.integration import window_overlaps
+    overlap = window_overlaps(velocity_axis, cfg.velocity_window_min_m_s, cfg.velocity_window_max_m_s)
+    window_blocked = not np.any(overlap > 0)
+    checks = [
+        {"name": "has_filtered_points", "ok": len(filtered.points) > 0,
+        "detail": f"{len(filtered.points)} {cfg.calibration_level_filter} point(s) of {sum(counts.values())} total ingestable"},
+        {"name": "velocity_window_overlaps_axis", "ok": not window_blocked,
+        "detail": f"requested [{cfg.velocity_window_min_m_s:.0f}, {cfg.velocity_window_max_m_s:.0f}] m/s vs cube "
+                  f"[{velocity_axis.min():.0f}, {velocity_axis.max():.0f}] m/s"},
+        {"name": "mosaic_board_buildable", "ok": mosaic_ok, "detail": mosaic_detail},
+    ]
+    if geometry:
+        cov = geometry["raster_coverage"]
+        uncovered = sorted({i for c in cov.values() for i in c["uncovered_points"]})
+        checks.append({"name": "bc_rasters_cover_all_points", "ok": not uncovered, "detail": (
+            "every point is within support_radius_deg of a B and a C pixel (largest gap "
+            + ", ".join(f"{k}x: {c['max_point_to_nearest_pixel_deg']:.3f}" for k, c in cov.items())
+            + f" vs support {spatial['support_radius_deg']:.3f} deg)" if not uncovered else
+            f"{len(uncovered)} point(s) beyond support_radius_deg of every B/C pixel: {uncovered[:10]}")})
+    tiles = {}
+    if mosaic_ok:
+        # RUN builds B THEN C, each in 2D tiles sized to the budget (integrated_map_in_tiles); B also keeps
+        # the full-grid uncertainty/valid that assess_science_quality() reads.
+        for key, grid, keep in (("b", grid_b, True), ("c", grid_c, False)):
+            tiles[key] = tile_plan(grid, int(velocity_axis.shape[0]), len(filtered.points), keep)
+            checks.append({"name": f"memory_estimate_within_budget_map_{key}", "ok": tiles[key]["ok"],
+                           "detail": tiles[key]["detail"]})
+    blocked = any(not c["ok"] for c in checks)
+    payload = {
+        "config": cfg.to_dict(), "config_hash": cfg.config_hash(), "calibration_level_counts": counts,
+        "board_grid": board.to_dict() if board else None,
+        "raster_base_grid": base.to_dict() if base else None,
+        "grid_b": grid_b.to_dict() if grid_b else None, "grid_c": grid_c.to_dict() if grid_c else None,
+        "n_rows": n_rows, "n_cols": n_cols, "mosaic_geometry": geometry, "tiles": tiles,
+        "spatial_params": spatial, "real_instrument_beam_fwhm_deg": cfg.beam_fwhm_deg,
+        "n_velocity_channels": int(velocity_axis.shape[0]),
+        "checks": checks, "blocked": blocked,
+        "will_process_points": [p.point_index for p in filtered.points],
+    }
+    _print(payload, args.json, [
+        f"calibration_level_filter: {cfg.calibration_level_filter}  counts: {counts}",
+        f"board: {mosaic_detail}  support_radius={spatial['support_radius_deg']:.4g} deg  "
+        f"smoothing (shared by B/C)={spatial['smoothing_fwhm_deg']:.4g} deg  "
+        f"(real instrument beam={cfg.beam_fwhm_deg:.4g} deg, reported only, not used for gridding)",
+        f"grid dims: A={n_rows}x{n_cols}"
+        + (f"  B={grid_b.ny}x{grid_b.nx} ({cfg.interp_factor_b}x)  C={grid_c.ny}x{grid_c.nx} "
+           f"({cfg.interp_factor_c}x)" if mosaic_ok else "  B/C: n/a (board not buildable)"),
+        f"will process {len(filtered.points)} point(s): {payload['will_process_points']}",
+        *[f"[{'PASS' if c['ok'] else 'BLOCKED'}] {c['name']}: {c['detail']}" for c in checks],
+    ])
+    return 1 if blocked else 0
+
+
+def cmd_run(args) -> int:
+    from science_engine.provenance import reduce_manifest_hash
+    cfg = _config_from_args(args)
+    t0 = datetime.now(timezone.utc)
+    _progress(f"loading the REDUCE session (calibration level {cfg.calibration_level_filter})")
+    filtered, counts, unfiltered = load_filtered_input(cfg.reduce_session_dir, cfg.calibration_level_filter)
+    _progress(f"{len(filtered.points)} point(s) pass the filter")
+    built = build_all_products(filtered, cfg)
+
+    root = Path(args.output_root)
+    session_id = _new_session_id()
+    out_dir = root / filtered.campaign_id / session_id
+    out_dir.mkdir(parents=True, exist_ok=False)   # fail closed on collision, same discipline as REDUCE/SCIENCE
+    maps_dir = out_dir / "maps"
+    maps_dir.mkdir()
+
+    _progress("rendering figures (A, B, C, uncertainty, exports)")
+    exports, unc_kind = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
+    _progress("writing points.csv, board.json and the manifest")
+    spatial_confidence = spatial_confidence_summary(built)
+
+    # tabular per-point export for reproducibility (section: "exporta valores tabulares de puntos")
+    import csv
+    points_csv = out_dir / "points.csv"
+    with points_csv.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["point_index", "ra_deg", "dec_degrees", "calibration_level", "reduce_quality_state",
+                   "status", "reason", "integrated_value", "integrated_uncertainty", "spectral_coverage",
+                   "timestamp_start_utc"])
+        for r in built["point_rows"]:
+            w.writerow([r["point_index"], r["ra_deg"], r["dec_degrees"], r["calibration_level"],
+                       r["reduce_quality_state"], r["status"], r["reason"], r["value"], r["uncertainty"],
+                       r["spectral_coverage"], r["timestamp_start_utc"]])
+
+    # ONE per-cell JSON for the web viewer/point-picker - see board_json_payload()'s own docstring for why
+    # this replaced three separately-shaped map_*.json files (map A used to be footprints, not cells).
+    _atomic_write_json(maps_dir / "board.json", board_json_payload(built))
+
+    thermal = _thermal_drift_note(unfiltered)
+    manifest_hash = reduce_manifest_hash(cfg.reduce_session_dir)
+    completeness = "COMPLETE" if unfiltered.reduce_session_status == "COMPLETED" and not unfiltered.exclusions else "PARTIAL"
+    manifest = {
+        "science_web_schema_version": SCHEMA_VERSION, "science_web_pipeline_version": PIPELINE_VERSION,
+        "science_web_session_id": session_id, "campaign_id": filtered.campaign_id,
+        "reduce_session_id": filtered.reduce_session_id, "reduce_session_dir": str(cfg.reduce_session_dir),
+        "input_reduce_manifest_sha256": manifest_hash, "data_completeness": completeness,
+        "calibration_level_filter": cfg.calibration_level_filter, "calibration_level_counts_full_session": counts,
+        "config": cfg.to_dict(), "config_hash": cfg.config_hash(),
+        "real_instrument_beam": {"fwhm_deg": cfg.beam_fwhm_deg, "source": cfg.beam_source, "status": cfg.beam_status,
+                                 "note": "reported honestly, unchanged between B/C - NOT used as the gridding "
+                                        "kernel for either map (see spatial_params/smoothing_kernel)"},
+        "spatial_params": built["spatial_params"],
+        "smoothing_kernel": built["beam"].to_dict(),
+        # THREE grids now, not one: the real N x M board (map A) and the two genuinely finer interpolated
+        # rasters (map B/C) - same physical extent/center as the board, denser pixels only.
+        "board_grid": built["board_grid"].to_dict(), "raster_base_grid": built["base_grid"].to_dict(),
+        "grid_b": built["grid_b"].to_dict(),
+        "grid_c": built["grid_c"].to_dict(),
+        "grid_dims": {"a": [built["n_rows"], built["n_cols"]], "b": list(built["map_b"].value.shape),
+                     "c": list(built["map_c"].value.shape)},
+        "mosaic_geometry": built["mosaic_geometry"],
+        "velocity_window_m_s": [cfg.velocity_window_min_m_s, cfg.velocity_window_max_m_s],
+        "n_velocity_channels": int(built["velocity_axis"].shape[0]),
+        "color_vmin": built["color_vmin"], "color_vmax": built["color_vmax"],
+        "color_limits_basis": built["color_limits_basis"],
+        "used_point_set": built["used_point_set"], "used_point_set_note": built["used_point_set_note"],
+        "n_points_filtered_in": len(filtered.points), "n_points_used": len(built["used_point_set"]),
+        "quality_b": built["quality_b"].to_dict(), "uncertainty_kind": unc_kind,
+        "spatial_confidence": spatial_confidence, "noise_dominance": built["noise_dominance"],
+        "loo_cross_validation": built["loo_cross_validation"],
+        "bc_exact_coordinate_consistency": built["bc_exact_coordinate_consistency"],
+        "thermal_drift": thermal,
+        "exports": exports, "points_csv": "points.csv",
+        "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),
+        "status": "COMPLETED",
+    }
+    _atomic_write_json(out_dir / "manifest.json", manifest)
+    _atomic_write_json(out_dir / "config.json", cfg.to_dict())
+    _atomic_write_json(out_dir / "provenance.json", {
+        "science_web_pipeline_version": PIPELINE_VERSION, "input_reduce_manifest_sha256": manifest_hash,
+        "input_reduce_session_dir": str(cfg.reduce_session_dir), "config_hash": cfg.config_hash(),
+        "git_commit": _git_commit(), "started_utc": manifest["started_utc"], "ended_utc": manifest["ended_utc"],
+    })
+    _progress(f"done: {len(built['used_point_set'])} point(s) used, output {out_dir}")
+    payload = {"status": "COMPLETED", "output_dir": str(out_dir), "session_id": session_id,
+              "campaign_id": filtered.campaign_id, "n_points_used": len(built["used_point_set"]),
+              "calibration_level_filter": cfg.calibration_level_filter, "exports": exports}
+    _print(payload, args.json, [
+        f"SCIENCE WEB COMPLETED", f"Campaign: {filtered.campaign_id}  session: {session_id}",
+        f"Calibration level: {cfg.calibration_level_filter}  points used: {len(built['used_point_set'])}",
+        f"Output: {out_dir}",
+    ])
+    return 0
+
+
+def _thermal_drift_note(science_input) -> dict[str, Any]:
+    """Looks for REAL, dated LNA/SDR temperature readings tied to this campaign's own captures
+    (environment.json next to each capture, DS18B20 sysfs readings via temperature_sensors.py). Never
+    estimates drift from elapsed time and never treats the 50-ohm profile's own HI-ALTO/HI-BAJO contrast
+    as a temperature measurement - those are explicitly out of scope per the task."""
+    checked = 0
+    found = 0
+    for p in science_input.points[:20]:   # a representative sample is enough to answer "does this exist at all"
+        for ref in p.capture_refs:
+            src = ref.get("source_path") or ref.get("capture_id")
+            if not src:
+                continue
+            env_path = Path(src).parent.parent / "environment.json" if src else None
+            checked += 1
+            try:
+                if env_path and env_path.is_file():
+                    env = json.loads(env_path.read_text())
+                    if env.get("temperature_before") or env.get("temperature_after"):
+                        found += 1
+            except (OSError, ValueError):
+                continue
+    if found:
+        return {"status": "AVAILABLE", "note": f"{found}/{checked} sampled captures have a non-empty recorded "
+                                               "temperature - inspect environment.json per session for values."}
+    return {"status": "NOT_EVALUABLE",
+           "note": "deriva térmica no evaluable: no real, dated LNA/SDR temperature reading was found for this "
+                   "campaign's captures (environment.json's temperature_before/after are empty on this hardware). "
+                   "Not estimated from elapsed time; the 50-ohm HI-ALTO/HI-BAJO contrast is a relative spectral "
+                   "reference, never a temperature measurement, and is not used as one here."}
+
+
+def _git_commit() -> Optional[str]:
+    import subprocess
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                           cwd=Path(__file__).resolve().parent, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _config_from_args(args) -> MapConfig:
+    beam_kwargs: dict[str, Any] = {}
+    if args.beam_fwhm_deg is not None and args.beam_from_observer_config is not None:
+        raise ValueError("give either --beam-fwhm-deg or --beam-from-observer-config, not both")
+    if args.beam_fwhm_deg is not None:
+        beam_kwargs.update(beam_fwhm_deg=args.beam_fwhm_deg, beam_source="operator_config",
+                          beam_status="CONFIGURED_OPERATIONAL")
+    elif args.beam_from_observer_config is not None:
+        from science_engine.beam import beam_settings_from_observer_config
+        beam_kwargs.update(beam_settings_from_observer_config(args.beam_from_observer_config))
+    else:
+        raise ValueError("no beam specified: pass --beam-fwhm-deg DEG or --beam-from-observer-config [PATH]")
+    kwargs: dict[str, Any] = dict(reduce_session_dir=args.reduce_session_dir,
+                                  calibration_level_filter=args.calibration_level_filter, **beam_kwargs)
+    for cli_name, cfg_name in (
+        ("mosaic_spacing_deg", "mosaic_spacing_deg"),
+        ("support_radius_deg", "support_radius_deg"), ("smoothing_fwhm_deg", "smoothing_fwhm_deg"),
+        ("interp_factor_b", "interp_factor_b"), ("interp_factor_c", "interp_factor_c"),
+        ("quality_policy", "quality_policy"),
+        ("velocity_window_min_m_s", "velocity_window_min_m_s"), ("velocity_window_max_m_s", "velocity_window_max_m_s"),
+        ("min_spectral_coverage_fraction", "min_spectral_coverage_fraction"), ("color_vmin", "color_vmin"),
+        ("color_vmax", "color_vmax"),
+    ):
+        value = getattr(args, cli_name, None)
+        if value is not None:
+            kwargs[cfg_name] = value
+    return MapConfig(**kwargs)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def _common_config_args(p):
+        p.add_argument("--calibration-level-filter", required=True, choices=CALIBRATION_LEVELS)
+        p.add_argument("--beam-fwhm-deg", type=float, default=None)
+        p.add_argument("--beam-from-observer-config", nargs="?", const="observer_config.json", default=None)
+        p.add_argument("--mosaic-spacing-deg", type=float, default=None)
+        p.add_argument("--support-radius-deg", type=float, default=None)
+        p.add_argument("--smoothing-fwhm-deg", type=float, default=None)
+        p.add_argument("--interp-factor-b", type=int, default=None)
+        p.add_argument("--interp-factor-c", type=int, default=None)
+        p.add_argument("--quality-policy", choices=("STRICT", "STANDARD", "PERMISSIVE"), default=None)
+        p.add_argument("--velocity-window-min-m-s", type=float, default=None)
+        p.add_argument("--velocity-window-max-m-s", type=float, default=None)
+        p.add_argument("--min-spectral-coverage-fraction", type=float, default=None)
+        p.add_argument("--color-vmin", type=float, default=None)
+        p.add_argument("--color-vmax", type=float, default=None)
+        p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("inspect", help="read-only coverage + calibration-level + velocity summary")
+    p.add_argument("reduce_session_dir")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_inspect)
+
+    p = sub.add_parser("plan", help="no writes: grid/beam, will-process points, blocking checks")
+    p.add_argument("reduce_session_dir")
+    _common_config_args(p)
+    p.set_defaults(func=cmd_plan)
+
+    p = sub.add_parser("run", help="build the three heatmaps + coverage/SNR + tabular export")
+    p.add_argument("reduce_session_dir")
+    p.add_argument("--output-root", default="data/science")
+    _common_config_args(p)
+    p.set_defaults(func=cmd_run)
+
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except Exception as error:  # noqa: BLE001
+        print(f"ERROR: {type(error).__name__}: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

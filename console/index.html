@@ -1,18 +1,25 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Field Console</title><link rel="stylesheet" href="styles.css"></head>
-<body>
+  <title>ALMITA Field Console</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+<body data-version-url="/version.json">
   <header class="topbar">
-    <div><h1>ALMITA FIELD CONSOLE</h1><span class="readonly">READ ONLY</span></div>
+    <div><h1>ALMITA FIELD CONSOLE</h1><span id="ops-chip" class="readonly">OPERATIONAL STATE …</span></div>
     <nav class="obs-nav">
-      <a class="obs-nav-link" id="nav-observe" href="#">OBSERVE</a>
+      <a class="obs-nav-link" id="nav-pipeline" href="/pipeline.html">PIPELINE</a>
+      <a class="obs-nav-link" id="nav-observe" href="/observe.html">OBSERVE</a>
+      <a class="obs-nav-link" id="nav-align" href="/align.html">ALIGN</a>
+      <a class="obs-nav-link" id="nav-calibrate" href="/calibrate.html">CALIBRATE</a>
+      <a class="obs-nav-link" id="nav-reduce" href="/reduce.html">REDUCE</a>
+      <a class="obs-nav-link" id="nav-science" href="/science.html">SCIENCE</a>
+      <a class="obs-nav-link" id="nav-status" href="/status.html">STATUS</a>
       <a class="obs-nav-link active" href="#">MONITOR</a>
       <a class="obs-nav-link" href="#last-session">LAST SESSION</a>
     </nav>
-    <dl><div><dt>SYSTEM</dt><dd id="system-badge" class="badge">—</dd></div>
+    <dl class="hdr-status" id="hdr-status"><div><dt>SYSTEM</dt><dd id="system-badge" class="badge">—</dd></div>
       <div><dt>UTC</dt><dd id="clock">—</dd></div>
-      <div><dt>UPDATED</dt><dd id="updated">—</dd></div></dl>
+      <div><dt>UPDATED (UTC)</dt><dd id="updated">—</dd></div>
+      <div><dt>LINK</dt><dd id="link-state" class="badge">—</dd></div></dl>
   </header>
   <div id="connection" class="banner connection" hidden>DATA CONNECTION DEGRADED — showing last valid status</div>
   <div id="loading" class="loading">CONNECTING TO CONSOLE WATCHER…</div>
@@ -26,6 +33,22 @@
         <div id="quicklook-kv" class="kv"></div></article>
       <article class="panel"><header><h2>RFI REFERENCE</h2><span id="rfi-ref-badge" class="badge">—</span></header>
         <div id="rfi-ref-kv" class="kv"></div></article>
+      <article class="panel" id="mount-camera-panel"><header><h2>MOUNT CAMERA</h2><span id="mount-camera-badge" class="badge">—</span></header>
+        <div class="mount-camera-frame">
+          <img id="mount-camera-img" alt="Mount camera live stream" hidden>
+          <div id="mount-camera-placeholder" class="mount-camera-placeholder">—</div>
+        </div>
+        <div id="mount-camera-kv" class="kv"></div>
+        <div class="obs-actions"><button type="button" id="mount-camera-retry">REINTENTAR</button></div>
+        <details id="mount-camera-config">
+          <summary>Configure stream URL</summary>
+          <div class="obs-row"><label for="mount-camera-url">STREAM URL</label><input type="text" id="mount-camera-url" placeholder="e.g. 192.168.1.164:81/stream — full URL with its scheme (http or https)"></div>
+          <div class="obs-row"><label for="mount-camera-rotation">ROTATION</label><select id="mount-camera-rotation">
+            <option value="0">0°</option><option value="90">90°</option><option value="180">180° (camera mounted upside down)</option><option value="270">270°</option></select></div>
+          <div class="obs-actions"><button type="button" id="mount-camera-save">SAVE</button></div>
+          <div id="mount-camera-config-note" class="muted"></div>
+        </details>
+      </article>
     </section>
     <div class="science-row">
       <div class="science-row-left">
@@ -60,6 +83,7 @@
           <div id="spectral-stack-tooltip" class="spectral-stack-tooltip" hidden></div>
           <div id="spectral-stack-message" class="spectral-stack-message">WAITING FOR DATA</div>
           <button id="spectral-stack-reset" class="spectral-stack-reset" type="button" hidden>RESET CAMERA</button>
+          <div id="spectral-stack-scale" class="spectral-stack-scale" hidden></div>
         </div>
       </section>
     </div>
@@ -70,14 +94,10 @@
       <h2>LAST KNOWN SESSION</h2><div id="last-session-kv" class="kv"></div>
     </section>
   </main>
+  <footer id="almita-footer"></footer>
   <script src="vendor/three/three.min.js"></script>
   <script src="vendor/three/OrbitControls.js"></script>
   <script src="spectral_stack_3d.js"></script>
+  <script src="common.js"></script>
   <script src="app.js"></script>
-  <script>
-    // Points OBSERVE at the orchestrator's own API/UI server (a separate
-    // process/port from this read-only console) — never touches app.js.
-    document.getElementById("nav-observe").href =
-      location.protocol + "//" + location.hostname + ":8090/observe.html";
-  </script>
 </body></html>

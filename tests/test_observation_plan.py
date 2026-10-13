@@ -13,6 +13,8 @@ import json
 import subprocess
 
 import pytest
+
+from tests.conftest import transiting_ra_hours
 from astropy.time import Time
 
 import observation_plan as pl
@@ -31,7 +33,7 @@ def _valid_spec(**overrides):
             "min_altitude_deg": 10, "traversal": "SERPENTINE",
         },
         "capture": {"seconds": 1, "settle_seconds": 0.5},
-        "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+        "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
         "rfi_ref": {"enabled": False, "serial": "00000002", "gain_db": 25.0},
         "quicklook": {"enabled": False, "native_grid": True, "interpolated_preview": False,
                       "calibration_profile_path": None},
@@ -129,7 +131,8 @@ def test_resolve_eastmost_safe_never_touches_indi_or_subprocess(monkeypatch):
 
 @pytest.fixture(scope="module")
 def fixed_center_plan(tmp_path_factory):
-    spec = _valid_spec(grid={"placement": "FIXED_CENTER", "center_ra_hours": 6.0, "center_dec_deg": -30.0})
+    ra = transiting_ra_hours()               # always visible when the test runs (a fixed 6h is below the horizon at some hours)
+    spec = _valid_spec(grid={"placement": "FIXED_CENTER", "center_ra_hours": ra, "center_dec_deg": -30.0})
     data_dir = tmp_path_factory.mktemp("fixed_center")
     plan = pl.plan_observation(spec, observer_config_path=TEST_OBSERVER_CONFIG,
                                 data_dir=str(data_dir), run_preflight=False)
@@ -139,7 +142,7 @@ def fixed_center_plan(tmp_path_factory):
 def test_fixed_center_resolution_artifacts_and_hash(fixed_center_plan):
     data_dir, plan = fixed_center_plan
 
-    assert plan["resolved"]["center_ra_hours"] == 6.0
+    assert plan["resolved"]["center_ra_hours"] == plan["requested"]["grid"]["center_ra_hours"]
     assert plan["resolved"]["center_dec_deg"] == -30.0
     assert plan["resolved"]["placement_reasoning"].startswith("Center RA/Dec taken verbatim")
     assert plan["resolved"]["point_count"] == 9
@@ -170,8 +173,8 @@ def test_fixed_center_plan_preserves_rfi_ref_bias_tee(fixed_center_plan):
     shared plan_observation() call (see module docstring: this Pi has ~0
     free swap and cannot afford a second real grid_generator.py pass)."""
     data_dir, plan = fixed_center_plan
-    assert plan["rfi_ref"]["bias_tee"] is False  # _valid_spec()'s rfi_ref omits it -> schema default
+    assert plan["rfi_ref"]["bias_tee"] is True  # _valid_spec()'s rfi_ref omits it -> schema default (ON, BL-041)
 
     session_dir = data_dir / plan["grid_session_dir"].split("/")[-1]
     on_disk = json.loads((session_dir / "observation_resolved.json").read_text())
-    assert on_disk["rfi_ref"]["bias_tee"] is False
+    assert on_disk["rfi_ref"]["bias_tee"] is True

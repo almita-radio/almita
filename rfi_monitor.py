@@ -33,6 +33,7 @@ import collections
 import concurrent.futures
 import contextlib
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -44,6 +45,7 @@ from dual_sdr_benchmark import listening_pid
 from runtime_state import atomic_write_json, utcnow
 
 RTL_TCP_BIN = "rtl_tcp"
+STDBUF_BIN = shutil.which("stdbuf")   # line-buffered rtl_tcp output (tuning acknowledgements)
 BYTES_PER_SAMPLE = 2  # 8-bit I + 8-bit Q, rtl_tcp default format
 FULL_SCALE_AMPLITUDE = 127.5  # unsigned-8 IQ centered at 127/128
 N_SPECTRUM_BINS = 256  # bounded ANTENNA B/RFI_REF spectrum product size
@@ -141,7 +143,7 @@ class RFIReferenceMonitor:
 
     def __init__(self, *, enabled: bool, runtime_dir, session_id: Optional[str] = None,
                  device_serial: str = "00000002", host: str = "127.0.0.1", port: int = 1235,
-                 center_frequency_hz: int = 1420405000, sample_rate: int = 2_400_000,
+                 center_frequency_hz: Optional[int] = None, sample_rate: int = 2_400_000,
                  gain_db: float = 25.0, bias_tee: bool = False, quicklook_every: int = 20,
                  block_bytes: int = 131072,
                  bind_timeout: float = 5.0, connect_timeout: float = 5.0,
@@ -157,6 +159,9 @@ class RFIReferenceMonitor:
         self.device_serial = device_serial
         self.host = host
         self.port = port
+        if center_frequency_hz is None:   # no literal default: the agreed operating frequency (single source)
+            import sdr_tuning
+            center_frequency_hz = sdr_tuning.operating_center_frequency_hz()
         self.center_frequency_hz = int(center_frequency_hz)
         self.sample_rate = int(sample_rate)
         self.gain_db = float(gain_db)
@@ -215,6 +220,7 @@ class RFIReferenceMonitor:
         self._last_session_waterfall_monotonic: Optional[float] = None
 
         self.proc: Optional[subprocess.Popen] = None
+        self.tuning: Optional[dict] = None
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rfi-fft")
@@ -244,7 +250,9 @@ class RFIReferenceMonitor:
             self._write_status()
             return
 
-        cmd = [
+        # stdbuf -oL: rtl_tcp's "set freq N" acknowledgements must reach the log immediately - they are the
+        # evidence _tune_explicitly() waits for. stdbuf execs rtl_tcp in place, so the PID is rtl_tcp's own.
+        cmd = ([STDBUF_BIN, "-oL"] if STDBUF_BIN else []) + [
             RTL_TCP_BIN, "-d", self.device_serial, "-a", self.host, "-p", str(self.port),
             "-f", str(self.center_frequency_hz), "-s", str(self.sample_rate),
             "-g", str(self.gain_db),  # explicit manual gain => rtl_tcp's AGC/auto-gain is not used
@@ -358,6 +366,16 @@ class RFIReferenceMonitor:
             self._write_status()
             return
 
+        try:
+            self.tuning = await self._tune_explicitly(writer)
+        except Exception as exc:  # noqa: BLE001 - isolate RFI_REF, never propagate to MAIN
+            self.status = "FAILED"
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            self._log(f"RFI_REF: explicit tuning failed: {self.last_error}")
+            self._write_status()
+            writer.close()
+            return
+
         self.status = "RUNNING"
         self.last_error = None
         self._write_status()
@@ -431,6 +449,38 @@ class RFIReferenceMonitor:
                     writer.close()
                     await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
             self._write_status()
+
+    async def _tune_explicitly(self, writer) -> dict:
+        """Send frequency / sample rate / manual gain / gain on this connection and wait for this dedicated
+        rtl_tcp's acknowledgement in its log (sdr_tuning evidence vocabulary). Its -f/-s/-g argv is only the
+        startup state; the acknowledgement is what proves these values reached the server."""
+        import struct
+        import sdr_tuning
+        if self.log_path is None:
+            raise sdr_tuning.TuningIncoherent("RFI_REF has no rtl_tcp log to read the tuning acknowledgement from")
+        source = sdr_tuning.LogFileAckSource(self.log_path)
+        source.mark()
+        want = {"center_frequency_hz": self.center_frequency_hz, "sample_rate_hz": self.sample_rate,
+                "gain_tenths_db": int(round(self.gain_db * 10))}
+        for command, value in ((0x01, want["center_frequency_hz"]), (0x02, want["sample_rate_hz"]),
+                               (0x03, 1), (0x04, want["gain_tenths_db"])):
+            writer.write(struct.pack(">BI", command, int(value)))
+        await writer.drain()
+        deadline = time.monotonic() + sdr_tuning.ACK_TIMEOUT_SECONDS
+        while True:
+            acks = sdr_tuning.parse_acks(source.lines())
+            if all(acks.get(k) == v for k, v in want.items()) or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.2)
+        applied = {"center_frequency_hz": acks.get("center_frequency_hz"), "sample_rate_hz": acks.get("sample_rate_hz"),
+                   "gain_db": acks["gain_tenths_db"] / 10.0 if acks.get("gain_tenths_db") is not None else None}
+        if any(acks.get(k) != v for k, v in want.items()):
+            raise sdr_tuning.TuningIncoherent(f"RFI_REF rtl_tcp did not acknowledge {want} (got {applied})")
+        return {"requested": {"center_frequency_hz": self.center_frequency_hz, "sample_rate_hz": self.sample_rate,
+                              "gain_db": self.gain_db},
+                "applied": applied, "evidence": sdr_tuning.EVIDENCE_SERVER_ACK,
+                "evidence_detail": f"dedicated RFI_REF rtl_tcp acknowledged the commands ({source.describe})",
+                "pll_not_locked_count": acks.get("pll_not_locked_count", 0), "tuned_utc": utcnow()}
 
     async def _cleanup_process_async(self) -> Optional[str]:
         loop = asyncio.get_running_loop()
@@ -642,6 +692,7 @@ class RFIReferenceMonitor:
                 "center_frequency_hz": self.center_frequency_hz,
                 "sample_rate": self.sample_rate,
                 "gain_db": self.gain_db,
+                "tuning": self.tuning,
                 "bias_tee": self.bias_tee,
                 "fft_duty_fraction": round(self.fft_duty_fraction, 4),
                 "clipping_fraction": self.clipping_fraction,

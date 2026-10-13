@@ -30,7 +30,7 @@ def _web_payload(*, rfi_ref_enabled=True, bias_tee=True):
             "min_altitude_deg": 10, "traversal": "SERPENTINE",
         },
         "capture": {"seconds": 10, "settle_seconds": 2},
-        "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+        "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
         "rfi_ref": {"enabled": rfi_ref_enabled, "serial": "00000002", "gain_db": 25.0, "bias_tee": bias_tee},
         "quicklook": {"enabled": False, "native_grid": True, "interpolated_preview": False,
                       "calibration_profile_path": None},
@@ -58,3 +58,13 @@ def test_web_payload_rfi_ref_disabled_still_records_bias_tee_choice():
     spec = sp.validate_spec_dict(_web_payload(rfi_ref_enabled=False, bias_tee=True))
     assert spec["rfi_ref"]["enabled"] is False
     assert spec["rfi_ref"]["bias_tee"] is True
+
+
+def test_observe_defaults_enable_rfi_ref_bias_tee_for_antenna_b_lna():
+    """Operator confirmation 2026-10-08: antenna B's LNA is powered by RFI_REF's Bias-T, so the web form's
+    effective default is ON - and it validates through the same schema a PLAN uses."""
+    import almita_orchestrator_server as srv
+    d = srv._observe_defaults()
+    assert d["rfi_ref"]["bias_tee"] is True
+    payload = _web_payload(rfi_ref_enabled=True, bias_tee=d["rfi_ref"]["bias_tee"])
+    assert sp.validate_spec_dict(payload)["rfi_ref"]["bias_tee"] is True

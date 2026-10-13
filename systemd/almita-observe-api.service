@@ -1,5 +1,5 @@
 [Unit]
-Description=ALMITA Observation Orchestrator - Web API + OBSERVE page (0.0.0.0:8090)
+Description=ALMITA web - single authenticated server: field console + orchestrator API + streams (0.0.0.0:8088)
 After=network.target
 Wants=network.target
 
@@ -7,7 +7,7 @@ Wants=network.target
 Type=simple
 User=stellarmate
 WorkingDirectory=/home/stellarmate/almita
-ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/almita_orchestrator_server.py --host 0.0.0.0 --port 8090
+ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/almita_orchestrator_server.py --host 0.0.0.0 --port 8088
 Restart=on-failure
 RestartSec=5
 # Observation lifecycle != Web API lifecycle: this API launches capture.py/
@@ -21,6 +21,10 @@ RestartSec=5
 # init) under KillMode=process. Only ever kill the tracked main process;
 # orphaned science children are intentionally left running.
 KillMode=process
+# Credentials: single user, PBKDF2 hash in ~stellarmate/.config/almita/web_auth.json (outside the repo,
+# mode 0600; written by `almita_web_auth.py set-password --user <name>`). Missing/invalid -> every request
+# refused. Override the path with Environment=ALMITA_WEB_AUTH_FILE=/abs/path.
+# Replaces almita-console-web.service (the former unauthenticated :8088): `systemctl disable --now` that one first.
 StandardOutput=journal
 StandardError=journal
 

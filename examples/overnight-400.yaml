@@ -27,7 +27,7 @@ capture:
   settle_seconds: 2
 
 main:
-  center_frequency_hz: 1420405000
+  center_frequency_hz: 1420405752
   sample_rate: 2400000
   gain_db: 40.2
   bias_tee: true
@@ -36,6 +36,7 @@ rfi_ref:
   enabled: true
   serial: "00000002"
   gain_db: 25.0
+  bias_tee: true  # antenna B ground-plane now feeds an in-line LNA powered via SDR2's bias-tee
 
 quicklook:
   enabled: true

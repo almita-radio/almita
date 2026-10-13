@@ -15,7 +15,7 @@ from quicklook_live import QuicklookLive
 from sdr_capture import write_hdf5_atomic
 
 
-PROFILE = Path("data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.npz")
+from tests.conftest import FOUNDATION_PROFILE as PROFILE  # the real V1 profile, kept in tests/fixtures/ (not data/)
 
 
 def future_capture(path: Path, point: int) -> Path:
@@ -64,7 +64,8 @@ def test_capture_defaults_are_manual_fixed_gain_and_explicit_topology(tmp_path):
     assert executor.input_topology == INPUT_TOPOLOGIES["antenna"]
     assert executor.bias_tee_enabled is True
     source = inspect.getsource(CaptureExecutor.execute_observation_plan)
-    assert "gain=self.sdr_gain_db" in source and "gain='auto'" not in source
+    # explicit tuning (sdr_tuning.tune_explicitly) with the executor's own manual gain, never 'auto'
+    assert "tune_explicitly(" in source and "self.sdr_gain_db" in source and "gain='auto'" not in source
 
 
 def test_future_hdf5_and_manifest_contract(tmp_path):
@@ -88,8 +89,24 @@ def test_future_hdf5_and_manifest_contract(tmp_path):
     assert check_calibration_compatibility(profile, source)["status"] == "COMPATIBLE"
 
 
+def _planning_artifacts(grid_dir, n=3):
+    """grid_generator.py's own planning files, which QUICKLOOK's native map reads (one row of n cells): the
+    session sits under <grid>/data/iq/<session>, capture.py's own nesting."""
+    import csv
+    grid_dir.mkdir(parents=True)
+    (grid_dir / "grid_metadata.json").write_text(json.dumps({"grid": {"rows": 1, "columns": n, "width_deg": 3.0, "height_deg": 1.0}}))
+    with (grid_dir / "mosaic.csv").open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["point_id", "grid_row", "grid_col", "ra", "dec", "capture_status"])
+        w.writeheader()
+        for point in range(1, n + 1):
+            w.writerow({"point_id": point, "grid_row": 0, "grid_col": point - 1, "ra": (150.0 + point) / 15.0,
+                        "dec": -30.0 + point, "capture_status": "success"})
+
+
 def test_future_three_point_session_runs_real_quicklook(tmp_path):
-    session = tmp_path / "SOFTWARE_VALIDATION_FIXTURE"
+    grid = tmp_path / "GRID"
+    _planning_artifacts(grid)
+    session = grid / "data" / "iq" / "SOFTWARE_VALIDATION_FIXTURE"
     output = tmp_path / "quicklook"
     for point in (1, 2, 3):
         source = future_capture(session / f"point_{point}.h5", point)

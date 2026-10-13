@@ -13,6 +13,7 @@ persistent unit files, auto-cleaned) — it's skipped gracefully if this
 environment has no usable systemd --user session (e.g. some CI sandboxes).
 """
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -43,9 +44,11 @@ def _run_transient_dummy(unit_name: str, kill_mode: str, harness_script: Path, s
     cmd = ["systemd-run", "--user", f"--unit={unit_name}", "--collect"]
     if kill_mode:
         cmd += ["-p", f"KillMode={kill_mode}"]
-    cmd += ["/usr/bin/env", "python3", str(harness_script)]
+    # the SAME interpreter as the tests (the venv): the system python3 lacks the project's dependencies, so the
+    # harness died importing observation_orchestrator and never wrote its status
+    cmd += [sys.executable, str(harness_script)]
     subprocess.run(cmd, check=True, capture_output=True, timeout=10)
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 45            # importing observation_orchestrator takes several seconds on the Pi
     while time.monotonic() < deadline and not status_file.exists():
         time.sleep(0.2)
     assert status_file.exists(), "harness did not report its status in time"
@@ -82,6 +85,7 @@ while True:
 
     default_unit = "almita-lifecycle-test-default"
     process_unit = "almita-lifecycle-test-process"
+    dummy_pid_default = None
     try:
         # 1) Default KillMode (control-group, systemd's implicit default —
         #    what almita-observe-api.service would have without the fix).
@@ -96,7 +100,7 @@ while True:
     finally:
         subprocess.run(["systemctl", "--user", "stop", f"{default_unit}.service"], capture_output=True, timeout=10)
         subprocess.run(["systemctl", "--user", "reset-failed", default_unit], capture_output=True)
-        if _pid_alive(dummy_pid_default):
+        if dummy_pid_default is not None and _pid_alive(dummy_pid_default):
             subprocess.run(["kill", str(dummy_pid_default)], capture_output=True)
 
     status_file.unlink(missing_ok=True)

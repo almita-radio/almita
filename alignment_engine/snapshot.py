@@ -1,6 +1,6 @@
 """JSON-serializable progress snapshot (Fase 13).
 
-Not an API - just the shape a future web UI at :8090 would poll. Every
+Not an API - just the shape the web UI (unified server on :8088) polls. Every
 engine method that changes state updates one of these and the CLI/future
 API both read the same object, so nothing needs reimplementing later.
 """

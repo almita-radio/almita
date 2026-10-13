@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+import sdr_tuning
 
 try:
     from rtlsdr import RtlSdr
@@ -535,14 +536,14 @@ class SDRCapture:
         
         return metrics
     
-    async def configure(self, center_freq: int = 1420405752,
+    async def configure(self, center_freq: Optional[int] = None,
                        sample_rate: int = 2400000,
                        gain: str = 'auto') -> CaptureMetrics:
         """
         Configure SDR parameters
         
         Args:
-            center_freq: Center frequency in Hz (default: 1420.405752 MHz for HI line)
+            center_freq: Center frequency in Hz (default: the operating frequency, sdr_tuning.operating_config())
             sample_rate: Sample rate in Hz
             gain: Gain setting ('auto' or numeric value)
         
@@ -551,7 +552,9 @@ class SDRCapture:
         """
         metrics = CaptureMetrics()
         metrics.sample_rate = sample_rate
-        
+        if center_freq is None:
+            center_freq = sdr_tuning.operating_center_frequency_hz()
+
         if self.mode == "usb":
             return await self._configure_usb(center_freq, sample_rate, gain, metrics)
         else:
@@ -930,7 +933,9 @@ class SDRCapture:
             'created_at': now_utc.isoformat(),
             
             # SDR Configuration
-            'center_frequency_hz': metadata.get('center_freq', 1420405752) if metadata else 1420405752,
+            # Never a fixed placeholder: the frequency last commanded on THIS connection (None if never tuned);
+            # callers add requested/applied/evidence via sdr_tuning.tuning_attrs().
+            'center_frequency_hz': (metadata or {}).get('center_freq', self.current_frequency),
             'sample_rate_hz': sample_rate,
             'gain': metadata.get('gain', 'auto') if metadata else 'auto',
             'sdr_mode': self.mode,
@@ -1097,7 +1102,7 @@ async def test_sdr_modes():
     
     test_duration = 1.0  # 1 second test
     sample_rate = 2400000  # 2.4 MS/s
-    center_freq = 1420405752  # HI line
+    center_freq = sdr_tuning.operating_center_frequency_hz()  # single source
     
     results = {}
     
@@ -1188,7 +1193,7 @@ async def test_sdr_modes():
     print("="*80)
 
 
-BASELINE_FREQUENCY_HZ = 1420405752
+BASELINE_FREQUENCY_HZ = sdr_tuning.operating_center_frequency_hz()   # single source
 BASELINE_SAMPLE_RATE_HZ = 2400000
 BASELINE_GAIN_DB = 40.2
 BASELINE_TOPOLOGY = "50ohm"
@@ -1207,7 +1212,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
     baseline.add_argument("--output", required=True, help="Final .h5 output path")
     baseline.add_argument("--duration", required=True, type=float, help="Capture duration in seconds")
-    baseline.add_argument("--frequency", required=True, type=int, help="Must be 1420405752 Hz")
+    baseline.add_argument("--frequency", required=True, type=int, help=f"Must be {BASELINE_FREQUENCY_HZ} Hz (operating frequency)")
     baseline.add_argument("--sample-rate", required=True, type=int, help="Must be 2400000 S/s")
     baseline.add_argument("--gain", required=True, type=float, help="Must be manual 40.2 dB")
     baseline.add_argument("--topology", required=True, choices=(BASELINE_TOPOLOGY,))

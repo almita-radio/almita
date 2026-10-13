@@ -5,6 +5,10 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 class ReadOnlyHandler(SimpleHTTPRequestHandler):
     def list_directory(self,path):self.send_error(404,"directory listing disabled");return None
+    def log_message(self,format,*args):
+        # UTC timestamp + component (the default prints local time with no zone)
+        from datetime import datetime,timezone
+        print(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} INFO  serve_dashboard {self.address_string()} {format%args}",file=sys.stderr,flush=True)
     def _reject(self):self.send_error(405,"read-only service")
     do_POST=_reject;do_PUT=_reject;do_DELETE=_reject;do_PATCH=_reject
     def end_headers(self):
@@ -17,7 +21,7 @@ class ReadOnlyHandler(SimpleHTTPRequestHandler):
         if path.endswith(".json"):self.send_header("Cache-Control","no-cache, max-age=0, must-revalidate")
         elif path.endswith((".js",".css")):self.send_header("Cache-Control","public, max-age=3600")
         else:self.send_header("Cache-Control","no-cache")
-        self.send_header("X-Content-Type-Options","nosniff");super().end_headers()
+        self.send_header("X-Content-Type-Options","nosniff");self.send_header("X-Frame-Options","SAMEORIGIN");self.send_header("Referrer-Policy","same-origin");super().end_headers()
 class ReadOnlyServer(ThreadingHTTPServer):
     # A client disappearing mid-request (closed tab, page refresh aborting
     # an in-flight fetch) surfaces here as BrokenPipeError/ConnectionResetError

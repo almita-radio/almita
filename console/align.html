@@ -1,18 +1,54 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Align</title><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Align</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
 <body>
-  <header class="topbar">
-    <div><h1>ALMITA ALIGN</h1><span class="readonly">ALIGNMENT ASSISTANT</span></div>
-    <nav class="obs-nav">
-      <a class="obs-nav-link" href="/observe.html">OBSERVE</a>
-      <a class="obs-nav-link active" href="/align.html">ALIGN</a>
-      <a class="obs-nav-link" href="/calibrate.html">CALIBRATE</a>
-    </nav>
-  </header>
+  <header id="almita-header"><h1>ALMITA ALIGN</h1></header>
 
   <main id="app">
+    <section class="panel" id="real-panel" aria-labelledby="h-real">
+      <header><h2 id="h-real">REAL ALIGNMENT <span class="muted">(alignment.py · real INDI mount + real MAIN SDR · SYNC only if ticked below, Sun and HI)</span></h2><span id="real-badge" class="badge">—</span></header>
+      <div class="obs-summary">This runs the real command on the real mount. Nothing here is simulated. The mount will slew and capture; the operator confirms physically by typing MOVE.</div>
+      <dl class="kv" id="real-mount-kv"></dl><div class="obs-actions"><span>MOUNT</span><span id="real-mount-badge" class="badge">—</span></div>
+
+      <div class="obs-actions">
+        <button type="button" id="real-mode-hi" class="mode-btn active">HI (night)</button>
+        <button type="button" id="real-mode-solar" class="mode-btn">SOLAR (day)</button>
+      </div>
+      <div class="obs-summary" id="real-track-mode-row" hidden>Real tracking mode (read-only - not settable from this field): <b id="real-track-mode">—</b></div>
+
+      <canvas id="real-sky" width="420" height="360" style="width:100%;max-width:420px;height:360px;display:block;margin:10px auto;border:1px solid var(--line);border-radius:8px"></canvas>
+      <canvas id="real-sky-legend" width="300" height="34" style="width:100%;max-width:300px;height:34px;display:block;margin:0 auto 6px" hidden title="HI4PI real map colour scale - N_HI column density, not an Almita measurement"></canvas>
+      <div class="obs-summary" id="real-sky-note">Loading sky view…</div>
+      <div class="obs-actions"><button type="button" id="real-sky-refresh">REFRESH SKY VIEW</button></div>
+      <div id="real-hi-areas" class="obs-checks"></div>
+
+      <div class="obs-row"><label for="real-ring-radii">RING RADII (deg, comma-separated - suggested, editable)</label><input type="text" id="real-ring-radii" autocomplete="off"></div>
+      <div class="obs-row"><label for="real-ring-points">POINTS PER RING (suggested, editable)</label><input type="number" id="real-ring-points" min="3" max="64"></div>
+      <div class="obs-row"><label for="real-capture-time">CAPTURE TIME PER POSITION (s - suggested, editable, same for every position)</label><input type="number" id="real-capture-time" min="0.5" max="120" step="any"></div>
+      <div class="obs-row"><label for="real-beam-fwhm">BEAM FWHM (deg - suggested, editable)</label><input type="number" id="real-beam-fwhm" min="1" max="60" step="any"></div>
+      <div class="obs-summary" id="real-beam-note"></div>
+      <div class="obs-row"><label for="real-min-elevation">MIN ELEVATION (deg - suggested, editable)</label><input type="number" id="real-min-elevation" min="5" max="89" step="any"></div>
+      <div class="obs-summary" id="real-pattern-total"></div>
+      <div class="obs-summary" id="real-duration-estimate"></div>
+      <div class="obs-actions"><button type="button" id="real-preflight">REAL PREFLIGHT</button><button type="button" id="real-plan">PLAN (real, moves nothing)</button></div>
+      <div id="real-preflight-out" class="obs-summary" hidden></div>
+      <div id="real-plan-stale" class="obs-summary" hidden style="color:var(--warn,#e6b85c)"></div>
+      <div id="real-plan-validity" class="obs-summary" hidden></div>
+      <div id="real-preview" hidden>
+        <div class="obs-summary" id="real-preview-summary"></div>
+        <div class="obs-summary" id="real-preview-temporal" hidden></div>
+        <div class="twrap"><table id="real-preview-table" class="status-table"><thead><tr><th>idx</th><th>ring</th><th>RA (h)</th><th>Dec (deg)</th><th>sep. from center (deg)</th><th>est. capture time (UTC)</th><th>alt at capture (min)</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="obs-row"><label><input type="checkbox" id="real-sync" checked> SYNC THE MOUNT AT THE END — only if confidence ≥ <b id="real-sync-threshold">0.65</b> and the offset ≤ MAX SYNC OFFSET (otherwise the offset is only shown)</label></div>
+      <div class="obs-row"><label for="real-max-sync">MAX SYNC OFFSET (deg — a larger estimate is never synced)</label><input type="number" id="real-max-sync" min="0.1" max="10" step="0.1" value="5"></div>
+      <div class="obs-row"><label for="real-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="real-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+      <div class="obs-actions"><button type="button" id="real-run">RUN REAL ALIGNMENT</button></div>
+      <div class="reason" data-for="real-run" role="status"></div>
+      <div id="real-offset" class="align-offset" role="status" hidden></div>
+      <div id="real-job-align_plan"></div><div id="real-job-align"></div>
+    </section>
+
     <section class="panel compact">
       <header><h2>STATUS</h2></header>
       <dl class="kv">
@@ -28,8 +64,8 @@
     <section class="panel compact">
       <header><h2>MODE</h2></header>
       <div class="obs-actions">
-        <button id="mode-solar" class="mode-btn active">SOLAR / DAY</button>
-        <button id="mode-hi" class="mode-btn">HI / NIGHT</button>
+        <button type="button" id="mode-solar" class="mode-btn active">SOLAR / DAY</button>
+        <button type="button" id="mode-hi" class="mode-btn">HI / NIGHT</button>
       </div>
     </section>
 
@@ -37,11 +73,14 @@
       <header><h2 id="mode-title">SOLAR ALIGNMENT</h2><span id="mode-badge" class="badge">—</span></header>
       <div id="mode-body" class="obs-summary">Loading…</div>
       <div class="obs-actions">
-        <button id="btn-plan">PLAN</button>
-        <button id="btn-preflight" disabled>PREFLIGHT</button>
-        <button id="btn-run-sim" disabled>RUN SIMULATION</button>
-        <button id="btn-run-real" disabled title="blocked by policy">RUN REAL</button>
+        <button type="button" id="btn-plan">PLAN</button>
+        <button type="button" id="btn-preflight" disabled>PREFLIGHT</button>
+        <button type="button" id="btn-run-sim" disabled>RUN SIMULATION</button>
+        <button type="button" id="btn-run-real" type="button" title="go to the REAL ALIGNMENT panel">RUN REAL ▲</button>
       </div>
+      <div class="reason" data-for="btn-preflight" role="status"></div>
+      <div class="reason" data-for="btn-run-sim" role="status"></div>
+      <div class="reason" data-for="btn-run-real" role="status"></div>
       <div id="preflight-checks" class="obs-checks"></div>
     </section>
 
@@ -53,25 +92,25 @@
         <h3>SYNC</h3>
         <div id="sync-status" class="obs-check-row status-block">SYNC BLOCKED</div>
         <div class="obs-actions">
-          <button id="btn-sync-prepare" disabled>PREPARE SYNC</button>
-          <button id="btn-sync-apply" disabled>APPLY SYNC</button>
+          <button type="button" id="btn-sync-prepare" disabled>PREPARE SYNC</button>
+          <button type="button" id="btn-sync-apply" disabled>APPLY SYNC</button>
         </div>
       </div>
     </section>
 
     <section id="hi-replay-panel" class="panel" hidden>
       <header><h2>HI REPLAY</h2></header>
-      <div class="obs-row"><label>SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/alignment/HI-..."></div>
-      <div class="obs-actions"><button id="btn-replay">REPLAY SESSION</button></div>
+      <div class="obs-row"><label for="replay-session-dir">SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/alignment/HI-..."></div>
+      <div class="obs-actions"><button type="button" id="btn-replay">REPLAY SESSION</button></div>
       <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
       <pre id="replay-summary" class="obs-summary"></pre>
     </section>
 
     <section id="hi-compare-panel" class="panel" hidden>
       <header><h2>COMPARE ALIGNMENTS</h2></header>
-      <div class="obs-row"><label>ANALYSIS DIR A</label><input type="text" id="compare-a"></div>
-      <div class="obs-row"><label>ANALYSIS DIR B</label><input type="text" id="compare-b"></div>
-      <div class="obs-actions"><button id="btn-compare">COMPARE</button></div>
+      <div class="obs-row"><label for="compare-a">ANALYSIS DIR A</label><input type="text" id="compare-a"></div>
+      <div class="obs-row"><label for="compare-b">ANALYSIS DIR B</label><input type="text" id="compare-b"></div>
+      <div class="obs-actions"><button type="button" id="btn-compare">COMPARE</button></div>
       <pre id="compare-summary" class="obs-summary"></pre>
     </section>
 
@@ -88,11 +127,13 @@
       <h3 id="modal-title">CONFIRM</h3>
       <dl class="kv" id="modal-body"></dl>
       <div class="obs-actions">
-        <button id="modal-cancel">CANCEL</button>
-        <button id="modal-confirm">CONFIRM</button>
+        <button type="button" id="modal-cancel">CANCEL</button>
+        <button type="button" id="modal-confirm">CONFIRM</button>
       </div>
     </div>
   </div>
 
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
   <script src="align.js"></script>
 </body></html>

@@ -1,14 +1,13 @@
-"""Write-policy regression tests (first real operational-calibration test's
-own precondition): RealCalibrationAcquisitionBackend must NEVER call
-SDRCapture.configure() - that is the entire reason connect()+capture()
-alone is genuinely read-only at the rtl_tcp protocol level. This is
-checked BOTH structurally (no reference to `.configure` in the source)
-and behaviorally (a mock SDRCapture records whether configure() was
-called during a full connect()+capture()+close() cycle).
+"""Write-policy regression tests for the calibration acquisition backend.
 
-Also covers hardware_inspection.py's two read-only probes (handshake +
-service command line) against a local fake TCP server / mocked subprocess
-- never against a live rtl_tcp instance in this test file.
+POLICY CHANGED 2026-10-02: RealCalibrationAcquisitionBackend used to NEVER call configure() so a capture was
+read-only at the rtl_tcp protocol level - and it then recorded the service argv as the frequency. On 2026-10-01
+that let the wizard's 50 ohm captures run at 1420405000 Hz (what rtl_tcp was left at) while declaring
+1420405752. Now the backend must tune explicitly (sdr_tuning.tune_explicitly) before it will capture, and must
+refuse to capture at anything other than what was tuned.
+
+Also covers hardware_inspection.py's two read-only probes (handshake + service command line) against a local
+fake TCP server / mocked subprocess - never against a live rtl_tcp instance in this test file.
 """
 import ast
 import asyncio
@@ -25,37 +24,68 @@ from calibration_engine.hardware_inspection import (
 )
 
 
-def test_real_backend_source_never_references_configure():
-    import calibration_engine.acquisition as module
-    source = Path(module.__file__).read_text()
-    tree = ast.parse(source)
-    calls = [node.func.attr for node in ast.walk(tree)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
-    assert "configure" not in calls
+def _fake_sdr():
+    fake_sdr = MagicMock()
+    fake_sdr.connect = AsyncMock()
+    fake_sdr.configure = AsyncMock()
+    fake_sdr.capture = AsyncMock()
+    fake_sdr.close = AsyncMock()
+    return fake_sdr
 
 
-def test_real_backend_capture_never_calls_sdr_configure():
-    """Uses asyncio.run() directly (this repo's own pattern - see
-    test_hw_hi_night_scan.py) rather than pytest.mark.asyncio, since
-    pytest-asyncio is not installed in this environment (confirmed by the
-    full-suite run's own pre-existing test_goto_polling.py/
-    test_raw_connection.py failures)."""
+def test_real_backend_refuses_to_capture_without_explicit_tuning():
+    import sdr_tuning
+
     async def _run():
         backend = RealCalibrationAcquisitionBackend(host="localhost", port=1234)
-        fake_sdr = MagicMock()
-        fake_sdr.connect = AsyncMock()
-        fake_sdr.configure = AsyncMock()
-        fake_sdr.capture = AsyncMock()
-        fake_sdr.close = AsyncMock()
+        fake_sdr = _fake_sdr()
         with patch("sdr_capture.SDRCapture", return_value=fake_sdr):
             await backend.connect()
-            await backend.capture(duration_seconds=1.0, output_path="/tmp/does_not_matter.h5",
-                                   center_frequency_hz=1_420_405_000.0, sample_rate_hz=2_400_000.0,
-                                   gain_db=40.2, metadata={})
+            with pytest.raises(sdr_tuning.TuningIncoherent):
+                await backend.capture(duration_seconds=1.0, output_path="/tmp/does_not_matter.h5",
+                                      center_frequency_hz=1_420_405_752.0, sample_rate_hz=2_400_000.0,
+                                      gain_db=40.2, metadata={})
             await backend.close()
-        fake_sdr.configure.assert_not_called()
-        fake_sdr.capture.assert_awaited_once()
-        fake_sdr.close.assert_awaited_once()
+        fake_sdr.capture.assert_not_called()
+    asyncio.run(_run())
+
+
+def test_real_backend_tunes_explicitly_then_captures_with_requested_and_applied_attrs():
+    async def _run():
+        backend = RealCalibrationAcquisitionBackend(host="localhost", port=1234)
+        fake_sdr = _fake_sdr()
+        with patch("sdr_capture.SDRCapture", return_value=fake_sdr):
+            await backend.connect()
+            await backend.tune(1_420_405_752, 2_400_000, 40.2)
+            await backend.capture(duration_seconds=1.0, output_path="/tmp/does_not_matter.h5",
+                                  center_frequency_hz=1_420_405_752.0, sample_rate_hz=2_400_000.0,
+                                  gain_db=40.2, metadata={"reference_kind": "AMBIENT_50R"})
+            await backend.close()
+        fake_sdr.configure.assert_awaited_once_with(center_freq=1_420_405_752, sample_rate=2_400_000, gain=40.2)
+        attrs = fake_sdr.capture.await_args.args[3]
+        assert attrs["requested_center_frequency_hz"] == 1_420_405_752
+        assert attrs["applied_center_frequency_hz"] == 1_420_405_752
+        assert attrs["center_frequency_hz"] == attrs["applied_center_frequency_hz"]
+        assert attrs["tuning_evidence"] == "TEST_STUB"          # conftest stub; never claims a real acknowledgement
+        assert "configuration_source" not in attrs             # the old argv "verification" label is gone
+    asyncio.run(_run())
+
+
+def test_real_backend_refuses_a_capture_at_a_frequency_other_than_the_tuned_one():
+    import sdr_tuning
+
+    async def _run():
+        backend = RealCalibrationAcquisitionBackend(host="localhost", port=1234)
+        fake_sdr = _fake_sdr()
+        with patch("sdr_capture.SDRCapture", return_value=fake_sdr):
+            await backend.connect()
+            await backend.tune(1_420_405_752, 2_400_000, 40.2)
+            with pytest.raises(sdr_tuning.TuningIncoherent):
+                await backend.capture(duration_seconds=1.0, output_path="/tmp/does_not_matter.h5",
+                                      center_frequency_hz=1_420_405_000.0, sample_rate_hz=2_400_000.0,
+                                      gain_db=40.2, metadata={})
+            await backend.close()
+        fake_sdr.capture.assert_not_called()
     asyncio.run(_run())
 
 

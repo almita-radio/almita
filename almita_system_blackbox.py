@@ -62,7 +62,7 @@ DEFAULT_BACKUP_COUNT = 6
 # ~10s cycle: the vcgencmd subprocess call, and fsync() of the log file.
 # ~6 samples at the default 10s interval is ~once a minute.
 SLOW_POLL_EVERY_N_SAMPLES = 6
-ALMITA_PORTS = (1234, 8088, 8090)
+ALMITA_PORTS = (1234, 8088)   # MAIN rtl_tcp, unified web server (console + API + stream); :8090 retired
 NA = "NA"
 
 _VCGENCMD_PATH = shutil.which("vcgencmd")

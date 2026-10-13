@@ -11,7 +11,7 @@ from calibration_foundation import load_calibration_profile
 from quicklook_map import (MapError, MapPoint, derive_point, generate, interpolate_visual,
                            map_metric, project_offsets, robust_spherical_center, validation_points)
 
-PROFILE=Path("data/calibration/CALIBRATION-FOUNDATION-V1-20260827T005049Z/calibration_profile_v1.npz")
+from tests.conftest import FOUNDATION_PROFILE as PROFILE  # real V1 profile kept in tests/fixtures/ (not data/)
 
 
 def test_map_metric_masks_and_uncertainty():

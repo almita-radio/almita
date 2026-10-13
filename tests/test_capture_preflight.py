@@ -3,6 +3,15 @@ from types import SimpleNamespace
 import pytest
 from capture import CaptureExecutor, should_execute_after_preflight
 
+
+@pytest.fixture(autouse=True)
+def _session_control_dir_in_tmp(tmp_path,monkeypatch):
+    """run_preflight() writes and deletes a probe file in the session manager's control dir - by default the
+    operator's real ./data/IQ. Every CaptureExecutor built in this file gets a control dir under tmp_path, so these
+    tests never touch data/ (BL-046)."""
+    import capture, session_manager
+    monkeypatch.setattr(capture,"SessionManager",lambda *a,**k:session_manager.SessionManager(str(tmp_path/"IQ")))
+
 FIELDS=["point_number","scan_order","target_ra_hours","target_dec_degrees","capture_status","start_time","end_time","duration","error_message","data_filename","session_name"]
 
 class FakeH5File:

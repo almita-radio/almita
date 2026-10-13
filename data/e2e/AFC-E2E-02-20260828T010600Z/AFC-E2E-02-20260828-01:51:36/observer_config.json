@@ -1,9 +1,0 @@
-{
-  "observer": {
-    "name": "Default Observatory",
-    "latitude_deg": -33.4489,
-    "longitude_deg": -70.6693,
-    "elevation_m": 570,
-    "timezone": "America/Santiago"
-  }
-}

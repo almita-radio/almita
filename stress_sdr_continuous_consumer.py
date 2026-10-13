@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from sdr_capture import SDRCapture, validate_hdf5_capture
+import sdr_tuning
 
 
 def rss_kib(pid: int) -> int:
@@ -120,7 +121,7 @@ def main():
     parser.add_argument("--wait-scale", type=float, default=1.0)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1234)
-    parser.add_argument("--frequency", type=int, default=1420405000)
+    parser.add_argument("--frequency", type=int, default=sdr_tuning.operating_center_frequency_hz())
     parser.add_argument("--sample-rate", type=int, default=2400000)
     parser.add_argument("--gain", default="40.2")
     parser.add_argument("--output", default="/tmp/sdr_continuous_stress")

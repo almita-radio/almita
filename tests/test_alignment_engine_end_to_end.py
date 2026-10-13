@@ -129,7 +129,7 @@ async def test_preflight_failure_transitions_to_preflight_failed_not_a_crash(tmp
 
 
 @pytest.mark.asyncio
-async def test_preflight_tracking_backend_timeout_fails_that_check_not_the_whole_preflight_call():
+async def test_preflight_tracking_backend_timeout_fails_that_check_not_the_whole_preflight_call(tmp_path):
     """Item 4: a hung tracking backend must produce a structured failed
     check (and a real, bounded wait), never an infinite await."""
     class HangingTrackingBackend:
@@ -140,6 +140,10 @@ async def test_preflight_tracking_backend_timeout_fails_that_check_not_the_whole
             return True
 
     config = AlignmentConfig.load()
+    # never the real data/alignment/ nor the host's live data/runtime/ (this test used to leave a SOLAR-<date>
+    # session folder in the operator's data/ on every run)
+    config.global_.output_root = str(tmp_path)
+    config.global_.orchestrator_runtime_dir = str(tmp_path / "orchestrator_runtime")
     config.global_.tracking_timeout_s = 0.05
     engine = AlignmentEngine("solar", config, LOCATION, SimulatedMountAdapter(), HangingTrackingBackend())
     engine.plan()

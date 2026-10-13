@@ -1,40 +1,49 @@
-// ALMITA CALIBRATE — calls the :8090 CALIBRATE API only. All clipping/
+// ALMITA CALIBRATE — calls the same-origin CALIBRATE API only. All clipping/
 // headroom/bandpass/gain/quality numbers come from calibration_engine via
 // the backend - this file only presents, orchestrates, and polls.
 (function () {
   "use strict";
-  const apiRoot = `${location.protocol}//${location.hostname}:${location.port || 8090}`;
+  const U = window.AlmitaUI;
+  U.mountHealthStrip(U.mountHeader("CALIBRATE", "CALIBRATION"));
+  U.mountFooter();
   let scenario = "HEALTHY";
   let currentSessionId = null;
-  let pollTimer = null;
+  let sessionPoller = null;
+  let pollError = false;
 
-  function showError(message) {
-    const banner = document.getElementById("error-banner");
-    banner.textContent = message;
-    banner.hidden = !message;
-  }
+  function showError(message) { U.showError(document.getElementById("error-banner"), message); }
   async function getJSON(path) {
-    const res = await fetch(`${apiRoot}${path}`, { cache: "no-store" });
-    return res.json();
+    const r = await U.api(path);
+    if (!r.ok) throw new Error(U.errorText(r.error));
+    return r.data;
   }
-  async function postJSON(path, body) {
-    const res = await fetch(`${apiRoot}${path}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
-    });
-    return res.json();
+  async function postJSON(path, body, timeoutMs) {
+    const r = await U.api(path, { method: "POST", body: body || {}, timeoutMs: timeoutMs || 30000 });
+    if (!r.ok) throw new Error(U.errorText(r.error));
+    return r.data;
   }
-  function badgeClass(text) { return "badge status-" + String(text || "unknown").toLowerCase().replace(/[^a-z0-9]/g, "-"); }
+  const msg = (err) => (err && err.message) || String(err);
+  function badgeClass(text) { return "badge " + U.stateClass(text); }
   function verifyTag(v) {
-    if (!v) return "";
+    if (!v) return null;
     const cls = v === "VERIFIED_BY_DEVICE_READBACK" ? "verify-device"
-              : v === "VERIFIED_BY_SERVICE_COMMAND_LINE" ? "verify-service" : "verify-expected";
-    return `<span class="verify-tag ${cls}">${v.replace(/_/g, " ")}</span>`;
+              : v === "SERVICE_STARTUP_ARGV" ? "verify-service" : "verify-expected";
+    const span = document.createElement("span");
+    span.className = "verify-tag " + cls;
+    span.textContent = String(v).replace(/_/g, " ");
+    return span;
   }
 
-  function card(label, value, tag) {
+  // Values come from the backend (device read-back, service command line): they are inserted as TEXT, never as markup.
+  function card(label, value, tagEl) {
     const el = document.createElement("div");
     el.className = "card";
-    el.innerHTML = `<dt>${label}</dt><dd>${value}${tag ? " " + tag : ""}</dd>`;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.appendChild(document.createTextNode(String(value)));
+    if (tagEl) { dd.appendChild(document.createTextNode(" ")); dd.appendChild(tagEl); }
+    el.append(dt, dd);
     return el;
   }
 
@@ -43,16 +52,16 @@
       const status = await getJSON("/api/calibrate/status");
       const d = status.data || {};
       const cards = document.getElementById("receiver-cards");
-      cards.innerHTML = "";
+      cards.textContent = "";
       const r = d.receiver || {};
       const field = (obj) => obj && typeof obj === "object" ? obj : { value: obj, verification: null };
       cards.appendChild(card("SERIAL", r.serial || "—"));
       const cf = field(r.center_frequency_hz);
-      cards.appendChild(card("CENTER FREQ", cf.value ? `${(cf.value / 1e6).toFixed(6)} MHz` : "—", verifyTag(cf.verification)));
+      cards.appendChild(card("CENTER FREQ", U.mhz(cf.value), verifyTag(cf.verification)));
       const sr = field(r.sample_rate_hz);
-      cards.appendChild(card("SAMPLE RATE", sr.value ? `${(sr.value / 1e6).toFixed(2)} MS/s` : "—", verifyTag(sr.verification)));
+      cards.appendChild(card("SAMPLE RATE", U.msps(sr.value), verifyTag(sr.verification)));
       const gain = field(r.gain_db);
-      cards.appendChild(card("GAIN", gain.value != null ? `${gain.value} dB` : "—", verifyTag(gain.verification)));
+      cards.appendChild(card("GAIN", U.finite(gain.value) ? `${gain.value} dB` : "—", verifyTag(gain.verification)));
       const biast = field(r.bias_t_state);
       cards.appendChild(card("BIAS-T", biast.value || "—", verifyTag(biast.verification)));
       const tuner = field(r.tuner_type);
@@ -60,7 +69,7 @@
 
       const fa = d.frequency_audit;
       document.getElementById("frequency-audit").textContent = fa
-        ? `${fa.label}\nservice center frequency: ${fa.service_center_frequency_hz} Hz\nnominal HI rest: ${fa.nominal_hi_rest_hz} Hz\ndifference: ${fa.difference_hz} Hz (configuration difference - NOT a measured frequency error)`
+        ? `${fa.label}\nservice center frequency: ${U.mhz(fa.service_center_frequency_hz)} (${fa.service_center_frequency_hz} Hz)\nnominal HI rest: ${U.mhz(fa.nominal_hi_rest_hz)} (${fa.nominal_hi_rest_hz} Hz)\ndifference: ${fa.difference_hz} Hz (configuration difference - NOT a measured frequency error)`
         : "";
 
       // Fase A: four DELIBERATELY SEPARATE concepts, never merged into one
@@ -71,27 +80,28 @@
       document.getElementById("st-main-resource").textContent = resource.status || "UNKNOWN";
 
       const workflowEl = document.getElementById("st-calibration-workflow");
-      const workflowActive = d.calibration_workflow_active || pollTimer !== null;
+      const workflowActive = d.calibration_workflow_active || sessionPoller !== null;
       workflowEl.textContent = workflowActive ? "SIMULATION RUNNING" : "IDLE";
 
       const busy = resource.status !== "FREE";
-      document.getElementById("btn-run-real").disabled = true; // real capture from web not wired this iteration
+      U.setEnabled(document.getElementById("btn-run-real"), !busy, `MAIN SDR is not free: ${resource.detail}`);
       const realCalEl = document.getElementById("st-real-calibration");
       const reasonEl = document.getElementById("real-calibration-reason");
-      realCalEl.textContent = "BLOCKED";
+      realCalEl.textContent = busy ? "BLOCKED" : "AVAILABLE";
       reasonEl.hidden = false;
       if (busy) {
-        reasonEl.textContent = `Reason: MAIN SDR currently in use by active science observation (${resource.detail})`;
+        reasonEl.textContent = `Reason: MAIN SDR currently in use (${resource.detail})`;
       } else {
-        reasonEl.textContent = "Reason: not wired to hardware from the web in this iteration; use calibration_operational_realtest.py";
+        reasonEl.textContent = "Use the REAL CALIBRATION panel above (calibration_operational_realtest.py: real MAIN captures, no mount movement, engineering/non-science level).";
       }
       document.getElementById("st-simulation").textContent = "AVAILABLE";
 
       renderGainTable(d.gain_table);
       renderSessionList(d.sessions || []);
       renderProfileList(d.profiles || []);
-      showError("");
-    } catch (err) { showError(`Status request failed: ${err}`); }
+      if (pollError) { showError(""); pollError = false; }
+      return true;
+    } catch (err) { showError(`Status request failed: ${msg(err)}`); pollError = true; return false; }
   }
 
   function renderGainTable(gt) {
@@ -106,8 +116,8 @@
 
   function renderSessionList(sessions) {
     const el = document.getElementById("session-list");
-    el.innerHTML = "";
-    if (!sessions.length) { el.innerHTML = '<div class="obs-check-row">NO CALIBRATION SESSION YET</div>'; return; }
+    el.textContent = "";
+    if (!sessions.length) { const row = document.createElement("div"); row.className = "obs-check-row"; row.textContent = "NO CALIBRATION SESSION YET"; el.appendChild(row); return; }
     for (const s of sessions) {
       const row = document.createElement("div");
       row.className = "obs-check-row";
@@ -117,8 +127,8 @@
   }
   function renderProfileList(profiles) {
     const el = document.getElementById("profile-list");
-    el.innerHTML = "";
-    if (!profiles.length) { el.innerHTML = '<div class="obs-check-row">NO PROFILE</div>'; return; }
+    el.textContent = "";
+    if (!profiles.length) { const row = document.createElement("div"); row.className = "obs-check-row"; row.textContent = "NO PROFILE"; el.appendChild(row); return; }
     for (const p of profiles) {
       const row = document.createElement("div");
       row.className = "obs-check-row";
@@ -128,43 +138,50 @@
   }
 
   document.querySelectorAll(".scenario-btn").forEach((btn) => {
+    btn.setAttribute("aria-pressed", String(btn.classList.contains("active")));
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".scenario-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".scenario-btn").forEach((b) => { b.classList.remove("active"); b.setAttribute("aria-pressed", "false"); });
       btn.classList.add("active");
+      btn.setAttribute("aria-pressed", "true");
       scenario = btn.dataset.scenario;
     });
   });
 
   async function doRunSimulation() {
-    document.getElementById("btn-run-sim").disabled = true;
     try {
-      const res = await postJSON("/api/calibrate/run", { scenario, n_captures: 5, capture_seconds: 1.0 });
-      if (res.blocked) { showError(res.reason || "RUN blocked"); document.getElementById("btn-run-sim").disabled = false; return; }
+      const res = await postJSON("/api/calibrate/run", { scenario, n_captures: 5, capture_seconds: 1.0 }, 30000);
+      if (res.blocked) { showError(res.reason || "RUN blocked"); return; }
+      showError("");
       currentSessionId = res.data.session_id;
       document.getElementById("overview-panel").hidden = false;
       document.getElementById("st-calibration-workflow").textContent = "SIMULATION RUNNING";
       pollSession();
-    } catch (err) { showError(`RUN failed: ${err}`); document.getElementById("btn-run-sim").disabled = false; }
+    } catch (err) { showError(`RUN failed: ${msg(err)}`); }
   }
 
   function pollSession() {
-    if (pollTimer) clearInterval(pollTimer);
-    const tick = async () => {
-      try {
-        const res = await getJSON(`/api/calibrate/session/${encodeURIComponent(currentSessionId)}`);
-        if (res.blocked) return;
-        renderResult(res.data);
-        if (!res.data.job_running) {
-          clearInterval(pollTimer); pollTimer = null;
-          document.getElementById("btn-run-sim").disabled = false;
-          document.getElementById("btn-profile-build").disabled = !res.data.result;
-          await refreshStatus();
-          document.getElementById("st-calibration-workflow").textContent = "COMPLETED";
-        }
-      } catch (err) { /* transient */ }
-    };
-    tick();
-    pollTimer = setInterval(tick, 2000);
+    if (sessionPoller) sessionPoller.stop();
+    const sid = currentSessionId;
+    const runBtn = document.getElementById("btn-run-sim");
+    U.setEnabled(runBtn, false, "a calibration simulation is running");
+    sessionPoller = U.poller(async () => {
+      const r = await U.api(`/api/calibrate/session/${encodeURIComponent(sid)}`, { timeoutMs: 10000 });
+      if (!r.ok) { showError(r.error); pollError = true; return false; }
+      const res = r.data;
+      if (res.blocked) return true;                    // session not visible yet: keep waiting
+      if (pollError) { showError(""); pollError = false; }
+      renderResult(res.data);
+      if (!res.data.job_running) {
+        if (sessionPoller) sessionPoller.stop();
+        sessionPoller = null;
+        U.setEnabled(runBtn, true, "");
+        U.setEnabled(document.getElementById("btn-profile-build"), !!res.data.result, "the run has no result to build a profile from");
+        await refreshStatus();
+        document.getElementById("st-calibration-workflow").textContent = "COMPLETED";
+      }
+      return true;
+    }, { intervalMs: 2000, hiddenIntervalMs: 15000 });
+    sessionPoller.start();
   }
 
   function renderResult(data) {
@@ -174,25 +191,32 @@
     badge.textContent = state.phase || "RUNNING";
     badge.className = badgeClass(badge.textContent);
     if (!result) return;
-
+    const captures = Array.isArray(result.per_capture) ? result.per_capture : [];
     const cardsEl = document.getElementById("overview-cards");
-    cardsEl.innerHTML = "";
-    const worstClip = result.per_capture.reduce((worst, c) => {
+    cardsEl.textContent = "";
+    if (!captures.length) {                               // empty data: say so instead of crashing on captures[0]
+      cardsEl.appendChild(card("RESULT", "No captures in this result yet"));
+      return;
+    }
+    const worstClip = captures.reduce((worst, c) => {
       const order = ["OK", "WARNING", "CLIPPED", "UNKNOWN"];
-      return order.indexOf(c.clipping.status) > order.indexOf(worst) ? c.clipping.status : worst;
+      return order.indexOf((c.clipping || {}).status) > order.indexOf(worst) ? c.clipping.status : worst;
     }, "OK");
-    const minBand = Math.min(...result.per_capture.map((c) => c.usable_band_fraction));
+    const bands = captures.map((c) => c.usable_band_fraction).filter(U.finite);
+    const minBand = bands.length ? Math.min(...bands) : NaN;
+    const first = captures[0];
     cardsEl.appendChild(card("CLIPPING", worstClip));
-    cardsEl.appendChild(card("HEADROOM", `${result.per_capture[0].clipping.percentile_margin_codes?.toFixed(0) ?? "—"} codes`));
-    cardsEl.appendChild(card("USABLE BAND", `${(minBand * 100).toFixed(1)}%`));
-    cardsEl.appendChild(card("STABILITY", result.stability ? `${(result.stability.power_rms_fraction * 100).toFixed(3)}%` : "n/a"));
+    cardsEl.appendChild(card("HEADROOM", `${U.fixed((first.clipping || {}).percentile_margin_codes, 0)} codes`));
+    cardsEl.appendChild(card("USABLE BAND", U.finite(minBand) ? `${(minBand * 100).toFixed(1)}%` : "—"));
+    cardsEl.appendChild(card("STABILITY", result.stability && U.finite(result.stability.power_rms_fraction) ? `${(result.stability.power_rms_fraction * 100).toFixed(3)}%` : "n/a"));
     cardsEl.appendChild(card("QUALITY", result.quality ? result.quality.verdict : "—"));
 
     document.getElementById("stability-panel").hidden = !result.stability;
     if (result.stability) {
+      const exp = (v) => (U.finite(v) ? v.toExponential(3) : "—");
       document.getElementById("stability-summary").textContent =
-        `power_rms_fraction: ${result.stability.power_rms_fraction.toExponential(3)}\n` +
-        `drift_slope_per_hour: ${result.stability.drift_slope_per_hour.toExponential(3)}\n` +
+        `power_rms_fraction: ${exp(result.stability.power_rms_fraction)}\n` +
+        `drift_slope_per_hour: ${exp(result.stability.drift_slope_per_hour)} (per hour)\n` +
         `WARM-UP DETECTED: ${result.stability.warmup_detected}\n` +
         `WARM-UP RECOMMENDATION: ${result.stability.warmup_detected ? result.stability.warmup_reason : "NOT ESTABLISHED"}`;
     }
@@ -203,9 +227,9 @@
       ? JSON.stringify(temps, null, 2) : "No temperature sensors configured/available for this session.";
 
     document.getElementById("bandpass-panel").hidden = false;
-    drawBandpass(result.per_capture[0]);
+    drawBandpass(first);
     document.getElementById("bandpass-notes").textContent =
-      `usable_band_fraction: ${(minBand * 100).toFixed(1)}%  dc_half_width_hz: ${result.per_capture[0].dc_half_width_hz?.toFixed(0) ?? "—"}\n` +
+      `usable_band_fraction: ${U.finite(minBand) ? (minBand * 100).toFixed(1) + "%" : "—"}  dc_half_width_hz: ${U.fixed(first.dc_half_width_hz, 0, "Hz")}\n` +
       "RECOMMENDED MASK: DRAFT ONLY (not computed for a single simulated run - needs multiple captures under the same config)";
   }
 
@@ -217,7 +241,13 @@
     const canvas = document.getElementById("bandpass-canvas");
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const hist = pointCapture.sample_statistics.histogram;
+    const hist = ((pointCapture.sample_statistics || {}).histogram || []).map((v) => (U.finite(v) ? v : 0));
+    ctx.fillStyle = "#91a2ad";
+    ctx.font = "10px monospace";
+    if (!hist.length || !hist.some((v) => v > 0)) {      // empty / all-zero / NaN histogram: an explicit empty state, not a blank or broken chart
+      ctx.fillText("No histogram data yet", 6, 12);
+      return;
+    }
     const max = Math.max(...hist, 1);
     ctx.fillStyle = "#65b7d8";
     const barWidth = canvas.width / hist.length;
@@ -226,42 +256,565 @@
       ctx.fillRect(i * barWidth, canvas.height - h, Math.max(1, barWidth - 0.5), h);
     });
     ctx.fillStyle = "#91a2ad";
-    ctx.font = "10px monospace";
     ctx.fillText("ADC code histogram (raw sample statistics) — not the RF bandpass shape", 6, 12);
   }
 
   async function doReplay() {
     const sessionDir = document.getElementById("replay-session-dir").value.trim();
-    if (!sessionDir) return;
+    if (!sessionDir) { showError("REPLAY: enter a session directory (data/calibration/CAL-...)"); return; }
     try {
-      const res = await postJSON("/api/calibrate/replay", { session_dir: sessionDir });
-      document.getElementById("replay-summary").textContent = JSON.stringify(res.data || res, null, 2).slice(0, 4000);
-    } catch (err) { showError(`REPLAY failed: ${err}`); }
+      const res = await postJSON("/api/calibrate/replay", { session_dir: sessionDir }, 60000);
+      document.getElementById("replay-summary").textContent = res.blocked ? `BLOCKED: ${res.reason}` : JSON.stringify(res.data || res, null, 2).slice(0, 4000);
+      showError("");
+    } catch (err) { showError(`REPLAY failed: ${msg(err)}`); }
   }
   async function doCompare() {
     const a = document.getElementById("compare-a").value.trim();
     const b = document.getElementById("compare-b").value.trim();
-    if (!a || !b) return;
+    if (!a || !b) { showError("COMPARE: enter both session ids"); return; }
     try {
-      const res = await postJSON("/api/calibrate/compare", { session_a: a, session_b: b });
-      document.getElementById("compare-summary").textContent = JSON.stringify(res.data || res, null, 2);
-    } catch (err) { showError(`COMPARE failed: ${err}`); }
+      const res = await postJSON("/api/calibrate/compare", { session_a: a, session_b: b }, 60000);
+      document.getElementById("compare-summary").textContent = res.blocked ? `BLOCKED: ${res.reason}` : JSON.stringify(res.data || res, null, 2);
+      showError("");
+    } catch (err) { showError(`COMPARE failed: ${msg(err)}`); }
   }
   async function doProfileBuild() {
-    if (!currentSessionId) return;
+    if (!currentSessionId) { showError("PROFILE BUILD: run a calibration first"); return; }
     try {
-      const res = await postJSON("/api/calibrate/profile/build", { session_id: currentSessionId });
-      document.getElementById("profile-summary").textContent = JSON.stringify(res.data || res, null, 2);
+      const res = await postJSON("/api/calibrate/profile/build", { session_id: currentSessionId }, 60000);
+      document.getElementById("profile-summary").textContent = res.blocked ? `BLOCKED: ${res.reason}` : JSON.stringify(res.data || res, null, 2);
+      showError("");
       refreshStatus();
-    } catch (err) { showError(`PROFILE BUILD failed: ${err}`); }
+    } catch (err) { showError(`PROFILE BUILD failed: ${msg(err)}`); }
   }
 
-  document.getElementById("btn-run-sim").addEventListener("click", doRunSimulation);
-  document.getElementById("btn-refresh-status").addEventListener("click", refreshStatus);
-  document.getElementById("btn-replay").addEventListener("click", doReplay);
-  document.getElementById("btn-compare").addEventListener("click", doCompare);
-  document.getElementById("btn-profile-build").addEventListener("click", doProfileBuild);
+  // Page reload during a run: adopt a calibration job that is still running on the server instead of assuming IDLE.
+  async function recover() {
+    try {
+      const status = await getJSON("/api/calibrate/status");
+      const d = status.data || {};
+      const newest = (d.sessions || [])[0];
+      if (d.calibration_workflow_active && newest) {
+        currentSessionId = newest.session_id;
+        document.getElementById("overview-panel").hidden = false;
+        pollSession();
+      }
+    } catch (err) { /* best effort; the normal status poll reports connection problems */ }
+  }
 
-  refreshStatus();
-  setInterval(refreshStatus, 5000);
+  const runBtn = document.getElementById("btn-run-sim");
+  runBtn.addEventListener("click", U.guard(runBtn, doRunSimulation, "STARTING…"));
+  const refreshBtn = document.getElementById("btn-refresh-status");
+  refreshBtn.addEventListener("click", U.guard(refreshBtn, refreshStatus, "REFRESHING…"));
+  for (const [id, fn, busy] of [["btn-replay", doReplay, "REPLAYING…"], ["btn-compare", doCompare, "COMPARING…"], ["btn-profile-build", doProfileBuild, "BUILDING…"]]) {
+    const b = document.getElementById(id);
+    b.addEventListener("click", U.guard(b, fn, busy));
+  }
+  U.setEnabled(document.getElementById("btn-profile-build"), false, "run a calibration first");
+  U.setEnabled(document.getElementById("btn-run-real"), true, "");
+
+  document.getElementById("btn-run-real").addEventListener("click", () => { document.getElementById("real-panel").scrollIntoView(); });
+  U.poller(refreshStatus, { intervalMs: 15000 }).start();   // refreshStatus polls the backend, which reads MAIN state: slow, and never while the tab is hidden
+  recover();
+  window.addEventListener("pagehide", () => { if (sessionPoller) sessionPoller.stop(); });
+
+  // ------------------------------------------------------------------ REAL CALIBRATION (calibration_operational_realtest.py through /api/ops)
+  {
+    const realErr = (e) => U.showError(document.getElementById("error-banner"), e);
+    const job = U.jobPanel(document.getElementById("real-job-calibrate"), document.getElementById("real-badge"), { onError: realErr, onChange: () => updateReal() });
+    function updateReal() {
+      const running = job.last && job.last.state === "RUNNING";
+      U.setEnabled(document.getElementById("real-run"), !running, "a real calibration is running");
+    }
+    const b = document.getElementById("real-run");
+    b.addEventListener("click", U.guard(b, () => job.start("calibrate", { n_captures: Number(document.getElementById("real-n").value), capture_seconds: Number(document.getElementById("real-s").value) }), "STARTING…"));
+    job.recover("calibrate");
+    updateReal();
+  }
+
+  // ------------------------------------------------------------------ REFERENCE WIZARD (50R / HI ALTO / HI BAJO through calibrate_reference_wizard.py)
+  // 50R is instrument-only (no mount movement) via the calibrate_wizard stage; HI ALTO/HI BAJO's capture-hi
+  // action is the ONLY real-GOTO step, dispatched through the SEPARATE calibrate_wizard_move stage so it gets
+  // the exact same real-preflight + typed-MOVE gate ALIGN's real RUN and OBSERVE's gain-pilot capture use
+  // (reused unmodified server-side - nothing about that gate is reimplemented here).
+  {
+    const $w = (id) => document.getElementById(id);
+    const wzErr = (e) => U.showError(document.getElementById("error-banner"), e);
+    let sessionDir = null, lastState = null, countdownTimer = null;
+
+    const CONNECTION_EXPLAIN = {
+      LNA_INPUT: "Includes in the measurement: Nooelec SAWbird H1 (LNA + filter), cabling, Bias-T, RTL-SDR Blog V4. Excludes: the antenna itself (replaced by this reference).",
+      LNA_OUTPUT: "Includes: cabling (post-LNA), Bias-T (if still downstream), RTL-SDR Blog V4. Excludes: antenna, the SAWbird H1 LNA (bypassed).",
+      SDR_INPUT: "Includes: RTL-SDR Blog V4 only. Excludes: antenna, the SAWbird H1 LNA, upstream cabling/Bias-T.",
+    };
+
+    async function pollJobUntilDone(jobId, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const r = await U.api(`/api/ops/job/${jobId}?tail=40`, { timeoutMs: 15000 });
+        if (!r.ok) throw new Error(U.errorText(r.error));
+        const j = r.data.data;
+        if (j.state !== "RUNNING") return j;
+        if (Date.now() > deadline) throw new Error("wizard step timed out waiting for the job to finish");
+        await new Promise((res) => setTimeout(res, 800));
+      }
+    }
+    // The wizard step currently running on the server (shown with a STOP button). STOP = SIGINT to that one job:
+    // the wizard keeps the step where it was, records the interruption and keeps every file already captured.
+    let runningJobId = null;
+    function setRunning(jobId, action) {
+      runningJobId = jobId;
+      $w("wz-running").hidden = !jobId;
+      $w("wz-running-note").textContent = jobId ? `running on the server: ${action || "wizard step"} (${jobId})` : "";
+    }
+    async function stopRunningStep() {
+      const id = runningJobId;
+      if (!id) return;
+      const r = await U.api(`/api/ops/stop/${id}`, { method: "POST", body: { confirm: true }, timeoutMs: 20000 });
+      if (!r.ok && !/not running/.test(U.errorText(r.error))) throw new Error(U.errorText(r.error));
+      await pollJobUntilDone(id, 180000);
+      setRunning(null);
+    }
+    async function refreshStatus() {
+      if (!sessionDir) return null;
+      const job = await startAndPoll("calibrate_wizard", { action: "status", session_dir: sessionDir }, null, 20000);
+      render(job.facts);
+      return job.facts;
+    }
+    async function startAndPoll(stage, params, confirmText, timeoutMs) {
+      const r = await U.api(`/api/ops/start/${stage}`, { method: "POST", body: { params, confirm: confirmText === undefined ? null : confirmText }, timeoutMs: 20000 });
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      const long = params.action === "capture_50r" || params.action === "capture_hi";
+      if (long) setRunning(r.data.data.job_id, params.action);
+      let job;
+      try { job = await pollJobUntilDone(r.data.data.job_id, timeoutMs || 60000); }
+      finally { if (long && runningJobId === r.data.data.job_id) setRunning(null); }
+      if (job.state !== "EXITED" || !job.facts || !job.facts.step) {
+        throw new Error(job.detail || `wizard step '${params.action}' did not return a usable state`);
+      }
+      return job;
+    }
+    const wizardAction = (params, timeoutMs) => startAndPoll("calibrate_wizard", params, null, timeoutMs);
+    const wizardMoveAction = (params, confirmText, timeoutMs) => startAndPoll("calibrate_wizard_move", params, confirmText, timeoutMs);
+
+    function updateCpExplain() { $w("wz-cp-explain").textContent = CONNECTION_EXPLAIN[$w("wz-cp").value] || ""; }
+    $w("wz-cp").addEventListener("change", updateCpExplain);
+    updateCpExplain();
+
+    let countdownKey = null;
+    // The step's own failure box: kind, reason, web job and time of the last attempt of THIS step that did not
+    // complete (state.last_interruption, written by calibrate_reference_wizard.py). Returns whether it is shown.
+    function showStepFailure(elId, state, stepLabel) {
+      const li = state.last_interruption;
+      const shown = !!(li && li.step === stepLabel);
+      $w(elId).hidden = !shown;
+      if (shown) {
+        const what = li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : li.kind === "TIMEOUT" ? "TIMED OUT" : "FAILED";
+        $w(elId).textContent = `LAST ${stepLabel} CAPTURE ${what} at ${li.utc}${li.job_id ? ` (job ${li.job_id})` : ""}`
+          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept · fix the cause, then retry or ABORT`;
+      }
+      return shown;
+    }
+    function startCountdown(seconds) {
+      if (countdownTimer) clearInterval(countdownTimer);
+      let remaining = Math.round(seconds);
+      const paint = () => {
+        $w("wz-countdown").textContent = remaining > 0
+          ? `suggested stabilization: ~${remaining}s remaining — you decide when it's actually ready`
+          : "suggested stabilization time elapsed — capture only when YOU judge it's ready; this never advances by itself";
+      };
+      paint();
+      countdownTimer = setInterval(() => { remaining -= 1; paint(); if (remaining <= 0) clearInterval(countdownTimer); }, 1000);
+    }
+
+    function renderQualityTable(result) {
+      const tbody = document.querySelector("#wz-result-table tbody");
+      tbody.textContent = "";
+      for (const c of result.per_capture) {
+        const tr = document.createElement("tr");
+        for (const v of [c.index, c.clipping.status, c.usable_band_fraction.toFixed(3), c.relative_digital_power.toFixed(2)]) {
+          const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    }
+    function qualitySummary(label, result) {
+      return `${label} (instrument quality): ${result.verdict} — ${result.verdict_reasons.join("; ")} — mean relative digital power ${result.mean_relative_digital_power.toFixed(3)}`;
+    }
+    function spectralSummary(label, spectral) {
+      const c = spectral && spectral.combined;
+      if (!c) return `${label} (HI-line spectral metric): not computed — ${(spectral && spectral.reason) || "no result"}`;
+      if (!c.metric_valid) return `${label} (HI-line spectral metric): NOT VALID — ${c.reason}`;
+      return `${label} (HI-line spectral metric): ${c.metric.toFixed(4)} ± ${c.uncertainty.toFixed(4)} (1σ) · usable ${((c.usable_fraction) * 100).toFixed(1)}% · `
+           + `RFI-flagged channels ${((c.rfi_flag_fraction) * 100).toFixed(1)}% · masked ${c.masked_channels}/${c.total_channels}`
+           + (spectral.cross_capture_metric_std != null ? ` · cross-capture metric std ${spectral.cross_capture_metric_std.toFixed(4)}` : "");
+    }
+
+    function renderHiPlanTable(plan) {
+      const tbody = document.querySelector("#wz-plan-hi-table tbody");
+      tbody.textContent = "";
+      for (const label of ["HI_ALTO", "HI_BAJO"]) {
+        const c = plan.candidates[label];
+        if (!c) continue;
+        const tr = document.createElement("tr");
+        for (const v of [label, c.ra_hours.toFixed(4), c.dec_deg.toFixed(3), c.alt_deg.toFixed(1) + "°",
+                         c.mean_n_hi_1e20cm2.toFixed(3), c.reason]) {
+          const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      $w("wz-plan-hi-rfi-note").textContent = plan.rfi_note || "";
+    }
+
+    // Alt/Az preview of the HI plan. Every number comes from facts.hi_plan_preview, which the backend re-shapes from
+    // the wizard's OWN saved hi_plan (calibration_engine/hi_plan_preview.py) - nothing is recomputed in the browser,
+    // so the preview cannot diverge from what capture-hi will point at. Re-rendered on every state, so a new plan
+    // (RE-PROPOSE) replaces it.
+    const PREVIEW_COLORS = { HI_ALTO: "#e6b85c", HI_BAJO: "#5cc8e6" };
+    const fmtDeg = (v) => (typeof v === "number" && isFinite(v) ? v.toFixed(1) + "°" : "—");
+    // Same view as ALIGN (U.drawSkyView: zenith at the centre, N up, E right, altitude rings, HI4PI layer + its scale).
+    // The HI layer is the real HI4PI map at the plan's OWN instant and beam (preview.sky, server-side), so the colour
+    // under each zone is the one the plan chose it from. The active point (status NEXT) is highlighted.
+    function drawPlanPreview(canvasId, preview) {
+      const pts = (preview && preview.points) || [];
+      const drawable = pts.filter((p) => typeof p.az_deg === "number" && typeof p.alt_deg === "number");
+      const sky = (preview && preview.sky) || {};
+      U.drawSkyView($w(canvasId), {
+        hi4pi_grid: sky.hi4pi_grid || null,
+        areas: drawable.map((p) => ({ label: p.label + (p.status === "MEASURED" ? " ✓" : ""), order: p.order,
+                                     az_deg: p.az_deg, alt_deg: p.alt_deg, radius_deg: p.radius_deg || 0, warn: !p.within_limits })),
+      }, { colors: { ...PREVIEW_COLORS, "HI_ALTO ✓": PREVIEW_COLORS.HI_ALTO, "HI_BAJO ✓": PREVIEW_COLORS.HI_BAJO },
+           path: drawable.map((p) => [p.az_deg, p.alt_deg]),
+           selected: (pts.find((p) => p.status === "NEXT") || {}).label || null });
+      const legend = $w(canvasId + "-legend"), note = $w(canvasId + "-note");
+      if (legend) {
+        legend.hidden = !sky.hi4pi_grid;
+        if (sky.hi4pi_grid) U.drawHi4piLegend(legend, sky.hi4pi_grid.value_range_1e20cm2, "N_HI (cm⁻²)");
+      }
+      if (note) {
+        const active = pts.find((p) => p.status === "NEXT");
+        note.textContent = (sky.hi4pi_grid ? `HI4PI layer at the plan instant ${sky.obstime_utc} (beam ${sky.beam_fwhm_deg}°)`
+                                           : `HI4PI layer unavailable: ${sky.hi4pi_error || "not computed"}`)
+          + ` · order: ${pts.map((p) => p.order + " " + p.label + (p.status === "MEASURED" ? " (measured)" : "")).join(" → ")}`
+          + (active ? ` · active: ${active.label}` : "");
+      }
+    }
+    function renderPlanPreview(preview) {
+      const box = $w("wz-plan-preview");
+      box.hidden = !preview;
+      if (!preview) return;
+      drawPlanPreview("wz-plan-sky", preview);
+      const tbody = document.querySelector("#wz-plan-preview-table tbody");
+      tbody.textContent = "";
+      for (const p of preview.points) {
+        const tr = document.createElement("tr");
+        const limits = p.within_limits ? "OK" : "OUT OF LIMITS: " + p.limit_problems.join("; ");
+        for (const v of [String(p.order), p.label, fmtDeg(p.az_deg), fmtDeg(p.alt_deg), fmtDeg(p.worst_case_altitude_deg), limits]) {
+          const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+        }
+        if (!p.within_limits) tr.className = "row-warn";
+        tbody.appendChild(tr);
+      }
+      $w("wz-plan-preview-ref").textContent = `Reference instant: ${preview.reference_utc || "unknown"} UTC — ${preview.reference_note}`;
+      const lim = preview.limits || {};
+      $w("wz-plan-preview-limits").textContent = (preview.all_within_limits ? "Both zones within the configured limits" : "WARNING: at least one zone is OUT OF the configured limits")
+        + ` (min elevation ${lim.min_elevation_deg ?? "—"}° over a ${lim.hold_seconds ?? "—"} s hold; circles = beam FWHM ${lim.beam_fwhm_deg ?? "—"}°; dashed line = visiting order).`;
+      $w("wz-plan-preview-horizon").textContent = preview.horizon && preview.horizon.available ? "" : "OBSTACLES NOT EVALUATED — " + ((preview.horizon || {}).note || "");
+    }
+
+    function render(state) {
+      lastState = state;
+      const bt = state.bias_t_facts;
+      $w("wizard-biast").textContent = bt ? `BIAS-T: ${bt.note} ${bt.safety}` : "";
+      $w("wizard-setup").hidden = true;
+      $w("wizard-active").hidden = false;
+      U.setBadge($w("wizard-badge"), state.step);
+      for (const id of ["wz-step-prepare", "wz-step-stabilize", "wz-step-result", "wz-step-reconnect",
+                        "wz-step-plan-hi", "wz-step-ready-hi", "wz-step-result-hi", "wz-step-done"]) $w(id).hidden = true;
+      const fiftyDone = state.fifty_ohm && (state.fifty_ohm.status === "DONE" || state.fifty_ohm.status === "SKIPPED");
+      const hiDone = ["HI_ALTO", "HI_BAJO"].filter((k) => state.hi_references && state.hi_references[k]).length;
+      $w("wz-session-note").textContent = `session ${state.session_id} · step ${state.step} · 50Ω ${fiftyDone ? "settled" : "pending"} · HI zones measured ${hiDone}/2`;
+      // The step's own failure box (showStepFailure) reports the last interruption of the step on screen; this
+      // session-level banner only adds what it does not: an interruption of ANOTHER step, and the earlier
+      // interrupted attempts whose files were set aside.
+      const kept = state.interrupted_attempts || [];
+      const ownStep = { STABILIZE_50R: "AMBIENT_50R", READY_HI_ALTO: "HI_ALTO", READY_HI_BAJO: "HI_BAJO" }[state.step];
+      const li = state.last_interruption && state.last_interruption.step !== ownStep ? state.last_interruption : null;
+      $w("wz-interruption").hidden = !li && !kept.length;
+      $w("wz-interruption").textContent = (li ? `${li.step} capture ${li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : li.kind === "TIMEOUT" ? "TIMED OUT" : "FAILED"} at ${li.utc}`
+          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept on disk. ` : "")
+        + (kept.length ? `Earlier interrupted attempts kept: ${kept.map((a) => `${a.step} → ${a.kept_in} (${a.files.length} file(s))`).join("; ")}` : "");
+
+      if (state.step === "PREPARE_50R") {
+        $w("wz-step-prepare").hidden = false;
+        updateCpExplain();
+      } else if (state.step === "STABILIZE_50R") {
+        $w("wz-step-stabilize").hidden = false;
+        $w("wz-stabilize-note").textContent = `50 Ω termination connected. Let it settle (suggested ${state.config.stabilize_seconds}s) — capture only starts on your CAPTURE NOW click.`;
+        const failed = showStepFailure("wz-50r-failure", state, "AMBIENT_50R");
+        $w("wz-capture").textContent = failed ? "RETRY CAPTURE (after fixing the cause)" : "CAPTURE NOW";
+        if (failed) {
+          if (countdownTimer) clearInterval(countdownTimer);
+          $w("wz-countdown").textContent = "the last capture did not complete - nothing was recorded as done; it is NOT retried automatically";
+        } else {
+          // once per stabilization (session + connection time), never restarted by a re-render / status refresh
+          const key = `${state.session_id}|${state.fifty_ohm && state.fifty_ohm.confirmed_utc}`;
+          if (countdownKey !== key) { countdownKey = key; startCountdown(state.config.stabilize_seconds); }
+        }
+      } else if (state.step === "RESULT_50R") {
+        $w("wz-step-result").hidden = false;
+        const result = state.fifty_ohm_result;
+        if (result) { $w("wz-result-summary").textContent = qualitySummary("50 Ω", result); renderQualityTable(result); }
+      } else if (state.step === "RECONNECT_ANTENNA") {
+        $w("wz-step-reconnect").hidden = false;
+        $w("wz-reconnect-note").textContent = state.fifty_ohm && state.fifty_ohm.status === "DONE"
+          ? "50 Ω result recorded. RECONNECT THE ANTENNA now, physically, before any sky pointing."
+          : "50 Ω was skipped. CONFIRM the antenna is connected before any sky pointing.";
+      } else if (state.step === "PLAN_HI") {
+        $w("wz-step-plan-hi").hidden = false;
+        if (!state.hi_plan) {
+          $w("wz-plan-hi-note").textContent = "Proposes HI ALTO (strong-line candidate) and HI BAJO (weak-line candidate) from the real HI4PI map, "
+            + "considering beam width, altitude, hold duration and slew distance. RFI cannot be predicted per sky position — see the result step's own RFI proxy.";
+          $w("wz-plan-hi-result").hidden = true;
+        } else {
+          $w("wz-plan-hi-note").textContent = `proposed ${state.hi_plan.generated_utc} — ${state.hi_plan.grid_points_considered} visible points considered`;
+          $w("wz-plan-hi-result").hidden = false;
+          renderHiPlanTable(state.hi_plan);
+          renderPlanPreview(state.hi_plan_preview || null);
+        }
+      } else if (state.step === "READY_HI_ALTO" || state.step === "READY_HI_BAJO") {
+        const label = state.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+        showStepFailure("wz-hi-failure", state, label);
+        const cand = state.hi_plan.candidates[label];
+        $w("wz-step-ready-hi").hidden = false;
+        $w("wz-ready-hi-label").textContent = `${label} — RA ${cand.ra_hours.toFixed(4)} h, Dec ${cand.dec_deg.toFixed(3)}°`;
+        $w("wz-ready-hi-note").textContent = `Real GOTO + ${state.config.n_captures} capture(s) at this approved point. ${cand.reason}. The mount WILL move.`;
+        $w("wz-hi-move-confirm").value = "";
+        const pv = state.hi_plan_preview || null;
+        $w("wz-ready-sky").hidden = !pv;
+        if (!pv) { $w("wz-ready-sky-legend").hidden = true; $w("wz-ready-sky-note").textContent = ""; }
+        if (pv) drawPlanPreview("wz-ready-sky", pv);
+        $w("wz-ready-preview-note").textContent = pv
+          ? `Approved plan as of ${pv.reference_utc} UTC (highlighted: ${label}, next). ${pv.horizon.available ? "" : "Obstacles not evaluated - check the sky physically."}`
+          : "";
+      } else if (state.step === "RESULT_HI_ALTO" || state.step === "RESULT_HI_BAJO") {
+        const label = state.step === "RESULT_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+        const ref = state.hi_references[label];
+        $w("wz-step-result-hi").hidden = false;
+        $w("wz-result-hi-label").textContent = label;
+        $w("wz-result-hi-quality").textContent = qualitySummary(label, ref.quality_result);
+        $w("wz-result-hi-spectral").textContent = spectralSummary(label, ref.spectral_result);
+        $w("wz-next-hi").hidden = label !== "HI_ALTO";
+        $w("wz-finish-hi").hidden = label !== "HI_BAJO";
+      } else if (state.step === "DONE") {
+        $w("wz-step-done").hidden = false;
+        $w("wz-done-summary").textContent = `DONE. 50Ω: ${state.fifty_ohm ? state.fifty_ohm.status : "—"}. HI ALTO/HI BAJO: measured.`;
+
+        const op = state.observe_profile;
+        const opBanner = $w("wz-observe-profile-banner"), opPath = $w("wz-observe-profile-path"), opDetail = $w("wz-observe-profile-detail");
+        if (op && op.status === "READY") {
+          opBanner.textContent = "READY — use this exact path in OBSERVE's calibration profile field";
+          opBanner.style.background = "#122a1e"; opBanner.style.color = "var(--ok)"; opBanner.style.borderColor = "#1e5c3d";
+          opPath.textContent = "";
+          const code = document.createElement("code"); code.textContent = op.profile_path_for_observe; code.style.userSelect = "all";
+          opPath.append("PATH: ", code);
+          const r = op.report || {};
+          opDetail.textContent = `verified by OBSERVE's own loader · ${r.reference_count ?? "?"} real 50Ω captures · `
+            + `valid_fraction ${r.valid_fraction != null ? r.valid_fraction.toFixed(3) : "—"} · dc_mask_bins ${r.dc_mask_bins ?? "—"} · spur_count ${r.spur_count ?? "—"}`
+            + ((r.caveats || []).length ? ` · caveats: ${r.caveats.join(" | ")}` : "");
+        } else if (op && op.status === "UNAVAILABLE") {
+          opBanner.textContent = "NO USABLE PROFILE";
+          opBanner.style.background = "#2a1414"; opBanner.style.color = "var(--error)"; opBanner.style.borderColor = "#7a2a2a";
+          opPath.textContent = "";
+          opDetail.textContent = op.reason || "unknown reason";
+        } else {
+          opBanner.textContent = "NOT BUILT"; opBanner.style.background = ""; opBanner.style.color = ""; opBanner.style.borderColor = "";
+          opPath.textContent = ""; opDetail.textContent = "";
+        }
+
+        $w("wz-draft-profile-note").textContent = state.profile_path
+          ? `operational draft JSON (diagnostic summary, no .npz, not loadable by OBSERVE): ${state.profile_path}`
+          : "no operational draft was produced (no reference reached DONE)";
+
+        const sc = state.spectral_contrast;
+        const banner = $w("wz-contrast-banner"), detail = $w("wz-contrast-detail");
+        if (sc) {
+          banner.textContent = `${sc.verdict} — ${sc.label}`;
+          banner.style.color = sc.verdict === "DEFENSIBLE_CONTRAST" ? "var(--ok)" : "var(--warn)";
+          const parts = [sc.reason];
+          if (sc.contrast_metric != null) parts.push(`contrast ${sc.contrast_metric.toFixed(4)} · combined uncertainty ${sc.combined_uncertainty != null ? sc.combined_uncertainty.toFixed(4) : "—"} · significance ${sc.significance != null ? sc.significance.toFixed(2) + "σ" : "—"} (threshold ${sc.significance_threshold}σ)`);
+          if (sc.alto_metric != null) parts.push(`HI ALTO metric ${sc.alto_metric.toFixed(4)} · HI BAJO metric ${sc.bajo_metric.toFixed(4)}`);
+          parts.push(...sc.caveats);
+          detail.textContent = parts.join(" | ");
+        } else { banner.textContent = ""; detail.textContent = ""; }
+      } else if (state.step === "ABORTED") {
+        $w("wizard-active").hidden = true;
+        $w("wizard-setup").hidden = false;
+      }
+    }
+
+    async function loadWizardDefaults() {
+      // The form's own HTML value="..." (below) is only a pre-load placeholder for the instant before this
+      // resolves - never trust it past this point. Real source of truth: observer_config.json's
+      // observation_defaults, the SAME values OBSERVE's own form loads (almita_web_ops.observation_defaults()) -
+      // so a wizard session run without editing this form always targets what a real OBSERVE session would
+      // actually use. Real incident this fixes: this field used to be a static HTML literal (1420405000) that
+      // never matched observer_config.json's real 1420405752 - a wizard session run without editing it built a
+      // calibration profile Quicklook later rejected for an entire real 625-point observation.
+      U.setEnabled($w("wz-start"), false, "loading defaults…");
+      const r = await U.api("/api/ops/calibrate/wizard_defaults", { timeoutMs: 15000 });
+      if (r.ok) {
+        const d = r.data.data;
+        $w("wz-freq").value = d.center_frequency_hz;
+        $w("wz-rate").value = d.sample_rate_hz;
+        $w("wz-gain").value = d.gain_db;
+      } else {
+        wzErr("could not load wizard defaults (" + U.errorText(r.error) + ") - CENTER FREQUENCY/SAMPLE RATE/GAIN above are only the page's own static placeholder; verify against observer_config.json before starting");
+      }
+      U.setEnabled($w("wz-start"), true, "");
+    }
+
+    async function recoverWizard() {
+      const r = await U.api("/api/ops/jobs", { timeoutMs: 15000 });
+      if (!r.ok) return;
+      // /api/ops/jobs returns newest-first. The newest wizard job names the session in progress - even one that was
+      // STOPPED, failed or lost its runner and so printed no state (then its output_dir still names the session).
+      // The session's REAL current state is then read back with "status" (state-only: works while MAIN is busy).
+      const rows = (r.data.data || []).filter((x) => ["calibrate_wizard", "calibrate_wizard_state", "calibrate_wizard_move"].includes(x.stage));
+      for (const row of rows.slice(0, 10)) {
+        const jr = await U.api(`/api/ops/job/${row.job_id}`, { timeoutMs: 15000 });
+        if (!jr.ok) continue;
+        const j = jr.data.data;
+        const dir = (j.facts && j.facts.session_dir) || j.output_dir || (j.params && j.params.session_dir);
+        if (!dir) continue;
+        if (j.facts && (j.facts.step === "DONE" || j.facts.step === "ABORTED")) return;
+        sessionDir = dir;
+        if (j.state === "RUNNING") {
+          setRunning(j.job_id, (j.params && j.params.action) || j.stage);
+          pollJobUntilDone(j.job_id, 600000).then(() => { setRunning(null); return refreshStatus(); }).catch(() => {});
+          if (j.facts && j.facts.step) render(j.facts);
+          return;
+        }
+        if (j.facts && j.facts.step) { render(j.facts); return; }        // the last step printed the session's state
+        const facts = await refreshStatus();                              // it did not (stopped / failed): read it back
+        if (facts && (facts.step === "DONE" || facts.step === "ABORTED")) { sessionDir = null; $w("wizard-active").hidden = true; $w("wizard-setup").hidden = false; }
+        return;
+      }
+    }
+
+    $w("wz-stop").addEventListener("click", U.guard($w("wz-stop"), async () => {
+      if (!confirm("Stop the step running on the server? Files already captured are kept; the step can be retried or the wizard aborted.")) return undefined;
+      try { await stopRunningStep(); wzErr(""); await refreshStatus(); } catch (err) { wzErr(`stop failed: ${msg(err)}`); }
+    }, "STOPPING…"));
+
+    $w("wz-start").addEventListener("click", U.guard($w("wz-start"), async () => {
+      try {
+        const job = await wizardAction({
+          action: "start", n_captures: Number($w("wz-n").value), capture_seconds: Number($w("wz-s").value),
+          stabilize_seconds: Number($w("wz-stab").value), hi_settle_seconds: Number($w("wz-hi-settle").value),
+          center_frequency_hz: Number($w("wz-freq").value), sample_rate_hz: Number($w("wz-rate").value),
+          gain_db: Number($w("wz-gain").value), clipping_threshold: Number($w("wz-clip").value),
+          stability_threshold: Number($w("wz-stab-th").value), rfi_threshold: Number($w("wz-rfi").value),
+          min_elevation_deg: Number($w("wz-min-alt").value), beam_fwhm_deg: Number($w("wz-beam").value),
+          significance_threshold: Number($w("wz-sig").value),
+        }, 20000);
+        wzErr(""); sessionDir = job.facts.session_dir; render(job.facts);
+      } catch (err) { wzErr(`START failed: ${msg(err)}`); }
+    }, "STARTING…"));
+
+    $w("wz-confirm-connected").addEventListener("click", U.guard($w("wz-confirm-connected"), async () => {
+      try {
+        const job = await wizardAction({ action: "set_reference", session_dir: sessionDir, connection_point: $w("wz-cp").value }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`confirm failed: ${msg(err)}`); }
+    }, "CONFIRMING…"));
+
+    $w("wz-skip").addEventListener("click", U.guard($w("wz-skip"), async () => {
+      if (!confirm("Skip the 50 Ω reference? It will not be measured.")) return undefined;
+      try {
+        const job = await wizardAction({ action: "skip_reference", session_dir: sessionDir, reason: "operator: not available" }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`skip failed: ${msg(err)}`); }
+    }, "SKIPPING…"));
+
+    $w("wz-capture").addEventListener("click", U.guard($w("wz-capture"), async () => {
+      try {
+        const sim = $w("wz-simulate").value;
+        const job = await wizardAction({ action: "capture_50r", session_dir: sessionDir, simulate: sim || undefined }, 120000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`capture failed: ${msg(err)}`); refreshStatus().catch(() => {}); }
+    }, "CAPTURING…"));
+
+    $w("wz-next").addEventListener("click", U.guard($w("wz-next"), async () => {
+      try {
+        const job = await wizardAction({ action: "next", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`next failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-confirm-antenna").addEventListener("click", U.guard($w("wz-confirm-antenna"), async () => {
+      if (!confirm("Confirm the antenna is physically connected (not the 50 Ω terminator)?")) return undefined;
+      try {
+        const job = await wizardAction({ action: "confirm_antenna", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`confirm failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-plan-hi").addEventListener("click", U.guard($w("wz-plan-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "plan_hi", session_dir: sessionDir }, 30000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`propose failed: ${msg(err)}`); }
+    }, "PROPOSING…"));
+    $w("wz-replan-hi").addEventListener("click", U.guard($w("wz-replan-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "plan_hi", session_dir: sessionDir }, 30000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`re-propose failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-approve-hi-plan").addEventListener("click", U.guard($w("wz-approve-hi-plan"), async () => {
+      try {
+        const job = await wizardAction({ action: "approve_hi_plan", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`approve failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-capture-hi").addEventListener("click", U.guard($w("wz-capture-hi"), async () => {
+      const label = lastState.step === "READY_HI_ALTO" ? "HI_ALTO" : "HI_BAJO";
+      if ($w("wz-hi-move-confirm").value !== "MOVE") { window.alert('Type MOVE (uppercase, exactly) before a real GOTO + capture.'); return undefined; }
+      if (!confirm(`Real GOTO + capture at ${label} now. The mount WILL move. Confirm physically: free travel, cables, antenna, nobody in the way.\nProceed?`)) return undefined;
+      try {
+        const job = await wizardMoveAction({ action: "capture_hi", session_dir: sessionDir, label }, $w("wz-hi-move-confirm").value, 180000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`capture failed: ${msg(err)}`); refreshStatus().catch(() => {}); }
+    }, "CAPTURING…"));
+
+    $w("wz-next-hi").addEventListener("click", U.guard($w("wz-next-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "next", session_dir: sessionDir }, 15000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`next failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-finish-hi").addEventListener("click", U.guard($w("wz-finish-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "finish", session_dir: sessionDir }, 20000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`finish failed: ${msg(err)}`); }
+    }, "FINISHING…"));
+
+    $w("wz-abort").addEventListener("click", U.guard($w("wz-abort"), async () => {
+      if (!confirm("Abort the wizard? Progress already on disk is kept, but the wizard resets."
+                   + (runningJobId ? "\nThe step running now is STOPPED first (its captured files are kept)." : ""))) return undefined;
+      try {
+        await stopRunningStep();
+        await wizardAction({ action: "abort", session_dir: sessionDir }, 15000);
+        wzErr(""); sessionDir = null; $w("wizard-active").hidden = true; $w("wizard-setup").hidden = false;
+      } catch (err) { wzErr(`abort failed: ${msg(err)}`); }
+    }, "…"));
+
+    loadWizardDefaults().catch(() => { U.setEnabled($w("wz-start"), true, ""); });
+    recoverWizard().catch(() => {});
+  }
 })();

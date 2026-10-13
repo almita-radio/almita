@@ -24,7 +24,7 @@ import observation_plan
 
 @contextlib.contextmanager
 def running_server():
-    httpd = server_mod.make_server("127.0.0.1", 0)
+    httpd = server_mod.make_server("127.0.0.1", 0, authenticator=None)  # auth exercised in test_web_auth.py
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -50,13 +50,15 @@ def _post(url, body, timeout=30):
         return exc.code, json.loads(exc.read())
 
 
+from tests.conftest import transiting_ra_hours  # noqa: E402
+
 VALID_SPEC = {
     "session": {"name": "WEBTEST"},
-    "grid": {"mode": "EQUATORIAL_RECT", "placement": "FIXED_CENTER", "center_ra_hours": 6.0,
+    "grid": {"mode": "EQUATORIAL_RECT", "placement": "FIXED_CENTER", "center_ra_hours": transiting_ra_hours(),  # always visible
              "center_dec_deg": -30.0, "width_deg": 4, "height_deg": 4, "rows": 3, "cols": 3,
              "min_altitude_deg": 5, "traversal": "SERPENTINE"},
     "capture": {"seconds": 1, "settle_seconds": 0.5},
-    "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+    "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
     "rfi_ref": {"enabled": False, "serial": "00000002", "gain_db": 25.0},
     "quicklook": {"enabled": False, "native_grid": True, "interpolated_preview": False,
                   "calibration_profile_path": None},
@@ -127,13 +129,17 @@ def test_start_requires_confirm_true():
 
 def test_start_never_shell_executes_bogus_path(monkeypatch):
     # A path containing shell metacharacters must be treated as a literal
-    # (failing) filename by json.loads(Path(...).read_text()) — never
-    # interpolated into a shell command.
+    # (invalid) path — never interpolated into a shell command, never read:
+    # web polish tightened this from a 500 (FileNotFoundError) to a 400 at the
+    # HTTP boundary because only data/mosaic/<campaign>/observation_resolved.json is accepted.
+    called = []
+    monkeypatch.setattr(observation_orchestrator, "run_observation", lambda *a, **k: called.append(a) or {})
     with running_server() as base:
         status, body = _post(f"{base}/api/observe/start",
                               {"resolved_plan_path": "; rm -rf / #", "confirm": True})
-        assert status == 500
-        assert "FileNotFoundError" in body["error"] or "No such file" in body["error"]
+        assert status == 400
+        assert "resolved_plan_path" in body["error"]
+    assert not called
 
 
 def test_start_delegates_to_orchestrator_run_observation(monkeypatch):
@@ -145,12 +151,13 @@ def test_start_delegates_to_orchestrator_run_observation(monkeypatch):
         return {"orchestrator_state": "RUNNING"}
 
     monkeypatch.setattr(observation_orchestrator, "run_observation", fake_run)
+    plan_path = str(server_mod.ASSET_ROOT / "X-20260101-00:00:00" / "observation_resolved.json")
     with running_server() as base:
         status, body = _post(f"{base}/api/observe/start",
-                              {"resolved_plan_path": "/x/observation_resolved.json", "confirm": True})
+                              {"resolved_plan_path": plan_path, "confirm": True})
         assert status == 200
         assert body["orchestrator_state"] == "RUNNING"
-    assert captured["path"] == "/x/observation_resolved.json"
+    assert captured["path"] == plan_path
     assert captured["yes"] is True  # browser's confirm click IS the operator GO
 
 

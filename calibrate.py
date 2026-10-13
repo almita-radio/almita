@@ -312,11 +312,10 @@ class HICalibratorScript:
             verbose=False
         )
         await sdr.connect()
-        await sdr.configure(
-            center_freq=1420405752,
-            sample_rate=2400000,
-            gain='auto'
-        )
+        import sdr_tuning
+        op = sdr_tuning.operating_config()
+        self.sdr_tuning = await sdr_tuning.tune_explicitly(sdr, op["center_frequency_hz"], op["sample_rate_hz"],
+                                                           op["gain_db"], operating=op)
         print("   ✓ SDR ready")
         print()
         

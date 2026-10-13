@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Pipeline</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header id="almita-header"><h1>ALMITA PIPELINE</h1></header>
+  <div id="error-banner" class="banner connection" hidden></div>
+  <main id="app">
+    <section class="panel" aria-labelledby="h-inst">
+      <header><h2 id="h-inst">INSTRUMENT <span class="muted">(real INDI read, read-only)</span></h2><span id="mount-badge" class="badge">—</span></header>
+      <dl class="kv" id="mount-kv"></dl>
+      <div class="obs-actions"><span class="muted">Every stage below runs the real ALMITA command; PASS / PARTIAL / FAIL is decided by its exit code and result files, never by this page.</span></div>
+    </section>
+
+    <section class="panel" id="stage-preflight" aria-labelledby="h-pf">
+      <header><h2 id="h-pf">1 · PREFLIGHT</h2><span id="pf-badge" class="badge">NOT RUN</span></header>
+      <div class="obs-actions"><button id="btn-preflight" type="button">RUN REAL PREFLIGHT</button><span id="pf-note" class="muted"></span></div>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>CHECK</th><th>STATUS</th><th>DETAIL</th></tr></thead><tbody id="tbl-preflight"></tbody></table></div>
+    </section>
+
+    <section class="panel" id="stage-align" aria-labelledby="h-al">
+      <header><h2 id="h-al">2 · ALIGNMENT <span class="muted">(alignment.py, real INDI + MAIN, SYNC never)</span></h2><span id="align-badge" class="badge">—</span></header>
+      <div class="obs-actions">
+        <button type="button" id="al-mode-hi" class="mode-btn active">HI (night)</button>
+        <button type="button" id="al-mode-solar" class="mode-btn">SOLAR (day)</button>
+      </div>
+      <div class="obs-summary" id="al-track-mode-row" hidden>Real tracking mode (read-only): <b id="al-track-mode">—</b></div>
+      <canvas id="al-sky" width="420" height="360" style="width:100%;max-width:420px;height:360px;display:block;margin:10px auto;border:1px solid var(--line);border-radius:8px"></canvas>
+      <canvas id="al-sky-legend" width="300" height="34" style="width:100%;max-width:300px;height:34px;display:block;margin:0 auto 6px" hidden title="HI4PI real map colour scale - N_HI column density, not an Almita measurement"></canvas>
+      <div class="obs-summary" id="al-sky-note">Loading sky view…</div>
+      <div class="obs-actions"><button type="button" id="al-sky-refresh">REFRESH SKY VIEW</button></div>
+      <div id="al-hi-areas" class="obs-checks"></div>
+      <div class="obs-row"><label for="al-ring-radii">RING RADII (deg, comma-separated - suggested, editable)</label><input type="text" id="al-ring-radii" autocomplete="off"></div>
+      <div class="obs-row"><label for="al-ring-points">POINTS PER RING (suggested, editable)</label><input type="number" id="al-ring-points" min="3" max="64"></div>
+      <div class="obs-row"><label for="al-capture-time">CAPTURE TIME PER POSITION (s - suggested, editable)</label><input type="number" id="al-capture-time" min="0.5" max="120" step="any"></div>
+      <div class="obs-row"><label for="al-beam-fwhm">BEAM FWHM (deg - suggested, editable)</label><input type="number" id="al-beam-fwhm" min="1" max="60" step="any"></div>
+      <div class="obs-summary" id="al-beam-note"></div>
+      <div class="obs-row"><label for="al-min-elevation">MIN ELEVATION (deg - suggested, editable)</label><input type="number" id="al-min-elevation" min="5" max="89" step="any"></div>
+      <div class="obs-summary" id="al-pattern-total"></div>
+      <div class="obs-summary" id="al-duration-estimate"></div>
+      <div class="obs-actions"><button id="btn-align-plan" type="button">PLAN (real, moves nothing)</button></div>
+      <div id="al-plan-stale" class="obs-summary" hidden style="color:var(--warn,#e6b85c)"></div>
+      <div id="al-preview" hidden>
+        <div class="obs-summary" id="al-preview-summary"></div>
+        <div class="obs-summary" id="al-preview-temporal" hidden></div>
+        <div class="twrap"><table id="al-preview-table" class="status-table"><thead><tr><th>idx</th><th>ring</th><th>RA (h)</th><th>Dec (deg)</th><th>sep. from center (deg)</th><th>est. capture time (UTC)</th><th>alt at capture (min)</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="obs-row"><label for="al-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="al-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+      <div class="obs-actions"><button id="btn-align-run" type="button">RUN REAL ALIGNMENT</button><span id="align-reason" class="muted"></span></div>
+      <div id="job-align_plan"></div><div id="job-align"></div>
+    </section>
+
+    <section class="panel" id="stage-calibrate" aria-labelledby="h-ca">
+      <header><h2 id="h-ca">3 · CALIBRATION <span class="muted">(calibration_operational_realtest.py, real MAIN, no mount movement)</span></h2><span id="calibrate-badge" class="badge">—</span></header>
+      <div class="obs-row"><label for="ca-n">CAPTURES</label><input type="number" id="ca-n" min="1" max="20" value="5"></div>
+      <div class="obs-row"><label for="ca-s">SECONDS PER CAPTURE</label><input type="number" id="ca-s" min="0.5" max="30" step="any" value="2"></div>
+      <div class="obs-actions"><button id="btn-calibrate-run" type="button">RUN REAL CALIBRATION</button><span id="calibrate-reason" class="muted"></span></div>
+      <div id="job-calibrate"></div>
+    </section>
+
+    <section class="panel" id="stage-observe" aria-labelledby="h-ob">
+      <header><h2 id="h-ob">4 · GRID / OBSERVATION / CAPTURE <span class="muted">(orchestrator + capture.py, real)</span></h2><span id="observe-badge" class="badge">—</span></header>
+      <div class="obs-actions"><a class="obs-nav-link" href="/observe.html">PLAN + START + STOP (OBSERVE page)</a></div>
+      <pre id="observe-summary" class="obs-summary">Loading…</pre>
+    </section>
+
+    <section class="panel" id="stage-reduce" aria-labelledby="h-re">
+      <header><h2 id="h-re">5 · REDUCE V1 <span class="muted">(almita_reduce.py, frozen)</span></h2><span id="reduce-badge" class="badge">—</span></header>
+      <div class="obs-row"><label for="re-campaign">CAMPAIGN (real grid session)</label><select id="re-campaign"></select></div>
+      <div class="obs-row"><label for="re-profile">CALIBRATION PROFILE (optional; none = UNCALIBRATED)</label><select id="re-profile"></select></div>
+      <div class="obs-actions"><button id="btn-reduce-plan" type="button">PLAN</button><button id="btn-reduce-run" type="button">RUN REDUCE</button><span id="reduce-reason" class="muted"></span></div>
+      <div id="job-reduce_plan"></div><div id="job-reduce"></div>
+    </section>
+
+    <section class="panel" id="stage-science" aria-labelledby="h-sc">
+      <header><h2 id="h-sc">6 · SCIENCE V1 <span class="muted">(almita_science.py, frozen)</span></h2><span id="science-badge" class="badge">—</span></header>
+      <div class="obs-row"><label for="sc-session">REDUCE SESSION</label><select id="sc-session"></select></div>
+      <div class="obs-row"><label for="sc-beam">BEAM (operator-provided; SCIENCE has no default)</label><select id="sc-beam"><option value="observer_config">from observer_config.json</option><option value="fwhm">FWHM in degrees</option></select></div>
+      <div class="obs-row" id="row-sc-fwhm" hidden><label for="sc-fwhm">BEAM FWHM (deg)</label><input type="number" id="sc-fwhm" min="0.1" max="90" step="any" value="20"></div>
+      <div class="obs-actions"><button id="btn-science-plan" type="button">PLAN</button><button id="btn-science-run" type="button">RUN SCIENCE</button><span id="science-reason" class="muted"></span></div>
+      <div id="job-science_plan"></div><div id="job-science"></div>
+    </section>
+  </main>
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
+  <script src="pipeline.js"></script>
+</body></html>

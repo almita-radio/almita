@@ -9,6 +9,8 @@ import json
 import pytest
 import yaml
 
+from tests.conftest import transiting_ra_hours
+
 import almita_observe as cli
 import grid_generator
 import observation_orchestrator as orch
@@ -30,11 +32,11 @@ def _fast_preflight(monkeypatch):
 def _write_yaml(tmp_path, **overrides):
     spec = {
         "session": {"name": "CLITEST"},
-        "grid": {"mode": "EQUATORIAL_RECT", "placement": "FIXED_CENTER", "center_ra_hours": 6.0,
+        "grid": {"mode": "EQUATORIAL_RECT", "placement": "FIXED_CENTER", "center_ra_hours": transiting_ra_hours(),
                  "center_dec_deg": -30.0, "width_deg": 4, "height_deg": 4, "rows": 3, "cols": 3,
                  "min_altitude_deg": 5, "traversal": "SERPENTINE"},
         "capture": {"seconds": 1, "settle_seconds": 0.5},
-        "main": {"center_frequency_hz": 1420405000, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
+        "main": {"center_frequency_hz": 1420405752, "sample_rate": 2400000, "gain_db": 40.2, "bias_tee": True},
         "rfi_ref": {"enabled": False, "serial": "00000002", "gain_db": 25.0},
         "quicklook": {"enabled": False, "native_grid": True, "interpolated_preview": False,
                       "calibration_profile_path": None},

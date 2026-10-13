@@ -217,10 +217,11 @@ def test_14_missing_quicklook_is_waiting_not_crash(tmp_path):
 # ---------------------------------------------------------------- 15-19: server
 
 
-def test_15_server_binds_0000_8088_by_default():
-    source = (ROOT / "almita_console_server.py").read_text()
-    assert '"--bind", default="0.0.0.0"' in source
+def test_15_single_web_server_binds_0000_8088_by_default():
+    source = (ROOT / "almita_orchestrator_server.py").read_text()
+    assert '"--host", default="0.0.0.0"' in source
     assert '"--port", type=int, default=8088' in source
+    assert "almita_orchestrator_server.py" in (ROOT / "almita_console_server.py").read_text()  # the old standalone main only points there
 
 
 def test_15b_prepare_console_web_cache_busts_static_assets(tmp_path):
@@ -1175,6 +1176,15 @@ def test_47_frontend_rfi_thumbs_stopped_state_retains_products(tmp_path):
     assert "WAITING FOR RFI PRODUCTS" not in html
 
 
+def test_47b_frontend_rfi_failure_of_an_ended_session_is_labelled_last_session(tmp_path):
+    (tmp_path / "ended").mkdir()
+    (tmp_path / "live").mkdir()
+    ended = dom(console_root(tmp_path / "ended", status=status_fixture("COMPLETED", rfi_ref=_rfi_ref_running(status="FAILED"))))
+    assert ">LAST SESSION FAILED<" in ended
+    live = dom(console_root(tmp_path / "live", status=status_fixture("RUNNING", rfi_ref=_rfi_ref_running(status="FAILED"))))
+    assert ">FAILED<" in live and ">LAST SESSION FAILED<" not in live
+
+
 def test_48_frontend_antenna_a_interpolated_preview_thumb_shown_when_available(tmp_path):
     html = dom(console_root(tmp_path, status=status_fixture(
         "RUNNING", quicklook=_quicklook_running(interpolated_map_available=True))))
@@ -1206,7 +1216,7 @@ def test_60_spectral_stack_pure_functions(tmp_path):
     harness = """<!doctype html><html><body><pre id="out"></pre>
 <script src="spectral_stack_3d.js"></script>
 <script>
-const {colormap, robustLimits, parseDocument} = window.AlmitaSpectralStack3D;
+const {colormap, robustLimits, dataLimits, parseDocument} = window.AlmitaSpectralStack3D;
 const lines = [];
 function check(name, cond) { lines.push((cond ? "ok: " : "FAIL: ") + name); }
 
@@ -1217,6 +1227,11 @@ const values = Array.from({length:100}, (_,i)=>i+1).concat([-10000, 10000]);
 const limits = robustLimits([{values}]);
 check("robustLimits clips low outlier", limits.lo > -100);
 check("robustLimits clips high outlier", limits.hi < 200);
+// the stack's own scale: the full range, like the waterfall colour bar - a value can never rise above the box
+const real = [{values:[-0.121, 0.0, 0.224, 0.676, -0.442, null]}];
+const full = dataLimits(real);
+check("dataLimits spans the full data range (as the session waterfall)", full.lo === -0.442 && full.hi === 0.676);
+check("dataLimits handles all-null", Number.isFinite(dataLimits([{values:[null]}]).lo));
 const nullLimits = robustLimits([{values:[null,null]}]);
 check("robustLimits handles all-null", Number.isFinite(nullLimits.lo) && Number.isFinite(nullLimits.hi));
 

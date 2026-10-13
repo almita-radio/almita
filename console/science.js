@@ -1,0 +1,577 @@
+// ALMITA SCIENCE — calls the same-origin ops API only. All map/quality/coverage numbers come from
+// science_engine (frozen) via science_web_bridge.py and the read-only /api/ops/science/* endpoints -
+// this file only discovers REDUCE sessions, shows coverage/PLAN/RUN as real jobs, and renders the three
+// real heatmaps (as the same PNGs a download would give) plus a point picker fed by the same per-point
+// values science_web_bridge.py computed. No science math here, no gridding/integration duplicated in JS.
+(function () {
+  "use strict";
+  const U = window.AlmitaUI;
+  const $ = (id) => document.getElementById(id);
+  U.mountHealthStrip(U.mountHeader("SCIENCE", "LEVEL 2 HEATMAPS"));
+  U.mountFooter();
+
+  const showError = (err) => U.showError($("error-banner"), err);
+  const msg = (err) => (err && err.message) || String(err);
+
+  let selectedSession = "";          // reduce_session_dir
+  let selectedCalibLevel = "";       // "RELATIVE" | "UNCALIBRATED"
+  let lastCoverage = null;
+  let lastPlanParams = null;
+  let lastPlanJobId = null;
+  let lastRunOutputDir = null;
+  let selectionSeq = 0;              // guards against a late HTTP response overwriting a newer selection
+
+  function numOrNull(id) { const v = $(id).value; return v === "" ? null : Number(v); }
+  function currentParams() {
+    return {
+      reduce_session_dir: selectedSession, calibration_level_filter: selectedCalibLevel,
+      velocity_window_min_m_s: kms($("in-vmin").value), velocity_window_max_m_s: kms($("in-vmax").value),
+      beam: $("in-beam-mode").value, beam_fwhm_deg: $("in-beam-mode").value === "fwhm" ? Number($("in-beam-fwhm").value) : null,
+      support_radius_deg: numOrNull("in-support-radius"), smoothing_fwhm_deg: numOrNull("in-smoothing"),
+      interp_factor_b: Number($("in-interp-factor-b").value), interp_factor_c: Number($("in-interp-factor-c").value),
+      quality_policy: $("in-quality-policy").value || null,
+      min_spectral_coverage_fraction: Number($("in-min-coverage").value),
+      color_vmin: $("in-color-override").checked ? Number($("in-color-vmin").value) : null,
+      color_vmax: $("in-color-override").checked ? Number($("in-color-vmax").value) : null,
+    };
+  }
+  function kms(v) { return Math.round(Number(v) * 1000); }
+  function paramsEqual(a, b) { return !!a && !!b && JSON.stringify(a) === JSON.stringify(b); }
+
+  // spatial_params' own smoothing-kernel field changed shape (science_web_bridge commit 782711b): B and C
+  // used to carry two DIFFERENT kernels (smoothing_fwhm_b_deg/smoothing_fwhm_c_deg) and now share ONE
+  // (smoothing_fwhm_deg) - a real, once-observed regression was a stale-loaded page still running JS from
+  // before that change, which read the old field name straight off a FRESH (new-shape) result and crashed
+  // the whole PLAN/RESULTS view on ".toFixed() of undefined". Every consumer of spatial_params now goes
+  // through this ONE formatter, which never assumes a shape: it shows the shared kernel when present, falls
+  // back to the legacy two-kernel display for an OLD-format payload (a manifest/config.json written before
+  // 782711b, on disk under data/science/.../SCIENCE_WEB-*/ from before this date - PLAN itself never reads
+  // one, it always computes fresh, but a stored one could still reach this formatter if some future feature
+  // displays it), and otherwise says plainly that the value is unavailable - never a fabricated number.
+  function formatSharedSmoothingFwhm(sp) {
+    if (!sp) return "— (no spatial_params in this result)";
+    if (Number.isFinite(sp.smoothing_fwhm_deg)) return `${sp.smoothing_fwhm_deg.toFixed(4)} deg (shared by B & C)`;
+    if (Number.isFinite(sp.smoothing_fwhm_b_deg) && Number.isFinite(sp.smoothing_fwhm_c_deg)) {
+      return `B=${sp.smoothing_fwhm_b_deg.toFixed(4)} / C=${sp.smoothing_fwhm_c_deg.toFixed(4)} deg `
+        + `(legacy result from before B/C shared one kernel — see science_web_bridge commit 782711b)`;
+    }
+    return "— (smoothing kernel not reported in this result)";
+  }
+  function formatSupportRadius(sp) {
+    return sp && Number.isFinite(sp.support_radius_deg) ? `${sp.support_radius_deg.toFixed(4)} deg` : "—";
+  }
+
+  function invalidateDownstream() {
+    lastPlanParams = null; lastPlanJobId = null; lastRunOutputDir = null;
+    $("plan-panel").hidden = !(selectedSession && selectedCalibLevel);
+    $("plan-summary").textContent = ""; $("plan-checks").textContent = ""; $("job-science-plan").textContent = "";
+    U.setBadge($("plan-badge"), "—");
+    $("run-panel").hidden = true;
+    $("job-science-run").textContent = "";
+    U.setEnabled($("btn-run"), false, "PLAN first");
+    $("results-panel").hidden = true;
+  }
+
+  // ------------------------------------------------------------------ 1) input discovery
+  async function loadInputs() {
+    $("input-note").textContent = "discovering REDUCE sessions…";
+    const r = await U.api("/api/ops/science/reduce_sessions", { timeoutMs: 20000 });
+    const sel = $("in-session"); sel.textContent = ""; sel.appendChild(new Option("(choose)", ""));
+    let sessions = [], noData = [];
+    if (r.ok) {
+      sessions = r.data.data.sessions || []; noData = r.data.data.no_data || [];
+      for (const s of sessions) {
+        const cl = Object.entries(s.calibration_level_counts || {}).map(([k, v]) => `${k}:${v}`).join(",") || "—";
+        const label = `${s.status} · ${s.points_completed}/${s.points_discovered} completed · [${cl}] · ${s.campaign_id} / ${s.reduce_session_id}`;
+        sel.appendChild(new Option(label, s.reduce_session_dir));
+      }
+    }
+    $("session-no-data-count").textContent = noData.length;
+    $("session-no-data-details").hidden = noData.length === 0;
+    const tbody = document.querySelector("#session-no-data-table tbody"); tbody.textContent = "";
+    for (const s of noData) {
+      const tr = document.createElement("tr");
+      for (const v of [s.campaign_id, s.reduce_session_id, s.status, s.points_completed]) {
+        const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    $("input-note").textContent = r.ok
+      ? `${sessions.length} REDUCE session(s) with usable points (${noData.length} more with 0 usable, see the details above)`
+      : "could not discover REDUCE sessions";
+  }
+  $("btn-refresh-inputs").addEventListener("click", U.guard($("btn-refresh-inputs"), loadInputs, "…"));
+  $("in-session").addEventListener("change", () => { selectedSession = $("in-session").value; onSessionChanged(); });
+
+  // ------------------------------------------------------------------ 2) coverage
+  function metaCard(label, value, warn) {
+    const el = document.createElement("div"); el.className = "card" + (warn ? " status-warning" : "");
+    const dt = document.createElement("dt"); dt.textContent = label;
+    const dd = document.createElement("dd"); dd.textContent = value == null || value === "" ? "—" : String(value);
+    el.append(dt, dd); return el;
+  }
+
+  async function onSessionChanged() {
+    const mySeq = ++selectionSeq;
+    selectedCalibLevel = ""; invalidateDownstream();
+    $("coverage-panel").hidden = !selectedSession; $("config-panel").hidden = !selectedSession;
+    $("row-calib-filter").hidden = true; $("calib-single-note").hidden = true;
+    if (!selectedSession) return;
+    U.setBadge($("coverage-badge"), "LOADING");
+    try {
+      const r = await U.api(`/api/ops/science/inspect_reduce_session?path=${encodeURIComponent(selectedSession)}`, { timeoutMs: 20000 });
+      if (mySeq !== selectionSeq) return;
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      lastCoverage = r.data.data;
+      renderCoverage();
+      showError("");
+    } catch (err) {
+      if (mySeq !== selectionSeq) return;
+      U.setBadge($("coverage-badge"), "ERROR");
+      showError(`coverage preview failed: ${msg(err)}`);
+    }
+  }
+
+  function renderCoverage() {
+    const m = lastCoverage;
+    const cards = $("coverage-cards"); cards.textContent = "";
+    U.setBadge($("coverage-badge"), m.science_contract_ok ? "OK" : "BLOCKED");
+    cards.append(
+      metaCard("CAMPAIGN", m.campaign_id), metaCard("REDUCE SESSION", m.reduce_session_id),
+      metaCard("REDUCE STATUS", m.reduce_status, m.reduce_status !== "COMPLETED"),
+      metaCard("POINTS PLANNED", m.points_planned),
+      metaCard("POINTS REDUCED (completed/blocked/failed)", `${m.points_reduced_completed}/${m.points_reduced_blocked}/${m.points_reduced_failed}`),
+      metaCard("POINTS INGESTABLE BY SCIENCE", m.n_points_ingestable, m.n_points_ingestable !== m.points_reduced_completed),
+      metaCard("CALIBRATION LEVEL COUNTS", JSON.stringify(m.calibration_level_counts || {})),
+      metaCard("VELOCITY (LSRK) AVAILABLE", `${m.velocity_available_count}/${m.n_points_ingestable}`,
+        m.velocity_available_count !== m.n_points_ingestable),
+      metaCard("RA range (deg)", m.ra_deg_range ? m.ra_deg_range.map((v) => v.toFixed(3)).join(" .. ") : "—"),
+      metaCard("DEC range (deg)", m.dec_deg_range ? m.dec_deg_range.map((v) => v.toFixed(3)).join(" .. ") : "—"),
+    );
+    const problems = m.science_contract_problems || [];
+    $("coverage-problems").hidden = problems.length === 0;
+    const plist = $("coverage-problems-list"); plist.textContent = "";
+    for (const p of problems) { const row = document.createElement("div"); row.className = "obs-check-row status-block"; row.textContent = p; plist.appendChild(row); }
+
+    const missing = m.velocity_missing_points || [];
+    $("coverage-lsrk-missing").hidden = missing.length === 0;
+    $("coverage-lsrk-missing-list").textContent = missing.length
+      ? `points without a computed LSRK axis (excluded from any velocity-window map): ${missing.join(", ")}`
+      : "";
+
+    // calibration-level choice: forced explicit pick if both exist, auto-select if only one
+    const levels = Object.keys(m.calibration_level_counts || {}).filter((k) => (m.calibration_level_counts[k] || 0) > 0);
+    $("btn-calib-relative").classList.remove("active"); $("btn-calib-uncalibrated").classList.remove("active");
+    if (levels.length > 1) {
+      $("row-calib-filter").hidden = false;
+      $("calib-single-note").hidden = true;
+    } else if (levels.length === 1) {
+      $("row-calib-filter").hidden = true;
+      selectedCalibLevel = levels[0];
+      $("calib-single-note").hidden = false;
+      $("calib-single-note").textContent = `only ${levels[0]} points exist in this REDUCE session — selected automatically. `
+        + (levels[0] === "UNCALIBRATED" ? "This will be an INSTRUMENTAL map (no 50Ω relative profile applied)." : "This will be a RELATIVE (calibrated) map.");
+      invalidateDownstream();
+      $("plan-panel").hidden = false;
+    } else {
+      $("row-calib-filter").hidden = true;
+    }
+  }
+  $("btn-calib-relative").addEventListener("click", () => selectCalibLevel("RELATIVE"));
+  $("btn-calib-uncalibrated").addEventListener("click", () => selectCalibLevel("UNCALIBRATED"));
+  function selectCalibLevel(level) {
+    selectedCalibLevel = level;
+    $("btn-calib-relative").classList.toggle("active", level === "RELATIVE");
+    $("btn-calib-uncalibrated").classList.toggle("active", level === "UNCALIBRATED");
+    invalidateDownstream();
+    $("plan-panel").hidden = false;
+  }
+  $("in-beam-mode").addEventListener("change", () => { $("row-beam-fwhm").hidden = $("in-beam-mode").value !== "fwhm"; invalidateDownstream(); });
+  $("in-color-override").addEventListener("change", () => { $("row-color-override").hidden = !$("in-color-override").checked; invalidateDownstream(); });
+  for (const id of ["in-vmin", "in-vmax", "in-beam-fwhm", "in-support-radius", "in-smoothing",
+    "in-interp-factor-b", "in-interp-factor-c",
+    "in-quality-policy", "in-min-coverage", "in-color-vmin", "in-color-vmax"]) {
+    $(id).addEventListener("change", invalidateDownstream);
+  }
+
+  // ------------------------------------------------------------------ 4) PLAN
+  async function pollJobUntilDone(jobId, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const r = await U.api(`/api/ops/job/${jobId}?tail=80`, { timeoutMs: 15000 });
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      const j = r.data.data;
+      if (j.state !== "RUNNING") return j;
+      if (Date.now() > deadline) throw new Error("timed out waiting for the job to finish");
+      await new Promise((res) => setTimeout(res, 800));
+    }
+  }
+
+  function buildStartParams() {
+    const p = currentParams();
+    const body = { reduce_session_dir: p.reduce_session_dir, calibration_level_filter: p.calibration_level_filter,
+      beam: p.beam, velocity_window_min_m_s: p.velocity_window_min_m_s, velocity_window_max_m_s: p.velocity_window_max_m_s,
+      min_spectral_coverage_fraction: p.min_spectral_coverage_fraction };
+    if (p.beam === "fwhm") body.beam_fwhm_deg = p.beam_fwhm_deg;
+    if (p.support_radius_deg != null) body.support_radius_deg = p.support_radius_deg;
+    if (p.smoothing_fwhm_deg != null) body.smoothing_fwhm_deg = p.smoothing_fwhm_deg;
+    if (p.interp_factor_b) body.interp_factor_b = p.interp_factor_b;
+    if (p.interp_factor_c) body.interp_factor_c = p.interp_factor_c;
+    if (p.quality_policy) body.quality_policy = p.quality_policy;
+    if (p.color_vmin != null && p.color_vmax != null) { body.color_vmin = p.color_vmin; body.color_vmax = p.color_vmax; }
+    return body;
+  }
+
+  $("btn-plan").addEventListener("click", U.guard($("btn-plan"), async () => {
+    if (!selectedSession || !selectedCalibLevel) return;
+    const params = buildStartParams();
+    try {
+      const r = await U.api("/api/ops/start/science_heatmaps_plan", { method: "POST", body: { params, confirm: null }, timeoutMs: 30000 });
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      const job = await pollJobUntilDone(r.data.data.job_id, 60000);
+      if (job.state !== "EXITED" || !job.facts) throw new Error(job.detail || "PLAN did not return a usable result");
+      lastPlanParams = currentParams();
+      lastPlanJobId = job.job_id;
+      renderPlan(job.facts);
+      showError("");
+    } catch (err) { showError(`PLAN failed: ${msg(err)}`); }
+  }, "PLANNING…"));
+
+  // Where the board's rows/columns came from (the campaign plan's grid_row/grid_col, or clustered measured
+  // positions), the shared A/B/C footprint, and how far a rectangular board would have misplaced a point.
+  function formatMosaicGeometry(sp, geo) {
+    if (!geo) return "";
+    const deg = (v) => (Number.isFinite(v) ? `${v.toFixed(2)} deg` : "—");
+    const spacing = sp && Number.isFinite(sp.mosaic_spacing_deg)
+      ? `${sp.mosaic_spacing_deg.toFixed(4)} deg (${sp.mosaic_spacing_source || "?"})` : "—";
+    const lattice = geo.lattice_source === "campaign_plan" ? `campaign plan ${geo.campaign_plan}` : "measured positions (no plan)";
+    const ext = Array.isArray(geo.raster_extent_deg) ? `${geo.raster_extent_deg[0].toFixed(2)} x ${geo.raster_extent_deg[1].toFixed(2)} deg` : "—";
+    return `board lattice: ${lattice}   spacing: ${spacing}\n`
+      + `A/B/C: one projection, one footprint ${ext}; A cells drawn at their points (max offset ${deg(geo.point_to_a_cell_node_max_deg)}; `
+      + `a rectangular board would be off by up to ${deg(geo.regular_board_offset_max_deg)})\n`;
+  }
+
+  function renderPlan(facts) {
+    U.setBadge($("plan-badge"), facts.blocked ? "BLOCKED" : "READY");
+    const n = (facts.will_process_points || []).length;
+    $("plan-summary").textContent =
+      `will process ${n} ${facts.config ? facts.config.calibration_level_filter : ""} point(s): ${JSON.stringify(facts.will_process_points || [])}\n`
+      + `calibration_level_counts (full session): ${JSON.stringify(facts.calibration_level_counts || {})}\n`
+      + `grid dims: A=${facts.n_rows}x${facts.n_cols}`
+      + (facts.grid_b ? `  B=${facts.grid_b.ny}x${facts.grid_b.nx}  C=${facts.grid_c.ny}x${facts.grid_c.nx}` : "  B/C=—") + "\n"
+      + `support radius (B & C, shared): ${formatSupportRadius(facts.spatial_params)}   `
+      + `smoothing kernel (B & C): ${formatSharedSmoothingFwhm(facts.spatial_params)}\n`
+      + formatMosaicGeometry(facts.spatial_params, facts.mosaic_geometry)
+      + `real instrument beam (reported only): ${facts.real_instrument_beam_fwhm_deg} deg   velocity channels: ${facts.n_velocity_channels}\n`
+      + `config_hash: ${facts.config_hash}`;
+    const list = $("plan-checks"); list.textContent = "";
+    for (const c of facts.checks || []) {
+      const row = document.createElement("div");
+      row.className = "obs-check-row " + (c.ok ? "status-pass" : "status-block");
+      row.textContent = `[${c.ok ? "PASS" : "BLOCKED"}] ${c.name}: ${c.detail}`;
+      list.appendChild(row);
+    }
+    $("run-panel").hidden = false;
+    U.setEnabled($("btn-run"), !facts.blocked, facts.blocked ? "PLAN is BLOCKED — see the checks above" : "");
+  }
+
+  // ------------------------------------------------------------------ 5) RUN
+  $("btn-run").addEventListener("click", U.guard($("btn-run"), async () => {
+    if (!paramsEqual(lastPlanParams, currentParams())) {
+      showError("inputs or parameters changed since PLAN — PLAN again before RUN");
+      $("run-panel").hidden = false; U.setEnabled($("btn-run"), false, "PLAN again — inputs/parameters changed");
+      return;
+    }
+    if (!confirm("Run SCIENCE heatmaps for this REDUCE session? Writes a new session under data/science/. No hardware, no mount, no SDR.")) return;
+    try {
+      const params = { ...buildStartParams(), plan_job_id: lastPlanJobId };
+      const r = await U.api("/api/ops/start/science_heatmaps", { method: "POST", body: { params, confirm: null }, timeoutMs: 30000 });
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      U.setBadge($("run-badge"), "RUNNING");
+      pollRun(r.data.data.job_id);
+      showError("");
+    } catch (err) { showError(`RUN failed: ${msg(err)}`); }
+  }, "STARTING…"));
+
+  async function pollRun(jobId) {
+    for (;;) {
+      const r = await U.api(`/api/ops/job/${jobId}?tail=120`, { timeoutMs: 15000 });
+      if (!r.ok) { showError(U.errorText(r.error)); return; }
+      const j = r.data.data;
+      renderRunJob(j);
+      if (j.state !== "RUNNING") { if (j.facts && j.facts.status) await renderResults(j); return; }
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+  }
+
+  function renderRunJob(j) {
+    U.setBadge($("run-badge"), j.state === "RUNNING" ? "RUNNING" : j.verdict);
+    const container = $("job-science-run"); container.textContent = "";
+    const head = document.createElement("div"); head.className = "obs-summary";
+    head.textContent = `job ${j.job_id} · ${j.state} · ${j.verdict} · elapsed ${U.hms(j.elapsed_s)}`;
+    container.appendChild(head);
+    const pre = document.createElement("pre"); pre.className = "job-log"; pre.textContent = j.log_tail || "";
+    container.appendChild(pre);
+  }
+
+  // ------------------------------------------------------------------ 6) RESULTS
+  let lastManifest = null, lastBoard = null, lastSelectedCell = null;
+
+  async function renderResults(job) {
+    const facts = job.facts || {};
+    lastRunOutputDir = job.output_dir;
+    if (!job.output_dir) { showError("RUN finished without a usable output_dir"); return; }
+    $("results-panel").hidden = false;
+
+    const mr = await U.api(`/api/ops/file?path=${encodeURIComponent(job.output_dir + "/manifest.json")}`, { timeoutMs: 15000 });
+    if (!mr.ok) { showError(`could not read the SCIENCE manifest: ${U.errorText(mr.error)}`); return; }
+    const manifest = mr.data;
+    lastManifest = manifest;
+    const dims = manifest.grid_dims || {};
+
+    $("results-summary").textContent =
+      `campaign: ${manifest.campaign_id}   reduce_session: ${manifest.reduce_session_id}   `
+      + `calibration_level_filter: ${manifest.calibration_level_filter}   data_completeness: ${manifest.data_completeness}\n`
+      + `points used: ${manifest.n_points_used} of ${manifest.n_points_filtered_in} filtered-in points\n`
+      + `velocity window (LSRK): [${(manifest.velocity_window_m_s[0] / 1000).toFixed(1)}, ${(manifest.velocity_window_m_s[1] / 1000).toFixed(1)}] km/s\n`
+      + `color limits (shared by A/B/C): [${manifest.color_vmin.toFixed(4)}, ${manifest.color_vmax.toFixed(4)}] (${manifest.color_limits_basis})\n`
+      + `grid dims: A=${dims.a ? dims.a.join("x") : "—"} → B=${dims.b ? dims.b.join("x") : "—"} `
+      + `(${manifest.config.interp_factor_b}x) → C=${dims.c ? dims.c.join("x") : "—"} (${manifest.config.interp_factor_c}x) `
+      + `— same projection and footprint; denser RASTER, not finer instrument resolution\n`
+      + `support radius (B & C, shared): ${formatSupportRadius(manifest.spatial_params)}   `
+      + `smoothing kernel (B & C): ${formatSharedSmoothingFwhm(manifest.spatial_params)}`
+      + (manifest.spatial_params && Number.isFinite(manifest.spatial_params.smoothing_fwhm_deg)
+        ? " — the ONLY difference between B and C is raster density\n" : "\n")
+      + `real instrument beam (reported only): ${manifest.real_instrument_beam.fwhm_deg} deg\n`
+      + formatMosaicGeometry(manifest.spatial_params, manifest.mosaic_geometry)
+      + `single-point-only pixels (no corroborating 2nd measurement): B=${(manifest.spatial_confidence.b.single_point_fraction * 100).toFixed(0)}%   `
+      + `C=${(manifest.spatial_confidence.c.single_point_fraction * 100).toFixed(0)}% of valid pixels — see COVERAGE DENSITY below\n`
+      + (manifest.noise_dominance ? (
+          `nearest-neighbour value check: median |Δ|=${manifest.noise_dominance.median_nearest_neighbor_abs_value_diff.toFixed(4)} `
+          + `(x${manifest.noise_dominance.ratio_observed_to_expected_noise.toFixed(2)} vs sqrt(2)×median σ=${manifest.noise_dominance.expected_abs_diff_if_independent_noise.toFixed(4)}), `
+          + `correlation r=${manifest.noise_dominance.nearest_neighbor_value_correlation.toFixed(2)}`
+          + (manifest.noise_dominance.consistent_with_pure_noise_at_point_spacing
+            ? "  → CONSISTENT WITH PURE NOISE at this point spacing: any multi-pixel bump/dip in B/C may be chance noise, not real structure\n"
+            : "  → neighbours correlate more than pure noise would predict\n")
+        ) : "")
+      + (manifest.bc_exact_coordinate_consistency ? (
+          `B/C CONSISTENCY CHECK (computational self-consistency, NOT predictive skill — see LEAVE-ONE-OUT below): `
+          + `evaluated at IDENTICAL physical coordinates (small odd-ratio companion grids, never a resampled `
+          + `image) — B max|Δ|=${manifest.bc_exact_coordinate_consistency.b.max_abs_diff.toExponential(2)}, `
+          + `C max|Δ|=${manifest.bc_exact_coordinate_consistency.c.max_abs_diff.toExponential(2)} against their `
+          + `own companions (float-precision only) → B and C compute the SAME field; only raster density differs\n`
+        ) : "")
+      + (manifest.loo_cross_validation && manifest.loo_cross_validation.predicted_vs_measured_correlation != null ? (
+          `LEAVE-ONE-OUT CHECK (predictive skill against REAL measurements — a DIFFERENT question from the `
+          + `B/C consistency check above): predicting each of ${manifest.loo_cross_validation.n_predictable} `
+          + `real point(s) from ONLY its neighbours (same kernel as B/C) correlates with its own measured value at `
+          + `r=${manifest.loo_cross_validation.predicted_vs_measured_correlation.toFixed(2)}, RMS held-out error=`
+          + `${manifest.loo_cross_validation.rms.toFixed(4)} vs field std=${manifest.loo_cross_validation.field_value_std.toFixed(4)}`
+          + (manifest.loo_cross_validation.rms_worse_than_predicting_the_field_mean
+            ? "  → WORSE than just guessing the field's mean: no verified predictive skill at this point density\n"
+            : "  → better than guessing the field's mean\n")
+        ) : "")
+      + `quality (map B): ${manifest.quality_b.state} — ${(manifest.quality_b.reasons || []).join("; ")}`
+      + (manifest.used_point_set_note ? `\nNOTE: ${manifest.used_point_set_note}` : "");
+    $("results-hi-caveat").textContent = "INSTRUMENTAL/" + manifest.calibration_level_filter + " result — "
+      + "relative_intensity_dimensionless only. No HI detection, Kelvin, Jy, N_HI or absolute flux claim is made here "
+      + "(indoor/UNCALIBRATED runs carry real instrumental residual - never a celestial signal).";
+    $("results-thermal").textContent = `Thermal drift: ${manifest.thermal_drift.status} — ${manifest.thermal_drift.note}`;
+    $("caption-a").textContent = `A — MEASURED (${dims.a ? dims.a.join("x") : "?"}, no interpolation)`;
+    $("caption-b").textContent = `B — INTERPOLATED (${dims.b ? dims.b.join("x") : "?"})`;
+    $("caption-c").textContent = `C — INTERPOLATED, finer raster (${dims.c ? dims.c.join("x") : "?"}, same kernel as B)`;
+
+    const od = job.output_dir;
+    // ON-SCREEN images are the chrome-free "_bare" exports (no title/colorbar/caption baked in - see
+    // render_all_maps._bare_export) so B/C display at the SAME visible size as A's own canvas, next to the
+    // SAME external HTML legend below. The full titled/colorbar'd PNGs remain available under DOWNLOADS.
+    $("img-map-b").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_b_smooth_bare.png")}`;
+    $("img-map-c").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_c_heavy_bare.png")}`;
+    $("img-map-coverage").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_coverage.png")}`;
+    const hasSnr = (manifest.exports || {}).map_snr;
+    $("fig-snr").hidden = !hasSnr;
+    if (hasSnr) $("img-map-snr").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_snr.png")}`;
+    const hasCovDensity = (manifest.exports || {}).map_coverage_density;
+    $("fig-coverage-density").hidden = !hasCovDensity;
+    if (hasCovDensity) $("img-map-coverage-density").src = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_coverage_density.png")}`;
+    const hasCombined = (manifest.exports || {}).map_abc_combined;
+    if (hasCombined) {
+      const combinedUrl = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_abc_combined.png")}`;
+      $("img-abc-combined").src = combinedUrl; $("link-abc-combined").href = combinedUrl;
+    }
+
+    const artifacts = $("results-artifacts"); artifacts.textContent = "";
+    const files = ["manifest.json", "config.json", "provenance.json", "points.csv", "maps/board.json"];
+    for (const [name, exts] of Object.entries(manifest.exports || {})) {
+      for (const fn of exts) files.push(`maps/${fn}`);
+    }
+    for (const rel of files) {
+      const a = document.createElement("a"); a.href = `/api/ops/file?path=${encodeURIComponent(od + "/" + rel)}`;
+      a.target = "_blank"; a.rel = "noopener"; a.textContent = rel; a.style.marginRight = "12px";
+      artifacts.appendChild(a);
+    }
+
+    const br = await U.api(`/api/ops/science/map?dir=${encodeURIComponent(od)}&name=board`, { timeoutMs: 15000 });
+    if (br.ok) {
+      lastBoard = br.data.data; lastSelectedCell = null;
+      drawBoardA();
+      renderColorLegend("legend-a", lastBoard);
+      renderColorLegend("legend-b", lastBoard);
+      renderColorLegend("legend-c", lastBoard);
+    }
+  }
+
+  // ------------------------------------------------------------------ map A: the ONLY interactive panel.
+  // B and C are plain <img> exports (see renderResults) - a new interpolated pixel is never a stand-in for a
+  // real sample, so it gets no click handler and no per-cell payload at all (board.json now describes A only
+  // - see science_web_bridge.board_json_payload's own docstring).
+  function drawBoardA() {
+    const canvas = $("board-canvas-a");
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square box, like B/C's <img>
+    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#0d1317"; ctx.fillRect(0, 0, cssW, cssH);
+    if (!lastBoard) return;
+    // Each cell is drawn as its quadrilateral (corners_xy, deg) in the SAME projection and footprint as the B/C
+    // images (extent_deg), fitted into the square box the way object-fit:contain fits those images: equal scale
+    // on both axes, centred - so a cell sits over the same sky as the B/C pixels around it. x (east) grows to
+    // the RIGHT and y (north) upward, exactly as in the exported PNGs (column 0, the westernmost, at the left).
+    // A board without corners_xy (written before this change) falls back to its regular row/col layout.
+    const ext = lastBoard.extent_deg;
+    const { n_rows: nRows, n_cols: nCols } = lastBoard;
+    let toPx;
+    if (ext) {
+      const k = Math.min(cssW / (2 * ext.half_w), cssH / (2 * ext.half_h));
+      const ox = cssW / 2, oy = cssH / 2;
+      toPx = ([x, y]) => [ox + x * k, oy - y * k];
+    }
+    canvas.__cells = [];
+    for (const cell of lastBoard.cells) {
+      const poly = ext && cell.corners_xy
+        ? cell.corners_xy.map(toPx)
+        : (() => { const cw = cssW / nCols, ch = cssH / nRows, px = cell.col * cw, py = (nRows - 1 - cell.row) * ch;
+                   return [[px, py + ch], [px + cw, py + ch], [px + cw, py], [px, py]]; })();
+      ctx.beginPath(); poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath();
+      if (cell.valid) { ctx.fillStyle = cell.color; ctx.fill(); }
+      ctx.strokeStyle = "#33414a"; ctx.lineWidth = 1; ctx.stroke();
+      canvas.__cells.push({ poly, cell });
+    }
+    if (lastSelectedCell) {
+      const hit = canvas.__cells.find((c) => c.cell.row === lastSelectedCell.row && c.cell.col === lastSelectedCell.col);
+      if (hit) {
+        ctx.beginPath(); hit.poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath();
+        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.stroke();
+      }
+    }
+  }
+
+  function insidePolygon(x, y, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  function cellAtEvent(canvas, ev) {
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.clientWidth ? canvas.clientWidth / rect.width : 1;
+    const x = (ev.clientX - rect.left) * scale, y = (ev.clientY - rect.top) * scale;
+    for (const c of canvas.__cells || []) {
+      if (insidePolygon(x, y, c.poly)) return c.cell;
+    }
+    return null;
+  }
+  $("board-canvas-a").addEventListener("click", (ev) => {
+    const cell = cellAtEvent($("board-canvas-a"), ev);
+    if (!cell) return;
+    // unambiguous identification: exactly one real cell (or none) is ever hit, never an overlapping marker.
+    lastSelectedCell = { row: cell.row, col: cell.col };
+    drawBoardA();
+    showCellDetail(cell);
+  });
+
+  async function showCellDetail(cell) {
+    const lines = [
+      `cell row ${cell.row + 1} col ${cell.col + 1}   RA=${cell.ra_deg.toFixed(4)}°  Dec=${cell.dec_degrees.toFixed(4)}°`,
+      cell.point_index != null
+        ? `real point ${cell.point_index}   status=${cell.point_status}${cell.point_reason ? ` (${cell.point_reason})` : ""}`
+        : "no pointing at this mosaic position — nothing was measured here.",
+      cell.valid ? `measured value: ${cell.value.toFixed(4)} ± ${cell.uncertainty.toFixed(4)}` : "no measured value",
+    ];
+    $("cell-detail").textContent = lines.join("\n");
+    if (cell.point_index == null) { $("point-spectrum-view").hidden = true; return; }
+    try {
+      const r = await U.api(`/api/ops/reduce/point?session_dir=${encodeURIComponent(lastManifest.reduce_session_dir)}&point_index=${cell.point_index}`, { timeoutMs: 15000 });
+      if (!r.ok) throw new Error(U.errorText(r.error));
+      $("point-spectrum-view").hidden = false;
+      drawPointSpectrum(r.data.data.arrays, lastManifest.velocity_window_m_s);
+    } catch (err) {
+      $("point-spectrum-view").hidden = true;
+      $("cell-detail").textContent += `\n(spectrum unavailable: ${msg(err)})`;
+    }
+  }
+
+  // ONE shared HTML colour legend, next to EACH of the three panels (request: "una barra de color visible
+  // junto a cada imagen... alinea las barras sin alterar el tamano de las imagenes") - built from the SAME
+  // color_vmin/color_vmax/color_stops the server computed with viridis_hex() (the identical function baked
+  // into every PNG export), so A's canvas and B/C's images never drift apart from their own legend or from
+  // each other; a plain CSS gradient div never resizes the image elements it sits beside.
+  function renderColorLegend(elId, board) {
+    const el = $(elId);
+    const stops = board.color_stops || [];
+    const grad = el.querySelector(".legend-gradient");
+    const [maxLbl, midLbl, minLbl] = el.querySelectorAll(".legend-labels span");
+    if (stops.length) {
+      const stepPct = 100 / (stops.length - 1);
+      grad.style.background = `linear-gradient(to top, ${stops.map((c, i) => `${c} ${(i * stepPct).toFixed(2)}%`).join(", ")})`;
+    }
+    maxLbl.textContent = board.color_vmax.toFixed(1);
+    midLbl.textContent = ((board.color_vmax + board.color_vmin) / 2).toFixed(1);
+    minLbl.textContent = board.color_vmin.toFixed(1);
+    el.title = board.color_units || "";
+  }
+
+  function drawPointSpectrum(arrays, window_m_s) {
+    const canvas = $("point-spectrum-canvas");
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth || 900, cssH = 240;
+    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    const vel = arrays.velocity_lsrk_m_s, val = arrays.relative_intensity;
+    if (!vel || !vel.length) { ctx.fillStyle = "#91a2ad"; ctx.fillText("no LSRK velocity axis for this point", 10, 20); return; }
+    const finite = val.filter((v) => Number.isFinite(v));
+    if (!finite.length) { ctx.fillStyle = "#91a2ad"; ctx.fillText("no finite values", 10, 20); return; }
+    const vlo = Math.min(...finite), vhi = Math.max(...finite);
+    const xlo = Math.min(...vel), xhi = Math.max(...vel);
+    const pad = 26;
+    const x = (v) => pad + ((v - xlo) / (xhi - xlo)) * (cssW - 2 * pad);
+    const y = (v) => cssH - pad - ((v - vlo) / Math.max(vhi - vlo, 1e-30)) * (cssH - 2 * pad);
+    // shade the integration window actually used
+    const [wlo, whi] = window_m_s;
+    ctx.fillStyle = "rgba(101,183,216,0.15)";
+    ctx.fillRect(x(Math.max(wlo, xlo)), pad, x(Math.min(whi, xhi)) - x(Math.max(wlo, xlo)), cssH - 2 * pad);
+    ctx.strokeStyle = "#2b3942"; ctx.strokeRect(pad, pad, cssW - 2 * pad, cssH - 2 * pad);
+    ctx.beginPath(); ctx.strokeStyle = "#65b7d8"; ctx.lineWidth = 1;
+    for (let i = 0; i < vel.length; i++) {
+      const px = x(vel[i]), py = Number.isFinite(val[i]) ? y(val[i]) : null;
+      if (py == null) continue;
+      if (i === 0 || !Number.isFinite(val[i - 1])) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.fillStyle = "#91a2ad"; ctx.font = "10px ui-monospace,monospace";
+    ctx.fillText(`${(xlo / 1000).toFixed(1)} km/s`, pad, cssH - 6);
+    ctx.textAlign = "right"; ctx.fillText(`${(xhi / 1000).toFixed(1)} km/s`, cssW - pad, cssH - 6); ctx.textAlign = "left";
+    ctx.fillText("shaded = integration window used for the maps", pad, pad + 10);
+  }
+
+  // ------------------------------------------------------------------ init
+  invalidateDownstream();
+  $("coverage-panel").hidden = true; $("config-panel").hidden = true;
+  loadInputs().catch((err) => showError(`could not load inputs: ${msg(err)}`));
+})();

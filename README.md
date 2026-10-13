@@ -10,7 +10,7 @@ ALMITA is a **fully open-source, open-hardware amateur radio astronomy project**
 by **Felipe Fridman G.** It observes the **1420 MHz hydrogen line** with a Raspberry Pi 5 and RTL-SDR receivers.
 Contact: **ffridman@gmail.com**
 
-It combines INDI/OnStep mount control, automated sky planning, HDF5 acquisition and a lightweight local web console. It is
+It combines INDI/OnStep mount control, automated sky planning, HDF5 acquisition and a single authenticated web console. It is
 **offline-first**: internet access is not required to observe.
 
 Project site: <https://almita-radio.github.io/almita/>
@@ -48,7 +48,7 @@ Supporting systems: **ALIGN** (conservative pointing alignment), **CALIBRATE** (
 | `almita_align.py` / `almita_calibrate.py` | alignment and calibration workflows |
 | `almita_reduce.py` | RAW -> reduced spectra |
 | `almita_science.py` | reduced spectra -> science products (`inspect`, `plan`, `run`, `replay`, `compare`, `validate`) |
-| `almita_console_server.py`, `almita_orchestrator_server.py` | local web console (:8088) and observe API (:8090) |
+| `almita_console_server.py`, `almita_orchestrator_server.py` | single authenticated web server :8088 (console + API + streams; `almita_web_auth.py` sets the user) |
 
 Every command has `--help`. The long-running services are described under `systemd/`.
 
@@ -62,6 +62,8 @@ not a commercial kit. ALMITA-original hardware design and integration documentat
 
 | Topic | Where |
 |---|---|
+| Operating the instrument step by step (Spanish) | [docs/MANUAL_CORTAPALOS.pdf](docs/MANUAL_CORTAPALOS.pdf) ([source](docs/MANUAL_CORTAPALOS.md)), [FIELD_RUNBOOK.md](FIELD_RUNBOOK.md) |
+| Current state of the product and open work (Spanish) | [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md), [docs/BACKLOG.md](docs/BACKLOG.md) |
 | Project overview (hardware, workflow, grid generator, alignment, gain, RFI reference) | [docs/ALMITA_OVERVIEW.md](docs/ALMITA_OVERVIEW.md) |
 | Observation planning / grids | [docs/observe/](docs/observe/) |
 | ALIGN | [docs/HI_ALIGNMENT_MODEL.md](docs/HI_ALIGNMENT_MODEL.md), [docs/HI_FIRST_LIGHT_RUNBOOK.md](docs/HI_FIRST_LIGHT_RUNBOOK.md) |
@@ -69,7 +71,7 @@ not a commercial kit. ALMITA-original hardware design and integration documentat
 | REDUCE | [docs/REDUCE_SCOPE.md](docs/REDUCE_SCOPE.md), [docs/REDUCE_MODEL.md](docs/REDUCE_MODEL.md), [docs/REDUCE_PIPELINE.md](docs/REDUCE_PIPELINE.md), [docs/REDUCE_V1_FREEZE.md](docs/REDUCE_V1_FREEZE.md), [runbook](docs/REDUCE_FIRST_RUNBOOK.md) |
 | SCIENCE | [docs/SCIENCE_SCOPE.md](docs/SCIENCE_SCOPE.md), [docs/SCIENCE_MODEL.md](docs/SCIENCE_MODEL.md), [docs/SCIENCE_PIPELINE.md](docs/SCIENCE_PIPELINE.md), [docs/SCIENCE_ACCEPTANCE.md](docs/SCIENCE_ACCEPTANCE.md), [docs/SCIENCE_V1_FREEZE.md](docs/SCIENCE_V1_FREEZE.md), [runbook](docs/SCIENCE_FIRST_RUNBOOK.md) |
 | Web console | [docs/WEB_ALIGNMENT_CALIBRATION.md](docs/WEB_ALIGNMENT_CALIBRATION.md) |
-| Hardware notes (mount model, rtl_tcp service) | [docs/hardware/](docs/hardware/) |
+| Open hardware: build guide, bill of materials, RF and wiring, mechanics, mount model, rtl_tcp service | [docs/hardware/](docs/hardware/) |
 | Full documentation index | [docs/README.md](docs/README.md) |
 
 ## Status and installation
@@ -77,5 +79,9 @@ not a commercial kit. ALMITA-original hardware design and integration documentat
 Experimental and field-tested on one Raspberry Pi 5. ALMITA is **not packaged**: it runs from a checkout under a Python
 virtual environment (`requirements.txt`), with the services in `systemd/` installed by hand. There is no `pip install`.
 
-Tests: from the repo root, `python -m pytest` (test files are in [tests/](tests/)). Some tests need optional packages (for example `indi`) or real
-historical campaigns under `data/`, and fail or skip without them.
+Tests: from the repo root, `python -m pytest` (test files are in [tests/](tests/)). They use no hardware and nothing under
+`data/`: their inputs are in `tests/fixtures/`. Some tests need optional packages (for example `indi`) or headless Chromium, and
+skip without them. The full suite takes about half an hour on the Raspberry Pi 5.
+
+Licences: software under [MIT](LICENSE); ALMITA-original hardware design and documentation under
+[CERN-OHL-S-2.0](LICENSE.hardware).

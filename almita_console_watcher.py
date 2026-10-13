@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from runtime_state import atomic_write_json, read_json_safe, utcnow
+from runtime_state import atomic_write_json, is_script_cmdline, read_json_safe, utcnow
 import telemetry_summary
 import wifi_health
 
@@ -76,10 +76,10 @@ def find_capture_process(proc: Path = Path("/proc")) -> bool:
         if not entry.name.isdigit():
             continue
         try:
-            cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            raw = (entry / "cmdline").read_bytes()
         except OSError:
             continue
-        if "capture.py" in cmdline:
+        if is_script_cmdline(raw, "capture.py"):      # executes capture.py - not pytest/sdr_capture.py/grep lines
             return True
     return False
 

@@ -71,7 +71,7 @@ def parse_coordinates(ra_arg: str, dec_arg: str) -> Tuple[Optional[float], Optio
     return ra, dec
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Control de montura INDI (movimiento, sync, tracking)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -106,7 +106,16 @@ Nota: RA puede ingresarse como decimal (18.615) o en formato HH:MM:SS.
     group.add_argument("--track", choices=["on", "off"],
                        help="Encender/apagar tracking")
 
-    args = parser.parse_args()
+    # argparse only accepts a value starting with "-" when it looks like a plain negative number, so a southern
+    # declination in sexagesimal ("-33:27:00") was rejected as an unknown option and only the decimal form worked.
+    # Widen what counts as a negative number to the [+/-]DD:MM:SS form this CLI documents. No option of this
+    # parser looks like a number, so nothing else changes.
+    parser._negative_number_matcher = re.compile(r"^-(\d+(:\d+){0,2}(\.\d*)?|\.\d+)$")
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     controller = INDITelescopeControl(
         host=args.host,
@@ -115,44 +124,37 @@ Nota: RA puede ingresarse como decimal (18.615) o en formato HH:MM:SS.
         verbose=args.verbose,
     )
 
+    import asyncio
     try:
-        if not controller.connect():
-            sys.exit(1)
-
-        if args.status:
-            awaitable = controller.get_coordinates()
-            # Python <3.7 can't await in non-async, so use asyncio.run
-            import asyncio
-            asyncio.run(awaitable)
-            return
-
-        if args.goto:
-            ra, dec = parse_coordinates(args.goto[0], args.goto[1])
-            if ra is None or dec is None:
-                print("ERROR: Coordenadas inválidas. Usa formato HH:MM:SS o decimal.")
-                sys.exit(1)
-            import asyncio
-            asyncio.run(controller.goto(ra, dec))
-            return
-
-        if args.sync:
-            ra, dec = parse_coordinates(args.sync[0], args.sync[1])
-            if ra is None or dec is None:
-                print("ERROR: Coordenadas inválidas. Usa formato HH:MM:SS o decimal.")
-                sys.exit(1)
-            import asyncio
-            asyncio.run(controller.sync(ra, dec))
-            return
-
-        if args.track:
-            enable = args.track == "on"
-            import asyncio
-            asyncio.run(controller.set_tracking(enable))
-            return
-
+        sys.exit(asyncio.run(_run(args, controller)))
     except KeyboardInterrupt:
         print("\nOperación cancelada por el usuario.")
         sys.exit(130)
+
+
+async def _run(args, controller) -> int:
+    """One event loop for the whole command: connect() is a coroutine - it used to be called without await
+    (always "truthy", never connected) and every action then ran in a fresh loop on an unconnected client."""
+    if not await controller.connect():
+        print("ERROR: no se pudo conectar al servidor INDI.")
+        return 1
+    try:
+        if args.status:
+            ra, dec = await controller.get_coordinates()
+            print(f"RA {ra} h  DEC {dec} deg")
+            return 0 if ra is not None and dec is not None else 1
+        if args.goto or args.sync:
+            ra, dec = parse_coordinates(*(args.goto or args.sync))
+            if ra is None or dec is None:
+                print("ERROR: Coordenadas inválidas. Usa formato HH:MM:SS o decimal.")
+                return 1
+            ok = await (controller.goto(ra, dec) if args.goto else controller.sync(ra, dec))
+            return 0 if ok else 1
+        if args.track:
+            return 0 if await controller.set_tracking(args.track == "on") else 1
+        return 0
+    finally:
+        await controller.disconnect()
 
 
 if __name__ == "__main__":

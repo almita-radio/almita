@@ -41,10 +41,11 @@ class CaptureConflictResult(NamedTuple):
 
 
 def _scan_proc_for_cmdline_needle(needle: str, proc_root: str = "/proc") -> Optional[int]:
-    """Generic read-only /proc scan for any process whose cmdline contains
-    `needle`. Never raises: an unreadable directory (permissions, or the
-    process exiting mid-scan - a normal race, not an error) is skipped,
-    never treated as a match. Returns the first matching pid, or None."""
+    """Read-only /proc scan for a process that EXECUTES the script `needle` (runtime_state.is_script_cmdline -
+    not any cmdline merely containing the text: pytest, sdr_capture.py, a shell or grep line used to match).
+    Never raises: an unreadable directory (permissions, or the process exiting mid-scan - a normal race, not
+    an error) is skipped, never treated as a match. Returns the first matching pid, or None."""
+    from runtime_state import is_script_cmdline
     root = Path(proc_root)
     try:
         candidates = [p for p in root.iterdir() if p.name.isdigit()]
@@ -55,7 +56,7 @@ def _scan_proc_for_cmdline_needle(needle: str, proc_root: str = "/proc") -> Opti
             raw = (entry / "cmdline").read_bytes()
         except OSError:
             continue
-        if needle.encode() in raw:
+        if is_script_cmdline(raw, needle):
             return int(entry.name)
     return None
 

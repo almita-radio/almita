@@ -1,0 +1,28 @@
+# MAIN receiver (RTL-SDR Blog V4, serial 00000001). Installed copy: /etc/systemd/system/rtl_tcp.service
+#
+# -f/-s/-g are only rtl_tcp's state when it starts. Every ALMITA acquisition retunes explicitly on its own
+# connection (sdr_tuning.tune_explicitly) and never trusts this argv as the current tuning. They still match
+# the operating configuration in observer_config.json (observation_defaults); tests/test_frequency_single_source_of_truth.py
+# fails if they drift apart.
+#
+# stdbuf -oL is required: rtl_tcp's "set freq N" acknowledgements are the tuning evidence the acquisitions wait
+# for. Without line buffering they reach the journal minutes late and every acquisition is blocked.
+[Unit]
+Description=RTL-TCP Radio Astronomy Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/stdbuf -oL /usr/bin/rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 -f 1420405752 -s 2400000 -g 40.2 -T
+
+Restart=always
+RestartSec=3
+
+User=stellarmate
+Group=stellarmate
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

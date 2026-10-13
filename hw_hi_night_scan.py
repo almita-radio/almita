@@ -274,6 +274,7 @@ async def main(args) -> int:
     failing = [(n, d) for n, p, d in gates if not p]
     if failing:
         reason = "; ".join(f"{n}: {d}" for n, d in failing)
+        session.log_event(f"BLOCKED by preflight gate(s): {reason}")   # the outcome belongs in the evidence log, not only on stdout
         report["result"] = "BLOCKED"
         report["reason"] = reason
         session.write_hardware_test_result(report)
@@ -296,8 +297,23 @@ async def main(args) -> int:
         obstime_provider = Time.now
     provider = FITSMomentMapProvider(str(fits_path), manifest, require_validated=True)
     obstime_now = obstime_provider()
-    center, selection = provider.choose_target(location, obstime_now, args.min_altitude, args.beam_fwhm_deg,
-                                                 stride=args.pixel_catalog_stride)
+    try:
+        center, selection = provider.choose_target(location, obstime_now, args.min_altitude, args.beam_fwhm_deg,
+                                                     stride=args.pixel_catalog_stride)
+    except RuntimeError as exc:
+        # No HI target is usable at this hour (all below the altitude floor, flat or in a coverage gap). That is a
+        # BLOCKED preflight like any other gate, with its evidence written - it used to escape as a traceback,
+        # which only showed at the hours when no candidate is up (found by the full test run of 2026-10-13, 14:40 UTC).
+        gate("hi_target_available_now", False, str(exc))
+        report["gates_astro_and_reference"] = [{"name": "hi_target_available_now", "passed": False, "detail": str(exc)}]
+        reason = f"hi_target_available_now: {exc}"
+        session.log_event(f"BLOCKED before target selection: {reason}")
+        report["result"] = "BLOCKED"
+        report["reason"] = reason
+        session.write_hardware_test_result(report)
+        session.write_state({"phase": "done", "result": "BLOCKED"})
+        print(f"\nFIRST REAL HI NIGHT SCAN: BLOCKED\nReason: {reason}\nEvidence: {session.dir}")
+        return 2
     template = provider.template_for(center, args.beam_fwhm_deg, stride=args.pixel_catalog_stride)
     gal = center.galactic
     print(f"[TARGET] l={gal.l.deg:.3f} b={gal.b.deg:.3f} RA={center.ra.hour:.4f}h DEC={center.dec.deg:.3f} deg "
@@ -344,6 +360,7 @@ async def main(args) -> int:
     still_failing = [(n, d) for n, p, d in gates if not p]
     if still_failing:
         reason = "; ".join(f"{n}: {d}" for n, d in still_failing)
+        session.log_event(f"BLOCKED by preflight gate(s): {reason}")
         report["result"] = "BLOCKED"
         report["reason"] = reason
         session.write_hardware_test_result(report)

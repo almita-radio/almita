@@ -4,7 +4,9 @@ const CONFIG={root:PARAMETERS.get("root")||window.ALMITA_RUNTIME_ROOT||"/runtime
 const $=id=>document.getElementById(id);
 const safe=(v,fallback="—")=>v===null||v===undefined||v===""?fallback:v;
 const num=(v,d=1)=>typeof v==="number"?v.toLocaleString(undefined,{maximumFractionDigits:d}):safe(v);
-const pair=(label,value)=>`<dt>${label}</dt><dd>${safe(value)}</dd>`;
+// Backend/watcher strings (errors, session names, paths) are inserted as TEXT: escape before they reach innerHTML.
+const esc=v=>String(v===null||v===undefined?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pair=(label,value)=>`<dt>${label}</dt><dd>${esc(safe(value))}</dd>`;
 const badgeClass=v=>`badge status-${String(v).toLowerCase()}`;
 let lastValid=null;
 
@@ -48,10 +50,19 @@ function _appendHmsToSummaryLine(line){
   return `${line}   (${_hhmmss(seconds)})`;
 }
 
+// Every fetch is bounded: a stalled watcher/server must show as DISCONNECTED, not as an eternal spinner.
+const FETCH_TIMEOUT_MS=8000;
 async function fetchJson(name){
-  const response=await fetch(`${CONFIG.root}/${name}`,{cache:"no-store"});
-  if(!response.ok)throw new Error(`${name}: HTTP ${response.status}`);
-  return response.json();
+  const ctl=typeof AbortController==="function"?new AbortController():null;
+  const timer=ctl?setTimeout(()=>ctl.abort(),FETCH_TIMEOUT_MS):null;
+  try{
+    const response=await fetch(`${CONFIG.root}/${name}`,{cache:"no-store",signal:ctl?ctl.signal:undefined});
+    if(!response.ok)throw new Error(`${name}: HTTP ${response.status}`);
+    return await response.json();
+  }catch(error){
+    if(error&&error.name==="AbortError")throw new Error(`${name}: no response within ${FETCH_TIMEOUT_MS/1000} s`);
+    throw error;
+  }finally{if(timer)clearTimeout(timer)}
 }
 
 // Collapses wifi's state + most relevant detail into one line, matching
@@ -160,9 +171,11 @@ function renderQuicklook(quicklook){
   renderThumbs(quicklook);
 }
 
-function renderRfiRef(rfiRef){
+function renderRfiRef(rfiRef,acquisitionState){
   const state=rfiRef.status||"DISABLED";
-  $("rfi-ref-badge").textContent=state;$("rfi-ref-badge").className=badgeClass(state);
+  // a failure outside a running acquisition is the record of the LAST session, not a live state: say so (same colour)
+  const pastFailure=["FAILED","UNAVAILABLE"].includes(state)&&!["STARTING","RUNNING"].includes(acquisitionState);
+  $("rfi-ref-badge").textContent=pastFailure?`LAST SESSION ${state}`:state;$("rfi-ref-badge").className=badgeClass(state);
   if(state==="DISABLED"){$("rfi-ref-kv").innerHTML=pair("RFI REFERENCE","DISABLED");return}
   $("rfi-ref-kv").innerHTML=[
     pair("RECEIVER / SERIAL",rfiRef.device_serial?`V3 / ${rfiRef.device_serial}`:"—"),
@@ -357,8 +370,8 @@ async function renderRfiProducts(rfiRef,quicklook,sessionId){
   const freqLabel=rfiRef.center_frequency_hz==null?"—":`${num(rfiRef.center_frequency_hz/1e6,3)} MHz`;
   const gainLabel=rfiRef.gain_db==null?"—":`${num(rfiRef.gain_db,1)} dB`;
   $("rfi-caption").innerHTML=
-    `<b>ANTENNA B / RFI REF</b> — RTL-SDR V3 — ${freqLabel} — gain ${gainLabel} — `+
-    `updated ${safe(rfiRef.spectrum_updated_utc||rfiRef.waterfall_updated_utc||rfiRef.last_update_utc)}`;
+    `<b>ANTENNA B / RFI REF</b> — RTL-SDR V3 — ${esc(freqLabel)} — gain ${esc(gainLabel)} — `+
+    `updated ${esc(safe(rfiRef.spectrum_updated_utc||rfiRef.waterfall_updated_utc||rfiRef.last_update_utc))}`;
 
   const thumbs=$("rfi-thumbs"),placeholder=$("rfi-products-placeholder");
   const specCanvas=$("rfi-spectrum-canvas"),wfCanvas=$("rfi-waterfall-canvas"),mapImg=$("rfi-map-thumb");
@@ -471,29 +484,51 @@ function renderLastSession(lastSession){
   ].join("");
 }
 
+// LIVE / STALE / DISCONNECTED of THIS page's data link: LIVE = the last poll worked AND the status file is fresh;
+// STALE = polls work but the watcher stopped updating the file; DISCONNECTED = polls fail.
+const LINK={failures:0,lastOkAt:0,statusUpdatedMs:NaN,connectedOnce:false};
+function linkState(now=Date.now()){
+  if(LINK.failures>=2)return"DISCONNECTED";
+  if(!LINK.connectedOnce)return"CONNECTING";
+  const age=Number.isFinite(LINK.statusUpdatedMs)?now-LINK.statusUpdatedMs:Infinity;
+  return age>3*CONFIG.pollMs+4000?"STALE":"LIVE";
+}
+function renderLink(){
+  const el=$("link-state");if(!el)return;
+  const state=linkState();
+  el.textContent=state;el.className=badgeClass(state);
+}
+
 function render(status){
   lastValid=status;$("loading").hidden=true;$("app").hidden=false;$("connection").hidden=true;
+  LINK.statusUpdatedMs=Date.parse(status.updated_utc);renderLink();
   const systemState=status.system_state||"READY";
   $("system-badge").textContent=systemState;$("system-badge").className=badgeClass(systemState);
+  {const acq=status.acquisition||{},chip=$("ops-chip");if(chip){const live=["RUNNING","STARTING","STOPPING"].includes(acq.state);
+    chip.textContent="OPERATIONAL · "+systemState+(live?" · ACQUISITION "+acq.state+" "+(acq.points_success??0)+"/"+(acq.points_total??"?"):" · operate from PIPELINE →");}}
   $("updated").textContent=_shortTime(status.updated_utc);
   renderInstrument(status.instrument||{},status.wifi||{});
   renderSession(status.acquisition||{state:"IDLE"});
   const quicklook=status.quicklook||{state:"IDLE"};
   renderQuicklook(quicklook);
   const rfiRef=status.rfi_ref||{status:"DISABLED"};
-  renderRfiRef(rfiRef);
+  renderRfiRef(rfiRef,(status.acquisition||{}).state);
   renderRfiProducts(rfiRef,quicklook,(status.acquisition||{}).session_id||null);
   renderActivityLog(status.activity_log);
   if(window.SpectralStack3D)window.SpectralStack3D.update((status.acquisition||{}).session_id||null,(status.acquisition||{}).state);
   renderLastSession(status.last_session);
 }
 
+let _pollInFlight=false;
 async function poll(){
-  try{render(await fetchJson("almita_status.json"))}
+  if(_pollInFlight)return;                     // never two overlapping polls (slow backend)
+  _pollInFlight=true;
+  try{render(await fetchJson("almita_status.json"));LINK.failures=0;LINK.lastOkAt=Date.now();LINK.connectedOnce=true;renderLink()}
   catch(error){
+    LINK.failures+=1;renderLink();
     $("connection").hidden=false;$("connection").textContent=`DATA CONNECTION DEGRADED — ${error.message}`;
     if(!lastValid)$("loading").textContent="DATA CONNECTION DEGRADED — waiting for console watcher";
-  }
+  }finally{_pollInFlight=false}
 }
 
 function syncJson(name){
@@ -501,11 +536,85 @@ function syncJson(name){
   return request.status===200?JSON.parse(request.responseText):null;
 }
 
+// MOUNT CAMERA — same-origin MJPEG relay only (this :8088 server, /mount_camera/*), never the ESP32-CAM's own
+// address. Deliberately independent of poll()/render() above: a camera fault here must never affect any other
+// MONITOR tile, so every operation below is self-contained and defensively try/caught.
+function initMountCamera(){
+  const img=document.getElementById("mount-camera-img"),placeholder=document.getElementById("mount-camera-placeholder");
+  const badge=document.getElementById("mount-camera-badge"),kv=document.getElementById("mount-camera-kv");
+  const retryBtn=document.getElementById("mount-camera-retry");
+  const urlInput=document.getElementById("mount-camera-url"),saveBtn=document.getElementById("mount-camera-save"),note=document.getElementById("mount-camera-config-note");
+  const rotationSelect=document.getElementById("mount-camera-rotation");
+  // Display rotation only (the relayed MJPEG is untouched); 90/270 swap the picture's axes, so it is scaled to
+  // stay inside the 3:2 frame.
+  function applyRotation(deg){
+    const d=[0,90,180,270].includes(Number(deg))?Number(deg):0;
+    img.style.transform=d===0?"":(d===180?"rotate(180deg)":`rotate(${d}deg) scale(0.6667)`);
+    img.dataset.rotation=String(d);
+    if(rotationSelect&&document.activeElement!==rotationSelect)rotationSelect.value=String(d);
+  }
+  if(!img||!badge)return;   // page variant without this tile - nothing to do
+
+  function loadStream(){
+    // Cache-busted src: forces a fresh GET (a fresh subscribe() to the shared relay) - the browser's own
+    // multipart/x-mixed-replace support renders each frame as it arrives; nothing here decodes/redraws it.
+    img.src="/mount_camera/stream?t="+Date.now();
+    img.hidden=false;
+  }
+  img.addEventListener("load",()=>{placeholder.hidden=true;img.hidden=false});
+  img.addEventListener("error",()=>{img.hidden=true;placeholder.hidden=false;placeholder.textContent="STREAM UNAVAILABLE — see status below, or REINTENTAR"});
+
+  async function refreshStatus(){
+    try{
+      const ctl=typeof AbortController==="function"?new AbortController():null;
+      const timer=ctl?setTimeout(()=>ctl.abort(),6000):null;
+      let response;
+      try{response=await fetch("/mount_camera/status",{cache:"no-store",signal:ctl?ctl.signal:undefined})}
+      finally{if(timer)clearTimeout(timer)}
+      if(!response.ok)throw new Error("HTTP "+response.status);
+      const s=await response.json();
+      badge.textContent=s.state||"—";badge.className="badge status-"+String(s.state||"unknown").toLowerCase();
+      kv.innerHTML=[pair("VIEWERS (this ALMITA process)",s.viewers),pair("SOURCE",s.configured_url),s.last_error?pair("LAST ERROR",s.last_error):""].join("");
+      if(urlInput&&document.activeElement!==urlInput)urlInput.value=s.configured_url||s.default_url||"";
+      applyRotation(s.rotation_deg);
+      if(urlInput&&!urlInput.value)urlInput.placeholder=s.default_url||"";
+    }catch(err){
+      badge.textContent="UNKNOWN";badge.className="badge status-unknown";
+      kv.innerHTML=pair("STATUS","console link degraded — "+(err&&err.message||err));
+    }
+  }
+
+  if(retryBtn)retryBtn.addEventListener("click",()=>{try{loadStream();refreshStatus()}catch(e){/* isolated - never affects the rest of MONITOR */}});
+  if(saveBtn)saveBtn.addEventListener("click",async()=>{
+    try{
+      const url=(urlInput&&urlInput.value||"").trim();
+      note.textContent="saving…";
+      const body={stream_url:url};
+      if(rotationSelect)body.rotation_deg=Number(rotationSelect.value);
+      const response=await fetch("/mount_camera/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok||!data.ok){note.textContent="save failed: "+(data.error||("HTTP "+response.status));return}
+      note.textContent="saved — rotation applies now; a new URL on the next (re)connect";
+      applyRotation(data.rotation_deg);
+      loadStream();refreshStatus();
+    }catch(err){note.textContent="save failed: "+String(err&&err.message||err)}
+  });
+
+  try{loadStream()}catch(e){/* isolated */}
+  refreshStatus();
+  setInterval(()=>{if(!document.hidden){try{refreshStatus()}catch(e){/* isolated - never throws into the main poll loop */}}},5000);
+}
+
 function start(){
   if(PARAMETERS.get("snapshot")==="1"){const status=syncJson("almita_status.json");if(status)render(status);return}
-  poll();setInterval(poll,CONFIG.pollMs);
-  setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z"},1000);
+  poll();
+  // One poll timer; no polling while the tab is hidden (it resumes immediately on return).
+  setInterval(()=>{if(!document.hidden)poll()},CONFIG.pollMs);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
+  setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z";renderLink()},1000);
+  if(window.AlmitaUI&&AlmitaUI.mountFooter)AlmitaUI.mountFooter();
+  try{initMountCamera()}catch(e){console.error("mount camera init failed (isolated, other tiles unaffected):",e)}
 }
 window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,
-  drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG};
+  drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG,linkState,LINK};
 start();

@@ -1,0 +1,409 @@
+{
+ "designs": {
+  "expAB_combined__full": {
+   "analysis": "full",
+   "scenarios": {
+    "candidate_only_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_CANDIDATE_ONLY": 12
+     },
+     "n": 12,
+     "truth": "TIME_CANDIDATE_ONLY",
+     "wrong": 0
+    },
+    "receiver_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "RECEIVER_FIXED": 12
+     },
+     "n": 12,
+     "truth": "RECEIVER_FIXED",
+     "wrong": 0
+    },
+    "sky_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_FIXED": 12
+     },
+     "n": 12,
+     "truth": "SKY_FIXED",
+     "wrong": 0
+    },
+    "spatial_gradient": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_GRADIENT": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "spatial_gradient_ra": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_GRADIENT": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "time_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_GLOBAL": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    },
+    "time_plus_spatial": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "MIXED_TIME_AND_SPATIAL": 12
+     },
+     "n": 12,
+     "truth": "MIXED_TIME_AND_SPATIAL",
+     "wrong": 0
+    },
+    "whole_spectrum_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_GLOBAL": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    }
+   },
+   "seconds": 136.23955821990967
+  },
+  "expA_fixed_sky__full": {
+   "analysis": "full",
+   "scenarios": {
+    "candidate_only_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_CANDIDATE_ONLY": 12
+     },
+     "n": 12,
+     "truth": "TIME_CANDIDATE_ONLY",
+     "wrong": 0
+    },
+    "receiver_fixed": {
+     "abstain": 12,
+     "correct": 0,
+     "counts": {
+      "STATIONARY_UNDISCRIMINATED": 12
+     },
+     "n": 12,
+     "truth": "RECEIVER_FIXED",
+     "wrong": 0
+    },
+    "sky_fixed": {
+     "abstain": 12,
+     "correct": 0,
+     "counts": {
+      "STATIONARY_UNDISCRIMINATED": 12
+     },
+     "n": 12,
+     "truth": "SKY_FIXED",
+     "wrong": 0
+    },
+    "time_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_GLOBAL": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    },
+    "whole_spectrum_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_GLOBAL": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    }
+   },
+   "seconds": 65.14615416526794
+  },
+  "expB_random_bracketed__full": {
+   "analysis": "full",
+   "scenarios": {
+    "candidate_only_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_CANDIDATE_ONLY": 12
+     },
+     "n": 12,
+     "truth": "TIME_CANDIDATE_ONLY",
+     "wrong": 0
+    },
+    "receiver_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "RECEIVER_FIXED": 12
+     },
+     "n": 12,
+     "truth": "RECEIVER_FIXED",
+     "wrong": 0
+    },
+    "sky_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_FIXED": 12
+     },
+     "n": 12,
+     "truth": "SKY_FIXED",
+     "wrong": 0
+    },
+    "spatial_gradient": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_GRADIENT": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "spatial_gradient_ra": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_GRADIENT": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "time_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_GLOBAL": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    },
+    "time_plus_spatial": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "MIXED_TIME_AND_SPATIAL": 12
+     },
+     "n": 12,
+     "truth": "MIXED_TIME_AND_SPATIAL",
+     "wrong": 0
+    },
+    "whole_spectrum_drift": {
+     "abstain": 0,
+     "correct": 9,
+     "counts": {
+      "MIXED_TIME_AND_SPATIAL": 3,
+      "TIME_GLOBAL": 9
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 3
+    }
+   },
+   "seconds": 67.29895329475403
+  },
+  "expB_random_bracketed__regression": {
+   "analysis": "regression",
+   "scenarios": {
+    "candidate_only_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_DRIFT": 12
+     },
+     "n": 12,
+     "truth": "TIME_CANDIDATE_ONLY",
+     "wrong": 0
+    },
+    "receiver_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "RECEIVER_FIXED": 12
+     },
+     "n": 12,
+     "truth": "RECEIVER_FIXED",
+     "wrong": 0
+    },
+    "sky_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_FIXED": 12
+     },
+     "n": 12,
+     "truth": "SKY_FIXED",
+     "wrong": 0
+    },
+    "spatial_gradient": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_GRADIENT": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "spatial_gradient_ra": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_GRADIENT": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "time_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_DRIFT": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    },
+    "time_plus_spatial": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "MIXED_TIME_AND_SPATIAL": 12
+     },
+     "n": 12,
+     "truth": "MIXED_TIME_AND_SPATIAL",
+     "wrong": 0
+    },
+    "whole_spectrum_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_DRIFT": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    }
+   },
+   "seconds": 23.28965663909912
+  },
+  "old_raster_9pt__regression": {
+   "analysis": "regression",
+   "scenarios": {
+    "candidate_only_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_DRIFT": 12
+     },
+     "n": 12,
+     "truth": "TIME_CANDIDATE_ONLY",
+     "wrong": 0
+    },
+    "receiver_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "RECEIVER_FIXED": 12
+     },
+     "n": 12,
+     "truth": "RECEIVER_FIXED",
+     "wrong": 0
+    },
+    "sky_fixed": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "SKY_FIXED": 12
+     },
+     "n": 12,
+     "truth": "SKY_FIXED",
+     "wrong": 0
+    },
+    "spatial_gradient": {
+     "abstain": 0,
+     "correct": 0,
+     "counts": {
+      "SKY_FIXED": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 12
+    },
+    "spatial_gradient_ra": {
+     "abstain": 12,
+     "correct": 0,
+     "counts": {
+      "UNRESOLVED": 12
+     },
+     "n": 12,
+     "truth": "SKY_GRADIENT",
+     "wrong": 0
+    },
+    "time_drift": {
+     "abstain": 0,
+     "correct": 12,
+     "counts": {
+      "TIME_DRIFT": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 0
+    },
+    "time_plus_spatial": {
+     "abstain": 0,
+     "correct": 2,
+     "counts": {
+      "MIXED_TIME_AND_SPATIAL": 2,
+      "TIME_DRIFT": 10
+     },
+     "n": 12,
+     "truth": "MIXED_TIME_AND_SPATIAL",
+     "wrong": 10
+    },
+    "whole_spectrum_drift": {
+     "abstain": 0,
+     "correct": 0,
+     "counts": {
+      "SKY_FIXED": 12
+     },
+     "n": 12,
+     "truth": "TIME_GLOBAL",
+     "wrong": 12
+    }
+   },
+   "seconds": 3.259403705596924
+  }
+ },
+ "epoch": "2026-09-21T14:45:00+00:00",
+ "n_seeds": 12,
+ "scoring": "correct = decision equals the injected truth (regression analyses score the TIME family as one class); abstain = UNRESOLVED / STATIONARY_UNDISCRIMINATED; wrong = anything else"
+}

@@ -69,6 +69,8 @@ ESTADO_ACTUAL.md
 # Outputs generados por campañas físicas de montura
 mount_benchmark_output*/
 mount_benchmark_physical_*/
+mount_benchmark_targeted_*/
+mount_slew_model_output/
 
 # Almita Console V1 - runtime outputs generados (no versionar)
 data/runtime/
@@ -83,3 +85,12 @@ data/rfi_ref_real_gotosanity/
 data/rfi_ref_spectrum_hw_validation/
 data/rfi_ref_occupancy_hw_validation/
 data/rfi_ref_50pt_field_e2e/
+
+# data/: generated results and operator state (captures, REDUCE/SCIENCE products, calibration wizard sessions and
+# profiles, runtime files, the downloaded HI4PI map). Never versioned - test inputs live in tests/fixtures/.
+# Versioned inputs under data/ are listed explicitly:
+/data/*
+!/data/hi_sky_catalog_2000pts.csv
+
+# pytest / hypothesis caches
+.hypothesis/

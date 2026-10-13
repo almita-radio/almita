@@ -2,11 +2,9 @@
 split as alignment_engine/hi/acquisition.py, never duplicating SDRCapture
 or the simulator: RealCalibrationAcquisitionBackend wraps sdr_capture.SDRCapture
 exactly as RealHIAcquisitionBackend does; SimulatedCalibrationAcquisitionBackend
-wraps calibration_engine.simulation. RealCalibrationAcquisitionBackend never
-calls SDRCapture.configure() - see its own docstring for the audit finding
-behind that (configure() writes to rtl_tcp even when values already
-match), which is what makes a real capture through this class genuinely
-read-only at the protocol level.
+wraps calibration_engine.simulation. RealCalibrationAcquisitionBackend tunes
+the receiver explicitly (sdr_tuning.tune_explicitly) before it will capture -
+see its own docstring for why the earlier read-only policy was retired.
 """
 from __future__ import annotations
 
@@ -39,36 +37,52 @@ class RealCalibrationAcquisitionBackend:
     protocol. Constructing this does NOT connect (Fase 50/consistency with
     RealHIAcquisitionBackend's own contract) - connect() is explicit.
 
-    DELIBERATELY NEVER CALLS SDRCapture.configure() (audit finding for the
-    first real operational-calibration test: SDRCapture.configure()'s
-    network path sends real rtl_tcp protocol writes - center frequency,
-    sample rate, gain-mode, gain - even when the requested values already
-    match what is running, because a freshly constructed SDRCapture starts
-    with current_frequency/current_gain=None and always treats that as an
-    "initial" config that must be sent. capture() itself (verified by
-    reading sdr_capture.py's _capture_network/_ensure_consumer_started)
-    never sends anything - it only recv()s. Observing the ALREADY-RUNNING
-    stream via connect()+capture() alone is therefore genuinely read-only
-    at the protocol level, honoring "no service reconfiguration" exactly.
-    center_frequency_hz/sample_rate_hz/gain_db passed in are recorded as
-    CONFIGURED/EXPECTED metadata describing what the caller BELIEVES is
-    already running (ideally cross-checked against
-    hardware_inspection.inspect_rtl_tcp_service_command_line() first) -
-    never transmitted to the device."""
+    TUNES EXPLICITLY BEFORE CAPTURING. It used to never call configure() so a
+    capture stayed read-only at the rtl_tcp protocol level, and it recorded the
+    service argv as the frequency. That was wrong: rtl_tcp keeps whatever the
+    PREVIOUS client tuned, so the 2026-10-01 wizard 50 ohm captures ran at
+    1420405000 Hz (service argv, nobody had retuned yet) while their HDF5 attrs
+    declared 1420405752. Now tune() must succeed (rtl_tcp acknowledged exactly
+    the requested frequency/rate/gain on this connection) and capture() refuses
+    any other frequency/rate/gain than the one tuned. Each capture's attrs
+    carry the requested and applied values and the evidence separately
+    (sdr_tuning.tuning_attrs)."""
     host: str
     port: int
     _sdr: Any = None
+    tuning: Optional[Dict[str, Any]] = None
 
     async def connect(self) -> None:
         from sdr_capture import SDRCapture
         self._sdr = SDRCapture(mode="network", host=self.host, port=self.port, verbose=False)
         await self._sdr.connect()
 
+    async def tune(self, center_frequency_hz: float, sample_rate_hz: float, gain_db: float,
+                   ack_source: Any = None) -> Dict[str, Any]:
+        """Explicit tuning on this connection; raises sdr_tuning.TuningIncoherent (no capture) on failure."""
+        import sdr_tuning
+        if self._sdr is None:
+            raise RuntimeError("connect() must be called before tune()")
+        self.tuning = None
+        self.tuning = await sdr_tuning.tune_explicitly(self._sdr, center_frequency_hz, sample_rate_hz, gain_db,
+                                                       ack_source=ack_source, operating=sdr_tuning.operating_config())
+        return self.tuning
+
     async def capture(self, *, duration_seconds: float, output_path: str, center_frequency_hz: float,
                        sample_rate_hz: float, gain_db: Optional[float], metadata: Dict[str, Any]) -> str:
+        import sdr_tuning
         if self._sdr is None:
             raise RuntimeError("connect() must be called before capture()")
-        await self._sdr.capture(duration_seconds, output_path, int(sample_rate_hz), metadata)
+        if self.tuning is None:
+            raise sdr_tuning.TuningIncoherent("capture() before a successful tune() - NO capture taken")
+        req = self.tuning["requested"]
+        if (int(round(center_frequency_hz)), int(round(sample_rate_hz)), gain_db) != \
+                (req["center_frequency_hz"], req["sample_rate_hz"], req["gain_db"]):
+            raise sdr_tuning.TuningIncoherent(
+                f"capture asks for {center_frequency_hz} Hz / {sample_rate_hz} sps / {gain_db} dB but the receiver "
+                f"was tuned to {req} - NO capture taken")
+        attrs = {**metadata, **sdr_tuning.tuning_attrs(self.tuning), "gain_requested_db": gain_db}
+        await self._sdr.capture(duration_seconds, output_path, int(sample_rate_hz), attrs)
         return output_path
 
     async def close(self) -> None:

@@ -57,6 +57,11 @@ Raspberry Pi 5
 rtl_tcp → RFI diagnostics
 ```
 
+The reference-chain LNA is powered through the secondary RTL-SDR's Bias-T (operator-confirmed 2026-10-08), which
+ALMITA enables by default for RFI_REF. That the LNA actually receives power has not been measured yet, and whether
+the FM notch filter is present in the chain as built is to be confirmed (BL-031 and BL-053 in
+[../BACKLOG.md](../BACKLOG.md)).
+
 RFI_REF is intentionally independent from MAIN. It provides context and must
 not become a dependency that can corrupt or block the primary science capture.
 

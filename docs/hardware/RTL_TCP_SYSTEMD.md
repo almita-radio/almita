@@ -5,26 +5,22 @@ Esta configuración mantiene `rtl_tcp` escuchando sólo en la interfaz local
 
 ## Unidad de servicio
 
-Crear `/etc/systemd/system/rtl_tcp.service` con este contenido:
+La unidad versionada es [`systemd/rtl_tcp.service`](../../systemd/rtl_tcp.service). Instalarla con:
 
-```ini
-[Unit]
-Description=RTL-SDR TCP server for ALMITA
-After=network.target
-
-[Service]
-Type=simple
-User=stellarmate
-Group=stellarmate
-ExecStart=/usr/bin/rtl_tcp -a 127.0.0.1 -p 1234 -f 1420405000 -s 2400000 -g 40.2 -T
-Restart=always
-RestartSec=3
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp systemd/rtl_tcp.service /etc/systemd/system/rtl_tcp.service
 ```
+
+Puntos obligatorios:
+
+- `-f`/`-s`/`-g` deben coincidir con `observer_config.json` → `observation_defaults`
+  (frecuencia de operación **1420405752 Hz**, 2400000 sps, 40.2 dB). Un test falla si divergen.
+- Ese argv es solo el estado de rtl_tcp al arrancar. Cada adquisición vuelve a sintonizar
+  explícitamente en su propia conexión (`sdr_tuning.tune_explicitly`) y nunca usa el argv
+  como prueba de la sintonía actual: rtl_tcp conserva lo que dejó el cliente anterior.
+- `stdbuf -oL` es obligatorio. Los acuses `set freq N` de rtl_tcp son la evidencia de sintonía
+  que esperan las adquisiciones; sin buffer de línea llegan al journal con minutos de retraso
+  y toda adquisición queda bloqueada.
 
 Antes de habilitar la unidad, cerrar cualquier instancia manual de `rtl_tcp`
 para evitar que dos procesos compitan por el SDR o por el puerto 1234.

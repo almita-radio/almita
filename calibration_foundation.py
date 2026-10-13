@@ -99,6 +99,9 @@ def build_calibration_profile(
     bias_t_state: str = "ON", fft_size: int = 8192,
 ) -> dict[str, Any]:
     """Build and persist a gain-specific relative reference ensemble."""
+    import sdr_tuning
+    operating = sdr_tuning.operating_config()   # single source - the reference files must match it
+    op_freq, op_rate = operating["center_frequency_hz"], operating["sample_rate_hz"]
     files = [str(Path(path)) for path in reference_files]
     if len(files) < 2:
         raise ValueError("at least two independent reference captures are required")
@@ -112,7 +115,7 @@ def build_calibration_profile(
             _gain_from_attributes(attributes),
         )
         source_signatures[filename] = signature
-        if signature[:2] != (1420405752, 2400000) or signature[2] != float(gain_db):
+        if signature[:2] != (op_freq, op_rate) or signature[2] != float(gain_db):
             raise ValueError(f"incompatible reference configuration: {filename} {signature}")
         if frequency is not None and not np.array_equal(frequency, f):
             raise ValueError("reference frequency axes differ")
@@ -136,9 +139,9 @@ def build_calibration_profile(
     median_absolute_deviation = np.median(np.abs(stack - reference), axis=0)
     reference_sigma = 1.4826 * median_absolute_deviation
     dc_measurement = measure_dc_mask_half_width(
-        frequency, reference, 1420405752,
+        frequency, reference, op_freq,
     )
-    dc = make_dc_mask(frequency, 1420405752, dc_measurement["half_width_hz"])
+    dc = make_dc_mask(frequency, op_freq, dc_measurement["half_width_hz"])
     spur, spur_regions = detect_fixed_spurs(
         frequency, stack, excluded_mask=dc,
         persistence_threshold=max(0.5, 1.0 - 1.0 / len(files)),
@@ -166,9 +169,9 @@ def build_calibration_profile(
         "reference_topology": reference_topology,
         "instrument_chain": "LNA_FILTER_CABLING_TO_RTL_SDR",
         "bias_t_state": bias_t_state,
-        "center_frequency_hz": 1420405752,
+        "center_frequency_hz": op_freq,
         "frequency_hz": {"start": float(frequency[0]), "stop": float(frequency[-1]), "bin_width": bin_hz},
-        "sample_rate_hz": 2400000,
+        "sample_rate_hz": op_rate,
         "gain_db": float(gain_db),
         "fft_size": int(fft_size),
         "window": "Hann (numpy.hanning)",
@@ -177,7 +180,7 @@ def build_calibration_profile(
         "reference_count": len(files),
         "reference_files": files,
         "reference_records": records,
-        "dc_frequency_hz": 1420405752,
+        "dc_frequency_hz": op_freq,
         "dc_mask": dc_measurement,
         "dc_mask_bins": int(np.sum(dc)),
         "dc_mask_half_width_hz": dc_measurement["half_width_hz"],
@@ -241,6 +244,54 @@ def load_calibration_profile(path: str | Path) -> dict[str, Any]:
     return {"metadata": metadata, **arrays}
 
 
+def check_calibration_compatibility_values(
+    profile: dict[str, Any], *,
+    center_frequency_hz: float | None, sample_rate_hz: float | None, gain_db: float | None,
+    fft_size: int | None = None, topology: str | None,
+) -> dict[str, str]:
+    """The actual COMPATIBLE/INCOMPATIBLE/UNKNOWN decision, given already-resolved values - never reads a
+    file itself. check_calibration_compatibility() below (a real capture's own HDF5 attrs) and
+    observation_preflight.py's pre-RUN check (a resolved OBSERVE plan's PLANNED values, before capture.py ever
+    runs - see the module's own real incident: a WIZARD calibration profile built at a stale 1420405000 Hz
+    silently let a real 625-point observation capture at observer_config.json's real 1420405752 Hz, and
+    Quicklook only discovered the mismatch after the fact) both call this SAME function so the two can never
+    reach a different verdict for the same real numbers."""
+    metadata = profile["metadata"]
+    checks = (
+        ("center frequency", center_frequency_hz, metadata["center_frequency_hz"]),
+        ("sample rate", sample_rate_hz, metadata["sample_rate_hz"]),
+        ("gain", gain_db, metadata["gain_db"]),
+    )
+    for name, actual, expected in checks:
+        if actual is None:
+            return {"status": "UNKNOWN", "reason": f"capture {name} unavailable"}
+        if float(actual) != float(expected):
+            return {"status": "INCOMPATIBLE", "reason": f"{name}: {actual} != {expected}"}
+    if fft_size is not None and int(fft_size) != int(metadata["fft_size"]):
+        return {
+            "status": "INCOMPATIBLE",
+            "reason": f"FFT size: {fft_size} != {metadata['fft_size']}",
+        }
+    if topology is None:
+        return {"status": "UNKNOWN", "reason": "capture topology unavailable"}
+    expected_topology = metadata["instrument_chain"]
+    aliases = {
+        metadata["reference_topology"]: expected_topology,
+        "50_OHM_AT_LNA_INPUT": expected_topology,
+        "ANTENNA_AT_LNA_INPUT_INDOOR": expected_topology,
+        "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR": expected_topology,
+        # calibration_operational_realtest.py's real "REAL CALIBRATION" captures record this exact string
+        # (rf_input="ANTENNA_CURRENT_OPERATIONAL") - verified against a real capture's own HDF5 attrs; without
+        # this alias a real antenna capture from that tool was INCOMPATIBLE with every relative profile, even
+        # a genuinely matching one.
+        "ANTENNA_CURRENT_OPERATIONAL": expected_topology,
+    }
+    normalized = aliases.get(str(topology), str(topology))
+    if normalized != expected_topology:
+        return {"status": "INCOMPATIBLE", "reason": f"instrument chain: {normalized} != {expected_topology}"}
+    return {"status": "COMPATIBLE", "reason": "frequency, sample rate, gain and topology match"}
+
+
 def check_calibration_compatibility(
     profile: dict[str, Any], capture: str | Path,
     *, topology: str | None = None,
@@ -253,37 +304,16 @@ def check_calibration_compatibility(
             attributes = {key: _plain(value) for key, value in source.attrs.items()}
     except (OSError, KeyError) as error:
         return {"status": "INCOMPATIBLE", "reason": str(error)}
-    metadata = profile["metadata"]
-    checks = (
-        ("center frequency", attributes.get("center_frequency_hz"), metadata["center_frequency_hz"]),
-        ("sample rate", attributes.get("sample_rate_hz"), metadata["sample_rate_hz"]),
-        ("gain", _gain_from_attributes(attributes), metadata["gain_db"]),
-    )
-    for name, actual, expected in checks:
-        if actual is None:
-            return {"status": "UNKNOWN", "reason": f"capture {name} unavailable"}
-        if float(actual) != float(expected):
-            return {"status": "INCOMPATIBLE", "reason": f"{name}: {actual} != {expected}"}
     capture_fft_size = attributes.get("fft_size", attributes.get("calibration_fft_size"))
-    if capture_fft_size is not None and int(capture_fft_size) != int(metadata["fft_size"]):
-        return {
-            "status": "INCOMPATIBLE",
-            "reason": f"FFT size: {capture_fft_size} != {metadata['fft_size']}",
-        }
     capture_topology = topology or attributes.get("reference_topology") or attributes.get("rf_input")
-    if capture_topology is None:
-        return {"status": "UNKNOWN", "reason": "capture topology unavailable"}
-    expected_topology = metadata["instrument_chain"]
-    aliases = {
-        metadata["reference_topology"]: expected_topology,
-        "50_OHM_AT_LNA_INPUT": expected_topology,
-        "ANTENNA_AT_LNA_INPUT_INDOOR": expected_topology,
-        "ANTENNA_TO_LNA_FILTER_CABLING_TO_RTL_SDR": expected_topology,
-    }
-    normalized = aliases.get(str(capture_topology), str(capture_topology))
-    if normalized != expected_topology:
-        return {"status": "INCOMPATIBLE", "reason": f"instrument chain: {normalized} != {expected_topology}"}
-    return {"status": "COMPATIBLE", "reason": "frequency, sample rate, gain and topology match"}
+    return check_calibration_compatibility_values(
+        profile,
+        center_frequency_hz=attributes.get("center_frequency_hz"),
+        sample_rate_hz=attributes.get("sample_rate_hz"),
+        gain_db=_gain_from_attributes(attributes),
+        fft_size=capture_fft_size,
+        topology=capture_topology,
+    )
 
 
 def apply_relative_calibration(

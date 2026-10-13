@@ -184,9 +184,21 @@ def _validate_main(raw: dict) -> dict:
     _require(bias_tee is True,
               f"{where}.bias_tee: false is not supported — capture.py has no CLI flag to disable "
               "bias-tee (it is always enabled in production); omit this field or set it to true")
+    center = int(_num(raw, "center_frequency_hz", where, min_value=1, kind=int))
+    rate = int(_num(raw, "sample_rate", where, min_value=1, kind=int))
+    # Single source of truth (sdr_tuning.operating_config(), observer_config.json): a spec cannot quietly run
+    # at another frequency/rate - that is how calibration profiles and observations drifted apart before.
+    import sdr_tuning
+    op = sdr_tuning.operating_config()
+    _require(center == op["center_frequency_hz"],
+             f"{where}.center_frequency_hz: {center} Hz is not the agreed operating frequency "
+             f"{op['center_frequency_hz']} Hz (observer_config.json observation_defaults) - fix the spec")
+    _require(rate == op["sample_rate_hz"],
+             f"{where}.sample_rate: {rate} is not the operating sample rate {op['sample_rate_hz']} "
+             "(observer_config.json observation_defaults) - fix the spec")
     return {
-        "center_frequency_hz": int(_num(raw, "center_frequency_hz", where, min_value=1, kind=int)),
-        "sample_rate": int(_num(raw, "sample_rate", where, min_value=1, kind=int)),
+        "center_frequency_hz": center,
+        "sample_rate": rate,
         "gain_db": _num(raw, "gain_db", where),
         "bias_tee": bias_tee,
     }
@@ -199,13 +211,17 @@ def _validate_rfi_ref(raw: dict) -> dict:
     serial = _str(raw, "serial", where, required=False, default="00000002")
     gain_db = _num(raw, "gain_db", where, required=False, default=25.0)
     # Unlike main.bias_tee (always-on, no CLI path to disable), RFI_REF's
-    # bias-tee is genuinely optional per-field hardware (whether an LNA is
-    # wired into antenna B's chain varies by deployment). Default false:
-    # an older spec/archived resolved-plan with no opinion on this field
-    # must revalidate to the same behavior rtl_tcp has always run with for
-    # RFI_REF (no -T) rather than silently start energizing hardware that
-    # wasn't there when the config was written.
-    bias_tee = _bool(raw, "bias_tee", where, required=False, default=False)
+    # bias-tee stays a real per-chain choice: an explicit `bias_tee: false`
+    # is honoured (a reference chain with no LNA, or one that must not see
+    # DC on its input). Default TRUE since 2026-10-13 (BL-041): antenna B
+    # of this instrument has an in-line LNA powered through SDR 00000002's
+    # Bias-T (operator-confirmed 2026-10-08), so a spec that says nothing
+    # must not leave that LNA unpowered. This is the same default the web
+    # form and /api/observe/defaults already used. Consequence, on purpose:
+    # an older spec with no opinion on this field now revalidates with the
+    # Bias-T ON (until 2026-10-13 it revalidated OFF); resolved plans always
+    # carry the field explicitly and are unaffected.
+    bias_tee = _bool(raw, "bias_tee", where, required=False, default=True)
     return {"enabled": enabled, "serial": serial, "gain_db": gain_db, "bias_tee": bias_tee}
 
 

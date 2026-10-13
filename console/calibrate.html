@@ -1,18 +1,146 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Calibrate</title><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Calibrate</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
 <body>
-  <header class="topbar">
-    <div><h1>ALMITA CALIBRATE</h1><span class="readonly">OPERATIONAL CALIBRATION</span></div>
-    <nav class="obs-nav">
-      <a class="obs-nav-link" href="/observe.html">OBSERVE</a>
-      <a class="obs-nav-link" href="/align.html">ALIGN</a>
-      <a class="obs-nav-link active" href="/calibrate.html">CALIBRATE</a>
-    </nav>
-  </header>
+  <header id="almita-header"><h1>ALMITA CALIBRATE</h1></header>
 
   <main id="app">
+    <section class="panel" id="wizard-panel" aria-labelledby="h-wizard">
+      <header><h2 id="h-wizard">REFERENCE WIZARD <span class="muted">(50 Ω · HI ALTO · HI BAJO · real MAIN captures · real mount movement for the HI steps only)</span></h2><span id="wizard-badge" class="badge">—</span></header>
+      <div class="obs-summary">Chain: antenna → Nooelec SAWbird H1 (LNA + filter) → RTL-SDR Blog V4 (rtl_tcp, Bias-T). Measures the RELATIVE HI-line spectral contrast between two real sky zones (HI ALTO/HI BAJO), after a 50 Ω instrument-quality check. This is NEVER a Y-factor, noise temperature, kelvin or absolute RF gain — see the RESULT at the end, always labeled RELATIVE.</div>
+      <div id="wizard-biast" class="obs-summary"></div>
+
+      <div id="wizard-setup">
+        <div class="obs-row"><label for="wz-n">CAPTURES PER REFERENCE (suggested, editable)</label><input type="number" id="wz-n" min="2" max="20" value="5"></div>
+        <div class="obs-row"><label for="wz-s">SECONDS PER CAPTURE</label><input type="number" id="wz-s" min="0.5" max="30" step="any" value="2"></div>
+        <div class="obs-row"><label for="wz-stab">50 Ω STABILIZATION TIME (s — suggested; CAPTURE still needs your explicit click, never automatic)</label><input type="number" id="wz-stab" min="0" max="600" value="20"></div>
+        <div class="obs-row"><label for="wz-hi-settle">HI GOTO SETTLE TIME (s — real, after the mount stops slewing)</label><input type="number" id="wz-hi-settle" min="0" max="120" step="any" value="2"></div>
+        <!-- No static value= here on purpose: loadWizardDefaults() (calibrate.js) fills these from the server's
+             observation_defaults() before the START button is even enabled, so this form can never silently
+             diverge from observer_config.json / OBSERVE's own defaults again (see calibrate.js for the incident). -->
+        <div class="obs-row"><label for="wz-freq">CENTER FREQUENCY (Hz)</label><input type="number" id="wz-freq"></div>
+        <div class="obs-row"><label for="wz-rate">SAMPLE RATE (samples/s)</label><input type="number" id="wz-rate"></div>
+        <div class="obs-row"><label for="wz-gain">GAIN (dB)</label><input type="number" id="wz-gain" step="any"></div>
+        <div class="obs-row"><label for="wz-clip">CLIPPING RAIL-HIT THRESHOLD (fraction)</label><input type="number" id="wz-clip" value="0.0001" step="any"></div>
+        <div class="obs-row"><label for="wz-stab-th">STABILITY RMS-FRACTION THRESHOLD</label><input type="number" id="wz-stab-th" value="0.10" step="any"></div>
+        <div class="obs-row"><label for="wz-rfi">RFI PROXY: MIN USABLE BAND FRACTION</label><input type="number" id="wz-rfi" value="0.5" step="any"></div>
+        <div class="obs-row"><label for="wz-min-alt">HI CANDIDATES: MIN ELEVATION (deg)</label><input type="number" id="wz-min-alt" min="5" max="89" value="20"></div>
+        <div class="obs-row"><label for="wz-beam">HI CANDIDATES: BEAM FWHM (deg)</label><input type="number" id="wz-beam" min="1" max="90" step="any" value="20"></div>
+        <div class="obs-row"><label for="wz-sig">CONTRAST SIGNIFICANCE THRESHOLD (σ)</label><input type="number" id="wz-sig" min="1" max="10" step="any" value="3"></div>
+        <div class="obs-actions"><button type="button" id="wz-start">START WIZARD</button></div>
+      </div>
+
+      <div id="wizard-active" hidden>
+        <div class="obs-summary" id="wz-session-note"></div>
+        <div class="banner" id="wz-interruption" role="status" hidden></div>
+        <div class="obs-actions" id="wz-running" hidden><span class="obs-summary" id="wz-running-note"></span><button type="button" id="wz-stop">STOP CURRENT STEP</button></div>
+
+        <div id="wz-step-prepare" hidden>
+          <h3>50 Ω TERMINATION</h3>
+          <div class="obs-summary">Physically connect the 50 Ω termination now. Choose where below, then confirm. Instrument-quality test only — no sky coordinates, no mount movement.</div>
+          <div class="obs-row"><label for="wz-cp">CONNECTION POINT</label>
+            <select id="wz-cp"><option value="LNA_INPUT">LNA INPUT (replaces the antenna)</option><option value="LNA_OUTPUT">LNA OUTPUT (bypasses the LNA)</option><option value="SDR_INPUT">SDR INPUT (dongle only)</option></select></div>
+          <div id="wz-cp-explain" class="obs-summary"></div>
+          <div class="obs-actions">
+            <button type="button" id="wz-confirm-connected">I'VE CONNECTED IT — CONFIRM</button>
+            <button type="button" id="wz-skip">SKIP THIS REFERENCE (not available)</button>
+          </div>
+        </div>
+
+        <div id="wz-step-stabilize" hidden>
+          <div class="banner wz-step-failure" id="wz-50r-failure" role="alert" hidden></div>
+          <div class="obs-summary" id="wz-stabilize-note"></div>
+          <div class="obs-summary" id="wz-countdown"></div>
+          <div class="obs-row"><label for="wz-simulate">TEST MODE ONLY — simulate instead of a real capture</label>
+            <select id="wz-simulate"><option value="">(real capture)</option><option value="HEALTHY">HEALTHY</option><option value="CLIPPED">CLIPPED</option><option value="THERMAL_DRIFT">THERMAL_DRIFT</option><option value="RFI_CONTAMINATED">RFI_CONTAMINATED</option></select></div>
+          <div class="obs-actions"><button type="button" id="wz-capture">CAPTURE NOW</button></div>
+        </div>
+
+        <div id="wz-step-result" hidden>
+          <div class="obs-summary" id="wz-result-summary"></div>
+          <div class="twrap"><table id="wz-result-table" class="status-table"><thead><tr><th>#</th><th>clipping</th><th>usable band</th><th>rel. digital power</th></tr></thead><tbody></tbody></table></div>
+          <div class="obs-actions"><button type="button" id="wz-next">NEXT</button></div>
+        </div>
+
+        <div id="wz-step-reconnect" hidden>
+          <div class="obs-summary" id="wz-reconnect-note"></div>
+          <div class="obs-actions"><button type="button" id="wz-confirm-antenna">CONFIRM &amp; CONTINUE TO HI ZONE PROPOSAL</button></div>
+        </div>
+
+        <div id="wz-step-plan-hi" hidden>
+          <div class="obs-summary" id="wz-plan-hi-note"></div>
+          <div class="obs-actions"><button type="button" id="wz-plan-hi">PROPOSE HI ALTO / HI BAJO ZONES</button></div>
+          <div id="wz-plan-hi-result" hidden>
+            <div class="twrap"><table id="wz-plan-hi-table" class="status-table"><thead><tr><th>zone</th><th>RA (h)</th><th>Dec (deg)</th><th>alt</th><th>HI4PI N_HI (×10²⁰cm⁻²)</th><th>reason</th></tr></thead><tbody></tbody></table></div>
+            <div class="obs-summary" id="wz-plan-hi-rfi-note"></div>
+            <div id="wz-plan-preview" class="wz-plan-preview" hidden>
+              <h3>Sky preview (Alt/Az, zenith at centre, N up)</h3>
+              <canvas id="wz-plan-sky" class="wz-sky" width="420" height="420" aria-label="Alt/Az preview of the planned HI zones"></canvas>
+              <canvas id="wz-plan-sky-legend" class="wz-sky-legend" width="300" height="34" hidden title="HI4PI real map colour scale at the plan instant - N_HI column density, not an Almita measurement"></canvas>
+              <div class="obs-summary wz-sky-note" id="wz-plan-sky-note"></div>
+              <div class="twrap"><table id="wz-plan-preview-table" class="status-table"><thead><tr><th>order</th><th>zone</th><th>az</th><th>alt (plan instant)</th><th>worst alt over hold</th><th>limits</th></tr></thead><tbody></tbody></table></div>
+              <div class="obs-summary" id="wz-plan-preview-ref"></div>
+              <div class="obs-summary" id="wz-plan-preview-limits"></div>
+              <div class="obs-summary" id="wz-plan-preview-horizon"></div>
+            </div>
+            <div class="obs-actions">
+              <button type="button" id="wz-approve-hi-plan">APPROVE THESE ZONES</button>
+              <button type="button" id="wz-replan-hi">RE-PROPOSE (refresh)</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="wz-step-ready-hi" hidden>
+          <div class="banner wz-step-failure" id="wz-hi-failure" role="alert" hidden></div>
+          <h3 id="wz-ready-hi-label"></h3>
+          <div class="obs-summary" id="wz-ready-hi-note"></div>
+          <canvas id="wz-ready-sky" class="wz-sky" width="420" height="420" aria-label="Alt/Az preview of the approved HI zones"></canvas>
+          <canvas id="wz-ready-sky-legend" class="wz-sky-legend" width="300" height="34" hidden title="HI4PI real map colour scale at the plan instant - N_HI column density, not an Almita measurement"></canvas>
+          <div class="obs-summary wz-sky-note" id="wz-ready-sky-note"></div>
+          <div class="obs-summary" id="wz-ready-preview-note"></div>
+          <div class="obs-row"><label for="wz-hi-move-confirm">TYPE MOVE TO ALLOW THE REAL GOTO + CAPTURE</label><input type="text" id="wz-hi-move-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+          <div class="obs-actions"><button type="button" id="wz-capture-hi">CAPTURE NOW (real GOTO + capture)</button></div>
+        </div>
+
+        <div id="wz-step-result-hi" hidden>
+          <h3 id="wz-result-hi-label"></h3>
+          <div class="obs-summary" id="wz-result-hi-quality"></div>
+          <div class="obs-summary" id="wz-result-hi-spectral"></div>
+          <div class="obs-actions"><button type="button" id="wz-next-hi" hidden>NEXT: HI BAJO</button><button type="button" id="wz-finish-hi" hidden>FINISH — COMPUTE CONTRAST</button></div>
+        </div>
+
+        <div id="wz-step-done" hidden>
+          <div class="obs-summary" id="wz-done-summary"></div>
+
+          <h3>OBSERVE CALIBRATION PROFILE</h3>
+          <div class="banner" id="wz-observe-profile-banner" style="font-weight:700"></div>
+          <div class="obs-summary" id="wz-observe-profile-path"></div>
+          <div class="obs-summary" id="wz-observe-profile-detail"></div>
+
+          <h3>OPERATIONAL DRAFT <span class="muted">(diagnostic summary only — NOT the file above, not directly usable by OBSERVE)</span></h3>
+          <div class="obs-summary" id="wz-draft-profile-note"></div>
+
+          <h3>HI ALTO vs HI BAJO CONTRAST <span class="muted">(a separate, RELATIVE sky-position result — not used to build the profile above)</span></h3>
+          <div class="banner" id="wz-contrast-banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700"></div>
+          <div class="obs-summary" id="wz-contrast-detail"></div>
+        </div>
+
+        <div class="obs-actions"><button type="button" id="wz-abort">ABORT WIZARD</button></div>
+      </div>
+      <div id="wizard-job"></div>
+    </section>
+
+    <section class="panel" id="real-panel" aria-labelledby="h-real">
+      <header><h2 id="h-real">REAL CALIBRATION <span class="muted">(calibration_operational_realtest.py · real MAIN captures · no mount movement · receiver config read-only)</span></h2><span id="real-badge" class="badge">—</span></header>
+      <div class="obs-summary">Runs the real command against the real MAIN SDR. Result level is OPERATIONAL_RELATIVE: engineering / non-science, no physical units. A PASS here is an instrument-quality check only — it does NOT build or imply an OBSERVE calibration profile; that only comes from the REFERENCE WIZARD's own FINISH step above.</div>
+      <div class="obs-row"><label for="real-n">CAPTURES</label><input type="number" id="real-n" min="1" max="20" value="5"></div>
+      <div class="obs-row"><label for="real-s">SECONDS PER CAPTURE</label><input type="number" id="real-s" min="0.5" max="30" step="any" value="2"></div>
+      <div class="obs-actions"><button type="button" id="real-run">RUN REAL CALIBRATION</button></div>
+      <div class="reason" data-for="real-run" role="status"></div>
+      <div id="real-job-calibrate"></div>
+    </section>
+
     <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.08em">
       LEVEL: OPERATIONAL_RELATIVE &nbsp;·&nbsp; ABSOLUTE RF CALIBRATION: UNAVAILABLE — no Kelvin, no dBm, no noise figure is measured here.
     </div>
@@ -24,7 +152,7 @@
     </section>
 
     <section class="panel compact">
-      <header><h2>STATUS</h2><button id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
+      <header><h2>STATUS</h2><button type="button" id="btn-refresh-status" class="mode-btn">REFRESH STATUS</button></header>
       <dl class="kv">
         <div><dt>ACTIVE SCIENCE OBSERVATION</dt><dd id="st-active-observation">—</dd></div>
         <div><dt>MAIN SDR RESOURCE</dt><dd id="st-main-resource">—</dd></div>
@@ -38,15 +166,17 @@
     <section id="run-panel" class="panel">
       <header><h2>SIMULATION</h2></header>
       <div class="obs-actions">
-        <button class="scenario-btn active" data-scenario="HEALTHY">HEALTHY</button>
-        <button class="scenario-btn" data-scenario="CLIPPED">CLIPPED</button>
-        <button class="scenario-btn" data-scenario="THERMAL_DRIFT">THERMAL_DRIFT</button>
-        <button class="scenario-btn" data-scenario="RFI_CONTAMINATED">RFI_CONTAMINATED</button>
+        <button type="button" class="scenario-btn active" data-scenario="HEALTHY">HEALTHY</button>
+        <button type="button" class="scenario-btn" data-scenario="CLIPPED">CLIPPED</button>
+        <button type="button" class="scenario-btn" data-scenario="THERMAL_DRIFT">THERMAL_DRIFT</button>
+        <button type="button" class="scenario-btn" data-scenario="RFI_CONTAMINATED">RFI_CONTAMINATED</button>
       </div>
       <div class="obs-actions">
-        <button id="btn-run-sim">RUN SIMULATION</button>
-        <button id="btn-run-real" disabled title="blocked - see STATUS panel above">RUN REAL</button>
+        <button type="button" id="btn-run-sim">RUN SIMULATION</button>
+        <button type="button" id="btn-run-real" title="go to the REAL CALIBRATION panel">RUN REAL ▲</button>
       </div>
+      <div class="reason" data-for="btn-run-sim" role="status"></div>
+      <div class="reason" data-for="btn-run-real" role="status"></div>
     </section>
 
     <section id="overview-panel" class="panel" hidden>
@@ -78,23 +208,24 @@
 
     <section class="panel compact">
       <header><h2>REPLAY</h2></header>
-      <div class="obs-row"><label>SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/calibration/CAL-..."></div>
-      <div class="obs-actions"><button id="btn-replay">REPLAY SESSION</button></div>
+      <div class="obs-row"><label for="replay-session-dir">SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/calibration/CAL-..."></div>
+      <div class="obs-actions"><button type="button" id="btn-replay">REPLAY SESSION</button></div>
       <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
       <pre id="replay-summary" class="obs-summary"></pre>
     </section>
 
     <section class="panel compact">
       <header><h2>COMPARE SESSIONS</h2></header>
-      <div class="obs-row"><label>SESSION A</label><input type="text" id="compare-a"></div>
-      <div class="obs-row"><label>SESSION B</label><input type="text" id="compare-b"></div>
-      <div class="obs-actions"><button id="btn-compare">COMPARE</button></div>
+      <div class="obs-row"><label for="compare-a">SESSION A</label><input type="text" id="compare-a"></div>
+      <div class="obs-row"><label for="compare-b">SESSION B</label><input type="text" id="compare-b"></div>
+      <div class="obs-actions"><button type="button" id="btn-compare">COMPARE</button></div>
       <pre id="compare-summary" class="obs-summary"></pre>
     </section>
 
     <section class="panel compact">
       <header><h2>PROFILE (DRAFT)</h2></header>
-      <div class="obs-actions"><button id="btn-profile-build" disabled>BUILD DRAFT FROM LAST RUN</button></div>
+      <div class="obs-actions"><button type="button" id="btn-profile-build" disabled>BUILD DRAFT FROM LAST RUN</button></div>
+      <div class="reason" data-for="btn-profile-build" role="status"></div>
       <div id="profile-list" class="obs-checks"></div>
       <pre id="profile-summary" class="obs-summary"></pre>
     </section>
@@ -106,5 +237,7 @@
 
     <div id="error-banner" class="banner connection" hidden></div>
   </main>
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
   <script src="calibrate.js"></script>
 </body></html>
