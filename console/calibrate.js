@@ -789,7 +789,14 @@
       try {
         const job = await wizardMoveAction({ action: "capture_hi", session_dir: sessionDir, label }, $w("wz-hi-move-confirm").value, 180000);
         wzErr(""); render(job.facts);
-      } catch (err) { wzErr(`capture failed: ${msg(err)}`); refreshStatus().catch(() => {}); }
+      } catch (err) {
+        // The page-level banner is at the top, far from this button: a blocked start (for instance the mount gate
+        // refusing because OnStep reports a limit error) looked like "nothing happens". Say it here too, after the
+        // status refresh (which re-renders this box).
+        const text = `capture NOT started: ${msg(err)}`;
+        wzErr(text);
+        refreshStatus().catch(() => {}).finally(() => { const box = $w("wz-hi-failure"); box.hidden = false; box.textContent = text; });
+      }
     }, "CAPTURING…"));
 
     $w("wz-next-hi").addEventListener("click", U.guard($w("wz-next-hi"), async () => {
