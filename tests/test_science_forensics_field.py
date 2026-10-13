@@ -303,7 +303,8 @@ def test_live_run_command_construction_and_provenance(repo):
     inst = plan["instrument_config_identical_to_feature_campaign"]
     expect = [sys.executable, "capture.py", "--csv", str(repo / F.MOSAIC_ROOT / cid / "mosaic.csv"), "--settle", "2.0", "--capture", "10.0", "--sdr-freq", "1420405752",
               "--sdr-rate", "2400000", "--sdr-gain", "40.2", "--input-topology", "antenna", "--min-altitude", "10.0", "--rfi-ref-enabled",
-              "--rfi-ref-gain-db", "25.0", "--rfi-ref-serial", "00000002"]
+              "--rfi-ref-gain-db", "25.0", "--rfi-ref-serial", "00000002",
+              "--rfi-ref-bias-t"]                 # BL-052: antenna B's LNA is powered by the RFI_REF Bias-T
     assert argv == expect and "--preflight-only" not in argv and inst["sdr_gain_db"] == 40.2
     man = json.loads((repo / F.FIELD_ROOT / cid / "manifest.json").read_text())
     for k in ("campaign_id", "experiment", "plan", "plan_sha256", "csv", "csv_sha256", "git_commit", "start_utc", "end_utc", "capture_exit", "preflight_result",
