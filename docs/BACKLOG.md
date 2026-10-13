@@ -105,7 +105,7 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 | id | prioridad | prueba | cierra | evidencia que falta |
 |---|---|---|---|---|
 | BL-026 | P1 | ALIGN SOLAR desde la web: primero sin SYNC, después con SYNC, y un ALIGN de confirmación. Guía: manual §14, prueba C. **Sin Sol disponible el 2026-10-13.** | BL-022 | `alignment_result.json` con offset y confianza; SYNC APPLIED; segundo ALIGN con offset cercano a 0. Hoy no hay ninguna corrida solar real: las carpetas `SOLAR-*` son restos de tests (BL-055). |
-| BL-027 | P1 | STOP OBSERVATION real. Dos pruebas el 2026-10-13 (§4.1 y §4.2): una tras un GOTO y antes de la captura, y otra **durante un GOTO**. **Falta el caso durante una captura.** Guía: manual §14, prueba A. | — | **Cierre y estado: comprobados** en la segunda prueba (`ABORTED` en 7 s, coherente en orquestador, API y MONITOR). **Datos: comprobados** en las dos (solo `.h5` completos, ningún `.part`). **Montura: FALLA durante GOTO**, ver BL-059. **Evidencia que falta:** un STOP durante la captura (10 s de ventana), para ver qué pasa con el punto en curso |
+| BL-027 | P1 | STOP OBSERVATION real. **Tres pruebas el 2026-10-13** (§4.1 a §4.3): tras un GOTO, durante un GOTO y durante una captura. | — | **Comprobado en hardware:** cierre en 6 a 7 s; estado `ABORTED` coherente en orquestador, API y MONITOR (desde el arreglo `0148b78`); solo `.h5` completos y validados; ningún `.part` en ninguna de las tres; SDR liberados. **Queda abierto por la montura:** tras un STOP durante un GOTO queda en seguimiento (BL-059). Se cierra cuando BL-059 esté resuelto y probado |
 | BL-028 | P2 | STOP CURRENT STEP del wizard durante una captura real, en 50 Ω y en HI (durante el GOTO y durante la captura). Guía: manual §14, prueba B. | BL-007 | Paso sin avanzar, aviso «STOPPED by the operator», archivos conservados y RETRY que los mueve a `interrupted-<UTC>/` |
 | BL-029 | P2 | Fallas provocadas: desconectar el USB de MAIN; apagar INDI. | — | BLOCK visible en PLAN y STATUS, y recuperación documentada |
 | BL-030 | P3 | Bench `sdr --yes` en MAIN y la CLI de `mount_control.py`. | BL-008, BL-011 | Salida del bench con ACK; un GOTO por CLI |
@@ -192,6 +192,21 @@ Dependencias que fijan el orden:
 | Archivos | 2 `.h5` completos y validados (24 000 000 muestras cada uno, sintonía por ACK). **0 `.part`**. Punto 3 sin archivo, `planned` |
 | Montura (lectura INDI, sin enviar órdenes) | **Terminó el GOTO y quedó en seguimiento sidéreo** en las coordenadas del punto 3. El log dice «Tracking OFF could not be confirmed». BL-059 |
 | Resultado | **Cierre y estado: PASS. Datos: PASS. Montura: FAIL** |
+
+## 4.3 Tercera prueba real de STOP OBSERVATION (2026-10-13): durante una captura
+
+| | |
+|---|---|
+| Sesión | `data/mosaic/ALMITA-OBSERVE-20261013-18:07:14` (25 puntos, **20 s** por punto, 40.2 dB) |
+| STOP pedido | 18:09:01 UTC |
+| Fase | **Durante la captura del punto 2.** El log llega a `SDR FLUSH OK` y `TEMP PRE` (18:08:54.6), que es donde empieza la captura de 20 s, y no tiene la línea `SDR CAPTURE OK`: el STOP cayó unos 6 s dentro de la captura. Es el caso A1 del manual |
+| Cierre | Respuesta del STOP a las 18:09:08: **7 s**. `ABORTED` en el orquestador, la API y MONITOR |
+| SDR | MAIN liberado a las 18:09:02; RFI REF cerrado a las 18:09:07.8; puerto 1235 libre |
+| Archivos | 1 `.h5` (punto 1), completo y validado: 48 000 000 muestras, sintonía por ACK. **0 `.part`.** Del punto 2 no quedó ningún archivo |
+| Puntos | 1 `success`, 1 `capturing` (el punto 2 quedó con esa marca en `mosaic.csv`; no se pasó a fallido), 23 `planned` |
+| Montura (lectura INDI a las 18:09:37, sin enviar órdenes) | Quieta en las coordenadas del punto 2, **seguimiento apagado**, sin error. El log no tiene esta vez el aviso «Tracking OFF could not be confirmed». No se puede distinguir desde los registros si lo apagó la limpieza de `capture.py` o el operador en Ekos |
+| Otro | Una lectura del sensor de temperatura del SDR falló por CRC a las 18:08:54 (`TEMP PRE SDR=ERR`); el sistema la descartó, como debe |
+| Resultado | **PASS** en cierre, estado, datos y SDR |
 
 ## 5. Tests
 

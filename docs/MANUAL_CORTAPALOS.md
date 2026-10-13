@@ -443,10 +443,15 @@ de mano.
   MONITOR y la API; 2 `.h5` completos y ningún `.part`. **Pero la montura terminó el GOTO y quedó con el
   seguimiento encendido.**
 
+- **Tercera prueba, caso A1** (STOP unos 6 s dentro de una captura de 20 s): `ABORTED` en 7 s, coherente en las
+  tres vistas; quedó el `.h5` del punto anterior, completo, y **ningún archivo ni `.part` del punto
+  interrumpido**; la montura quedó quieta y sin seguimiento.
+
 > ⚠ **Después de cualquier STOP, apaga el seguimiento o aparca la montura en Ekos.** El STOP no lo garantiza:
 > si cae durante un GOTO, la montura completa el movimiento y sigue el cielo sola (BL-059).
 
-Falta el caso A1, durante una captura. Detalle en `docs/BACKLOG.md` §4.1 y §4.2.
+Con esto la prueba A está hecha en sus dos casos. Lo único que no pasó es la montura tras un STOP durante un
+GOTO. Detalle en `docs/BACKLOG.md` §4.1 a §4.3.
 
 | | |
 |---|---|
