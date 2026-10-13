@@ -71,7 +71,7 @@ async def run(args):
     (out/"rf_chain_summary.json").write_text(json.dumps(summary,indent=2))
     scalar=[k for k,v in rows[0].items() if not isinstance(v,(dict,list))]
     with (out/"gain_sweep_50ohm.csv").open("w",newline="") as h:
-        w=csv.DictWriter(h,fieldnames=scalar);w.writeheader();w.writerows(rows)
+        w=csv.DictWriter(h,fieldnames=scalar,extrasaction="ignore");w.writeheader();w.writerows(rows)
     import matplotlib;matplotlib.use("Agg");import matplotlib.pyplot as plt
     gains=[r["gain_requested_db"] for r in rows]
     fig,ax=plt.subplots(1,2,figsize=(10,4));ax[0].plot(gains,std,"o-");ax[0].set(xlabel="gain dB",ylabel="ADC std counts")
