@@ -2,11 +2,9 @@
 
 **De la preparación del equipo a REDUCE y SCIENCE, con la versión instalada.**
 
-Versión del software: rama `web-polish-v1`, código de producto en el commit `b6eca65` (2026-10-08); los commits
-posteriores de la rama solo cambian documentación. Revisado el 2026-10-12 y el 2026-10-13 contra el código, la
-web y las sesiones reales guardadas en `data/`. El servidor web corre desde el
-reinicio del Pi del 2026-10-08 a las 20:50 UTC: tiene cargado el Python de `fd8a962` y sirve la consola de
-`b6eca65`. La única diferencia no cambia lo que ve el operador (detalle en `docs/PROJECT_BRIEF.md` §4). Este es
+Versión del software: rama `web-polish-v1`, código de producto en el commit `e696038` (2026-10-13). Revisado el
+2026-10-12 y el 2026-10-13 contra el código, la web y las sesiones reales guardadas en `data/`. El servidor web
+corre ese mismo build desde su reinicio del 2026-10-13 a las 15:19 UTC (lo dice el pie de cada página). Este es
 un **primer borrador**.
 
 **Cómo leer las marcas de verificación**
@@ -90,10 +88,10 @@ Qué depende de qué en el código actual:
     RFI REF lanzaron ese `rtl_tcp` con `-T`, según `rfi_ref/rtl_tcp.log`]** Que el LNA reciba alimentación de
     verdad aún no está medido **[P]** (Anexo C): no existe ninguna sesión con el Bias-T apagado para comparar.
 
-    Ojo fuera de la web: en una especificación YAML para la CLI, `rfi_ref.bias_tee` vale `false` si no se
-    escribe. Ponlo en `true` a mano, como en `examples/overnight-400.yaml`. El plan del experimento de
-    forensics (`examples/science_forensics_experiment.yaml`) lo trae en `false` a propósito, porque copia la
-    campaña de septiembre: ejecutado así, el LNA de la antena B queda sin alimentación (BL-052).
+    Fuera de la web vale lo mismo: en una especificación YAML, `rfi_ref.bias_tee` vale `true` si no se
+    escribe (desde el 2026-10-13), y los ejemplos de `examples/` y el plan de forensics lo traen en `true`.
+    Para una cadena de referencia sin LNA, escribe `bias_tee: false` o desmarca BIAS-T en la web. Única
+    excepción: `capture.py` lanzado a mano solo lo enciende con `--rfi-ref-bias-t`. **[C]**
 
 4. Frecuencia, muestreo y ganancia **no se escriben a mano**. Salen de `observer_config.json` →
     `observation_defaults` (hoy **1420405752 Hz / 2400000 sps / 40.2 dB**) y la web rellena los campos sola.
@@ -407,6 +405,7 @@ Hay una sola tarea REDUCE o SCIENCE a la vez en el Pi.
 | **Captura fallida** (`FAILED`, o FAILED > 0 en SESSION) | Un punto o la sesión no se pudo capturar | Los puntos ya guardados se conservan. Mira `orchestrator_capture.log`. Si faltan zonas, planifica una sesión nueva para esa zona. **No lances una segunda captura sobre la misma sesión.** |
 | `DEGRADED` | Algo está atrasado o silencioso, sin que eso implique pérdida de datos | Revisa `last_successful_point_id`, `acquisition_stale` y `error` antes de actuar. |
 | Sale «RUNNING» pero ya terminó | Etiqueta vieja | La web ya muestra el estado efectivo. Recarga la página. |
+| **Cámara: «STREAM UNAVAILABLE»** en MONITOR | El servidor no logró conectar con la cámara de la montura (ESP32-CAM por WiFi, un solo cliente a la vez) | Pulsa **REINTENTAR**. Si sigue, anota el texto de **LAST ERROR** bajo la imagen: dice si la cámara rechazó la conexión o no respondió. No afecta a la observación. **[H: visto el 2026-10-11 y el 2026-10-12; causa del lado de la cámara sin determinar, BL-054]** |
 
 ---
 

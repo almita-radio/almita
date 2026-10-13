@@ -28,20 +28,20 @@ físicos: el haz y la alimentación del LNA de la antena B.
 
 **Bloqueos actuales**
 
-- **La web es alcanzable desde Internet** con contraseña por HTTP sin cifrar (BL-040). Es una decisión del
-  operador y es lo único urgente.
+- **La web es alcanzable desde Internet** con contraseña por HTTP sin cifrar (BL-040). El operador indicó el
+  2026-10-13 que ese acceso es el que quiere; quedan tres comprobaciones suyas.
 - **ALIGN no corrige todavía:** el SYNC nunca se envió a la montura real y ALIGN SOLAR nunca corrió (BL-026). La
   única corrida real, con HI, no logró estimar un offset.
 - **STOP OBSERVATION nunca se probó** en una sesión real (BL-027).
 - **El haz no está medido** (BL-034): 20° en la configuración y 14° en `alignment.py`, ambos provisionales.
-- **Antena B:** el Bias-T se envía, pero nadie midió que el LNA reciba alimentación (BL-031). Además, el plan
-  del experimento de forensics lo lleva apagado (BL-052).
+- **Antena B:** el Bias-T se envía, pero nadie midió que el LNA reciba alimentación (BL-031). Desde el
+  2026-10-13 toda la configuración lo trae encendido por defecto.
 
 Ninguno impide observar como se observó el 2026-10-08.
 
-**Sin actividad desde el 2026-10-08.** Entre la revisión del 2026-10-12 y la del 2026-10-13 no hubo commits de
-producto, sesiones, trabajos web ni reinicios. Lo único nuevo en `data/` son los restos de la corrida de tests
-del 12 y el latido del sistema.
+**Sin actividad en el instrumento desde el 2026-10-08:** ni sesiones, ni trabajos web, ni reinicios. Lo único
+nuevo en `data/` son los restos de la corrida de tests del 12 y el latido del sistema. El 2026-10-13 hubo una
+pasada de correcciones de software sin hardware (§2).
 
 ### Estado por funcionalidad
 
@@ -61,14 +61,14 @@ Todas las filas están implementadas y desplegadas, salvo donde se indica.
 |---|---|---|---|---|
 | **ALIGN** (anillos alrededor del Sol o de una zona HI; offset; SYNC con control) | sí: alineación y SYNC con montura falsa | — | **parcial.** HI: una corrida real de 25 posiciones el 2026-10-07 (`WEB-HI-20261007T011610Z`), sin offset estimable. SOLAR: nunca. SYNC: nunca. | BL-026. Con este haz, HI rara vez estima un offset. La sección ALIGN de PIPELINE no tiene SYNC (BL-043). |
 | **CALIBRATE** (Reference Wizard: 50 Ω, zonas HI ALTO/BAJO, perfil RELATIVE) | sí | sí: mapa de zonas con plan real | sí: tres wizards DONE (2026-10-02, 10-07, 10-08) y uno ABORTED. Perfiles a 40.2 y 42.1 dB. | STOP CURRENT STEP sin probar (BL-028). Contraste INCONCLUSIVE el 10-07 y el 10-08. Sin modelo de horizonte (BL-039). Solo RELATIVE: no hay Kelvin. |
-| **Gain pilot** (1 o 2 capturas reales para elegir ganancia; RE-PLAN) | sí | — | sí: 2026-10-08, READY a 42.1 dB y RE-PLAN usado. | El aviso de ganancia sin perfil (BL-023) no se ha visto en una sesión real (BL-032). |
+| **Gain pilot** (1 o 2 capturas reales para elegir ganancia; RE-PLAN) | sí | — | sí: 2026-10-08, READY a 42.1 dB y RE-PLAN usado. | El aviso de ganancia sin perfil (BL-023) no se ha visto en una sesión real (BL-032). La consulta de estado sin pilot ya no deja un trabajo fallido (BL-048, comprobado en el servidor). |
 | **OBSERVE** (PLAN, PREFLIGHT, START, STOP) | sí | — | sí: 400 puntos (10-02), 676 (10-07), 100 y tres de 25 (10-08). Todas COMPLETED, 0 fallidos en las dos últimas. | **STOP real sin probar** (BL-027). Fallas provocadas sin probar (BL-029). |
 | **QUICKLOOK** (espectro, cascada, mapa, grilla nativa, vista interpolada) | sí | sí | sí: en vivo en todas las sesiones con perfil compatible; la última procesó 25/25. | Se bloquea si el perfil no coincide en ganancia. Es vista previa, no producto científico. |
-| **RFI REF** (antena B, SDR 00000002, `rtl_tcp` en :1235) | sí | — | **parcial.** Seis sesiones reales con ACK de sintonía y `-T` en el log de lanzamiento. Alimentación del LNA sin medir. | BL-031. REDUCE no lo usa (BL-037). El esquema de la CLI deja el Bias-T apagado por omisión (BL-041) y el plan de forensics lo fija en `false` (BL-052). |
-| **MONITOR** (sesión, quicklook, RFI, stack 3D, cámara, log) | sí: navegador headless | sí: stack 3D con datos reales | sí: usado en vivo. | El stream de la cámara respondió 503 el 2026-10-12; causa no investigada. |
+| **RFI REF** (antena B, SDR 00000002, `rtl_tcp` en :1235) | sí | — | **parcial.** Seis sesiones reales con ACK de sintonía y `-T` en el log de lanzamiento. Alimentación del LNA sin medir. | BL-031. REDUCE no lo usa (BL-037). Bias-T encendido por defecto en la web, el esquema y los YAML de ejemplo desde el 2026-10-13; `false` explícito sigue disponible. `capture.py` por CLI directa necesita `--rfi-ref-bias-t`. |
+| **MONITOR** (sesión, quicklook, RFI, stack 3D, cámara, log) | sí: navegador headless; relay de la cámara con cámara simulada | sí: stack 3D con datos reales | sí: usado en vivo. | Cámara: 503 intermitente (3 de 6 pedidos entre el 10-08 y el 10-13). Defecto del relay corregido y desplegado el 2026-10-13; el stream respondió bien tras el reinicio. La causa del lado de la cámara no se puede ver desde el Pi (BL-054). |
 | **REDUCE** (nivel 0 → nivel 1, RELATIVE, LSRK) | sí | sí: cinco reducciones, la última el 2026-10-08 sobre la sesión de 100 puntos | — | Motor congelado. Topocentric exige los mismos metadatos que LSRK (BL-036). Las dos sesiones del 10-08 por la tarde no están reducidas. |
 | **SCIENCE** (mapas A, B y C; LOO; exportes) | sí | sí: 400/400 puntos, calidad GOOD, pico de 1.03 GB; y la sesión de 100 puntos | — | Motor congelado. B y C interpolan: más píxeles no es más resolución. Depende del haz provisional. |
-| **Servicios** (cuatro unidades systemd) | sí | — | sí: activas y habilitadas; arrancaron solas tras el reinicio del 2026-10-08. Unidades instaladas idénticas a `systemd/`. | El servidor tiene cargado un archivo anterior a HEAD (§4, BL-044). Pie de página con texto falso (BL-045). |
+| **Servicios** (cuatro unidades systemd) | sí | — | sí: activas y habilitadas. `almita-observe-api` reiniciado el 2026-10-13 15:19 UTC con el build `e696038`; los otros tres corren desde el 2026-10-08. Unidades instaladas idénticas a `systemd/`. | Ninguna diferencia entre el servidor y el código de la rama (§4). |
 | **Manual cortapalos** | — | revisado contra código y `data/` el 2026-10-12 y el 2026-10-13 | no: nunca se hizo el recorrido completo siguiéndolo | BL-033. Falta el procedimiento de Ekos. |
 
 Orden de operación, por dependencias reales:
@@ -95,24 +95,44 @@ Detalle y botones exactos: manual cortapalos.
 | 2026-10-08 22:33 | **b6eca65** — RFI REF con Bias-T encendido por defecto (BL-025). | 8 archivos, +66/−8 |
 | 2026-10-08 22:35 | OBSERVE real, 25 puntos, 50×50°, 1 s, 42.1 dB, altura mínima pedida 1°. | `…20261008-22:34:35`: 25 HDF5, COMPLETED, 12 min |
 | 2026-10-12 | Revisión de estado: este brief, el backlog y el manual. `.gitignore` cubre las salidas de montura. | **7fe9c56**, solo documentación y `.gitignore` |
-| 2026-10-13 | Segunda revisión de estado. Sin cambios de código. Dos hallazgos nuevos sobre la antena B (BL-052, BL-053) y el aviso del manual ampliado. | Commit de documentación |
+| 2026-10-13 | Segunda revisión de estado. Sin cambios de código. Dos hallazgos nuevos sobre la antena B (BL-052, BL-053) y el aviso del manual ampliado. | **71af9d5**, solo documentación |
+| 2026-10-13 | **Pasada autónoma del backlog**, sin hardware. Cierra BL-041, BL-044 a BL-049, BL-051, BL-052 y BL-056; corrige el relay de la cámara; abre BL-054 y BL-055. | **7b2eefb**, **4a472ce**, **2017a14**, **bc03cc2**, **e696038**; detalle en [BACKLOG.md §1.1](BACKLOG.md) |
+| 2026-10-13 15:19 | **Reinicio de `almita-observe-api`**, una vez y sin trabajos activos. Carga b6eca65 y toda la pasada. | PID 711914, build `e696038`; comprobado con la web autenticada |
 
 No hubo ALIGN, CALIBRATE, gain pilot, REDUCE ni SCIENCE después de fd8a962.
 
+**Pasada autónoma del 2026-10-13: qué cambia para quien opera**
+- **Bias-T de RFI REF encendido por defecto en todas partes:** el esquema de las especificaciones YAML
+  (`observation_spec.py`), los ejemplos y el plan de forensics, además de la web, que ya lo tenía. Un `false`
+  explícito se respeta, para otra cadena sin LNA. Una especificación vieja que no escriba el campo ahora
+  revalida encendida.
+- **Plan de forensics:** su única diferencia con la campaña de septiembre es ese Bias-T. El valor original queda
+  anotado en el propio plan y las guardias (SHA del plan y pins de módulos congelados) se actualizaron dejando
+  escritos los valores anteriores.
+- **Scripts de evidencia** (`rf_chain_characterization.py`, `rf_gain_control_test.py`,
+  `sun_detectability_test.py`): toman la frecuencia de la configuración central y exigen el ACK de `rtl_tcp`. No
+  se ejecutaron en hardware después del cambio.
+- **Cámara:** el relay ya no responde 503 mientras le queda un reintento, y deja el motivo en el journal.
+- **Pie de página:** describe la autenticación y el transporte reales, y el SHA de «build» es el del arranque.
+- **`mount_control.py`:** acepta `-33:27:00` como declinación.
+- **`hw_hi_night_scan.py`:** cuando ningún objetivo HI es utilizable a esa hora termina en BLOCKED con su
+  evidencia, en vez de una traza.
+- Todo lo anterior está activo desde el reinicio de las 15:19 UTC (§4).
+
 **b6eca65 — Bias-T de RFI REF**
 - `/api/observe/defaults` devuelve `rfi_ref.bias_tee: true` y el formulario lo sigue y lo conserva al RE-PLAN.
-- El esquema (`observation_spec.py`) mantiene `false` por omisión, para que los planes archivados revaliden igual.
-- La parte del servidor no está cargada todavía (§4).
+- En ese commit el esquema (`observation_spec.py`) mantenía `false` por omisión; pasó a `true` el 2026-10-13 (BL-041).
+- Cargado en el servidor desde el reinicio del 2026-10-13 (§4).
 
-Hallazgos de esta revisión, todos en el backlog:
+Hallazgos de la revisión del 2026-10-12, todos en el backlog:
 - la web recibe tráfico de Internet (BL-040);
 - un test escribe en el `data/` real (BL-046);
 - el manual daba 10° como altura mínima por defecto y la web rellena 30° (corregido);
 - las carpetas `data/alignment/SOLAR-*` no son corridas solares: son restos de tests.
 
 Hallazgos de la revisión del 2026-10-13:
-- `examples/science_forensics_experiment.yaml` tiene RFI REF activado con `bias_tee: false`. Copia la
-  configuración de la campaña de septiembre, anterior a la confirmación del LNA de la antena B (BL-052);
+- `examples/science_forensics_experiment.yaml` tenía RFI REF activado con `bias_tee: false`, copiado de la
+  campaña de septiembre, anterior a la confirmación del LNA de la antena B (BL-052, corregido el mismo día);
 - las guías de hardware de `main` describen la cadena de RFI REF como antena → filtro notch FM → LNA → SDR y no
   dicen que el LNA se alimenta por Bias-T; el manual y este brief no mencionan el filtro (BL-053);
 - además de :8088, el Pi escucha en todas las interfaces en los puertos 22, 80, 445, 5900, 6080 y 7624 (INDI,
@@ -266,31 +286,41 @@ Ver `docs/REDUCE_V1_FREEZE.md`, `docs/SCIENCE_V1_FREEZE.md` y `docs/WEB_V1_FREEZ
 
 ## 4. Qué está desplegado
 
-Comprobado el 2026-10-12 y otra vez el 2026-10-13 a las 12:35 UTC, sin reiniciar ni desplegar nada. El 13 todo
-seguía igual: mismos PID, mismas horas de arranque y `NRestarts=0`.
+Comprobado el 2026-10-13 a las 15:20 UTC, después del único reinicio de esta pasada.
 
 ### Qué ejecuta cada servicio
 
-Los cuatro servicios arrancaron con el reinicio del Pi, el 2026-10-08 a las 20:50:50 UTC, y no se reiniciaron
-desde entonces (`NRestarts=0`). Las unidades instaladas en `/etc/systemd/system/` son idénticas a las de
-`systemd/` del repo.
+`almita-observe-api` se reinició el 2026-10-13 a las 15:19:53 UTC, después de comprobar en un paso aparte que no
+había trabajos ni observaciones (los dos PID de la última sesión eran procesos ya terminados). Los otros tres
+servicios corren desde el reinicio del Pi del 2026-10-08 a las 20:50:50 UTC. Las unidades instaladas en
+`/etc/systemd/system/` son idénticas a las de `systemd/` del repo.
 
 | servicio | PID | código que tiene cargado | diferencia con HEAD (el código de producto de HEAD es el de b6eca65) |
 |---|---|---|---|
-| `almita-observe-api` (:8088) | 825 | `almita_orchestrator_server.py` como estaba en **fd8a962**: el archivo se editó a las 22:28, después del arranque. El resto de los módulos que importa no cambió desde antes del arranque. `console/` se sirve en vivo. | Una: `/api/observe/defaults` no devuelve `rfi_ref.bias_tee`. Sin efecto visible, porque la casilla ya viene marcada en el HTML. |
+| `almita-observe-api` (:8088) | 711914 | Build **`e696038`** (lo informa `/api/system/version`, resuelto al arrancar). `console/` se sirve en vivo. | Ninguna en código. Los commits posteriores de la rama solo cambian documentación. |
 | `almita-console-watcher` | 824 | `almita_console_watcher.py`, sin cambios desde el 2026-10-06 | Ninguna |
 | `almita-system-blackbox` | 679 | `almita_system_blackbox.py`, sin cambios desde el 2026-10-05 | Ninguna |
 | `rtl_tcp` | 848 | Binario del sistema: `rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 -f 1420405752 -s 2400000 -g 40.2 -T` | Ninguna; coincide con `observer_config.json` |
 
-- Los scripts que lanza la web (`alignment.py`, `capture.py`, `reduce_campaign_run.py`, `science_web_bridge.py`,
-  …) se cargan en cada trabajo, así que corren el código del árbol de trabajo.
+- Los scripts que lanza la web (`alignment.py`, `capture.py`, `observation_gain_pilot.py`,
+  `reduce_campaign_run.py`, `science_web_bridge.py`, …) se cargan en cada trabajo, así que ya corren el código
+  del árbol de trabajo, incluida la pasada del 2026-10-13.
+- No se reinició ningún otro servicio: `almita-console-watcher`, `almita-system-blackbox` y `rtl_tcp` no
+  cambiaron, y conservan sus PID del 2026-10-08, igual que `indiserver`.
+- **Comprobado en la web autenticada tras el reinicio** (pedidos locales con las credenciales del operador):
+  - `/api/system/version` y `version.json`: build `e696038`, «HTTP (no TLS), single-user Basic authentication»;
+  - las ocho páginas y `common.js` responden 200; sin credenciales o con contraseña equivocada, 401;
+  - `/api/system/health`: `observe_api`, `field_console` y `console_watcher` en UP;
+  - `/api/observe/defaults`: `rfi_ref.bias_tee: true`, 1420405752 Hz, 2400000 sps, 40.2 dB, altura mínima 30°;
+  - cámara: con cero espectadores, el stream respondió 200 y entregó 2.1 MB en 6 s; estado STREAMING sin error;
+  - gain pilot: la consulta de estado sobre una sesión sin pilot terminó con código 0 y PASS;
+  - el journal del servicio no tiene errores desde el reinicio.
+- Antes del reinicio el pie decía build `fd8a962` y «HTTP (LAN, no TLS, no authentication)».
+- **No comprobado en un navegador real:** las páginas se pidieron por HTTP, no se miraron renderizadas.
 - Fuera de systemd: `indiserver` en :7624, levantado por Ekos el 2026-10-08 a las 20:58. `almita-console-web`
   (la web vieja) está deshabilitada.
 - Sin trabajos ni capturas activos el 2026-10-13: no hay procesos `capture.py`, `quicklook_live.py`,
   `alignment.py`, wizard, REDUCE ni SCIENCE.
-- **No verificado:** el SHA que muestra el pie de página de la web. Exige iniciar sesión, y esta revisión no usó
-  las credenciales. El servidor lo lee de Git la primera vez que se consulta, así que puede decir `fd8a962` o
-  `b6eca65` según cuándo fue esa primera consulta.
 
 ### Exposición de red
 
@@ -310,9 +340,8 @@ verificado:** cuáles de ellos reenvía el router; desde el Pi no se puede saber
 ### Ramas
 
 - **Repositorio:** `git@github.com:almita-radio/almita.git` (https://github.com/almita-radio/almita).
-- **Rama de trabajo:** `web-polish-v1`. Antes de esta revisión, local y `origin/web-polish-v1` coincidían en
-  `7fe9c56d480b78c529e5b22ac667adfc7bfc3084` (comprobado con `git fetch` el 2026-10-13). El SHA publicado con
-  esta revisión se informa al entregarla.
+- **Rama de trabajo:** `web-polish-v1`. El último SHA publicado antes de la pasada autónoma es
+  `71af9d5e1fe04738fee0e33148ade2147f327108`. El SHA publicado con la pasada se informa al entregarla.
 - **`main`** (`origin/main` = `9161fe8`, igual que el `main` local): base común `70b4a5c`.
   - `web-polish-v1` tiene todo el producto actual: 84 commits que `main` no tenía el 2026-10-13, antes del commit
     de esta revisión.
@@ -324,8 +353,8 @@ verificado:** cuáles de ellos reenvía el router; desde el Pi no se puede saber
 - Otras ramas locales (`backlog/wizard-preview-profile-picker`, `science/abc-shared-projection-wip`,
   `web/backlog-integration`, `science-forensics-v1`): todas son ancestros de `web-polish-v1`, así que no tienen
   nada que la rama de trabajo no tenga.
-- **Servidor frente a ramas:** el proceso de :8088 tiene el Python de `fd8a962`; la rama, el remoto y el árbol de
-  trabajo tienen el de `b6eca65` más documentación. `main` no tiene nada del producto actual.
+- **Servidor frente a ramas:** el proceso de :8088 corre `e696038`, el último commit con código de la rama.
+  `main` no tiene nada del producto actual.
 
 ---
 
@@ -333,8 +362,46 @@ verificado:** cuáles de ellos reenvía el router; desde el Pi no se puede saber
 
 ### Tests automatizados
 
-Los resultados vigentes son los del 2026-10-12. Desde entonces solo cambió documentación (y `.gitignore`), así
-que siguen describiendo el código de HEAD.
+**Corrida completa vigente: 2026-10-13** (14:29:35 a 15:05:39 UTC, 36 min 2 s), sobre `bc03cc2`, con
+`.venv/bin/python -m pytest tests -q -p no:cacheprovider`. Se repitió la suite completa porque los cambios lo
+pedían: los fallos de BL-047 solo aparecían en corrida completa, y BL-046 exigía comprobar que ningún test
+tocara `data/`.
+
+| resultado | cantidad |
+|---|---|
+| passed | 2555 |
+| failed | 2 |
+| skipped | 52 |
+
+- Los tres tests que fallaron el 2026-10-12 pasan (BL-051 y BL-047).
+- Las dos fallas son `test_hw_hi_night_scan.py::test_blocked_without_obstime_override…` y
+  `…::test_evidence_logging_complete_on_blocked_preflight`. Dependen de la hora: a las 14:40 UTC ningún objetivo
+  HI era utilizable y el script terminaba con una traza. El 12, a las 23:10, pasaban. Es BL-056, corregido
+  después en `e696038`.
+- La corrida guardó un listado de `data/` (archivos, tamaños y fechas, sin `data/runtime`) antes y después: ningún
+  archivo nuevo, borrado ni modificado, pero cambiaron las fechas de `data/alignment`, `data/calibration` y
+  `data/IQ`. Tres suites creaban y borraban cosas ahí; corregido en `e696038`.
+
+**Corridas parciales del 2026-10-13, posteriores a la completa** (sobre `e696038`; la suite completa no se
+repitió):
+
+| qué | resultado |
+|---|---|
+| `test_hw_hi_night_scan.py`, con un test nuevo que fuerza el caso sin objetivo | 20 passed |
+| `test_capture_preflight.py`, `test_almita_web_align_calibrate.py`, `test_alignment_engine_end_to_end.py`, con el listado de `data/` antes y después | 51 passed; `data/` idéntico, fechas incluidas |
+
+**Corridas parciales del 2026-10-13, anteriores a la completa**, una por cambio:
+
+| qué | resultado |
+|---|---|
+| Cámara, pie de página, test de ALIGN, literales de frecuencia (`test_mount_camera_relay`, `test_mount_camera_rotation`, `test_web_hardening`, `test_alignment_engine_end_to_end`, `test_sdr_tuning`, `test_sun_detectability`) | 99 passed |
+| Gain pilot, quicklook y el test de 30 minutos de la consola | 23 passed |
+| Bias-T y guardias de forensics (`test_mount_control_cli`, `test_observation_spec`, `test_observation_plan`, `test_almita_orchestrator_server`, `test_observation_orchestrator`, `test_science_forensics_*`, `test_sdr_tuning`) | 311 passed, 2 failed, 3 skipped: una expectativa por actualizar y los pins por mover; corregidos, y después `test_science_forensics_field` y `_bench` dieron 153 passed |
+
+Ninguna corrida usó hardware. Los tres scripts de evidencia de BL-051 y `hw_hi_night_scan.py` no se ejecutaron
+contra el instrumento.
+
+**Resultados anteriores**
 
 **Corrida completa del 2026-10-12** (23:10 a 23:43 UTC, 33 min 29 s), sobre el código de b6eca65, con
 `.venv/bin/python -m pytest tests -q`. No usa hardware: la sintonía y RFI REF están sustituidos en
@@ -391,11 +458,16 @@ detenida a propósito al 38 % sin fallas.
 Duración real medida: unos 32 s por punto con capturas de 10 s, y unos 23 s por punto con capturas de 1 s. Las dos sesiones
 de 25 puntos dieron 36 s y 29 s por punto: son grillas más abiertas, con GOTO más largos.
 
-El 2026-10-12 se comprobó que la sesión de 400 puntos (400 HDF5, 6.1 GB), su perfil y el resguardo
-`almita_preserve_20261002` siguen intactos: mismos archivos, tamaños y fechas antes y después de esta revisión.
-Comprobado otra vez el 2026-10-13, antes y después de la revisión: 400 HDF5 y 6.1 GB en la sesión, 37 MB en el
-perfil `WIZARD-20261002-013321-160933`, 3260 archivos y 6.4 GB en el resguardo, y ningún archivo modificado
-después del 2026-10-03 en ninguno de los tres.
+**Integridad de la sesión de 400 puntos y su perfil.** El 2026-10-13 se compararon contra el manifiesto original
+del resguardo, `/home/stellarmate/almita_preserve_20261002/manifest_before.sha256` (del 2026-10-02, sin
+modificar; su propio SHA-256 empieza por `c30a7493`), y contra `sizes_before.txt`:
+
+| cuándo | archivos | SHA-256 | tamaños |
+|---|---|---|---|
+| Antes de la pasada autónoma | 3248 (3230 de la sesión, 18 del perfil) | 3248 coinciden | 3248 coinciden, 6.54 GB |
+| Después de los cambios, la corrida completa y el reinicio (15:21 UTC) | 3248 | 3248 coinciden | 3248 coinciden |
+
+Las revisiones del 2026-10-12 y de la mañana del 13 solo habían comparado cantidades, tamaños y fechas.
 
 ### Pendiente en hardware
 
@@ -416,7 +488,7 @@ Pendientes, prioridades y orden: [BACKLOG.md](BACKLOG.md).
 - Calibración solo RELATIVE: no hay Kelvin ni ganancia absoluta.
 - En REDUCE, topocentric exige los mismos metadatos que LSRK (motor congelado).
 - La sección ALIGN de PIPELINE no tiene SYNC.
-- El pie de página dice «LAN, no authentication». Las dos cosas son falsas hoy.
+- La cámara de la montura falla a ratos y la causa del lado del equipo no está determinada (BL-054).
 
 **Fuera de Git, a propósito.** Nada de esto se borró, se movió ni se subió.
 
@@ -434,10 +506,9 @@ Pendientes, prioridades y orden: [BACKLOG.md](BACKLOG.md).
 
 Qué hacer con los scripts y los resguardos es BL-042.
 
-Revisado otra vez el 2026-10-13: la lista de archivos sin versionar es la misma y el árbol no tiene cambios
-locales en archivos versionados. Ninguno de esos scripts contiene credenciales. Siete de los diez llevan escrita
-la frecuencia `1420405752`, así que versionarlos tal cual sumaría casos a BL-051. Siguen fuera de Git: no
-pertenecen al producto.
+Revisado otra vez el 2026-10-13: la lista de archivos sin versionar es la misma. Ninguno de esos scripts contiene
+credenciales. Siete de los diez llevan escrita la frecuencia `1420405752`. La pasada autónoma no los tocó: son
+scripts personales, siguen fuera de Git y la regla de BL-051 solo mira los versionados.
 
 ---
 
@@ -455,12 +526,15 @@ pertenecen al producto.
 - Revisado de nuevo el 2026-10-13. Las referencias de versión seguían vigentes (`b6eca65` es el último commit
   con código de producto). Cambios: el aviso sobre el plan de forensics (BL-052), la nota sobre el filtro notch
   FM de la antena B (BL-053) y la fecha de revisión. PDF regenerado.
-- **Antena B:** el manual, este brief, la web (HTML, JS y `/api/observe/defaults` en el árbol de trabajo) y
-  `examples/overnight-400.yaml` coinciden: LNA alimentado por el Bias-T del SDR 00000002, encendido por defecto.
-  La última sesión real (2026-10-08 22:35) lanzó `rtl_tcp -d 00000002 … -g 25.0 -T` y recibió el ACK de sintonía.
-  No coinciden:
-  - el valor por omisión del esquema, `false` (BL-041);
-  - el plan de forensics, `false` explícito con RFI REF activado (BL-052);
-  - `examples/block-validation-01.yaml`, `false` pero con RFI REF desactivado, así que no tiene efecto;
-  - las guías de hardware de `main`, que no mencionan el Bias-T de RFI REF (BL-053).
+- Actualizado en la pasada autónoma del 2026-10-13: el párrafo del Bias-T de RFI REF (ahora encendido por
+  defecto también en las especificaciones YAML), una fila nueva en «Problemas habituales» para la cámara y la
+  versión del encabezado. PDF regenerado.
+- **Antena B:** desde el 2026-10-13 coinciden el manual, este brief, la web (HTML, JS y
+  `/api/observe/defaults`), el esquema de especificaciones, los tres YAML de `examples/` y el plan de forensics:
+  LNA alimentado por el Bias-T del SDR 00000002, encendido por defecto, con `false` explícito disponible. La
+  última sesión real (2026-10-08 22:35) lanzó `rtl_tcp -d 00000002 … -g 25.0 -T` y recibió el ACK de sintonía.
+  Quedan fuera:
+  - `capture.py` por CLI directa, que solo lo enciende con `--rfi-ref-bias-t` (módulo congelado);
+  - las guías de hardware de `main`, que no mencionan el Bias-T de RFI REF (BL-053);
+  - la medición de que el LNA recibe alimentación (BL-031).
 - Sigue siendo un primer borrador: nadie hizo el recorrido completo siguiéndolo, y falta el procedimiento de Ekos.

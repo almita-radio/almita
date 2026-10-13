@@ -6,6 +6,11 @@ el 2026-10-12 y de nuevo el 2026-10-13. Contexto general: [PROJECT_BRIEF.md](PRO
 Entre las dos revisiones no se cerró ningún pendiente: no hubo commits de producto, sesiones ni reinicios. La
 revisión del 13 agrega BL-052 y BL-053 y amplía la evidencia de BL-040.
 
+**Pasada autónoma del 2026-10-13** (commits `7b2eefb`, `4a472ce`, `2017a14`, `bc03cc2`, `e696038`): cierra
+BL-041, BL-044, BL-045, BL-046, BL-047, BL-048, BL-049, BL-051, BL-052 y BL-056, corrige el 503 de la cámara en el
+software y abre BL-054 y BL-055. Detalle en §1.1. No se usó hardware: ni capturas, ni bench, ni GOTO, ni SYNC. El
+servidor web se reinició una vez, a las 15:19:53 UTC, y corre el build `e696038`.
+
 Un pedido tiene cinco niveles de comprobación y ninguno implica el siguiente:
 
 | nivel | significado |
@@ -22,8 +27,8 @@ del backlog anterior; el 2026-10-12 solo se comprobó que sus artefactos siguen 
 
 ## 1. Pedidos entregados (BL-001 a BL-025)
 
-Todos están implementados, y todos menos una parte de BL-025 están desplegados: el servidor web arrancó con el
-reinicio del Pi del 2026-10-08 a las 20:50 UTC, después de todos esos commits.
+Todos están implementados y desplegados: el servidor web se reinició el 2026-10-13 a las 15:19 UTC y corre el
+build `e696038`, posterior a todos esos commits.
 
 | id | pedido | commits | tests | datos | hardware | estado |
 |---|---|---|---|---|---|---|
@@ -35,7 +40,7 @@ reinicio del Pi del 2026-10-08 a las 20:50 UTC, después de todos esos commits.
 | BL-006 | SCIENCE: exportes legibles y diagnósticos uniformes | b40e126 | sí | sí | — | **cerrado** |
 | BL-007 | Wizard: STOP, ABORT, fallas y pasos interrumpidos | adc2cac | sí | — | parcial: ABORT sí (2026-10-07); STOP CURRENT STEP no | abierto: BL-028 |
 | BL-008 | Frecuencia: configuración central + ACK de rtl_tcp | aae14d9 | sí | — | parcial: sí en OBSERVE y wizard; bench `sdr --yes` no | abierto: BL-030 |
-| BL-009 | Tests sin dependencia de `data/` | fdc72e9, 8473f0c | sí: no leen `data/` | — | — | reabierto en parte: un test todavía escribe ahí (BL-046) |
+| BL-009 | Tests sin dependencia de `data/` | fdc72e9, 8473f0c, 7b2eefb | sí: no leen ni escriben en `data/` (corrida completa del 2026-10-13 con foto de `data/` antes y después) | — | — | **cerrado** (BL-046) |
 | BL-010 | Git: `data/` ignorado, fixtures, runbook | ef32d62, dbafb43 | — | — | — | **cerrado** |
 | BL-011 | `mount_control.py` no hacía await de `connect()` | 5ee573a | sí | — | no | abierto: BL-030 |
 | BL-012 | Incidente del wizard con 50 Ω | 8dfb3ab | sí | — | sí: WIZARD-20261007-010706 DONE | **cerrado** |
@@ -51,11 +56,28 @@ reinicio del Pi del 2026-10-08 a las 20:50 UTC, después de todos esos commits.
 | BL-022 | ALIGN: SYNC (Sol y HI) con confianza y offset máximo | 4012330 | sí, montura falsa | — | **no: el SYNC nunca se envió a la montura real** | abierto: BL-026 |
 | BL-023 | Gain pilot avisa de ganancia sin perfil; etiqueta topocentric | 8f7ab05 | sí | — | no: ninguna sesión posterior usó el pilot | abierto: BL-032 |
 | BL-024 | Brief del proyecto + sincronización de Git | fd8a962 | — | — | — | **cerrado** |
-| BL-025 | RFI REF: Bias-T encendido por defecto | b6eca65 | sí | — | parcial: `-T` enviado en 6 sesiones reales; alimentación del LNA sin medir | abierto: BL-031 (medición), BL-044 (despliegue), BL-052 (plan de forensics) |
+| BL-025 | RFI REF: Bias-T encendido por defecto | b6eca65, 7b2eefb | sí | — | parcial: `-T` enviado en 6 sesiones reales; alimentación del LNA sin medir | abierto: BL-031 (medición). El esquema y el plan de forensics ya coinciden (BL-041, BL-052) |
 
-Detalle de BL-025: la consola (HTML y JS) está activa. El cambio de `almita_orchestrator_server.py` no está cargado,
-porque el archivo se editó después del arranque del servidor. No cambia lo que ve el operador: sin ese dato, el
-formulario usa la casilla ya marcada del HTML.
+### 1.1 Cerrado en la pasada autónoma del 2026-10-13
+
+| id | qué se hizo | commit | evidencia | falta |
+|---|---|---|---|---|
+| BL-051 | `rf_chain_characterization.py`, `rf_gain_control_test.py` y `sun_detectability_test.py` leen frecuencia y muestreo de la configuración central (`sdr_tuning`). Los dos que usan `SDRCapture` sintonizan con `tune_explicitly` y guardan el registro de sintonía; el de socket directo verifica el ACK de `rtl_tcp` antes de escribir cada archivo. Los scripts sin versionar no se tocaron. | 7b2eefb, bc03cc2 | `test_no_frequency_literal_in_operational_python` pasa; los dos scripts entraron a la regla «nunca `configure()` sin evidencia» | Nunca se ejecutaron en hardware después del cambio: la próxima corrida real de cualquiera de los tres es su primera prueba |
+| BL-046 | El test de timeout del preflight de ALIGN escribe en `tmp_path`, igual que los tests de las rutas web de ALIGN y CALIBRATE y los del preflight de `capture.py`. | 7b2eefb, e696038 | Corrida completa con foto de `data/` (archivos, tamaños y fechas) antes y después: `data/` idéntico antes y después en las tres suites que lo tocaban (`e696038`). En la corrida completa previa a ese commit no quedó ningún archivo nuevo, pero cambiaron las fechas de `data/alignment`, `data/calibration` y `data/IQ`: los tests de las rutas web de ALIGN y CALIBRATE y los del preflight de `capture.py` creaban y borraban carpetas y archivos de prueba ahí. Ahora trabajan en `tmp_path` | Borrar las tres carpetas ya creadas es BL-055 |
+| BL-045 | El pie de página y STATUS dicen «HTTP (no TLS), single-user Basic authentication». El SHA de «build» se resuelve al arrancar el proceso, no en la primera consulta. | 7b2eefb | `test_health_and_version_never_leak_secrets_or_paths` | — . Desplegado y visto en la web autenticada tras el reinicio: pie y `version.json` con el texto nuevo y build `e696038` |
+| BL-047 | `quicklook_live.STOP_REQUESTED` se limpia antes de cada test; el test de 30 minutos de la consola tiene 300 s de reloj real para sus ~1000 pedidos. | 7b2eefb | Corrida completa del 2026-10-13: los dos tests pasan dentro de la suite | — |
+| BL-048 | `observation_gain_pilot.py status` sin pilot planificado responde «not planned» con código 0, y la web lo clasifica como PASS. Los demás comandos siguen exigiendo un pilot planificado. | 7b2eefb | `tests/test_gain_pilot_status.py` (3 tests) | — . Comprobado en el servidor reiniciado: el trabajo `OBSERVE_GAIN_PILOT_ADMIN-20261013-152020-78c5` terminó con código 0, PASS, «no gain pilot planned for this session» |
+| BL-049 | Documentado en `alignment_engine/sync_flow.py` y `targets/hi_reference.py`: el motor bloquea el SYNC solo desde plantillas sintéticas y difiere a propósito de `alignment.py` (que desde 4012330 juzga HI como el Sol). No se cambió ninguna política de SYNC. | 7b2eefb | Solo docstrings | Unificar las dos políticas es una decisión posterior a BL-026; queda anotada en BL-043 |
+| BL-041 | `rfi_ref.bias_tee` vale `true` por omisión en el esquema (`observation_spec.py`). Un `false` explícito se respeta. `examples/block-validation-01.yaml` pasó a `true`. | 7b2eefb, 4a472ce | `test_rfi_ref_bias_tee_defaults_on_when_field_omitted`, `test_rfi_ref_bias_tee_explicit_false_is_kept`; API, formulario, RE-PLAN y los tres YAML de `examples/` validan en `true` | Consecuencia buscada: una especificación vieja que no escriba el campo ahora revalida con el Bias-T encendido. `capture.py` por CLI directa (módulo congelado) sigue necesitando `--rfi-ref-bias-t` |
+| BL-052 | El plan de forensics lleva `bias_tee: true` y sus tres plantillas de comando llevan `--rfi-ref-bias-t`. El valor de la campaña original queda en `bias_tee_feature_campaign: false`, con nota. | 7b2eefb, 4a472ce, 2017a14 | Guardias actualizadas y documentadas: SHA del plan en `scripts/science_forensics_bench.py` (anterior `8bacb7ab…`, anotado) y pins de `science_forensics` y `observation_spec.py` en `scripts/science_forensics_field.py` (anteriores `02b8e5a` y `26fa261`, anotados). `test_frozen_surface_unchanged_against_pins` pasa | Es la única diferencia con la campaña de septiembre y solo afecta a RFI REF (otro SDR). Para volver atrás: `false` en el YAML y en `plan.py`, y restaurar las guardias anotadas |
+| BL-050 (parte) | `mount_control.py` acepta la declinación negativa en sexagesimal (`-33:27:00`). `docs/history/FLUJO_COMPLETO.md` lleva un aviso de documento histórico. | 7b2eefb | `tests/test_mount_control_cli.py` (6 casos nuevos) | El resto de BL-050 sigue abierto (§2.4) |
+| Cámara, 503 | Ver BL-054. El software respondía 503 con un reintento todavía pendiente; corregido. | 7b2eefb | `tests/test_mount_camera_relay.py` (3 tests) | Desplegado. Tras el reinicio el stream respondió 200 con 2.1 MB en 6 s. La causa del lado de la cámara es BL-054 |
+
+| BL-044 | `almita-observe-api` reiniciado una vez, el 2026-10-13 a las 15:19:53 UTC, después de comprobar en un paso aparte que no había trabajos ni observaciones. No se reinició nada más. | — | PID 711914, build `e696038`; `rtl_tcp`, watcher, blackbox e `indiserver` conservan sus PID y horas de arranque del 2026-10-08. Con las credenciales del operador: las ocho páginas y `common.js` responden 200, `/api/system/health` UP, `/api/observe/defaults` con `rfi_ref.bias_tee: true`, contraseña equivocada 401, journal sin errores | — |
+| BL-056 | `hw_hi_night_scan.py` terminaba con una traza cuando ningún objetivo HI era utilizable a esa hora; ahora termina en BLOCKED con su evidencia, y todas las salidas BLOCKED quedan escritas en la bitácora de la sesión. Encontrado por la corrida completa (2 tests fallaron a las 14:40 UTC; a las 23:10 del día anterior pasaban). | e696038 | `tests/test_hw_hi_night_scan.py`: 20 passed, con un test nuevo que fuerza el caso | Es un script de prueba en hardware; no se ejecutó contra la montura |
+
+Además: `rf_chain_characterization.py` reventaba al escribir su CSV (campos no escalares en los registros), después
+de terminar las capturas. Corregido en `bc03cc2`; comprobado solo con un caso mínimo, no en hardware.
 
 ## 2. Abierto
 
@@ -67,13 +89,11 @@ hardware y sin consultar.
 
 ### 2.1 Bugs
 
+Los cinco bugs de esta lista (BL-045, BL-046, BL-047, BL-048 y BL-051) se cerraron el 2026-10-13: ver §1.1.
+
 | id | prioridad | qué | evidencia | quién | falta para cerrar |
 |---|---|---|---|---|---|
-| BL-045 | P1 | El pie de página dice «HTTP (LAN, no TLS, no authentication)». El servidor sí exige Basic Auth y además recibe tráfico de Internet (BL-040). | `almita_web_system.version_info`; journal del 2026-10-10 al 12 | autónomo | Corregir el texto, test, y reiniciar el servidor (BL-044) |
-| BL-046 | P2 | Un test escribe en el `data/` real: cada corrida deja una carpeta `data/alignment/SOLAR-<fecha>` en `PREFLIGHT_FAILED`. Contradice BL-009. | `SOLAR-20261006-010009`, `SOLAR-20261008-191903` y `SOLAR-20261012-231035`, creada por la corrida de esta revisión, que además tocó las fechas de `data/calibration` y `data/IQ` sin dejar archivos; `tracking_timeout_s: 0.05` solo existe en `tests/test_alignment_engine_end_to_end.py` | autónomo | Redirigir `output_root` a `tmp_path`; decidir con el operador si se borran las carpetas ya creadas |
-| BL-051 | P2 | `test_no_frequency_literal_in_operational_python` falla siempre desde fd8a962: los tres scripts de evidencia versionados entonces (`rf_chain_characterization.py`, `rf_gain_control_test.py`, `sun_detectability_test.py`) llevan el literal `1420405752`. | Corrida completa del 2026-10-12; falla también aislado | autónomo | Leer la frecuencia de `sdr_tuning` en esos scripts, o excluirlos de la regla con una lista explícita |
-| BL-047 | P3 | Tests que fallan solo en la corrida completa: `test_run_exits_on_its_own_once_capture_reports_the_session_ended` (otro test deja `quicklook_live.STOP_REQUESTED` activado) y `test_field_console_left_open_for_30_minutes…` (sensible al reloj con el Pi cargado). | Corrida completa del 2026-10-12: fallan; aislados pasan | autónomo | Restaurar el flag en un fixture; hora simulada |
-| BL-048 | P3 | Al abrir OBSERVE sin pilot planificado, el trabajo `observe_gain_pilot_admin status` termina con código 1 («plan first») y queda en la lista de trabajos. | `OBSERVE_GAIN_PILOT_ADMIN-20261008-210419-d82e` y `…-223450-9c9f` | autónomo | Confirmar cómo se muestra en la web (no verificado) y tratarlo como «sin pilot», no como falla |
+| BL-054 | P2 | **Cámara de montura: 503 intermitente.** La parte de software está corregida; la del equipo no se puede comprobar desde el Pi. | El journal del servidor tiene 3 respuestas 503 y 3 respuestas 200 de `/mount_camera/stream` desde el 2026-10-08, con un 200 un minuto después de un 503. La cámara es una ESP32-CAM por WiFi (`192.168.1.164:81`, un solo cliente a la vez); el 2026-10-13 respondía ping (4 a 42 ms) y tenía abiertos los puertos 80 y 81. El servidor no registraba el motivo de cada 503, así que la causa de esos tres no se puede reconstruir. Defecto encontrado: el relay marcaba ERROR en cada intento fallido y respondía 503 aunque quedara un reintento; además nunca soltaba a los espectadores cuando se rendía. Corregido en 7b2eefb, y ahora el motivo queda en el journal. No se abrió el stream de la cámara para probar, porque le habría quitado la imagen a quien la estuviera mirando. | operador | Después del reinicio (BL-044): si vuelve a aparecer «STREAM UNAVAILABLE», mirar LAST ERROR en MONITOR o `journalctl -u almita-observe-api \| grep "mount camera"` y anotar el mensaje. Con eso se distingue WiFi débil, cámara colgada u otro cliente ocupando el stream |
 
 ### 2.2 Pruebas pendientes en hardware
 
@@ -95,11 +115,10 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 
 | id | prioridad | decisión | contexto | opción propuesta |
 |---|---|---|---|---|
-| BL-040 | **P0** | **La web :8088 es alcanzable desde Internet.** | Del 2026-10-10 al 12 el journal registra 57 direcciones públicas distintas; 76 pedidos de escáneres rechazados con 401 y una sesión autenticada desde una IP pública el 2026-10-11 16:55 UTC. La contraseña viaja por HTTP sin cifrar (Basic Auth). Esa web puede mover la montura. El 2026-10-13 siguen llegando escáneres (10 direcciones públicas más desde el 12 a las 23:45, todas rechazadas con 401 o 400; ninguna sesión autenticada). El Pi también escucha en todas las interfaces en 22, 80, 445, 5900, 6080 y 7624 (INDI: sin autenticación y mueve la montura); no se verificó cuáles reenvía el router, y desde el Pi no se puede saber. | Confirmar que la sesión del 11 fue de ustedes. Revisar en el router **todos** los reenvíos hacia el Pi, no solo :8088. Cerrarlos y entrar por VPN (Tailscale o WireGuard). Si la sesión fue ajena, cambiar la contraseña. |
+| BL-040 | P2 | **La web :8088 es alcanzable desde Internet.** Decidido: el operador indicó el 2026-10-13 que el acceso por Internet funciona como él quiere. No se cambió router, reenvíos, firewall, autenticación ni acceso remoto. Quedan comprobaciones. | Del 2026-10-10 al 12 el journal registra 57 direcciones públicas distintas; 76 pedidos de escáneres rechazados con 401 y una sesión autenticada desde una IP pública el 2026-10-11 16:55 UTC. El 2026-10-13 siguen llegando escáneres (10 direcciones más, todas rechazadas con 401 o 400). La contraseña viaja por HTTP sin cifrar (Basic Auth) y esa web puede mover la montura. El Pi también escucha en todas las interfaces en 22, 80, 445, 5900, 6080 y 7624 (INDI: sin autenticación y mueve la montura); desde el Pi no se puede saber cuáles reenvía el router. | Comprobaciones pendientes, todas del operador: (1) confirmar que la sesión del 2026-10-11 fue suya; (2) mirar en el router qué puertos se reenvían además de :8088, sobre todo 7624; (3) decidir si la contraseña sin cifrar es aceptable o si conviene una VPN |
 | BL-035 | P1 | Unir `web-polish-v1` con `main`. | `main` tiene 19 commits de documentación y sitio que la rama no tiene; la rama tiene más de 80 que `main` no tiene. Solo chocan en `README.md`. | Un PR `web-polish-v1` → `main` resolviendo el README, después de BL-026 y BL-027 |
-| BL-041 | P2 | `rfi_ref.bias_tee` vale `false` por omisión en el esquema (`observation_spec.py`, módulo congelado). | La web manda `true`. Una especificación YAML por CLI que no lo escriba deja el LNA de la antena B sin alimentación. `examples/overnight-400.yaml` lo trae en `true`; `examples/block-validation-01.yaml` tiene RFI REF desactivado. | Mantener el esquema (los planes archivados revalidan igual) y dejarlo advertido en el manual, que ya lo dice |
-| BL-052 | P2 | El plan del experimento de forensics lleva RFI REF activado con `bias_tee: false`. | `examples/science_forensics_experiment.yaml` y `science_forensics/experiment/plan.py` copian la configuración de la campaña de septiembre (`ALMITA-WEB-SMALL-RUN-01`), anterior a la confirmación del LNA de la antena B. Ejecutado tal cual, deja ese LNA sin alimentación. El archivo está fijado en `docs/WEB_V1_FREEZE.md` y el diseño exige «configuración idéntica a la campaña». No afecta a MAIN ni a los productos científicos: RFI REF es solo monitoreo. Encontrado el 2026-10-13. | Decidir después de BL-031. Si el LNA necesita el Bias-T, pasarlo a `true` y dejar escrita la diferencia con la campaña original; hasta entonces, el manual lo advierte |
 | BL-053 | P3 | Cadena de la antena B: la documentación no coincide. | Las guías de `main` (`docs/hardware/RF_AND_WIRING.md`, `BUILD.md`, `BOM.md`) dicen antena → filtro notch FM (Nooelec Flamingo FM) → LNA de banda ancha → SDR, y no dicen que el LNA se alimenta por Bias-T. El manual y el brief dicen antena B → LNA → SDR, sin filtro. No se puede comprobar sin mirar el equipo. Encontrado el 2026-10-13. | Que el operador confirme la cadena real; corregir el manual y el brief en esta rama y las guías al unir con `main` (BL-035) |
+| BL-055 | P3 | Borrar los restos de tests en `data/alignment/`: `SOLAR-20261006-010009`, `SOLAR-20261008-191903` y `SOLAR-20261012-231035`. | Las creó el test corregido en BL-046; están en `PREFLIGHT_FAILED` y no contienen capturas. No se borraron porque están en `data/`. | Borrarlas: confunden, porque parecen corridas solares y no hay ninguna |
 | BL-036 | P3 | REDUCE topocentric sin metadatos. | Exige descongelar `reduce_engine`. Hoy solo se corrigió la etiqueta. | No hacerlo mientras SCIENCE solo acepte LSRK |
 | BL-037 | P2 | RFI REF: asociar las capturas de la antena B a cada punto en REDUCE. | La interfaz existe (`docs/REDUCE_RFI_REF_INTERFACE.md`) y hoy informa UNAVAILABLE. Toca REDUCE V1 congelado. | Decidir después de BL-031: no tiene sentido sin saber que la antena B mide bien |
 | BL-038 | P3 | Subir un perfil desde el disco del navegador (resto de BL-002). | Hay que decidir dónde se guarda y quién puede escribir. | Posponer |
@@ -110,31 +129,28 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 
 | id | prioridad | mejora | quién | depende de |
 |---|---|---|---|---|
-| BL-044 | P2 | Reiniciar `almita-observe-api` para cargar b6eca65 y lo que siga. Solo sin trabajos activos, comprobado en un paso aparte. | operador (autoriza) | Conviene juntarlo con BL-045 |
-| BL-043 | P2 | Sección ALIGN de PIPELINE sin opción de SYNC: siempre usa `--no-sync`. | autónomo | BL-026, para no exponer un SYNC sin probar |
-| BL-049 | P3 | Política vieja de SYNC en `alignment_engine/sync_flow.py` y `targets/hi_reference.py`, que bloquea el SYNC en HI. Alinear el código o la documentación con BL-022. | autónomo | BL-026 |
-| BL-050 | P3 | Pendientes de FIELD_RUNBOOK §14: identidad canónica de la sesión; lock del proceso INDI; `gain='auto'` como default en `sdr_capture.configure`; lectores DS18B20 duplicados; `README.md` y `docs/history/FLUJO_COMPLETO.md` desactualizados; Dec negativa en la CLI de `mount_control.py`. | autónomo, salvo los que tocan módulos congelados | — |
+| BL-043 | P2 | Sección ALIGN de PIPELINE sin opción de SYNC: siempre usa `--no-sync`. Junto con esto, decidir si `alignment_engine` adopta la política de SYNC de `alignment.py` (BL-049). | autónomo | BL-026, para no exponer un SYNC sin probar. **No se habilita antes.** |
+| BL-050 | P3 | Lo que queda de FIELD_RUNBOOK §14: identidad canónica de la sesión; lock del proceso INDI; `gain='auto'` como default en `sdr_capture.configure`; lectores DS18B20 duplicados; `README.md` desactualizado. | Los tres primeros tocan módulos congelados (`capture.py`, `indi_telescope_control.py`, `sdr_capture.py`): decisión del operador. El README conviene resolverlo con BL-035, porque es el único archivo que choca con `main`. Los lectores DS18B20 ya comparten el rango de plausibilidad; unirlos es limpieza sin efecto visible | — |
 
 ## 3. Orden propuesto
 
-1. **BL-040.** Es la única con riesgo activo y no depende de nada. Diez minutos del operador en el router.
-2. **Sin hardware, en paralelo:** BL-045, BL-046 y BL-051, y BL-047 si queda tiempo. Dejan la suite en verde y
-   el árbol listo para un solo reinicio.
-3. **BL-044:** un reinicio del servidor, autorizado por el operador, que carga b6eca65 y BL-045.
-4. **Salida a terreno de día:** BL-031 (sin mover la montura) → BL-026 (ALIGN SOLAR y SYNC) → BL-027 (STOP real)
+Todo lo que se podía hacer sin hardware ni decisiones está hecho. Lo que sigue necesita al operador.
+
+1. **Salida a terreno de día:** BL-031 (sin mover la montura) → BL-026 (ALIGN SOLAR y SYNC) → BL-027 (STOP real)
    → BL-029. Hacerla siguiendo el manual cubre BL-033. Con el equipo a la vista, confirmar la cadena de la
-   antena B (BL-053) y, con el resultado de BL-031, decidir BL-052.
-5. **Con el Sol ya medido:** BL-034 (haz). Después BL-043 y BL-049.
-6. **Noche siguiente:** BL-028 y BL-032 dentro de una sesión normal.
-7. **BL-035** (PR a `main`) cuando BL-026 y BL-027 estén cerrados.
-8. El resto (BL-030, BL-036 a BL-039, BL-041, BL-042, BL-048, BL-050) no bloquea a nadie.
+   antena B (BL-053) y anotar el mensaje de la cámara si vuelve a fallar (BL-054).
+2. **Con el Sol ya medido:** BL-034 (haz). Después BL-043, que incluye decidir la política de SYNC del motor.
+3. **Noche siguiente:** BL-028 y BL-032 dentro de una sesión normal.
+4. **BL-035** (PR a `main`) cuando BL-026 y BL-027 estén cerrados; lleva consigo el README (BL-050) y las guías
+   de hardware (BL-053).
+5. **Decisiones sueltas, sin fecha:** las tres comprobaciones de BL-040, BL-055 (borrar restos de tests), BL-042,
+   BL-036 a BL-039 y lo que queda de BL-050.
 
 Dependencias que fijan el orden:
 
-- BL-026 antes de BL-034, BL-043 y BL-049.
-- BL-031 antes de BL-037 y de BL-052.
+- BL-026 antes de BL-034 y de BL-043.
+- BL-031 antes de BL-037.
 - BL-053 antes de BL-035, para corregir las guías de hardware en el mismo PR.
-- BL-045 antes de BL-044, para reiniciar una sola vez.
 - BL-026 y BL-027 antes de BL-035.
 
 ## 4. Activación
@@ -146,8 +162,13 @@ Dependencias que fijan el orden:
 
 ## 5. Tests
 
-Corrida completa del 2026-10-12 sobre b6eca65: 2540 passed, 3 failed, 52 skipped, en 33 min 29 s. Las tres
-fallas son BL-051 (real) y BL-047 (dos que pasan aisladas). Es el resultado vigente: desde entonces solo cambió
-documentación. El 2026-10-13 se lanzó otra corrida sin necesidad y se interrumpió al 19 % (556 passed, 0 failed);
-no cuenta como resultado. Detalle en
-[PROJECT_BRIEF.md §5](PROJECT_BRIEF.md#5-validación).
+- **Corrida completa vigente, 2026-10-13** (14:29 a 15:05 UTC, 36 min 2 s, sobre `bc03cc2`): 2555 passed,
+  2 failed, 52 skipped. Las dos fallas eran BL-056 (dependen de la hora) y se corrigieron después, en `e696038`.
+  Los tres tests que fallaban el 2026-10-12 (BL-051 y BL-047) pasan.
+- **Después de esa corrida** cambiaron `hw_hi_night_scan.py` y tres archivos de tests (`e696038`). Se corrieron
+  solo sus suites: `test_hw_hi_night_scan.py` 20 passed; `test_capture_preflight.py`,
+  `test_almita_web_align_calibrate.py` y `test_alignment_engine_end_to_end.py` 51 passed. No se repitió la
+  corrida completa.
+- Corrida completa anterior, 2026-10-12 sobre b6eca65: 2540 passed, 3 failed, 52 skipped.
+
+Detalle en [PROJECT_BRIEF.md §5](PROJECT_BRIEF.md#5-validación).

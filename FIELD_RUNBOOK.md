@@ -269,9 +269,11 @@ No hay pasos adicionales de hardware documentados más allá de esto.
 
 ## 14. KNOWN OPEN ITEMS
 
-*(NO BLOCKER FOR CONSOLE V1 — VERIFY OPERATIONALLY DURING FIELD USE)* — estado revisado 2026-10-06:
+*(NO BLOCKER FOR CONSOLE V1 — VERIFY OPERATIONALLY DURING FIELD USE)* — estado revisado 2026-10-13 (BL-050 en
+`docs/BACKLOG.md`):
 
-- ~~`mount_control.py` `connect()` sin `await`~~ — corregido (5ee573a). Dec negativa: usar decimal (`-33.4`).
+- ~~`mount_control.py` `connect()` sin `await`~~ — corregido (5ee573a).
+- ~~Dec negativa en la CLI de `mount_control.py`~~ — corregido (7b2eefb): acepta `-33:27:00` y `-33.4`.
 - ~~visibility TOCTOU~~ — capture.py recalcula la altitud al momento del GOTO y difiere el punto si no cumple.
 - ~~console header Gain/Bias-T histórico~~ — ya no existe ese texto fijo.
 - ~~CSV de sesión/mosaic no atómico~~ — capture.py escribe vía `.csv.tmp` + `os.replace`.
@@ -280,7 +282,8 @@ No hay pasos adicionales de hardware documentados más allá de esto.
 - `sdr_capture.configure(gain='auto')` como valor por omisión — ningún flujo operativo lo usa (todos sintonizan
   explícito con ganancia fija); **abierto** como limpieza
 - duplicación de lectores DS18B20 (`temperature_sensors.py` / `telemetry_summary.py`) — **abierto**
-- documentación antigua (`FLUJO_COMPLETO.md`, `README.md`) con referencias desactualizadas — **abierto**
+- ~~`FLUJO_COMPLETO.md` desactualizado~~ — marcado como documento histórico (7b2eefb)
+- `README.md` con referencias desactualizadas — **abierto**; se resuelve al unir con `main` (BL-035)
 
 ## 15. EMERGENCY PRINCIPLE
 
