@@ -472,7 +472,11 @@ capturas nuevas. Ningún `.part`.
 
 **Caso B2, HI ALTO, STOP durante el GOTO: PASS [H].** El wizard se quedó en el paso con 0 archivos y sin nada que
 limpiar. **La montura terminó el GOTO** y quedó en el objetivo, con el seguimiento apagado (el wizard solo lo
-enciende al llegar). Falta el STOP durante las capturas de un paso HI. Detalle en `docs/BACKLOG.md` §4.4 y §4.5.
+enciende al llegar).
+
+**Caso B2, HI ALTO, STOP durante la captura: PASS [H].** Con el seguimiento encendido y la primera captura en
+curso, el STOP dejó el paso donde estaba, sin archivos, y **el wizard apagó el seguimiento en el mismo momento**
+(lo deja como estaba antes del paso). Con esto la prueba B está completa. Detalle en `docs/BACKLOG.md` §4.4 a §4.6.
 
 | | |
 |---|---|
@@ -480,7 +484,7 @@ enciende al llegar). Falta el STOP durante las capturas de un paso HI. Detalle e
 | **Botones** | **B1, sin movimiento:** en el paso de 50 Ω, **CAPTURE NOW** y, durante las capturas, **STOP CURRENT STEP**. **B2, con GOTO:** en HI ALTO, escribe **MOVE**, pulsa **CAPTURE NOW (real GOTO + capture)** y pulsa **STOP CURRENT STEP** una vez mientras la montura se mueve y, en otro intento, una vez durante las capturas. |
 | **Resultado esperado** | El paso **no avanza**: el wizard sigue en el mismo paso. Aparece el aviso «… capture STOPPED by the operator … N file(s) kept on disk» y el botón pasa a **RETRY CAPTURE (after fixing the cause)**. Las capturas que alcanzaron a completarse quedan como `capture_000.h5`, `capture_001.h5`… No se reintenta solo. En B2 durante el GOTO la montura puede terminar el movimiento. |
 | **Evidencias** | Paso y momento del STOP (GOTO o captura). El texto del aviso. `ls data/calibration/WIZARD-…/captures/<AMBIENT_50R o HI_ALTO>/`. Qué hizo la montura. |
-| **Recuperación** | Pulsa **RETRY CAPTURE**: los archivos del intento interrumpido no se sobrescriben, pasan a `captures/<paso>/interrupted-<UTC>/` y el aviso los lista. Después sigue el wizard normalmente. Si prefieres dejarlo, **ABORT WIZARD** cierra la sesión sin borrar nada, y puedes iniciar otra. |
+| **Recuperación** | Pulsa **RETRY CAPTURE** (en los pasos HI, **RETRY CAPTURE (real GOTO + capture)**, con `MOVE` escrito): los archivos del intento interrumpido no se sobrescriben, pasan a `captures/<paso>/interrupted-<UTC>/` y el aviso los lista. Después sigue el wizard normalmente. Si prefieres dejarlo, **ABORT WIZARD** cierra la sesión sin borrar nada, y puedes iniciar otra. |
 | **No vale como prueba** | Recargar la página no detiene nada: el wizard se recupera leyendo su estado real. |
 
 ### Prueba C — ALIGN SOLAR sin SYNC, con SYNC y confirmación

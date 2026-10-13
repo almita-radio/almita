@@ -38,7 +38,7 @@ build `e696038`, posterior a todos esos commits.
 | BL-004 | Retiro del puerto 8090 | 704b168 | sí | — | sí: nada escucha en :8090 (2026-10-12) | **cerrado** |
 | BL-005 | SCIENCE: A, B y C en una proyección, ≤3 GB | cf450de, 4eec7f4, 9c5c8f2 | sí | sí: 400/400, GOOD, pico 1.03 GB | — | **cerrado** |
 | BL-006 | SCIENCE: exportes legibles y diagnósticos uniformes | b40e126 | sí | sí | — | **cerrado** |
-| BL-007 | Wizard: STOP, ABORT, fallas y pasos interrumpidos | adc2cac | sí | — | parcial: ABORT sí (2026-10-07); STOP CURRENT STEP no | abierto: BL-028 |
+| BL-007 | Wizard: STOP, ABORT, fallas y pasos interrumpidos | adc2cac | sí | — | sí: ABORT (2026-10-07) y STOP CURRENT STEP en 50 Ω y en HI, durante GOTO y durante captura (2026-10-13) | **cerrado** (BL-028) |
 | BL-008 | Frecuencia: configuración central + ACK de rtl_tcp | aae14d9 | sí | — | parcial: sí en OBSERVE y wizard; bench `sdr --yes` no | abierto: BL-030 |
 | BL-009 | Tests sin dependencia de `data/` | fdc72e9, 8473f0c, 7b2eefb | sí: no leen ni escriben en `data/` (corrida completa del 2026-10-13 con foto de `data/` antes y después) | — | — | **cerrado** (BL-046) |
 | BL-010 | Git: `data/` ignorado, fixtures, runbook | ef32d62, dbafb43 | — | — | — | **cerrado** |
@@ -106,7 +106,7 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 |---|---|---|---|---|
 | BL-026 | P1 | ALIGN SOLAR desde la web: primero sin SYNC, después con SYNC, y un ALIGN de confirmación. Guía: manual §14, prueba C. **Sin Sol disponible el 2026-10-13.** | BL-022 | `alignment_result.json` con offset y confianza; SYNC APPLIED; segundo ALIGN con offset cercano a 0. Hoy no hay ninguna corrida solar real: las carpetas `SOLAR-*` son restos de tests (BL-055). |
 | BL-027 | P1 | STOP OBSERVATION real. **Tres pruebas el 2026-10-13** (§4.1 a §4.3): tras un GOTO, durante un GOTO y durante una captura. | — | **Comprobado en hardware:** cierre en 6 a 7 s; estado `ABORTED` coherente en orquestador, API y MONITOR (desde el arreglo `0148b78`); solo `.h5` completos y validados; ningún `.part` en ninguna de las tres; SDR liberados. **Queda abierto por la montura:** tras un STOP durante un GOTO queda en seguimiento (BL-059). Se cierra cuando BL-059 esté resuelto y probado |
-| BL-028 | P2 | STOP CURRENT STEP del wizard. Probado el 2026-10-13 en 50 Ω (§4.4) y en HI ALTO **durante el GOTO** (§4.5): PASS los dos. **Falta** el STOP durante las capturas de un paso HI. Guía: manual §14, prueba B. | BL-007 | En HI durante la captura: archivos conservados, RETRY que los aparta, y que el seguimiento, que ahí sí está encendido, quede apagado o restaurado |
+| BL-028 | P2 | STOP CURRENT STEP del wizard. **Probado el 2026-10-13 en sus tres casos, PASS los tres:** 50 Ω durante la captura (§4.4), HI ALTO durante el GOTO (§4.5) y HI ALTO durante la captura (§4.6). | BL-007 | **Cerrado.** Queda como observación, no como fallo: el STOP no frena un GOTO en curso (la montura lo completa) |
 | BL-029 | P2 | Fallas provocadas: desconectar el USB de MAIN; apagar INDI. | — | BLOCK visible en PLAN y STATUS, y recuperación documentada |
 | BL-030 | P3 | Bench `sdr --yes` en MAIN y la CLI de `mount_control.py`. | BL-008, BL-011 | Salida del bench con ACK; un GOTO por CLI |
 | BL-031 | P1 | Antena B: medir que el LNA recibe alimentación con el Bias-T de RFI REF. | BL-025 | Nivel de ruido de RFI REF con BIAS-T marcado y desmarcado, o tensión en el conector. No se puede sacar de los datos guardados: las seis sesiones con RFI REF usaron `-T` y no hay ninguna sin él. No mueve la montura. |
@@ -233,6 +233,19 @@ Dependencias que fijan el orden:
 | Montura (lectura INDI a las 18:54:38, sin enviar órdenes) | **Terminó el GOTO**: está en el objetivo de HI ALTO. **Seguimiento apagado**, sin error; la RA avanza al ritmo sidéreo, como corresponde a una montura quieta sin seguimiento |
 | Diferencia con OBSERVE (BL-059) | Aquí la montura no quedó en seguimiento. El wizard solo lo enciende después del GOTO, y el STOP llegó antes; en OBSERVE ya venía encendido desde el punto anterior |
 | Resultado | **PASS.** Confirma que el STOP no frena el movimiento: la montura completa el GOTO |
+
+## 4.6 STOP CURRENT STEP del wizard en HI ALTO, durante la captura (2026-10-13)
+
+| | |
+|---|---|
+| Sesión | `data/calibration/WIZARD-20261013-181623-230083`, trabajo `CALIBRATE_WIZARD_MOVE-20261013-192622-da59` |
+| Antes del STOP | GOTO corto (5.0°) completado; el log dice «sidereal tracking ON confirmed (was off)»; montura en el objetivo con 0.02° de error; primera captura de 5 s empezada |
+| STOP pedido | 19:26:51 UTC, **durante la primera captura**. El trabajo terminó a las 19:26:52 |
+| Wizard | Siguió en `READY_HI_ALTO`; interrupción `STOPPED_BY_OPERATOR` con 0 archivos |
+| Archivos | Ninguno en `captures/HI_ALTO/` (la captura interrumpida no deja archivo). **0 `.part`** |
+| SDR | MAIN liberado a las 19:26:51 |
+| Montura (lectura INDI a las 19:28:43, sin enviar órdenes; el operador no tocó Ekos) | **Seguimiento apagado**, quieta, sin error. La RA leída (16.1447 h) es la del objetivo (16.1136 h) más 112 s de deriva sidérea, que es el tiempo transcurrido desde el STOP: el seguimiento se apagó en el momento de la parada. El wizard lo dejó como estaba antes del paso |
+| Resultado | **PASS** |
 
 ## 5. Tests
 
