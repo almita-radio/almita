@@ -337,6 +337,16 @@ Otros puertos que escuchan en todas las interfaces (`ss -ltn`, 2026-10-13): 22 (
 5900 y 6080 (VNC y noVNC de StellarMate) y 7624 (INDI, que no tiene autenticación y mueve la montura). **No
 verificado:** cuáles de ellos reenvía el router; desde el Pi no se puede saber.
 
+### Qué SHA es cada cosa
+
+| qué | SHA |
+|---|---|
+| Código desplegado en `almita-observe-api` | `e6960383…` (`e696038`), el último commit que cambia código |
+| Último commit de la rama de trabajo | el de documentación más reciente; se informa al entregar cada revisión |
+
+Los commits posteriores a `e696038` solo tocan `docs/`, `FIELD_RUNBOOK.md` y el PDF del manual, así que el
+servidor no necesita reinicio por ellos.
+
 ### Ramas
 
 - **Repositorio:** `git@github.com:almita-radio/almita.git` (https://github.com/almita-radio/almita).
@@ -347,7 +357,8 @@ verificado:** cuáles de ellos reenvía el router; desde el Pi no se puede saber
     de esta revisión.
   - `main` tiene 19 commits de documentación y sitio (licencias open hardware, `docs/hardware/` con BOM, cableado
     y mecánica, sitio web) que esta rama no tiene.
-  - Solo chocan en `README.md`. No se hizo merge: es una decisión del operador (BL-035).
+  - Solo chocan en `README.md`. La integración está preparada en la rama aparte
+    `integration/web-polish-v1-into-main`, sin fusionar ni desplegar (BL-035).
 - **Ramas locales que no se suben a propósito:** `backup-antes-de-limpiar-github-20260810` y
   `respaldo-local-18-03`. Tienen historia anterior a la limpieza de GitHub y subirlas la desharía.
 - Otras ramas locales (`backlog/wizard-preview-profile-picker`, `science/abc-shared-projection-wip`,
@@ -458,14 +469,37 @@ detenida a propósito al 38 % sin fallas.
 Duración real medida: unos 32 s por punto con capturas de 10 s, y unos 23 s por punto con capturas de 1 s. Las dos sesiones
 de 25 puntos dieron 36 s y 29 s por punto: son grillas más abiertas, con GOTO más largos.
 
-**Integridad de la sesión de 400 puntos y su perfil.** El 2026-10-13 se compararon contra el manifiesto original
-del resguardo, `/home/stellarmate/almita_preserve_20261002/manifest_before.sha256` (del 2026-10-02, sin
-modificar; su propio SHA-256 empieza por `c30a7493`), y contra `sizes_before.txt`:
+**Integridad de lo preservado.** El resguardo `/home/stellarmate/almita_preserve_20261002/` trae dos inventarios
+del 2026-10-02, sin modificar: `manifest_before.sha256` (su propio SHA-256 empieza por `c30a7493`) y
+`sizes_before.txt`. Los dos listan las mismas **3257** rutas. La carpeta tiene 3260 archivos: esos 3257 más los
+tres archivos de inventario.
 
-| cuándo | archivos | SHA-256 | tamaños |
-|---|---|---|---|
-| Antes de la pasada autónoma | 3248 (3230 de la sesión, 18 del perfil) | 3248 coinciden | 3248 coinciden, 6.54 GB |
-| Después de los cambios, la corrida completa y el reinicio (15:21 UTC) | 3248 | 3248 coinciden | 3248 coinciden |
+Las 3257 entradas son más que la sesión y su perfil:
+
+| grupo | entradas | comparado con `data/` actual el 2026-10-13 |
+|---|---|---|
+| Sesión `mosaic/ALMITA-OBSERVE-20261002-01:45:08` | 3230 | 3230 coinciden en SHA-256 y tamaño |
+| Perfil `calibration/WIZARD-20261002-013321-160933` | 18 | 18 coinciden en SHA-256 y tamaño |
+| Mapas HI4PI (`reference/…`, 6 archivos) y `hi_sky_catalog_2000pts.csv` | 7 | 7 coinciden en SHA-256 y tamaño |
+| `IQ/session.csv` | 1 | **distinto**, 533 → 1288 bytes |
+| `runtime/mount_camera_config.json` | 1 | **distinto**, 105 → 128 bytes |
+
+- La cifra de **3248** del reporte anterior es la suma de las dos primeras filas: se comprobó solo la sesión y
+  su perfil, que era lo pedido, y no las otras 9 entradas. Esa comprobación se hizo dos veces, antes y después
+  de la pasada autónoma, con el mismo resultado.
+- Los dos archivos distintos son estado operativo que el sistema reescribe, no datos de la sesión:
+  - `IQ/session.csv` es el índice de sesiones de `capture.py`. Ya no tiene la fila de la sesión del 2026-09-28
+    y tiene cinco filas nuevas, de las sesiones del 2026-10-07 y del 2026-10-08;
+  - `mount_camera_config.json` ganó `rotation_deg: 180` el 2026-10-07 (BL-014).
+- **El resguardo en sí está íntegro:** sus 3257 archivos coinciden con su propio manifiesto (comprobado el
+  2026-10-13 a las 15:36 UTC). Las versiones originales de esos dos archivos siguen ahí.
+- **Conclusión, con su alcance:** sesión, perfil, mapas HI4PI y catálogo están idénticos al 2026-10-02 (3255 de
+  3257). No se puede decir «3257 de 3257 idénticos»: dos archivos cambiaron por operación normal.
+- **Sin explicar:** `data_bytes_before.txt` dice 11 317 446 987 bytes y los tamaños del inventario suman
+  6 841 256 217 bytes. Lo más probable es que la primera cifra sea el tamaño de todo `data/` ese día y no solo
+  de lo preservado, pero el resguardo no lo dice y no se puede comprobar hoy.
+- Nada de esto se modificó: los inventarios se leyeron y los subconjuntos usados para comparar se escribieron
+  fuera del resguardo.
 
 Las revisiones del 2026-10-12 y de la mañana del 13 solo habían comparado cantidades, tamaños y fechas.
 
@@ -526,6 +560,11 @@ scripts personales, siguen fuera de Git y la regla de BL-051 solo mira los versi
 - Revisado de nuevo el 2026-10-13. Las referencias de versión seguían vigentes (`b6eca65` es el último commit
   con código de producto). Cambios: el aviso sobre el plan de forensics (BL-052), la nota sobre el filtro notch
   FM de la antena B (BL-053) y la fecha de revisión. PDF regenerado.
+- **§14, «Pruebas de validación para el operador»** (2026-10-13): STOP OBSERVATION, STOP CURRENT STEP, ALIGN
+  SOLAR (pendiente, sin Sol) y el recorrido nocturno completo, con botones, requisitos, resultado esperado,
+  evidencias y recuperación. Describe el contrato real de los archivos: un `.h5.part` puede quedar si el STOP
+  cae justo en la escritura, y el STOP no aborta un GOTO en curso. La configuración de la prueba D se pasó por
+  PLAN ese día, en un directorio temporal, y fue aceptada. PDF de 12 páginas, revisado a la vista.
 - Actualizado en la pasada autónoma del 2026-10-13: el párrafo del Bias-T de RFI REF (ahora encendido por
   defecto también en las especificaciones YAML), una fila nueva en «Problemas habituales» para la cámara y la
   versión del encabezado. PDF regenerado.

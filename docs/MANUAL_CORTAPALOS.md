@@ -320,9 +320,9 @@ Si no usas el gain pilot, START no lo exige.
     Duración real medida: unos **32 s por punto con capturas de 10 s** (400 puntos ≈ 3 h 32 min) y unos **23 s
     por punto con capturas de 1 s**.
 
-3. **STOP OBSERVATION** envía SIGINT, que es una parada limpia. Los puntos ya capturados se conservan, y cerrar
-    los archivos puede tardar hasta 2 min. El estado pasa por `STOPPING` y termina en `ABORTED`. **[C; P en
-    hardware]**
+3. **STOP OBSERVATION** envía SIGINT, que es una parada limpia. Los puntos ya capturados se conservan, y el
+    cierre puede tardar hasta 2 min. El estado pasa por `STOPPING` y termina en `ABORTED`. Qué pasa con el punto
+    en curso y con la montura está en §14, prueba A. **[C; P en hardware]**
 
 4. **Comprobar que terminó bien:**
     - En OBSERVE → **OBSERVATION RUN**, el estado es `COMPLETED` («SUCCESS — capture finished»).
@@ -409,6 +409,113 @@ Hay una sola tarea REDUCE o SCIENCE a la vez en el Pi.
 
 ---
 
+## 14. Pruebas de validación para el operador
+
+Cuatro pruebas pendientes en el instrumento. Ninguna se ha hecho todavía: lo que sigue sale del código y de los
+tests **[C]**, y cada prueba dice qué anotar para convertirlo en **[H]**. Hazlas con la montura libre de
+obstáculos y alguien mirándola.
+
+**Cómo se guarda un punto (vale para A y B).** Durante la captura las muestras están solo en memoria: no hay
+ningún archivo del punto en curso. Al terminar la captura se escribe `<punto>.h5.part`, se valida y se renombra
+a `<punto>.h5`. Por eso:
+
+- un `.h5` siempre es una captura completa y validada;
+- una interrupción **durante la captura** no deja ningún archivo de ese punto;
+- una interrupción **justo durante la escritura** (un instante, al final de cada punto) puede dejar un
+  `.h5.part`. El código borra el `.part` cuando la escritura falla por un error, pero no garantiza borrarlo
+  cuando lo que la corta es el STOP. **Un `.part` no es un dato válido y tampoco es un fallo de la prueba:**
+  anótalo y no lo borres.
+
+**Qué pasa con la montura (vale para A y B).** El STOP no envía ninguna orden de abortar el movimiento. Si llega
+**durante un GOTO**, la montura puede terminar ese GOTO por su cuenta; el programa se cierra y, al salir, pide
+apagar el seguimiento. Si necesitas detener la montura de inmediato, usa el botón de parada de Ekos o el control
+de mano.
+
+### Prueba A — STOP OBSERVATION con una grilla pequeña
+
+| | |
+|---|---|
+| **Requisitos** | Pasos 1 a 3 hechos; preflight real sin BLOCK; un perfil a la ganancia del plan. Una grilla de 25 puntos (la de la prueba D sirve). |
+| **Botones** | OBSERVE → **PLAN OBSERVATION** → **START OBSERVATION** (confirma el resumen) → esperar → **STOP OBSERVATION** (confirma el diálogo). |
+| **Hazla dos veces** | **A1, durante una captura:** pulsa STOP cuando MONITOR → SESSION muestre el punto 3 o 4 en captura (la montura quieta). **A2, durante un GOTO:** en otra sesión nueva, pulsa STOP mientras la montura se mueve hacia el punto siguiente. |
+| **Resultado esperado** | El aviso «STOP REQUESTED — waiting for capture to finish» y, en menos de 2 min, OBSERVATION RUN en **PARTIAL — stopped before completion; captured points are kept** (estado `ABORTED`). Los puntos anteriores al STOP tienen su `.h5`. El punto en curso no tiene `.h5`. En A2 la montura puede completar el GOTO antes de quedar quieta. QUICKLOOK y RFI REF se detienen solos. |
+| **Evidencias** | Hora del STOP y si fue A1 o A2. Estado final en OBSERVE. `ls data/mosaic/<sesión>/data/iq/*/` con la cantidad de `.h5` y de `.part`. Las últimas 30 líneas de `data/mosaic/<sesión>/orchestrator_capture.log`. Qué hizo la montura. |
+| **Si algo sale distinto** | Si a los 2 min el estado es **BLOCKED — needs operator attention** (`DEGRADED`), el programa no terminó solo: el sistema no lo mata. Anota la nota que muestra la página y mira `ps -ef \| grep '[c]apture.py'`; si sigue vivo, detenlo con `kill -INT <pid>` (nunca `-TERM` ni `-9`). |
+| **Recuperación** | La web no reanuda una sesión interrumpida: haz **PLAN OBSERVATION** de nuevo y lanza una sesión nueva. No lances una segunda captura sobre la misma sesión. Los `.h5` ya guardados sirven para REDUCE tal como están. |
+
+### Prueba B — STOP CURRENT STEP del Reference Wizard
+
+| | |
+|---|---|
+| **Requisitos** | Ruta B (§5B) en marcha: CALIBRATE → **START WIZARD**. Para B2, zonas HI aprobadas. |
+| **Botones** | **B1, sin movimiento:** en el paso de 50 Ω, **CAPTURE NOW** y, durante las capturas, **STOP CURRENT STEP**. **B2, con GOTO:** en HI ALTO, escribe **MOVE**, pulsa **CAPTURE NOW (real GOTO + capture)** y pulsa **STOP CURRENT STEP** una vez mientras la montura se mueve y, en otro intento, una vez durante las capturas. |
+| **Resultado esperado** | El paso **no avanza**: el wizard sigue en el mismo paso. Aparece el aviso «… capture STOPPED by the operator … N file(s) kept on disk» y el botón pasa a **RETRY CAPTURE (after fixing the cause)**. Las capturas que alcanzaron a completarse quedan como `capture_000.h5`, `capture_001.h5`… No se reintenta solo. En B2 durante el GOTO la montura puede terminar el movimiento. |
+| **Evidencias** | Paso y momento del STOP (GOTO o captura). El texto del aviso. `ls data/calibration/WIZARD-…/captures/<AMBIENT_50R o HI_ALTO>/`. Qué hizo la montura. |
+| **Recuperación** | Pulsa **RETRY CAPTURE**: los archivos del intento interrumpido no se sobrescriben, pasan a `captures/<paso>/interrupted-<UTC>/` y el aviso los lista. Después sigue el wizard normalmente. Si prefieres dejarlo, **ABORT WIZARD** cierra la sesión sin borrar nada, y puedes iniciar otra. |
+| **No vale como prueba** | Recargar la página no detiene nada: el wizard se recupera leyendo su estado real. |
+
+### Prueba C — ALIGN SOLAR sin SYNC, con SYNC y confirmación
+
+**Pendiente: necesita el Sol.** Cuando lo haya, sigue el §4 tres veces seguidas, con modo **SOLAR (day)**:
+
+1. Con **SYNC THE MOUNT AT THE END** desmarcada: anota el offset y la confianza del recuadro **ALIGNMENT
+    RESULT**.
+2. Con la casilla marcada y **MAX SYNC OFFSET** en 5°: el resultado esperado es `PASS` + **SYNC APPLIED** si la
+    confianza es ≥ 0.65 y el offset ≤ 5°. Si dice SYNC NOT SENT, anota el motivo y no subas el máximo.
+3. Una tercera corrida, de confirmación: el offset debería quedar cerca de 0.
+
+Evidencias: las tres carpetas `data/alignment/WEB-SUN-…` y el texto del recuadro en cada corrida. Es la primera
+vez que se envía un SYNC a la montura real: quédate junto a ella.
+
+### Prueba D — Recorrido completo nocturno
+
+Primera validación: **grilla pequeña, perfil existente y sin gain pilot**. Dura unos 15 a 20 minutos de
+observación más la preparación.
+
+1. **Preparación y montura:** pasos 1 a 3. El preflight real no debe tener BLOCK.
+2. **ALIGN HI, solo si es utilizable:** §4 con modo **HI (night)**. Deja marcada **SYNC THE MOUNT AT THE END**:
+    el sistema solo corrige si la confianza es ≥ 0.65 y el offset ≤ 5°. Si el resultado es `LOW CONFIDENCE` o
+    `NO DEFENDIBLE DIFFERENTIAL HI STRUCTURE`, **no fuerces nada**: sigue con la alineación de Ekos. No subas
+    MAX SYNC OFFSET para conseguir un SYNC.
+3. **Perfil:** usa uno existente a 40.2 dB (Ruta A). Solo si no sirve ninguno, haz CALIBRATE (Ruta B).
+4. **OBSERVE**, con estos valores:
+
+    | campo | valor |
+    |---|---|
+    | OBSERVATION NAME | `ALMITA-OBSERVE` |
+    | PLACEMENT | `EASTMOST_SAFE`, CENTER DEC vacío |
+    | WIDTH / HEIGHT | 20 / 20 |
+    | ROWS / COLS | 5 / 5 (25 puntos, separación 5°) |
+    | MIN PLANNING ALTITUDE | 30 |
+    | CAPTURE (s) / SETTLE (s) | 10 / 2 |
+    | MAIN | sin tocar: 1420405752 Hz, 2400000 sps, **40.2 dB** |
+    | RFI_REF / ANTENNA B | Enabled, 25 dB, BIAS-T marcado |
+    | QUICKLOOK | Enabled, Native Grid, Interpolated Preview; perfil `WIZARD-20261007-010706-387765` con **BROWSE ALMITA SERVER…** |
+
+    Pulsa **PLAN OBSERVATION**. Esta configuración se pasó por PLAN el 2026-10-13 y fue aceptada: 25 puntos,
+    13 min estimados (18 en la versión conservadora), 1.5 GB de disco, `Quicklook / calibration match` en PASS.
+    El único BLOCK de ese día fue `INDI/mount`, porque la montura no estaba lista; no es de la configuración.
+    **[C]** El centro lo calcula PLAN según la hora, y hay que pulsar START dentro de unos 8 min o volver a
+    planificar.
+
+    **No uses el gain pilot en esta primera validación.** Pulsa **START OBSERVATION**.
+
+5. **QUICKLOOK y RFI REF:** en MONITOR, mira que QUICKLOOK procese cada punto y que **RFI REFERENCE** muestre
+    espectro. Si aparece «STREAM UNAVAILABLE» en la cámara, anota LAST ERROR (§13).
+
+6. **Cierre:** OBSERVATION RUN en `COMPLETED`, 25 `.h5`, FAILED = 0. Aparca la montura en Ekos.
+
+7. **REDUCE** (§10) con **el mismo perfil** y `lsrk`. **SCIENCE** (§11) sobre esa reducción.
+
+Evidencias: nombre de la sesión; resultado de ALIGN (offset, confianza, y si hubo SYNC); perfil usado; estado
+final; carpetas de REDUCE y SCIENCE; y **cada punto donde el manual no coincidió con lo que viste**. Si en
+cualquier paso aparece un BLOCK, anota la línea exacta y detente ahí: no hay forma de saltárselo.
+
+Recuperación: una observación que falla o se detiene no se reanuda desde la web; se planifica una sesión nueva.
+REDUCE y SCIENCE se pueden repetir sin tocar la sesión.
+
+---
+
 ## Anexo A — Detalles técnicos
 
 - **Servicios:**
@@ -462,10 +569,9 @@ de `data/`. Más detalle en `FIELD_RUNBOOK.md` §7–§12.
 
 Agrupadas para hacerlas en una misma sesión con el operador:
 
-1. **STOP OBSERVATION real:** con una grilla corta en curso, pulsar STOP y confirmar que termina en `ABORTED`, que
-    los `.h5` están completos y que no queda ningún `.part`.
+1. **STOP OBSERVATION real:** §14, prueba A.
 
-2. **STOP CURRENT STEP del wizard** durante una captura real de 50 Ω o HI (BL-007).
+2. **STOP CURRENT STEP del wizard** durante una captura real de 50 Ω o HI: §14, prueba B.
 3. **Ekos:** dejar escrito el procedimiento real de alineación (nombres de menús, plate solving o estrellas,
     SYNC) y cómo se sincronizan la hora y el sitio con OnStep.
 
@@ -476,6 +582,5 @@ Agrupadas para hacerlas en una misma sesión con el operador:
 5. **Fallos simulados a mano:** desconectar el USB de MAIN y comprobar el BLOCK y la recuperación de `rtl_tcp`;
     apagar o desconectar INDI y comprobar el BLOCK `INDI/mount`.
 
-6. **ALIGN SOLAR con SYNC desde la web** (de día): primero con la casilla de SYNC desmarcada para ver el offset;
-    después con SYNC, y repetir ALIGN para confirmar que el offset queda cerca de 0.
-7. **Recorrido completo de una vez siguiendo este manual,** anotando dónde se aparta de la realidad.
+6. **ALIGN SOLAR con SYNC desde la web** (de día): §14, prueba C.
+7. **Recorrido completo de una vez siguiendo este manual:** §14, prueba D.
