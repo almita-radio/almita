@@ -133,6 +133,7 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 
 | id | prioridad | mejora | quién | depende de |
 |---|---|---|---|---|
+| BL-061 | P3 | MONITOR, **SPECTRAL STACK 3D con fondo negro**: hoy el recuadro del gráfico es claro y desentona con el resto de la consola, que es oscura. Pedido del operador el 2026-10-13; no hacerlo todavía. | autónomo | — |
 | BL-043 | P2 | Sección ALIGN de PIPELINE sin opción de SYNC: siempre usa `--no-sync`. Junto con esto, decidir si `alignment_engine` adopta la política de SYNC de `alignment.py` (BL-049). | autónomo | BL-026, para no exponer un SYNC sin probar. **No se habilita antes.** |
 | BL-050 | P3 | Lo que queda de FIELD_RUNBOOK §14: identidad canónica de la sesión; lock del proceso INDI; `gain='auto'` como default en `sdr_capture.configure`; lectores DS18B20 duplicados; `README.md` desactualizado. | Los tres primeros tocan módulos congelados (`capture.py`, `indi_telescope_control.py`, `sdr_capture.py`): decisión del operador. El README conviene resolverlo con BL-035, porque es el único archivo que choca con `main`. Los lectores DS18B20 ya comparten el rango de plausibilidad; unirlos es limpieza sin efecto visible | — |
 
