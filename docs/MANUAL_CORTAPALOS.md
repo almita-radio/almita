@@ -427,19 +427,26 @@ a `<punto>.h5`. Por eso:
   anótalo y no lo borres.
 
 **Qué pasa con la montura (vale para A y B).** El STOP no envía ninguna orden de abortar el movimiento. Si llega
-**durante un GOTO**, la montura puede terminar ese GOTO por su cuenta; el programa se cierra y, al salir, pide
-apagar el seguimiento. Si necesitas detener la montura de inmediato, usa el botón de parada de Ekos o el control
+**durante un GOTO**, la montura termina ese GOTO por su cuenta; el programa se cierra y pide apagar el
+seguimiento, pero esa orden no surte efecto mientras la montura se mueve: **queda siguiendo el cielo** (visto el
+2026-10-13). Si necesitas detener la montura de inmediato, usa el botón de parada de Ekos o el control
 de mano.
 
 ### Prueba A — STOP OBSERVATION con una grilla pequeña
 
-**Primera prueba, 2026-10-13 (`TEST-STOP`): datos bien, estado mal.** El STOP cayó en el punto 4, 1.5 s después
-de terminar su GOTO y antes de la captura. La captura se detuvo en 6 s, quedaron 3 `.h5` completos, ningún `.part`,
-los SDR libres y la montura quieta sin seguimiento. **[H]** Pero la web tardó 2 minutos y terminó en
-**BLOCKED — needs operator attention** con la nota «did not exit within 120s», y MONITOR en `DEGRADED`: el
-sistema no reconocía que la captura ya había terminado. Está corregido; **hay que repetir la prueba** para ver el
-`ABORTED` en segundos, y siguen pendientes los casos A1 (durante captura) y A2 (durante GOTO). Detalle en
-`docs/BACKLOG.md` §4.1.
+**Resultados reales del 2026-10-13 [H]:**
+
+- **Primera prueba** (STOP justo después de un GOTO, antes de capturar): la captura se detuvo en 6 s con 3 `.h5`
+  completos y ningún `.part`, pero la web tardó 2 minutos y terminó en BLOCKED. Era un fallo del sistema, ya
+  corregido.
+- **Segunda prueba, caso A2** (STOP durante un GOTO): estado **PARTIAL** (`ABORTED`) en 7 s, igual en OBSERVE,
+  MONITOR y la API; 2 `.h5` completos y ningún `.part`. **Pero la montura terminó el GOTO y quedó con el
+  seguimiento encendido.**
+
+> ⚠ **Después de cualquier STOP, apaga el seguimiento o aparca la montura en Ekos.** El STOP no lo garantiza:
+> si cae durante un GOTO, la montura completa el movimiento y sigue el cielo sola (BL-059).
+
+Falta el caso A1, durante una captura. Detalle en `docs/BACKLOG.md` §4.1 y §4.2.
 
 | | |
 |---|---|
