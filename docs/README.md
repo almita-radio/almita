@@ -23,7 +23,8 @@ antenna and gain characterisation, RFI reference receiver). It was the repositor
 [GRID_DISTRIBUTION_CHANGES](observe/GRID_DISTRIBUTION_CHANGES.md), [README_GRID_GENERATOR](observe/README_GRID_GENERATOR.md)
 
 ## Hardware - `hardware/`
-[MOUNT_SLEW_MODEL](hardware/MOUNT_SLEW_MODEL.md), [RTL_TCP_SYSTEMD](hardware/RTL_TCP_SYSTEMD.md)
+[Open hardware index](hardware/README.md), [BUILD](hardware/BUILD.md), [BOM](hardware/BOM.md), [RF_AND_WIRING](hardware/RF_AND_WIRING.md),
+[MECHANICAL](hardware/MECHANICAL.md), [MOUNT_SLEW_MODEL](hardware/MOUNT_SLEW_MODEL.md), [RTL_TCP_SYSTEMD](hardware/RTL_TCP_SYSTEMD.md)
 
 ## History - `history/`
 Early-era and one-off documents kept for the record (Spanish setup guides, the first workflow description, the 50-point RFI_REF

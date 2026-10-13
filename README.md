@@ -6,11 +6,11 @@
 
 **Antenna Listening Mostly to Interference, Tentatively Astronomy**
 
-ALMITA is an open-source amateur radio astronomy project: a **21 cm neutral hydrogen (HI) radio telescope** built in **Chile**
+ALMITA is a **fully open-source, open-hardware amateur radio astronomy project**: a **21 cm neutral hydrogen (HI) radio telescope** built in **Chile**
 by **Felipe Fridman G.** It observes the **1420 MHz hydrogen line** with a Raspberry Pi 5 and RTL-SDR receivers.
 Contact: **ffridman@gmail.com**
 
-It combines INDI/OnStep mount control, automated sky planning, HDF5 acquisition and a lightweight local web console. It is
+It combines INDI/OnStep mount control, automated sky planning, HDF5 acquisition and a single authenticated web console. It is
 **offline-first**: internet access is not required to observe.
 
 Project site: <https://almita-radio.github.io/almita/>
@@ -56,12 +56,14 @@ Every command has `--help`. The long-running services are described under `syste
 
 Raspberry Pi 5 - RTL-SDR Blog V4 (science) and V3 (RFI reference) - Nooelec Hydrogen LNA - 1420 MHz feed on a modified ~90 x 60 cm
 grid reflector - equatorial mount with OnStep + INDI - temperature sensors. Intentionally accessible, experimental and repairable;
-not a commercial kit. Details: [docs/ALMITA_OVERVIEW.md](docs/ALMITA_OVERVIEW.md).
+not a commercial kit. ALMITA-original hardware design and integration documentation are published under **CERN-OHL-S-2.0**; software is **MIT licensed**. Commercial modules remain under their manufacturers’ terms. Details: [docs/hardware/](docs/hardware/) and [docs/ALMITA_OVERVIEW.md](docs/ALMITA_OVERVIEW.md).
 
 ## Documentation
 
 | Topic | Where |
 |---|---|
+| Operating the instrument step by step (Spanish) | [docs/MANUAL_CORTAPALOS.pdf](docs/MANUAL_CORTAPALOS.pdf) ([source](docs/MANUAL_CORTAPALOS.md)), [FIELD_RUNBOOK.md](FIELD_RUNBOOK.md) |
+| Current state of the product and open work (Spanish) | [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md), [docs/BACKLOG.md](docs/BACKLOG.md) |
 | Project overview (hardware, workflow, grid generator, alignment, gain, RFI reference) | [docs/ALMITA_OVERVIEW.md](docs/ALMITA_OVERVIEW.md) |
 | Observation planning / grids | [docs/observe/](docs/observe/) |
 | ALIGN | [docs/HI_ALIGNMENT_MODEL.md](docs/HI_ALIGNMENT_MODEL.md), [docs/HI_FIRST_LIGHT_RUNBOOK.md](docs/HI_FIRST_LIGHT_RUNBOOK.md) |
@@ -69,7 +71,7 @@ not a commercial kit. Details: [docs/ALMITA_OVERVIEW.md](docs/ALMITA_OVERVIEW.md
 | REDUCE | [docs/REDUCE_SCOPE.md](docs/REDUCE_SCOPE.md), [docs/REDUCE_MODEL.md](docs/REDUCE_MODEL.md), [docs/REDUCE_PIPELINE.md](docs/REDUCE_PIPELINE.md), [docs/REDUCE_V1_FREEZE.md](docs/REDUCE_V1_FREEZE.md), [runbook](docs/REDUCE_FIRST_RUNBOOK.md) |
 | SCIENCE | [docs/SCIENCE_SCOPE.md](docs/SCIENCE_SCOPE.md), [docs/SCIENCE_MODEL.md](docs/SCIENCE_MODEL.md), [docs/SCIENCE_PIPELINE.md](docs/SCIENCE_PIPELINE.md), [docs/SCIENCE_ACCEPTANCE.md](docs/SCIENCE_ACCEPTANCE.md), [docs/SCIENCE_V1_FREEZE.md](docs/SCIENCE_V1_FREEZE.md), [runbook](docs/SCIENCE_FIRST_RUNBOOK.md) |
 | Web console | [docs/WEB_ALIGNMENT_CALIBRATION.md](docs/WEB_ALIGNMENT_CALIBRATION.md) |
-| Hardware notes (mount model, rtl_tcp service) | [docs/hardware/](docs/hardware/) |
+| Open hardware: build guide, bill of materials, RF and wiring, mechanics, mount model, rtl_tcp service | [docs/hardware/](docs/hardware/) |
 | Full documentation index | [docs/README.md](docs/README.md) |
 
 ## Status and installation
@@ -77,5 +79,9 @@ not a commercial kit. Details: [docs/ALMITA_OVERVIEW.md](docs/ALMITA_OVERVIEW.md
 Experimental and field-tested on one Raspberry Pi 5. ALMITA is **not packaged**: it runs from a checkout under a Python
 virtual environment (`requirements.txt`), with the services in `systemd/` installed by hand. There is no `pip install`.
 
-Tests: from the repo root, `python -m pytest` (test files are in [tests/](tests/)). Some tests need optional packages (for example `indi`) or real
-historical campaigns under `data/`, and fail or skip without them.
+Tests: from the repo root, `python -m pytest` (test files are in [tests/](tests/)). They use no hardware and nothing under
+`data/`: their inputs are in `tests/fixtures/`. Some tests need optional packages (for example `indi`) or headless Chromium, and
+skip without them. The full suite takes about half an hour on the Raspberry Pi 5.
+
+Licences: software under [MIT](LICENSE); ALMITA-original hardware design and documentation under
+[CERN-OHL-S-2.0](LICENSE.hardware).

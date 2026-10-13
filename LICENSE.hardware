@@ -1,0 +1,23 @@
+ALMITA Open Hardware License Notice
+
+The original ALMITA hardware design documentation, integration diagrams,
+mechanical adaptation notes, wiring documentation and related design material
+under docs/hardware/ are licensed under:
+
+CERN Open Hardware Licence Version 2 - Strongly Reciprocal
+SPDX-License-Identifier: CERN-OHL-S-2.0
+
+Official licence text:
+https://ohwr.org/cern_ohl_s_v2.txt
+
+Copyright (c) 2026 Felipe Fridman G.
+
+This licence applies to ALMITA's original hardware design and documentation.
+Commercial off-the-shelf components incorporated into ALMITA (for example
+Raspberry Pi, RTL-SDR receivers, LNAs, filters, mount hardware and other
+third-party modules) remain subject to their respective manufacturers'
+licences, copyrights, trademarks and terms.
+
+The purpose of this notice is to make ALMITA's own hardware design,
+interconnection, adaptation and build documentation openly reusable,
+modifiable and redistributable under CERN-OHL-S-2.0.
