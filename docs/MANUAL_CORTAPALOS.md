@@ -468,7 +468,11 @@ GOTO. Detalle en `docs/BACKLOG.md` §4.1 a §4.3.
 **Resultado real del 2026-10-13, caso B1 (50 Ω, sin movimiento): PASS [H].** STOP con 2 de 5 capturas hechas: el
 wizard se quedó en el paso, mostró «STOPPED by the operator … 2 file(s) kept» y ofreció RETRY CAPTURE. Al
 reintentar, los dos archivos pasaron a `interrupted-<UTC>/` sin sobrescribirse y el paso terminó con sus 5
-capturas nuevas. Ningún `.part`. Falta el caso B2, en un paso HI con GOTO. Detalle en `docs/BACKLOG.md` §4.4.
+capturas nuevas. Ningún `.part`.
+
+**Caso B2, HI ALTO, STOP durante el GOTO: PASS [H].** El wizard se quedó en el paso con 0 archivos y sin nada que
+limpiar. **La montura terminó el GOTO** y quedó en el objetivo, con el seguimiento apagado (el wizard solo lo
+enciende al llegar). Falta el STOP durante las capturas de un paso HI. Detalle en `docs/BACKLOG.md` §4.4 y §4.5.
 
 | | |
 |---|---|
