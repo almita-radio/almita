@@ -489,13 +489,22 @@ def stop_observation(*, runtime_dir: str = DEFAULT_RUNTIME_DIR, confirm: bool = 
 
 
 def _pid_alive(pid: int) -> bool:
+    """True only for a process that is still running. A process that has EXITED but was not yet reaped by its
+    parent (a zombie) still answers os.kill(pid, 0), and capture.py is a child of the long-lived web server, which
+    never waits for it: the first real STOP (2026-10-13, TEST-STOP) therefore waited the full timeout on a capture
+    that had exited 6 s after SIGINT, and reported DEGRADED "did not exit". The kernel's own process state decides."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        state = stat.rsplit(")", 1)[1].split()[0]     # the field after "(comm)": R/S/D/T/... or Z (zombie), X (dead)
+    except (OSError, IndexError):
+        return True                                   # no /proc (or raced): keep the conservative answer
+    return state not in ("Z", "X")
 
 
 def generate_final_report(session_dir: str) -> Dict[str, Any]:

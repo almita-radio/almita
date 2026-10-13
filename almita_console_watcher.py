@@ -151,7 +151,8 @@ _ACQUISITION_IDLE = {
 }
 
 
-def build_acquisition(now_utc: str, current_session: Optional[dict], capture_process_detected: bool) -> dict:
+def build_acquisition(now_utc: str, current_session: Optional[dict], capture_process_detected: bool,
+                      orchestrator: Optional[dict] = None) -> dict:
     if not current_session:
         return {**_ACQUISITION_IDLE, "capture_process_detected": capture_process_detected}
     age = _age_seconds(current_session.get("updated_utc"), now_utc)
@@ -159,8 +160,17 @@ def build_acquisition(now_utc: str, current_session: Optional[dict], capture_pro
     state = current_session.get("state") or "IDLE"
     error = current_session.get("error")
     if state in ("RUNNING", "STARTING") and stale and not capture_process_detected:
-        state = "DEGRADED"
-        error = error or "capture process not detected; session went silent while RUNNING"
+        # capture.py does not announce an end state when it is stopped with SIGINT (seen in the first real STOP,
+        # 2026-10-13): the session file stays at RUNNING. If the orchestrator recorded an operator STOP for THIS
+        # session, that is what happened - an ABORTED session, not a capture that silently died.
+        stopped = (bool(orchestrator) and orchestrator.get("session_id") == current_session.get("session_id")
+                   and orchestrator.get("orchestrator_state") in ("STOPPING", "ABORTED"))
+        if stopped:
+            state = "ABORTED"
+            error = error or "stopped by the operator (STOP OBSERVATION); points already captured are kept"
+        else:
+            state = "DEGRADED"
+            error = error or "capture process not detected; session went silent while RUNNING"
     return {
         "state": state,
         "session_id": current_session.get("session_id"),
@@ -385,7 +395,8 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
     # only the device name Capture itself already announced, reused as-is.
     # No second INDI reader is introduced by this.
     instrument["mount_device"] = (current_session or {}).get("mount_device")
-    acquisition = build_acquisition(now_utc, current_session, capture_process_detected)
+    acquisition = build_acquisition(now_utc, current_session, capture_process_detected,
+                                    read_json_safe(Path(runtime_dir) / "observation_runtime.json"))
     quicklook = build_quicklook(now_utc, runtime_dir, acquisition["session_id"])
     rfi_ref = build_rfi_ref(runtime_dir, acquisition["session_id"], now_utc)
     activity_log = build_activity_log(runtime_dir, acquisition["session_id"])

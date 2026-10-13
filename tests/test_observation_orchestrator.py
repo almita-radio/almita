@@ -708,3 +708,27 @@ def test_get_status_omits_capture_process_alive_when_no_capture_pid_recorded(tmp
     orch._write_runtime(str(runtime_dir), orchestrator_state="PREFLIGHT")
     status = orch.get_status(runtime_dir=str(runtime_dir))
     assert "capture_process_alive" not in status["orchestrator"]
+
+
+# ------------------------------------------------------------------ first real STOP (2026-10-13, TEST-STOP)
+def test_pid_alive_is_false_for_an_exited_but_unreaped_child(tmp_path):
+    """capture.py is a child of the web server, which never waits for it: after SIGINT it exits and stays a zombie.
+    os.kill(pid, 0) still succeeds on a zombie, so STOP waited its whole 120 s timeout and reported DEGRADED
+    "did not exit" for a capture that had ended 6 s after the signal. Every other stop test replaces _pid_alive."""
+    import subprocess
+    import sys
+    import time
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    done = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and "Z" not in Path(f"/proc/{done.pid}/stat").read_text().rsplit(")", 1)[1].split()[0]:
+            time.sleep(0.05)
+        os.kill(done.pid, 0)                                  # the zombie still answers signal 0 ...
+        assert orch._pid_alive(done.pid) is False             # ... but it is not running
+        assert orch._pid_alive(live.pid) is True
+    finally:
+        live.kill()
+        live.wait()
+        done.wait()
+    assert orch._pid_alive(done.pid) is False                 # reaped: no such process
