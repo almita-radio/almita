@@ -51,10 +51,10 @@ FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("scien
           # tuning with requested/applied/evidence attrs (26fa261). The spectral data path is unchanged.
           # observation_spec.py re-pinned from 26fa261 to 7b2eefb (2026-10-13, BL-041): rfi_ref.bias_tee defaults to true.
           # To go back: revert that commit's hunks in these two paths and restore the previous pins.
-          # capture.py re-pinned from 26fa261 to 3bfeb98 (2026-10-14): operator-authorised exception limited to STOP -
+          # capture.py re-pinned from 26fa261 to 69b9b61 (2026-10-14; first as 3bfeb98): operator-authorised exception limited to STOP -
           # own SIGINT handling, confirmed mount stop (mount_stop.py), stop_report.json and the end-of-session
           # announcement. The acquisition loop, the spectral data path and the HDF5 format are unchanged.
-          ("capture.py", "3bfeb98"),
+          ("capture.py", "69b9b61"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
           ("observation_orchestrator.py", "0148b78"), ("observation_spec.py", "7b2eefb"))
