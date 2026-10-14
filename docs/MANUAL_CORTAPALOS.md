@@ -477,7 +477,9 @@ Con esto la prueba A está hecha en sus dos casos **con el software anterior**. 
 STOP durante un GOTO, está corregido desde el 2026-10-14 y **hay que repetirlo** (abajo). Detalle en
 `docs/BACKLOG.md` §4.1 a §4.3.
 
-**Repetición con la corrección (pendiente).** Dos sesiones cortas, con 20 s de captura para tener margen:
+**Repetición con la corrección.** El caso A1 (durante una captura) se hizo el 2026-10-14 en la montura real y
+**pasó [H]**: parada confirmada en 10.8 s, «MOUNT STOPPED AND VERIFIED», seguimiento apagado sin tocar Ekos, un
+`.h5` completo y nada del punto interrumpido. **Falta el caso A2, durante un GOTO**, que es el que había fallado:
 
 | | A2: durante un GOTO | A1: durante una captura |
 |---|---|---|

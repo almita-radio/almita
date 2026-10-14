@@ -177,7 +177,7 @@ Dependencias que fijan el orden:
 
 | parada | en hardware (bajo techo) | con la corrección del 2026-10-14 |
 |---|---|---|
-| STOP OBSERVATION durante una captura | PASS (§4.3) | Sin repetir; cubierto con procesos reales y montura simulada |
+| STOP OBSERVATION durante una captura | PASS (§4.3) | **PASS en la montura real, 2026-10-14 (§4.9)** |
 | STOP OBSERVATION tras un GOTO, antes de capturar | Datos PASS; cierre FAIL, corregido y visto en la segunda prueba (§4.1, §4.2) | Sin repetir |
 | **STOP OBSERVATION durante un GOTO** | **FAIL: la montura quedó en seguimiento (§4.2)** | **Corregido en código; sigue fallido hasta repetirlo en la montura** |
 | STOP CURRENT STEP del wizard, tres casos | PASS los tres (§4.4 a §4.6) | El wizard ahora también aborta el GOTO; sin repetir |
@@ -325,6 +325,23 @@ Observaciones:
 - QUICKLOOK y REDUCE usaron el perfil del 2026-10-02, no el nuevo del 2026-10-14. Los dos son a 40.2 dB y
   compatibles; no es un error.
 - La montura quedó quieta, sin seguimiento y sin error al final.
+
+## 4.9 STOP OBSERVATION durante una captura, con la corrección (2026-10-14, bajo techo)
+
+Primera corrida real del código nuevo (`3bfeb98`).
+
+| | |
+|---|---|
+| Sesión | `data/mosaic/ALMITA-OBSERVE-20261014-02:03:05` (400 puntos planificados, 15 s por punto, 40.2 dB) |
+| STOP pedido | 02:05:32.78 UTC, **durante la captura del punto 2** (según `stop_report.json` y el log: `SDR FLUSH OK`, `TEMP PRE`, sin `SDR CAPTURE OK`) |
+| Parada de la montura | **CONFIRMADA en 10.8 s.** Orden de abortar enviada y aceptada por el driver real; estado «no moviéndose» leído de inmediato; seguimiento apagado en 3 lecturas consecutivas, sin reactivaciones; posición coherente con una montura quieta (RA +6.0 s y Dec +0″ en 5.7 s, frente a +5.7 s esperados) |
+| Lectura independiente (02:06:58, sin enviar órdenes) | Seguimiento apagado, sin movimiento, sin error en OnStep, RA avanzando al ritmo sidéreo. El operador confirmó a la vista: montura quieta, seguimiento apagado |
+| Fin de sesión | Publicado por `capture.py`: `SESSION_ABORTED`, sin error, con el veredicto de la parada. Código de salida 130 |
+| Estados | `ABORTED` en el orquestador, la API (con la nota «MOUNT STOP CONFIRMED») y MONITOR |
+| Cierre | Respuesta del STOP a las 02:05:49: **17 s** (antes eran 6 a 7 s; la diferencia es la comprobación de la montura). SDR MAIN liberado a las 02:05:43, RFI REF cerrado a las 02:05:48, puerto 1235 libre |
+| Archivos | 1 `.h5` (punto 1), completo y validado (36 000 000 muestras). Ningún archivo ni `.part` del punto 2. `mosaic.csv`: 1 `success`, 1 `capturing`, 398 `planned` |
+| Defecto menor encontrado | `stop_report.json` decía «planned: 400» en el recuento de puntos, porque contaba las filas en memoria. Corregido: ahora cuenta desde el archivo del plan |
+| Resultado | **PASS.** Es el caso «durante una captura»: la montura ya estaba quieta. **El caso durante un GOTO sigue pendiente** |
 
 ## 5. Tests
 
