@@ -32,7 +32,7 @@ build `e696038`, posterior a todos esos commits.
 
 | id | pedido | commits | tests | datos | hardware | estado |
 |---|---|---|---|---|---|---|
-| BL-001 | CALIBRATE: mapa Alt/Az de las zonas HI del wizard | 156bfbd, 8a66860 | sí | sí, plan real WIZARD-20261002 | no: nadie comparó el mapa con el cielo | cerrado salvo hardware |
+| BL-001 | CALIBRATE: mapa Alt/Az de las zonas HI del wizard | 156bfbd, 8a66860 | sí | sí, plan real WIZARD-20261002 | sí: el operador comprobó el 2026-10-14 (`WIZARD-20261014-001224-467117`) que la montura fue a HI ALTO y a HI BAJO en concordancia con el mapa. Observación a ojo, sin medida | **cerrado** |
 | BL-002 | OBSERVE: selector de perfil (explorador del servidor) | 4085ed8, 915f8fa | sí | sí, perfiles reales por HTTP | sí: las sesiones del 2026-10-08 llevan un perfil del servidor | **cerrado**; la subida desde el navegador es BL-038 |
 | BL-003 | Indicador de estado centrado | 03d263a | sí, navegador | — | — | **cerrado** |
 | BL-004 | Retiro del puerto 8090 | 704b168 | sí | — | sí: nada escucha en :8090 (2026-10-12) | **cerrado** |
@@ -248,6 +248,20 @@ Dependencias que fijan el orden:
 | SDR | MAIN liberado a las 19:26:51 |
 | Montura (lectura INDI a las 19:28:43, sin enviar órdenes; el operador no tocó Ekos) | **Seguimiento apagado**, quieta, sin error. La RA leída (16.1447 h) es la del objetivo (16.1136 h) más 112 s de deriva sidérea, que es el tiempo transcurrido desde el STOP: el seguimiento se apagó en el momento de la parada. El wizard lo dejó como estaba antes del paso |
 | Resultado | **PASS** |
+
+## 4.7 Wizard completo tras las pruebas de STOP (2026-10-14)
+
+| | |
+|---|---|
+| Sesión | `data/calibration/WIZARD-20261014-001224-467117`, de 00:12 a 00:18 UTC: 5 min 30 s de principio a fin |
+| Configuración | 5 capturas de 2 s por referencia, 1420405752 Hz, 2400000 sps, 40.2 dB; 50 Ω en `LNA_INPUT` |
+| Zonas | Aprobadas a las 00:14 y capturadas a las 00:16 y 00:17, sin pausa. HI ALTO: RA 16.153 h, Dec −51.37°, a 35.8° de altura. HI BAJO: RA 23.101 h, Dec −43.35°, a 64.0° |
+| Apuntado | Error de llegada 0.12° y 0.13° (tolerancia 0.25°), mantenido durante las capturas con seguimiento confirmado |
+| Archivos | 15 `.h5` (5 por referencia), los 15 validados. Ningún `.part`, ninguna interrupción |
+| Contraste | `INCONCLUSIVE`: la diferencia entre HI ALTO y HI BAJO es de 0.20 sigma, por debajo del umbral de 3 sigma con este tiempo de integración. Igual que el 2026-10-07 y el 2026-10-08 |
+| Perfil | **READY**: `observe_profile/calibration_profile_v1.json`, nivel `RELATIVE_INSTRUMENTAL`, misma frecuencia, muestreo y ganancia que la configuración central |
+| Montura al terminar | Quieta, sin seguimiento, sin error en OnStep |
+| Wizards anteriores del día | `WIZARD-20261013-181623-230083` y `WIZARD-20261013-193915-787403`, abortados: conservan todos sus archivos (12 y 5) |
 
 ## 5. Tests
 

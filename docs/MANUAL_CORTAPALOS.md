@@ -180,7 +180,8 @@ El SYNC lleva la montura a la posición corregida, la sincroniza con la referenc
 
 1. Un perfil válido está en `data/calibration/WIZARD-…/observe_profile/calibration_profile_v1.json` y tiene **la
     misma frecuencia, muestreo y ganancia** que vas a usar. Hoy hay perfiles a **40.2 dB**
-    (`WIZARD-20261002-013321-160933`, `WIZARD-20261007-010706-387765`) y a **42.1 dB**
+    (`WIZARD-20261002-013321-160933`, `WIZARD-20261007-010706-387765` y el más reciente,
+    `WIZARD-20261014-001224-467117`) y a **42.1 dB**
     (`WIZARD-20261008-010548-274525`).
 
 2. Lo eliges en OBSERVE (§6, campo QUICKLOOK). El explorador solo deja seleccionar perfiles compatibles.
@@ -189,7 +190,8 @@ El SYNC lleva la montura a la posición corregida, la sincroniza con la referenc
 
 ### 5B. Ruta B: calibración nueva con el Reference Wizard
 
-Página **CALIBRATE** → **REFERENCE WIZARD**. **[H 2026-10-02, 10-07, 10-08]**
+Página **CALIBRATE** → **REFERENCE WIZARD**. **[H 2026-10-02, 10-07, 10-08, 10-14]** Con 2 s por captura, el wizard
+completo toma unos 6 minutos.
 
 1. **Configuración.** Los valores sugeridos sirven: **CAPTURES PER REFERENCE** 5, **SECONDS PER CAPTURE** 2,
     **50 Ω STABILIZATION TIME** 20 s, **HI GOTO SETTLE TIME** 2 s.
@@ -524,7 +526,7 @@ observación más la preparación.
     | CAPTURE (s) / SETTLE (s) | 10 / 2 |
     | MAIN | sin tocar: 1420405752 Hz, 2400000 sps, **40.2 dB** |
     | RFI_REF / ANTENNA B | Enabled, 25 dB, BIAS-T marcado |
-    | QUICKLOOK | Enabled, Native Grid, Interpolated Preview; perfil `WIZARD-20261007-010706-387765` con **BROWSE ALMITA SERVER…** |
+    | QUICKLOOK | Enabled, Native Grid, Interpolated Preview; perfil `WIZARD-20261014-001224-467117` (el más reciente a 40.2 dB) con **BROWSE ALMITA SERVER…** |
 
     Pulsa **PLAN OBSERVATION**. Esta configuración se pasó por PLAN el 2026-10-13 y fue aceptada: 25 puntos,
     13 min estimados (18 en la versión conservadora), 1.5 GB de disco, `Quicklook / calibration match` en PASS.
