@@ -330,6 +330,19 @@ def reconcile_observation_status(status: Dict[str, Any]) -> Dict[str, Any]:
             effective = "DEGRADED"
             note = (f"orchestrator label {raw} but the recorded capture process (pid {orch.get('capture_pid')}) is not "
                     f"alive and the session reported no end state - check the session before starting another")
+    # What capture.py itself published about stopping the mount (mount_stop.py: abort, tracking OFF, INDI readback).
+    # A stop that could not be PROVED is never shown as a finished stop: the page says PARADA NO CONFIRMADA and the
+    # state asks for the operator, whatever the process exit looked like.
+    cs = status.get("current_session") or {}
+    ms = cs.get("mount_stop") if (cs and cs.get("session_id") == orch.get("session_id")) else None
+    if isinstance(ms, dict):
+        orch["mount_stop"] = ms
+        summary = ms.get("summary") or ("mount stop confirmed" if ms.get("confirmed") else "PARADA NO CONFIRMADA")
+        if not ms.get("confirmed"):
+            effective = "DEGRADED"
+            note = f"{summary} - check the mount NOW (Ekos / hand controller); the software could not prove it stopped"
+        else:
+            note = f"{note}; {summary}" if note else summary
     orch["effective_state"], orch["effective_note"] = effective, note
     return {**status, "orchestrator": orch}
 
@@ -1147,6 +1160,63 @@ def stop(job_id: str) -> Dict[str, Any]:
     return {"job_id": job_id, "requested": "SIGINT sent to the runner; the command decides when it stops (a real slew may finish its current step)", "utc": _utc()}
 
 
+# ------------------------------------------------------------------ STOP MOUNT (independent of any job's own closing)
+def stop_mount(*, runtime_dir: Optional[str] = None, host: str = "localhost", port: int = 7624,
+               device: str = "LX200 OnStep") -> Dict[str, Any]:
+    """The web's PARAR MONTURA: (1) send the clean stop (SIGINT) to everything that could move the mount again -
+    the running observation and every running physical job - WITHOUT waiting for them, then (2) stop the mount
+    itself over this server's own INDI connection and read it back (mount_stop.py).
+
+    It reports what INDI showed, never "done because the commands were sent". It is a software stop over INDI,
+    not a physical brake: with INDI or the controller unreachable the answer is PARADA NO CONFIRMADA. It never
+    parks, homes or starts a movement."""
+    import asyncio as _asyncio
+    import observation_orchestrator as _orch
+    import mount_stop
+    from indi_telescope_control import INDITelescopeControl
+
+    signalled: List[str] = []
+    notes: List[str] = []
+    try:                                                   # 1a. the observation (exact PID the orchestrator launched)
+        runtime = _orch._read_runtime(runtime_dir or _orch.DEFAULT_RUNTIME_DIR) or {}
+        pid = runtime.get("capture_pid")
+        if pid and _orch._pid_alive(int(pid)) and _orch._capture_ownership_matches(runtime):
+            os.kill(int(pid), signal.SIGINT)
+            signalled.append(f"observation capture.py (pid {pid})")
+    except Exception as exc:  # noqa: BLE001 - never let this keep the mount from being stopped
+        notes.append(f"observation not signalled: {type(exc).__name__}: {exc}")
+    try:                                                   # 1b. physical web jobs (ALIGN, wizard move, gain pilot)
+        for job in list_jobs(limit=40):
+            if job.get("state") == "RUNNING" and STAGES.get(job.get("stage"), {}).get("physical"):
+                try:
+                    stop(job["job_id"])
+                    signalled.append(f"job {job['job_id']}")
+                except Exception as exc:  # noqa: BLE001
+                    notes.append(f"job {job['job_id']} not signalled: {type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"jobs not listed: {type(exc).__name__}: {exc}")
+
+    async def _run() -> Dict[str, Any]:                    # 2. the mount itself
+        telescope = INDITelescopeControl(host, port, device, False)
+        telescope.compact_console = True
+        try:
+            if not await _asyncio.wait_for(telescope.connect(), 10.0):
+                return {"confirmed": False, "reason": "could not connect to INDI", "steps": []}
+            return await mount_stop.stop_mount_and_confirm(telescope)
+        except Exception as exc:  # noqa: BLE001
+            return {"confirmed": False, "reason": f"{type(exc).__name__}: {exc}", "steps": []}
+        finally:
+            try:
+                await telescope.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+    report = _asyncio.run(_run())
+    return {"utc": _utc(), "signalled": signalled, "notes": notes, "mount_stop": report,
+            "confirmed": bool(report.get("confirmed")), "summary": mount_stop.summary_line(report),
+            "limits": "software stop over INDI - not a physical brake. If the mount is still moving use Ekos, the hand "
+                      "controller or its power."}
+
+
 def _tail(path: Path, n: int) -> str:
     try:
         data = path.read_bytes()[-200_000:].decode("utf8", "replace")
@@ -1486,6 +1556,15 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
         elif out["verdict"] == "FAIL":
             out["verdict"] = "STOPPED"                              # the operator sent SIGINT before the command produced its result
         out["detail"] = "stopped by the operator (SIGINT); " + out["detail"]
+        # mount-moving jobs print mount_stop's own verdict; an unproved stop must not read as a clean one
+        tail = _tail(Path(j["log"]), 400)
+        lines = [line.strip() for line in tail.splitlines() if "PARADA NO CONFIRMADA" in line or "MOUNT STOP CONFIRMED" in line]
+        if lines:
+            last = lines[-1][lines[-1].find("PARADA NO CONFIRMADA") if "PARADA NO CONFIRMADA" in lines[-1] else lines[-1].find("MOUNT STOP CONFIRMED"):]
+            out["facts"] = {**(out.get("facts") or {}), "mount_stop": last}
+            out["detail"] = f"{last} | {out['detail']}"
+            if last.startswith("PARADA NO CONFIRMADA"):
+                out["verdict"] = "FAIL"
     return out
 
 

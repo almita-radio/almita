@@ -214,12 +214,45 @@
       if (it.key === section) a.setAttribute("aria-current", "page");
       nav.appendChild(a);
     }
+    U.mountStopButton(nav);
     const strip = document.createElement("div");
     strip.className = "hdr-status";
     strip.id = "hdr-status";
     strip.setAttribute("aria-live", "polite");
     header.append(brand, nav, strip);
     return strip;
+  };
+
+  // PARAR MONTURA: on every page, independent of any job's own STOP. The server stops whatever could move the mount
+  // again (observation, ALIGN, wizard, gain pilot), aborts the movement, switches tracking off and READS THE MOUNT
+  // BACK; the answer shown is that readback. It is a software stop over INDI, and it says so.
+  U.mountStopButton = function (nav) {
+    if (!nav || document.getElementById("btn-mount-stop")) return null;
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "btn-mount-stop"; b.className = "danger-action mount-stop"; b.textContent = "PARAR MONTURA";
+    b.title = "Stop the mount now (software stop over INDI - not a physical brake)";
+    b.addEventListener("click", async () => {
+      if (!window.confirm("PARAR MONTURA now?\n\nThis stops the running observation and every job that can move the mount, aborts the "
+        + "movement, switches tracking off and then reads the mount back.\n\nIt is a SOFTWARE stop over INDI - not a physical brake. "
+        + "If the mount keeps moving, use Ekos, the hand controller or its power.")) return;
+      const label = b.textContent;
+      b.disabled = true; b.textContent = "PARANDO…";
+      let text;
+      try {
+        const r = await U.api("/api/mount/stop", { method: "POST", body: { confirm: true }, timeoutMs: 170000 });
+        if (!r.ok) text = "PARADA NO CONFIRMADA — the request failed: " + U.errorText(r.error) + "\n\nCheck the mount NOW (Ekos / hand controller).";
+        else {
+          const d = r.data.data;
+          text = d.summary + (d.confirmed ? "" : "\n\nCHECK THE MOUNT NOW (Ekos / hand controller).")
+            + (d.signalled.length ? "\n\nStop sent to: " + d.signalled.join(", ") : "\n\nNo running observation or movement job.")
+            + (d.notes.length ? "\n" + d.notes.join("\n") : "") + "\n\n" + d.limits;
+        }
+      } catch (err) { text = "PARADA NO CONFIRMADA — " + (err && err.message || err) + "\n\nCheck the mount NOW (Ekos / hand controller)."; }
+      b.disabled = false; b.textContent = label;
+      window.alert(text);
+    });
+    nav.appendChild(b);
+    return b;
   };
 
   function chip(label, value, klass) {

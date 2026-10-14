@@ -230,6 +230,11 @@ async def _capture_at(host: str, port: int, sdr_host: str, sdr_port: int, ra_hou
                "gain_db": gain_db, "capture_seconds": capture_seconds, "sample_rate_hz": sample_rate_hz,
                "center_frequency_hz": center_frequency_hz, "captured_utc": datetime.now(timezone.utc).isoformat(),
                "hdf5_path": str(output_path), "tuning": tuning}
+    except BaseException as exc:
+        # operator stop / timeout while the mount may be moving: stop it and read it back (mount_stop.py)
+        import mount_stop
+        await mount_stop.stop_after_interruption(telescope, exc, lambda m: print(m, flush=True))
+        raise
     finally:
         await sdr.close()
         await telescope.disconnect()

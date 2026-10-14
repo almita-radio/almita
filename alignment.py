@@ -957,6 +957,13 @@ class AlignmentRunner:
             self.save(reference, center, records, estimate, selection, sync_applied, status, {})
             self.print_result(estimate, sync_applied, status)
             return 0 if status == "PASS" else 2
+        except BaseException as exc:
+            # STOP ALIGNMENT (SIGINT) while the mount may be slewing or tracking: stop it and read it back before
+            # the tracking MODE is restored below (mount_stop.py). Prints MOUNT STOP CONFIRMED / PARADA NO CONFIRMADA.
+            import mount_stop
+            if self.telescope is not None:
+                await mount_stop.stop_after_interruption(self.telescope, exc, lambda m: print(m, flush=True))
+            raise
         finally:
             if self.telescope and self._previous_track_mode not in (None, "unknown", "alert", "solar"):
                 # Restore whatever real tracking mode was in effect before this solar ALIGN touched it -

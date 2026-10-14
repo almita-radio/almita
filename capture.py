@@ -10,6 +10,7 @@ Supports resuming interrupted sessions via session_manager.py
 
 import sys
 import os
+import signal
 import csv
 import json
 import asyncio
@@ -36,6 +37,7 @@ import sdr_tuning
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 from runtime_state import announce_session, atomic_write_json
 from rfi_monitor import RFIReferenceMonitor
+import mount_stop
 
 
 def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
@@ -248,6 +250,121 @@ class CaptureExecutor:
         # Verify CSV exists
         # Existence/readability is a critical preflight check. load_observation_plan
         # retains its existing fail-fast behavior for normal CLI use.
+
+    # ------------------------------------------------------------------ operator STOP (SIGINT)
+    # Exception to the capture.py freeze, authorised 2026-10-14, limited to: stopping, releasing resources and
+    # publishing the end of the session. Nothing of the acquisition, the science values or the HDF5 format changes.
+    # Why: the first real STOP during a GOTO (2026-10-13) closed the acquisition but left the mount finishing the
+    # slew and tracking; and a stopped session never announced its own end (SIGINT reaches this coroutine as a
+    # task cancellation, which the old `except KeyboardInterrupt` never saw).
+    _stop_phase = "STARTING"          # where the session is: GOTO / TRACKING / SETTLE / CAPTURE / BETWEEN_POINTS
+    _stop_point = None                # point_number being worked on
+    _stop_handled = False
+    stop_requested_utc = None
+    mount_stop_report = None
+
+    def _mark(self, phase: str, point=None) -> None:
+        self._stop_phase = phase
+        if point is not None:
+            self._stop_point = point
+
+    def _session_part_files(self) -> list:
+        """Every *.part under this session's capture directories - listed, never deleted here."""
+        found = []
+        try:
+            names = {str(p.get("session_name", "unknown_session")) for p in (self.observation_points or [])}
+            for name in names:
+                for directory in self._session_capture_directories(name):
+                    found += [str(path) for path in sorted(Path(directory).glob("*.part"))]
+        except Exception:  # noqa: BLE001 - an inventory must never break the stop itself
+            pass
+        return found
+
+    async def _handle_operator_stop(self) -> dict:
+        """Runs once, when the session is cancelled: stop the mount and prove it (mount_stop), then publish what
+        happened. Complete points are untouched; the interrupted point and any .part are recorded, not removed."""
+        self._stop_handled = True
+        phase, point = self._stop_phase, self._stop_point
+        self.log("", "WARNING", force=True)
+        self.log("=" * 80, "WARNING", force=True)
+        self.log(f"STOP REQUESTED during {phase}" + (f" of point {point}" if point is not None else "")
+                 + " - no further GOTO or capture; stopping the mount", "WARNING", force=True)
+        try:
+            report = await mount_stop.stop_mount_and_confirm(
+                self.telescope, log=lambda message: self.log(message, "WARNING", force=True))
+        except BaseException as exc:  # noqa: BLE001 - a second interruption: record it, the caller re-raises
+            report = {"confirmed": False, "reason": f"stop sequence interrupted ({type(exc).__name__})", "steps": []}
+        self.mount_stop_report = report
+        line = mount_stop.summary_line(report)
+        self.log(line, "INFO" if report.get("confirmed") else "ERROR", force=True)
+        parts = self._session_part_files()
+        # The interrupted point: its HDF5 is written and renamed in one synchronous step, so it is either absent
+        # or complete. A STOP landing between that write and the CSV update left a valid file recorded as
+        # "capturing" (found by the write-boundary integration test); a complete capture is recorded as success.
+        point_outcome = ("no file: the capture of this point never completed"
+                         if phase in ("POINT_START", "GOTO", "TRACKING", "SETTLE", "CAPTURE") else "no point in progress")
+        if point is not None and phase in ("CAPTURE", "SETTLE", "TRACKING", "GOTO", "POINT_START"):
+            try:
+                row = next(r for r in self.observation_points if int(r["point_number"]) == int(point))
+                final_name = f"{Path(row['data_filename']).stem}.h5"
+                final = next((d / final_name for d in self._session_capture_directories(row.get("session_name", "unknown_session"))
+                              if (d / final_name).is_file()), None)
+                if final is not None and str(row.get("capture_status", "")).strip().lower() != "success":
+                    validate_hdf5_capture(final)
+                    self.update_point_status(int(point), "success", end_time=datetime.now(timezone.utc).isoformat())
+                    point_outcome = (f"complete: {final.name} was already written and valid when the stop arrived; "
+                                     "recorded as success")
+            except StopIteration:
+                pass
+            except Exception as exc:  # noqa: BLE001 - an invalid/unknown file is reported, never promoted
+                point_outcome = f"file present but NOT valid, left as it is: {type(exc).__name__}: {exc}"
+        counts = {}
+        try:
+            for row in (self.observation_points or []):
+                key = str(row.get("capture_status", "planned")).strip().lower()
+                counts[key] = counts.get(key, 0) + 1
+        except Exception:  # noqa: BLE001
+            pass
+        stop_record = {
+            "schema_version": 1, "session_id": self.session_id, "stop_requested_utc": self.stop_requested_utc,
+            "recorded_utc": datetime.now(timezone.utc).isoformat(), "phase_at_stop": phase,
+            "interrupted_point": point,
+            "interrupted_point_outcome": point_outcome,
+            "session_had_already_ended": phase in ("CLOSING", "COMPLETED"),
+            "point_status_counts": counts, "part_files_left_untouched": parts, "mount_stop": report,
+            "summary": line,
+        }
+        try:
+            atomic_write_json(Path(self.csv_path).parent / "stop_report.json", stop_record)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"stop_report.json could not be written: {type(exc).__name__}: {exc}", "WARNING", force=True)
+        if parts:
+            self.log(f".part files left in place (not deleted): {len(parts)}", "WARNING", force=True)
+        if phase not in ("CLOSING", "COMPLETED"):
+            try:
+                self.session_manager.pause_session(self.session_id)
+            except Exception:  # noqa: BLE001
+                pass
+        if phase in ("CLOSING", "COMPLETED"):
+            # The session had already ended on its own when the STOP arrived: its own end state stands; only the
+            # outcome of the mount stop is added.
+            self._announce(error_mount_stop=None if report.get("confirmed") else line,
+                           stop={"phase": phase, "interrupted_point": None, "part_files": len(parts),
+                                 "requested_utc": self.stop_requested_utc},
+                           mount_stop={"confirmed": bool(report.get("confirmed")), "reason": report.get("reason"),
+                                       "summary": line, "tracking_reactivations": report.get("tracking_reactivations"),
+                                       "abort": report.get("abort"), "stillness": report.get("stillness")})
+            self.log(f"Mount stop after the session had ended. Evidence: {Path(self.csv_path).parent / 'stop_report.json'}", "INFO", force=True)
+            return report
+        self._announce(event="SESSION_ABORTED", state="ABORTED",
+                       error=None if report.get("confirmed") else line,
+                       stop={"phase": phase, "interrupted_point": point, "part_files": len(parts),
+                             "requested_utc": self.stop_requested_utc},
+                       mount_stop={"confirmed": bool(report.get("confirmed")), "reason": report.get("reason"),
+                                   "summary": line, "tracking_reactivations": report.get("tracking_reactivations"),
+                                   "abort": report.get("abort"), "stillness": report.get("stillness")})
+        self.log(f"Session stopped by the operator. Evidence: {Path(self.csv_path).parent / 'stop_report.json'}", "INFO", force=True)
+        return report
 
     def _announce(self, **fields) -> None:
         """Best-effort session-state announcement for the field console.
@@ -1332,6 +1449,7 @@ class CaptureExecutor:
                 point_clock = time.perf_counter()
                 point_start = datetime.now(timezone.utc)
                 point_num = int(point['point_number'])
+                self._mark("POINT_START", point_num)
                 ra_hours = float(point['target_ra_hours'])
                 dec_deg = float(point['target_dec_degrees'])
                 actual_session_count += 1
@@ -1468,6 +1586,7 @@ class CaptureExecutor:
                         self._observe_goto_log(live_row, str(message))
                         return original_telescope_log_verbose(message, *args, **kwargs)
                     self.telescope.log_verbose = timeline_telescope_log_verbose
+                self._mark("GOTO", point_num)
                 try:
                     success = await self.telescope.goto(ra_hours, dec_deg)
                 finally:
@@ -1475,6 +1594,7 @@ class CaptureExecutor:
                         self.telescope.log = original_telescope_log
                     if original_telescope_log_verbose is not None:
                         self.telescope.log_verbose = original_telescope_log_verbose
+                self._mark("TRACKING", point_num)   # reached only when the GOTO returned (not when it was cancelled)
                 slew_sec = time.perf_counter() - slew_clock
                 slew_end = datetime.now(timezone.utc)
                 slew_time = (slew_end - slew_start).total_seconds()
@@ -1654,6 +1774,7 @@ class CaptureExecutor:
                 self._live_event(live_row, "SETTLE START", "settle_start",
                                  [f"requested={settle_time:.3f} s"])
                 self.log(f"SETTLE START ({settle_time:.3f}s)", force=True)
+                self._mark("SETTLE", point_num)
                 settle_task = asyncio.create_task(asyncio.sleep(settle_time))
                 while not settle_task.done():
                     elapsed_settle = time.perf_counter() - settle_clock
@@ -1938,6 +2059,7 @@ class CaptureExecutor:
                             )
 
                     self.sdr.timing_callback = sdr_timing_callback
+                    self._mark("CAPTURE", point_num)
                     try:
                         sdr_metrics = await self.sdr.capture(
                             duration=capture_time,
@@ -2011,6 +2133,7 @@ class CaptureExecutor:
                                        start_time=start_time_iso,
                                        end_time=end_time_iso,
                                        duration=duration)
+                self._mark("BETWEEN_POINTS", point_num)   # this point is complete and recorded
                 self._announce(event="POINT_COMPLETED", state="RUNNING",
                                 points_success=successful + 1,
                                 last_successful_point_id=str(point.get("point_id", point_num)),
@@ -2191,6 +2314,7 @@ class CaptureExecutor:
                 elif self.verbose:
                     self.log("")
 
+            self._mark("CLOSING")   # the point loop is over: from here on a STOP no longer changes the outcome
             # Deferred visibility remains planned for a future resume.
             if safety_paused:
                 self.session_manager.pause_session(self.session_id)
@@ -2269,6 +2393,10 @@ class CaptureExecutor:
 
             return not safety_paused and failed == 0 and self.visibility_deferred_count == 0
 
+        except asyncio.CancelledError:
+            # Operator STOP (SIGINT, see main()): stop the mount, prove it, publish the end of the session.
+            await self._handle_operator_stop()
+            raise
         except KeyboardInterrupt:
             # User interrupted - pause session
             self.log("", "WARNING", force=True)
@@ -2292,19 +2420,35 @@ class CaptureExecutor:
                 self.log(traceback.format_exc(), "ERROR")
             return False
         finally:
-            # Never deliberately leave the mount tracking after any exit path.
-            await self.ensure_tracking_off()
-            if self.sdr:
-                await self.sdr.close()
-                if self.verbose:self.log("SDR closed")
+            # Never deliberately leave the mount tracking after any exit path. After an operator STOP the mount
+            # was already stopped AND read back by _handle_operator_stop(); do not send a second, unverified OFF.
+            # A STOP that arrives while THIS block is closing a finished/failed session is handled here: every
+            # release below still runs, and the mount is stopped and read back like in any other phase.
+            stopped_while_closing = False
+            try:
+                if not self._stop_handled:
+                    await self.ensure_tracking_off()
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                stopped_while_closing = True
+            try:
+                if self.sdr:
+                    await self.sdr.close()
+                    if self.verbose:self.log("SDR closed")
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                stopped_while_closing = True
             # RFI_REF: stop only the subprocess this instance itself owns.
             # Best-effort by design (mirrors _announce) - a failure here must
             # never mask or replace the real outcome of the session above.
             if self.rfi_ref_enabled:
                 try:
                     await self.rfi_ref.stop()
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    stopped_while_closing = True
                 except Exception:
                     pass
+            if stopped_while_closing and not self._stop_handled:
+                await self._handle_operator_stop()
+                raise asyncio.CancelledError()
 
 
 async def main():
@@ -2412,6 +2556,27 @@ Useful for re-observations or after fixing equipment issues.
                              'in-line LNA on antenna B; independent of MAIN\'s bias-tee). Default: disabled')
 
     args = parser.parse_args()
+
+    # Operator STOP = SIGINT (the orchestrator's STOP OBSERVATION, or Ctrl-C). The FIRST one cancels this task, so the
+    # session unwinds through execute_observation_plan()'s own stop handling (mount stopped and read back, end of
+    # session published). Any LATER one is acknowledged and ignored: with asyncio's default handling a second
+    # SIGINT raises KeyboardInterrupt in the middle of the stop sequence and leaves the mount unverified.
+    stop_state = {"count": 0, "executor": None}
+    _main_task = asyncio.current_task()
+
+    def _on_sigint() -> None:
+        stop_state["count"] += 1
+        if stop_state["count"] == 1:
+            if stop_state["executor"] is not None:
+                stop_state["executor"].stop_requested_utc = datetime.now(timezone.utc).isoformat()
+            print("\nSTOP       SIGINT received - stopping the session and the mount", flush=True)
+            _main_task.cancel()
+        else:
+            print(f"\nSTOP       SIGINT #{stop_state['count']} ignored - the stop sequence is already running", flush=True)
+    try:
+        asyncio.get_running_loop().add_signal_handler(signal.SIGINT, _on_sigint)
+    except (NotImplementedError, RuntimeError, ValueError):
+        pass   # no signal support here (not the main thread): asyncio's default SIGINT handling stays
 
     # Initialize session manager
     session_mgr = SessionManager()
@@ -2525,6 +2690,7 @@ Useful for re-observations or after fixing equipment issues.
 
     # Compact is the operator-facing mode. Detailed diagnostics remain in the
     # timing CSV and are still available with --debug.
+    stop_state["executor"] = executor
     executor.compact_console = not executor.verbose
     if executor.compact_console:
         executor.print_console_header(args.settle, args.capture)
@@ -2595,13 +2761,28 @@ Useful for re-observations or after fixing equipment issues.
         sys.exit(1)
     finally:
         if executor.telescope and executor.telescope.writer:
-            executor.telescope.writer.close()
-            await executor.telescope.writer.wait_closed()
+            try:
+                executor.telescope.writer.close()
+                await executor.telescope.writer.wait_closed()
+            except Exception as exc:  # noqa: BLE001 - INDI already gone (e.g. it dropped during a stop): closing a dead
+                # socket must not replace the session's real outcome with a ConnectionError and exit code 1
+                executor.log(f"INDI connection was already closed ({type(exc).__name__})", "WARNING", force=True)
         executor.log("Disconnected from INDI server")
 
 
-if __name__ == "__main__":
+def cli() -> int:
+    """Process entry point. 130 = stopped by the operator (the outcome of the mount stop is in stop_report.json and
+    in the session's own announcement - never inferred from this exit code)."""
     try:
         asyncio.run(main())
+    except asyncio.CancelledError:
+        print("\nSTOPPED    session stopped by the operator; mount stop result in stop_report.json", flush=True)
+        return 130
     except KeyboardInterrupt:
         print("\nSTOPPED    session paused; tracking-off cleanup requested", flush=True)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(cli())

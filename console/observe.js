@@ -239,6 +239,15 @@
     if (stopRequestedAt && state === "STOPPING") { note.hidden = false; note.textContent = `STOP REQUESTED at ${U.utc(stopRequestedAt)} — the capture is still shutting down (this is not completion).`; }
     else if (stopRequestedAt && TERMINAL.includes(state)) { note.hidden = false; note.textContent = `Stop completed: capture ended as ${state} (requested ${U.utc(stopRequestedAt)}).`; stopRequestedAt = null; }
     else if (state !== "STOPPING" && !stopRequestedAt) { note.hidden = true; }
+    // The mount stop is its own fact, published by the capture itself after reading INDI back: shown whenever the
+    // session reports one, and in the error colour when it could NOT be confirmed.
+    const ms = (status.orchestrator || {}).mount_stop;
+    if (ms && state !== "STOPPING") {
+      note.hidden = false;
+      note.className = ms.confirmed ? "banner info" : "banner";      // the plain banner is the error style
+      note.textContent = (ms.confirmed ? "MOUNT STOPPED AND VERIFIED — " : "") + (ms.summary || "")
+        + (ms.confirmed ? "" : " — CHECK THE MOUNT NOW (Ekos / hand controller).") + " This is a software stop over INDI, not a physical brake.";
+    } else { note.className = "banner info"; }
     updateStartButton();
     // A terminal state ends live polling (the page keeps showing it as LAST RUN); DEGRADED keeps polling: it may need the operator.
     if (TERMINAL.includes(state) && runPoller) { runPoller.stop(); runPoller = null; }

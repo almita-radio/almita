@@ -411,7 +411,8 @@
       if (shown) {
         const what = li.kind === "STOPPED_BY_OPERATOR" ? "STOPPED by the operator" : li.kind === "TIMEOUT" ? "TIMED OUT" : "FAILED";
         $w(elId).textContent = `LAST ${stepLabel} CAPTURE ${what} at ${li.utc}${li.job_id ? ` (job ${li.job_id})` : ""}`
-          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept · fix the cause, then retry or ABORT`;
+          + (li.error ? ` — ${li.error}` : "") + ` · ${li.files_on_disk.length} file(s) kept · fix the cause, then retry or ABORT`
+          + (li.mount_stop ? ` · ${li.mount_stop.summary}${li.mount_stop.confirmed ? "" : " — CHECK THE MOUNT NOW"}` : "");
       }
       return shown;
     }

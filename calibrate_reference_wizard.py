@@ -102,6 +102,14 @@ def _record_interruption(session_dir: Path, label: str, exc: BaseException, cap_
         "files_on_disk": sorted(p.name for p in cap_dir.glob("capture_*.h5")),
         "job_id": os.environ.get("ALMITA_JOB_ID"),     # the web job that ran this step (None from a shell)
     }
+    try:                                               # what the stop did to the mount, when this step moved it
+        import mount_stop
+        report = mount_stop.LAST_REPORT
+        if report is not None and label != "AMBIENT_50R":
+            state["last_interruption"]["mount_stop"] = {"confirmed": bool(report.get("confirmed")),
+                                                        "summary": mount_stop.summary_line(report)}
+    except Exception:  # noqa: BLE001
+        pass
     _save_state(session_dir, state)
 
 
@@ -420,6 +428,13 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
                "capture_seconds": capture_seconds, "sample_rate_hz": sample_rate_hz,
                "center_frequency_hz": center_frequency_hz, "captured_utc": datetime.now(timezone.utc).isoformat(),
                "capture_paths": [str(p) for p in paths], "simulated": False, "tuning": tuning}
+    except BaseException as exc:
+        # STOP CURRENT STEP / timeout: stop the mount and read it back before letting go of INDI (mount_stop.py).
+        # A STOP during the GOTO used to leave the slew running to its end.
+        import mount_stop
+        if await mount_stop.stop_after_interruption(telescope, exc, _progress) is not None:
+            tracking_restore = False      # the stop already switched tracking OFF and verified it
+        raise
     finally:
         await sdr.close()
         if tracking_restore:     # leave tracking as it was before this hold (OFF): best effort, reported

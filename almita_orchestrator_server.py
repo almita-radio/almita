@@ -449,6 +449,13 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 body = _read_json_body(self)
                 _log("INFO", f"req={self._request_id} OPS START {ops_start.group('stage')} params={json.dumps(body.get('params') or {})[:200]}")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.start(ops_start.group("stage"), body.get("params") or {}, confirm=body.get("confirm"))})
+            if path == "/api/mount/stop":
+                if _read_json_body(self).get("confirm") is not True:
+                    raise ValueError("confirm: true is required - STOP MOUNT does not proceed implicitly")
+                _log("WARNING", f"req={self._request_id} MOUNT STOP requested")
+                result = almita_web_ops.stop_mount()
+                _log("WARNING", f"req={self._request_id} MOUNT STOP result: {result['summary']} | signalled={result['signalled']}")
+                return _json_response(self, 200, {"ok": True, "data": result})
             ops_stop = _OPS_STOP_RE.match(path)
             if ops_stop:
                 if _read_json_body(self).get("confirm") is not True:

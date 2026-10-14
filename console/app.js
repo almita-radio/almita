@@ -613,6 +613,7 @@ function start(){
   document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
   setInterval(()=>{$("clock").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z";renderLink()},1000);
   if(window.AlmitaUI&&AlmitaUI.mountFooter)AlmitaUI.mountFooter();
+  if(window.AlmitaUI&&AlmitaUI.mountStopButton)AlmitaUI.mountStopButton(document.querySelector(".topbar .obs-nav"));
   try{initMountCamera()}catch(e){console.error("mount camera init failed (isolated, other tiles unaffected):",e)}
 }
 window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,

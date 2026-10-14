@@ -1464,6 +1464,15 @@ class INDITelescopeControl:
             self.log(f"Error al cambiar tracking: {e}", "ERROR")
             return False
     
+    async def abort_motion(self) -> None:
+        """Ask the driver to stop any slew in progress (INDI standard TELESCOPE_ABORT_MOTION). It only sends the
+        command: whether the mount really stopped is established by reading it back (mount_stop.py). Added
+        2026-10-14 for STOP: a cancelled GOTO used to leave the mount finishing the slew on its own."""
+        await self._send_command(
+            f'''<newSwitchVector device="{self.device_name}" name="TELESCOPE_ABORT_MOTION">
+  <oneSwitch name="ABORT">On</oneSwitch>
+</newSwitchVector>''')
+
     async def disconnect(self):
         """Desconecta del servidor"""
         if self._reader_task is not None:
