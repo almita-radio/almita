@@ -239,16 +239,20 @@ class QuicklookLive:
         spectrum,arrays=generate_quicklook(source,self.profile_path,point_dir/"spectrum")
         spectrum_seconds=time.perf_counter()-spectrum_start
         frequency=np.asarray(arrays["frequency_hz"]);span=frequency[-1]-frequency[0]
-        metric=map_metric(arrays["fractional_excess"],arrays["fractional_uncertainty"],arrays["valid_mask"],frequency,
+        # Channels the profile itself marks as interference (spur_mask) are left out here exactly as REDUCE leaves them
+        # out (reduce_engine/masks.py): a spur recorded in the profile's 50-ohm reference used to show up as a dark
+        # line across every capture of the session waterfall (2026-10-14, 1419.716 MHz, profile of 2026-10-02).
+        usable=np.asarray(arrays["valid_mask"],dtype=bool)&~np.asarray(arrays.get("spur_mask",np.zeros_like(arrays["valid_mask"])),dtype=bool)
+        metric=map_metric(arrays["fractional_excess"],arrays["fractional_uncertainty"],usable,frequency,
                           frequency[0]+.1*span,frequency[-1]-.1*span)
         session_waterfall_start=time.perf_counter()
         try:
             update_session_waterfall(self.output,session_id=self.session_id,point_id=point_id,
-              frequency_hz=frequency,relative_db=arrays["relative_psd_db"],valid_mask=arrays["valid_mask"])
+              frequency_hz=frequency,relative_db=arrays["relative_psd_db"],valid_mask=usable)
         except Exception:
             _log(self.log_path,"SESSION WATERFALL FAILED",point_id)
         session_waterfall_seconds=time.perf_counter()-session_waterfall_start
-        del arrays, frequency
+        del arrays, frequency, usable
         gc.collect()
         waterfall_start=time.perf_counter();_log(self.log_path,"PROCESS WATERFALL",point_id)
         generate_waterfall(source,self.profile_path,point_dir/"waterfall")

@@ -241,3 +241,18 @@ def test_campaigns_listing_tells_same_named_profiles_apart(repo, monkeypatch):
     assert {"WIZARD-A", "WIZARD-OLD"} <= set(rows)
     assert (rows["WIZARD-A"]["created_utc"], rows["WIZARD-A"]["center_frequency_hz"]) == ("2026-10-02T01:40:00Z", 1420405752)
     assert rows["WIZARD-OLD"]["center_frequency_hz"] == 1420405000
+
+
+def test_each_profile_reports_its_interference_channels_and_flags_a_noisy_one():
+    """2026-10-14: the 2026-10-02 profile (23 spur channels, one at 1419.715 MHz) put a dark line across a session;
+    the explorer now shows the count with every profile and flags the ones above the usual."""
+    import numpy as np
+    import calibration_profile_catalog as catalog
+    freq = np.linspace(1419.2e6, 1421.6e6, 100)
+    clean = {"spur_mask": np.zeros(100, bool), "frequency_hz": freq}
+    noisy_mask = np.zeros(100, bool); noisy_mask[20:35] = True
+    noisy = {"spur_mask": noisy_mask, "frequency_hz": freq}
+    assert catalog._spur_info(clean) == {"spur_bins": 0, "spur_regions_mhz": [], "spur_warning": False}
+    info = catalog._spur_info(noisy)
+    assert info["spur_bins"] == 15 and info["spur_warning"] is True and len(info["spur_regions_mhz"]) == 1
+    assert catalog._spur_info({})["spur_bins"] is None            # a profile it cannot read is never an error here

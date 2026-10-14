@@ -357,6 +357,27 @@
     $("f-min-alt").value = d.grid.min_altitude_deg;
     $("f-rfi-gain").value = d.rfi_ref.gain_db;
     if (typeof d.rfi_ref.bias_tee === "boolean") $("f-rfi-bias-tee").checked = d.rfi_ref.bias_tee;
+    await suggestNewestProfile();
+  }
+
+  // The newest profile that fits the frequency / sample rate / gain above is proposed by default; an older one that
+  // the browser kept in the field is not silently replaced, but the page says a newer one exists. (2026-10-14: a
+  // whole session ran with the 2026-10-02 profile, whose 50-ohm reference carried interference, although a clean
+  // profile from the day before was available.)
+  async function suggestNewestProfile() {
+    const r = await U.api(`/api/observe/calibration-profiles?${profileQuery()}`, { timeoutMs: 20000 });
+    if (!r.ok) return;
+    const list = ((r.data.data || r.data).profiles || []).filter((p) => p.valid && p.compatibility && p.compatibility.status === "COMPATIBLE");
+    if (!list.length) return;
+    const newest = list[0];                                   // the server lists newest first
+    const current = $("f-ql-cal").value.trim();
+    if (!current) { $("f-ql-cal").value = newest.path; await validateProfilePath(); return; }
+    if (current !== newest.path) {
+      await validateProfilePath();
+      const note = $("f-ql-cal-status");
+      note.textContent += `\nA NEWER compatible profile exists: ${newest.path} (created ${U.utc((newest.summary || {}).created_utc)}`
+        + `, interference channels ${newest.spur_bins}). Choose it with BROWSE unless you need this one.`;
+    }
   }
 
   function updateRfiBiasTeeAvailability() { $("f-rfi-bias-tee").disabled = !$("f-rfi-enabled").checked; }

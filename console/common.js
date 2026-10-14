@@ -355,7 +355,10 @@
       for (const f of view.files) {
         const tr = document.createElement("tr"); const c = f.compatibility || {};
         cell(tr, f.name + (f.summary && f.summary.created_utc ? `\ncreated ${U.utc(f.summary.created_utc)}` : ""), "fx-name");
-        cell(tr, f.valid ? U.fmtProfileValues(f.summary) : "—");
+        cell(tr, f.valid ? U.fmtProfileValues(f.summary)
+          + (f.spur_bins !== undefined && f.spur_bins !== null
+             ? `\ninterference channels: ${f.spur_bins}${f.spur_warning ? " ⚠ more than usual" + (f.spur_regions_mhz && f.spur_regions_mhz.length ? " (at " + f.spur_regions_mhz.join(", ") + " MHz)" : "") : ""}` : "")
+          : "—");
         cell(tr, !f.valid ? `REJECTED: ${f.error}` : (c.status === "INCOMPATIBLE" ? `REJECTED: ${c.reason}` : `${c.status}: ${c.reason}`));
         const b = document.createElement("button"); b.type = "button"; b.textContent = "SELECT"; b.disabled = !f.selectable;
         b.addEventListener("click", () => { el("picker").hidden = true; opts.onSelect(f); });

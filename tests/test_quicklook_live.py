@@ -347,3 +347,25 @@ def test_run_exits_on_its_own_once_capture_reports_the_session_ended(tmp_path, m
     other = tmp_path / "current_session.json"
     other.write_text('{"session_id": "OTHER", "event": "SESSION_COMPLETED"}')
     assert live._session_finished() is False
+
+
+def test_channels_the_profile_marks_as_interference_are_left_out_of_the_session_waterfall(tmp_path,monkeypatch):
+    """2026-10-14: a spur in the 2026-10-02 profile's 50-ohm reference drew a dark line through every capture of a
+    session. The quicklook now leaves the profile's spur channels out, like REDUCE (reduce_engine/masks.py)."""
+    fake_products(monkeypatch)
+    original=ql.generate_quicklook
+    def with_spur(source,profile,out):
+        spectrum,arrays=original(source,profile,out)
+        spur=np.zeros(16,bool);spur[5]=True
+        return spectrum,{**arrays,"spur_mask":spur}
+    monkeypatch.setattr(ql,"generate_quicklook",with_spur)
+    session=tmp_path/"s";session.mkdir();make_grid(session,1,2);capture(session/"x.h5")
+    manifest(session,[row("1","SUCCESS","x.h5")])
+    out=tmp_path/"out";ql.QuicklookLive(session,PROFILE,out).run(True)
+    state=json.loads((out/"session_waterfall_state.json").read_text())
+    values=state["rows"][0]["relative_db"]
+    assert values.count(None)>=1 and any(v is not None for v in values)   # the spur channel is blank, the rest is not
+    # without the spur, the same capture has no blank channel
+    monkeypatch.setattr(ql,"generate_quicklook",original)
+    out2=tmp_path/"out2";ql.QuicklookLive(session,PROFILE,out2).run(True)
+    assert json.loads((out2/"session_waterfall_state.json").read_text())["rows"][0]["relative_db"].count(None)==0

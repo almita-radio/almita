@@ -43,6 +43,30 @@ def _summary(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return {k: metadata.get(k) for k in SUMMARY_FIELDS}
 
 
+# A profile whose 50-ohm reference caught interference carries it into every calibrated spectrum (2026-10-14: the
+# 2026-10-02 profile put a dark line at 1419.716 MHz across a whole session's quicklook). The number of channels the
+# profile itself marks as interference is shown with each profile; above this many it is flagged.
+SPUR_BINS_WARN = 12
+
+
+def _spur_info(profile: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        import numpy as np
+        spur = np.asarray(profile["spur_mask"], dtype=bool)
+        freq = np.asarray(profile["frequency_hz"], dtype=float)
+        n = int(spur.sum())
+        regions, start = [], None
+        for i, flag in enumerate(list(spur) + [False]):
+            if flag and start is None:
+                start = i
+            elif not flag and start is not None:
+                regions.append(round(float(freq[start:i].mean()) / 1e6, 4))
+                start = None
+        return {"spur_bins": n, "spur_regions_mhz": regions[:8], "spur_warning": n > SPUR_BINS_WARN}
+    except Exception:  # noqa: BLE001 - informative only
+        return {"spur_bins": None, "spur_regions_mhz": [], "spur_warning": False}
+
+
 def _compatibility(profile: Dict[str, Any], main: Optional[Dict[str, Any]]) -> Dict[str, str]:
     if not main or not any(main.get(k) is not None for k in ("center_frequency_hz", "sample_rate", "gain_db")):
         return {"status": "UNKNOWN", "reason": "no OBSERVE frequency / sample rate / gain given to compare against"}
@@ -91,7 +115,7 @@ def list_profiles(root: Path, repo_root: Path, main: Optional[Dict[str, Any]] = 
                                     "summary": None, "compatibility": None})
                     continue
                 entries.append({"path": rel, "valid": True, "error": None, "summary": _summary(profile["metadata"]),
-                                "compatibility": _compatibility(profile, main)})
+                                "compatibility": _compatibility(profile, main), **_spur_info(profile)})
                 if len(entries) >= MAX_PROFILES:
                     break
     entries.sort(key=lambda e: ((e.get("summary") or {}).get("created_utc") or "", e["path"]), reverse=True)
@@ -151,7 +175,7 @@ def _profile_entry(path: Path, repo_root: Path, main: Optional[Dict[str, Any]]) 
         return entry
     compat = _compatibility(profile, main)
     entry.update(valid=True, error=None, summary=_summary(profile["metadata"]), compatibility=compat,
-                 selectable=compat["status"] != "INCOMPATIBLE")
+                 selectable=compat["status"] != "INCOMPATIBLE", **_spur_info(profile))
     return entry
 
 
