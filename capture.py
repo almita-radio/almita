@@ -320,9 +320,12 @@ class CaptureExecutor:
                 point_outcome = f"file present but NOT valid, left as it is: {type(exc).__name__}: {exc}"
         counts = {}
         try:
-            for row in (self.observation_points or []):
-                key = str(row.get("capture_status", "planned")).strip().lower()
-                counts[key] = counts.get(key, 0) + 1
+            # from the plan file on disk - the rows in memory keep the status they were loaded with
+            # (first real run of this code, 2026-10-14: "planned: 400" with one point already saved)
+            with open(self.csv_path, "r", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    key = str(row.get("capture_status", "planned")).strip().lower()
+                    counts[key] = counts.get(key, 0) + 1
         except Exception:  # noqa: BLE001
             pass
         stop_record = {

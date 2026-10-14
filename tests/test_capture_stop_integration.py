@@ -163,6 +163,7 @@ def test_stop_during_a_goto_stops_the_mount_and_it_does_not_resume_tracking(sess
     assert report["mount_stop"]["abort"] == {"supported": True, "sent": True}
     assert report["interrupted_point"] == 2
     _assert_data_intact(s, expected_complete=1)
+    assert report["point_status_counts"].get("success") == 1          # counted from the plan on disk
     assert s.parts() == [] and report["part_files_left_untouched"] == []
     assert "TELESCOPE_ABORT_MOTION" in s.commands_after_stop()
     assert s.statuses()[1] == "planned"             # the interrupted point was never captured, and is not "success"
