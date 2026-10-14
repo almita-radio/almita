@@ -149,16 +149,13 @@ def write_interpolated_preview_png(path: Path, document: dict[str, Any]) -> None
     image = axis.imshow(masked, origin="lower", extent=extent, aspect="auto", cmap=cmap,
                         interpolation="nearest", vmin=document["color_scale"]["minimum"],
                         vmax=document["color_scale"]["maximum"])
-    real_x = [p["x_offset_deg"] for p in document["real_observation_points"]]
-    real_y = [p["y_offset_deg"] for p in document["real_observation_points"]]
-    axis.scatter(real_x, real_y, marker="o", facecolors="none", edgecolors="white",
-                s=40, linewidths=1.0, label="real observation")
+    # No markers on the real observation points (operator, 2026-10-14): they cluttered the picture. Their positions
+    # stay in the JSON document (real_observation_points) and the exact cells are the NATIVE_GRID map.
     axis.set(title="ALMITA - Native Grid (INTERPOLATED PREVIEW - not raw data)",
              xlabel="East offset [deg]", ylabel="North offset [deg]")
     axis.text(.01, .01, f"{document['n_points_used']} real points used | visual preview only",
               transform=axis.transAxes, color="white", fontsize=9,
               bbox={"facecolor": "black", "alpha": .5, "edgecolor": "none"})
-    axis.legend(loc="upper right", fontsize=8)
     fig.colorbar(image, ax=axis, label="Median fractional excess (interpolated)")
     fig.savefig(path, dpi=130)
     plt.close(fig)
