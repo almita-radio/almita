@@ -39,12 +39,10 @@ físicos: el haz y la alimentación del LNA de la antena B.
   2026-10-13 que ese acceso es el que quiere; quedan tres comprobaciones suyas.
 - **ALIGN no corrige todavía:** el SYNC nunca se envió a la montura real y ALIGN SOLAR nunca corrió (BL-026). La
   única corrida real, con HI, no logró estimar un offset.
-- **STOP OBSERVATION durante un GOTO sigue fallido en hardware.** En la prueba del 2026-10-13 la montura terminó
-  el movimiento y quedó en seguimiento. Está corregido en origen desde el 2026-10-14 (`3bfeb98`: parada abortada
-  y comprobada leyendo INDI, o «PARADA NO CONFIRMADA»), con pruebas de procesos y señales reales contra una
-  montura simulada, **pero no se ha repetido en la montura** (BL-059). Las otras dos fases (tras un GOTO, durante
-  una captura) y los tres casos del STOP del wizard pasaron. Hay además un botón PARAR MONTURA en todas las
-  páginas, también sin probar en la montura (BL-065).
+- **STOP OBSERVATION:** corregido en origen y comprobado en la montura real el 2026-10-14, bajo techo, durante
+  una captura y durante un GOTO. La montura se detiene, queda sin seguimiento y el sistema lo confirma leyendo
+  INDI; si no puede, dice «PARADA NO CONFIRMADA» (pasó una vez, y era cierto). Hay un botón PARAR MONTURA en todas
+  las páginas, probado con la montura en seguimiento. Falta probar la parada nueva en ALIGN, wizard y gain pilot.
 - **El haz no está medido** (BL-034): 20° en la configuración y 14° en `alignment.py`, ambos provisionales.
 - **Antena B:** el Bias-T se envía, pero nadie midió que el LNA reciba alimentación (BL-031). Desde el
   2026-10-13 toda la configuración lo trae encendido por defecto.

@@ -93,11 +93,11 @@ Los cinco bugs de esta lista (BL-045, BL-046, BL-047, BL-048 y BL-051) se cerrar
 
 | id | prioridad | qué | evidencia | quién | falta para cerrar |
 |---|---|---|---|---|---|
-| BL-059 | **P1** | **Tras un STOP durante un GOTO, la montura terminaba el movimiento y quedaba con el seguimiento ENCENDIDO.** Corregido en origen el 2026-10-14 (`3bfeb98`), **sin probar todavía en la montura**. | Causa: la interrupción llegaba a `capture.py` como cancelación de su tarea; la única limpieza era pedir que se apagara el seguimiento mientras la montura todavía se movía, sin abortar ni esperar, y OnStep restauraba el seguimiento al terminar el GOTO. Solución: `mount_stop.py` aborta el movimiento, espera con límite a que termine, apaga el seguimiento, exige que siga apagado en lecturas consecutivas (lo vuelve a apagar si un GOTO tardío lo reactiva) y comprueba con las coordenadas que la montura no se mueve ni sigue. Solo declara parada confirmada con la lectura de INDI; si no, «PARADA NO CONFIRMADA» con el motivo. Excepción autorizada al congelamiento de `capture.py`, limitada a la parada, la limpieza y el anuncio del fin de sesión. Probado con procesos y señales reales contra una montura simulada que sigue moviéndose y siguiendo (§5). | operador | **Repetir en la montura** el STOP durante un GOTO y durante una captura (manual §14, prueba A). Hasta entonces, STOP OBSERVATION durante GOTO sigue contando como fallido en hardware. No está comprobado que el driver real acepte la orden de abortar ni cuánto tarda OnStep en detenerse |
+| BL-059 | — | Tras un STOP durante un GOTO, la montura terminaba el movimiento y quedaba con el seguimiento encendido. **Corregido en origen y comprobado en la montura real el 2026-10-14** (`3bfeb98`, `1bcd07e`). | Causa: la interrupción llegaba a `capture.py` como cancelación; la única limpieza era pedir que se apagara el seguimiento con la montura todavía en movimiento. Solución: `mount_stop.py` aborta el movimiento, espera con límite, apaga el seguimiento, exige que siga apagado y comprueba con la posición que la montura ni se mueve ni sigue; si la comprobación falla, reapaga el seguimiento y repite la prueba. Solo declara parada confirmada con la lectura de INDI. Evidencia: §4.9 (durante captura), §4.10 (primer intento durante GOTO: abortó, pero OnStep reactivó el seguimiento segundos después y quedó «PARADA NO CONFIRMADA») y §4.11 (durante GOTO, PASS: reactivación detectada y corregida, confirmado en 17.9 s). | — | **Cerrado** para OBSERVE, bajo techo. Queda por ver: el caso sin orden de abortar (no aplica a este driver, que la acepta) y la parada en ALIGN, wizard y gain pilot con el código nuevo |
 | BL-057 | — | `capture.py` no anunciaba el fin de la sesión cuando se detenía con STOP. **Corregido en origen** (`3bfeb98`): publica `SESSION_ABORTED` con el resultado de la parada de la montura, marca la sesión como pausada y escribe `stop_report.json`. | Probado con procesos y señales reales en `tests/test_capture_stop_integration.py`. La compensación desde afuera (`0148b78`) se conserva como respaldo. | operador | Verlo en la repetición de la prueba A |
 | BL-060 | P2 | **El wizard no tiene en cuenta el límite de meridiano de OnStep, y un plan HI aprobado no se puede rehacer.** | 2026-10-13 19:32, `WIZARD-20261013-181623-230083`, trabajo `CALIBRATE_WIZARD_MOVE-20261013-193107-0995`: las 5 capturas de HI ALTO se completaron, pero la comprobación final encontró el seguimiento apagado y el paso falló («target NOT held … tracking off»). OnStep informa «Meridian Limit (W) Exceeded»; su límite es de 12 minutos pasado el meridiano y el objetivo llegó a un ángulo horario de +0.202 h (12.1 min) a las 19:31:59. El plan se había aprobado a las 18:53, cuando el objetivo estaba al este del meridiano. El wizard hizo lo correcto al rechazar el paso. Faltan dos cosas: avisar o evitar objetivos que cruzarán el límite durante la espera, y permitir RE-PROPOSE desde un paso HI ya aprobado (hoy solo se puede antes de aprobar). | autónomo el diseño; hardware para probarlo | Leer el límite de OnStep (`Minutes Past Meridian`) al proponer y al capturar; permitir volver a proponer zonas sin abortar la sesión. **Además:** el error de límite queda anotado en OnStep y ALMITA bloquea todo movimiento mientras siga ahí. Comprobado el 2026-10-13/14: no lo borran ni ir a home, ni un GOTO desde Ekos, ni reiniciar Ekos; **lo borra encender y apagar el seguimiento en Ekos**. Falta que la web lo diga al bloquear |
 | BL-062 | — | El SDR de RFI REF (serial 00000002) se desconectó del USB en plena sesión. **Explicado y cerrado:** lo desconectó el operador un momento al ponerle una ferrita. | 2026-10-14 00:32:12 UTC, sesión `ALMITA-OBSERVE-20261014-00:28:48` (bajo techo): «usb 3-1: USB disconnect»; RFI REF quedó en FAILED («Connection reset by peer») y STATUS marcó `rfi_sdr` DOWN. **MAIN no se vio afectado:** la captura siguió y guardó el punto 7 después de la desconexión. | — | Nada. Sirve como evidencia parcial de BL-029: desconectar el SDR de RFI REF en plena sesión no afecta a MAIN y se ve en MONITOR y STATUS |
-| BL-065 | P1 | **Botón PARAR MONTURA en todas las páginas.** Hecho el 2026-10-14 (`3bfeb98`), sin probar en la montura. | Independiente del cierre normal de los trabajos: envía la parada limpia a la observación y a todo trabajo que pueda mover la montura (ALIGN, wizard, gain pilot), y después detiene la montura con la misma secuencia de `mount_stop.py` desde el propio servidor. Muestra la confirmación real o «PARADA NO CONFIRMADA». Declara sus límites: es una parada por software sobre INDI, no un freno físico; si INDI o el controlador no responden, no puede detener nada. | operador | Pulsarlo una vez con la montura quieta y otra durante un GOTO, y anotar lo que muestra y lo que hace la montura |
+| BL-065 | P2 | **Botón PARAR MONTURA en todas las páginas.** Hecho el 2026-10-14 (`3bfeb98`). Probado una vez en la montura real con el seguimiento encendido: lo apagó y confirmó en 9.4 s. | Independiente del cierre normal de los trabajos: envía la parada limpia a la observación y a todo trabajo que pueda mover la montura, y después detiene la montura con `mount_stop.py` desde el propio servidor. Muestra la confirmación real o «PARADA NO CONFIRMADA». Es una parada por software sobre INDI, no un freno físico. | operador | Probarlo **durante un GOTO** y con una observación o un ALIGN corriendo, para ver que también detiene el trabajo |
 | BL-058 | P3 | **ABORT GAIN PILOT** sin pilot planificado queda como trabajo FAIL («plan first»). | Dos casos el 2026-10-13 a las 17:48 sobre `TEST-STOP`. Es el mismo ruido que BL-048 corrigió para la consulta de estado. | autónomo | Tratarlo como «nada que abortar» |
 | BL-054 | P2 | **Cámara de montura: 503 intermitente.** La parte de software está corregida; la del equipo no se puede comprobar desde el Pi. | El journal del servidor tiene 3 respuestas 503 y 3 respuestas 200 de `/mount_camera/stream` desde el 2026-10-08, con un 200 un minuto después de un 503. La cámara es una ESP32-CAM por WiFi (`192.168.1.164:81`, un solo cliente a la vez); el 2026-10-13 respondía ping (4 a 42 ms) y tenía abiertos los puertos 80 y 81. El servidor no registraba el motivo de cada 503, así que la causa de esos tres no se puede reconstruir. Defecto encontrado: el relay marcaba ERROR en cada intento fallido y respondía 503 aunque quedara un reintento; además nunca soltaba a los espectadores cuando se rendía. Corregido en 7b2eefb, y ahora el motivo queda en el journal. No se abrió el stream de la cámara para probar, porque le habría quitado la imagen a quien la estuviera mirando. | operador | Después del reinicio (BL-044): si vuelve a aparecer «STREAM UNAVAILABLE», mirar LAST ERROR en MONITOR o `journalctl -u almita-observe-api \| grep "mount camera"` y anotar el mensaje. Con eso se distingue WiFi débil, cámara colgada u otro cliente ocupando el stream |
 
@@ -179,10 +179,10 @@ Dependencias que fijan el orden:
 |---|---|---|
 | STOP OBSERVATION durante una captura | PASS (§4.3) | **PASS en la montura real, 2026-10-14 (§4.9)** |
 | STOP OBSERVATION tras un GOTO, antes de capturar | Datos PASS; cierre FAIL, corregido y visto en la segunda prueba (§4.1, §4.2) | Sin repetir |
-| **STOP OBSERVATION durante un GOTO** | **FAIL: la montura quedó en seguimiento (§4.2)** | **Corregido en código; sigue fallido hasta repetirlo en la montura** |
+| **STOP OBSERVATION durante un GOTO** | FAIL el 2026-10-13: la montura quedó en seguimiento (§4.2) | **PASS en la montura real el 2026-10-14 02:22 (§4.11)**, tras un intento fallido a las 02:13 que llevó a una segunda corrección (§4.10) |
 | STOP CURRENT STEP del wizard, tres casos | PASS los tres (§4.4 a §4.6) | El wizard ahora también aborta el GOTO; sin repetir |
 | ALIGN, gain pilot | Sin prueba de parada en hardware | Usan la misma parada confirmada; sin probar |
-| PARAR MONTURA (web) | No existía | Nuevo; sin probar en la montura |
+| PARAR MONTURA (web) | No existía | **PASS con la montura en seguimiento** (2026-10-14 02:19: confirmado en 9.4 s). Sin probar durante un GOTO ni con un trabajo corriendo |
 
 ## 4.0 Condiciones de las pruebas del 2026-10-13 y 2026-10-14: bajo techo
 
@@ -342,6 +342,36 @@ Primera corrida real del código nuevo (`3bfeb98`).
 | Archivos | 1 `.h5` (punto 1), completo y validado (36 000 000 muestras). Ningún archivo ni `.part` del punto 2. `mosaic.csv`: 1 `success`, 1 `capturing`, 398 `planned` |
 | Defecto menor encontrado | `stop_report.json` decía «planned: 400» en el recuento de puntos, porque contaba las filas en memoria. Corregido: ahora cuenta desde el archivo del plan |
 | Resultado | **PASS.** Es el caso «durante una captura»: la montura ya estaba quieta. **El caso durante un GOTO sigue pendiente** |
+
+## 4.10 STOP OBSERVATION durante un GOTO, primer intento con la corrección (2026-10-14 02:13, bajo techo)
+
+| | |
+|---|---|
+| Sesión | `data/mosaic/ALMITA-OBSERVE-20261014-02:11:15` |
+| STOP | 02:13:03 UTC, durante el GOTO del punto 2 (log: «MOTION START», «GOTO cancelado») |
+| Montura | **Se detuvo de inmediato:** orden de abortar aceptada, «no moviéndose» 0.8 s después. Seguimiento apagado en 3 lecturas seguidas. **Segundos más tarde el seguimiento volvió a encenderse solo**; la comprobación de posición midió +21 s de RA en 5.7 s y el código se rindió sin reapagarlo. Lectura posterior: montura en seguimiento |
+| Lo que dijo el sistema | **«PARADA NO CONFIRMADA»** con ese motivo en el log, en `stop_report.json`, en OBSERVE (estado BLOCKED) y en MONITOR. No declaró éxito |
+| Datos | 1 `.h5` completo; nada del punto 2; ningún `.part` |
+| Resultado | **FAIL en la montura, informado correctamente.** Llevó a `1bcd07e`: si la comprobación falla, se relee el seguimiento, se reapaga y se repite la prueba (hasta 4 veces) |
+
+## 4.11 STOP OBSERVATION durante un GOTO, con la segunda corrección (2026-10-14 02:22, bajo techo)
+
+| | |
+|---|---|
+| Sesión | `data/mosaic/ALMITA-OBSERVE-20261014-02:20:15` |
+| STOP | 02:22:51.98 UTC, durante el GOTO del punto 2 |
+| Parada de la montura | **CONFIRMADA en 17.9 s.** Abortar aceptado; «no moviéndose» en el acto; seguimiento apagado ×3; primera comprobación de posición fallida (+22 s de RA en 5.7 s); **seguimiento encontrado encendido otra vez y reapagado**; segunda comprobación: +6.0 s de RA y Dec fija en 5.7 s, montura quieta. Una reactivación |
+| Vigilancia posterior (lecturas cada 13 s hasta las 02:24:34, sin enviar órdenes) | Seguimiento apagado todo el tiempo, RA avanzando al ritmo sidéreo (+53 s en 53 s), sin error en OnStep. El operador no tocó Ekos |
+| Estados | `ABORTED` en el orquestador, la API (nota «MOUNT STOP CONFIRMED … after 1 late reactivation») y MONITOR. Respuesta del STOP en 24 s |
+| Datos y recursos | 1 `.h5` completo y validado; nada del punto 2; ningún `.part`; MAIN liberado a las 02:23:10; RFI REF cerrado a las 02:23:15 |
+| Resultado | **PASS** |
+
+Sin determinar: quién vuelve a encender el seguimiento después de abortar (OnStep o Ekos) y por qué la RA se mueve
+unos 22 s en ese lapso. Pasó igual las dos veces, una sola reactivación cada vez.
+
+**PARAR MONTURA**, 2026-10-14 02:19 UTC: pulsado con la montura en seguimiento tras el intento fallido. Resultado en
+el journal del servidor: «MOUNT STOP CONFIRMED (9.43 s): not slewing, tracking OFF, STATIONARY», sin trabajos que
+detener. El operador vio apagarse el seguimiento.
 
 ## 5. Tests
 

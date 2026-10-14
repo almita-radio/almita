@@ -438,7 +438,7 @@ a `<punto>.h5`. Por eso:
 
 **Qué pasa con la montura (vale para A y B).** Hasta el 2026-10-13 el STOP no detenía la montura: si llegaba
 durante un GOTO, la montura lo terminaba y **quedaba siguiendo el cielo**. Desde el 2026-10-14 el STOP hace una
-parada comprobada **[C: probado con una montura simulada, todavía no en la real]**:
+parada comprobada **[H 2026-10-14, bajo techo]**:
 
 1. pide a la montura que aborte el movimiento; si el driver no lo permite, espera a que termine (máximo 2 min);
 2. apaga el seguimiento y comprueba que siga apagado, volviéndolo a apagar si se reactiva solo;
@@ -470,8 +470,8 @@ de mano.
   tres vistas; quedó el `.h5` del punto anterior, completo, y **ningún archivo ni `.part` del punto
   interrumpido**; la montura quedó quieta y sin seguimiento.
 
-> ⚠ **Hasta que la repetición de abajo pase en la montura real, después de cualquier STOP comprueba en Ekos que el
-> seguimiento quedó apagado.** La corrección está probada con una montura simulada, no con la tuya (BL-059).
+> ⚠ **Después de un STOP, espera a que la web diga MOUNT STOPPED AND VERIFIED** (puede tardar unos 20 s). Si dice
+> **PARADA NO CONFIRMADA**, mira la montura y apaga el seguimiento en Ekos o con **PARAR MONTURA**.
 
 Con esto la prueba A está hecha en sus dos casos **con el software anterior**. Lo que no pasó, la montura tras un
 STOP durante un GOTO, está corregido desde el 2026-10-14 y **hay que repetirlo** (abajo). Detalle en
@@ -479,7 +479,13 @@ STOP durante un GOTO, está corregido desde el 2026-10-14 y **hay que repetirlo*
 
 **Repetición con la corrección.** El caso A1 (durante una captura) se hizo el 2026-10-14 en la montura real y
 **pasó [H]**: parada confirmada en 10.8 s, «MOUNT STOPPED AND VERIFIED», seguimiento apagado sin tocar Ekos, un
-`.h5` completo y nada del punto interrumpido. **Falta el caso A2, durante un GOTO**, que es el que había fallado:
+`.h5` completo y nada del punto interrumpido.
+
+**El caso A2 (durante un GOTO) también pasó [H], al segundo intento.** La montura se detiene en el acto. Segundos
+después el controlador vuelve a encender el seguimiento por su cuenta; el sistema lo detecta, lo apaga otra vez y
+recién entonces confirma (unos 18 s en total). En el primer intento esa reactivación no se corregía y la web dijo
+**PARADA NO CONFIRMADA**, que era la verdad. El botón **PARAR MONTURA** se probó con la montura en seguimiento y lo
+apagó en 9 s. Lo de abajo queda como procedimiento para repetir la prueba:
 
 | | A2: durante un GOTO | A1: durante una captura |
 |---|---|---|
