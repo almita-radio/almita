@@ -375,13 +375,22 @@ detener. El operador vio apagarse el seguimiento.
 
 ## 5. Tests
 
-- **Corrida completa vigente, 2026-10-13** (14:29 a 15:05 UTC, 36 min 2 s, sobre `bc03cc2`): 2555 passed,
-  2 failed, 52 skipped. Las dos fallas eran BL-056 (dependen de la hora) y se corrigieron después, en `e696038`.
-  Los tres tests que fallaban el 2026-10-12 (BL-051 y BL-047) pasan.
-- **Después de esa corrida** cambiaron `hw_hi_night_scan.py` y tres archivos de tests (`e696038`). Se corrieron
-  solo sus suites: `test_hw_hi_night_scan.py` 20 passed; `test_capture_preflight.py`,
-  `test_almita_web_align_calibrate.py` y `test_alignment_engine_end_to_end.py` 51 passed. No se repitió la
-  corrida completa.
-- Corrida completa anterior, 2026-10-12 sobre b6eca65: 2540 passed, 3 failed, 52 skipped.
+- **Corrida completa vigente, 2026-10-14** (01:58 a 02:40 UTC, 42 min 37 s, iniciada sobre `527ef32`): 2589
+  passed, 4 failed, 53 skipped. Se repitió la suite completa porque cambió `capture.py`. Las cuatro fallas, todas
+  corregidas después y vueltas a correr (112 passed, 3 skipped en esas tres suites):
+  - dos en `test_quicklook_native_grid_map.py`: esperaban la ascensión recta de la grilla sin convertir de horas
+    a grados. Era el error corregido en BL-063; faltaba actualizar estas dos expectativas, que no estaban en las
+    suites que corrí entonces;
+  - `test_frozen_modules_untouched`: una segunda guardia de módulos congelados, con sus propios pins, que no se
+    había actualizado. Ahora lee los mismos pins que la herramienta de campo, para que no puedan divergir;
+  - `test_frozen_surface_unchanged_against_pins`: falló porque durante la corrida se commiteó un cambio de
+    `capture.py` (el recuento del informe de parada). Pasa con el pin actual.
+- **La corrida coincidió con sesiones reales del operador.** El listado de `data/` de antes y después difiere solo
+  en lo que esas sesiones, un SCIENCE y dos reinicios del servidor escribieron; ningún cambio viene de los tests.
+- **Pruebas de parada con procesos y señales reales** (montura INDI simulada que sigue moviéndose y siguiendo):
+  `test_capture_stop_integration.py` 10 passed; `test_mount_stop_integration.py` 17 passed.
+- **Después de la corrida completa** cambiaron `mount_stop.py` (repetición de la prueba de parada) y el recuento
+  del informe en `capture.py`; se corrieron sus suites, no la completa.
+- Corridas completas anteriores: 2026-10-13, 2555 passed, 2 failed; 2026-10-12, 2540 passed, 3 failed.
 
 Detalle en [PROJECT_BRIEF.md §5](PROJECT_BRIEF.md#5-validación).

@@ -175,8 +175,9 @@ def test_serpentine_scan_order_does_not_alter_cell_geometry(tmp_path):
     geometry = load_native_grid_geometry(grid_dir)
     # point_id = row*cols+col+1 (geometric) regardless of the file's scan_order
     # column ordering (row 1 is written right-to-left in mosaic.csv).
-    assert geometry["cells"]["4"] == {"row": 1, "column": 0, "ra_deg": 10.0, "dec_deg": -19.0}
-    assert geometry["cells"]["6"] == {"row": 1, "column": 2, "ra_deg": 12.0, "dec_deg": -19.0}
+    # mosaic.csv's "ra" column is in HOURS (10 h, 12 h here): the geometry holds degrees
+    assert geometry["cells"]["4"] == {"row": 1, "column": 0, "ra_deg": 150.0, "dec_deg": -19.0}
+    assert geometry["cells"]["6"] == {"row": 1, "column": 2, "ra_deg": 180.0, "dec_deg": -19.0}
     state = processed(4, 99.0)
     doc = build_native_grid_document(geometry, state, read_cell_status(grid_dir), "s", "X")
     values = finite_grid(doc)
@@ -202,10 +203,10 @@ def test_ra_dec_match_grid_geometry_not_manifest(tmp_path):
     geometry = load_native_grid_geometry(grid_dir)
     cell = next(c for pid, c in geometry["cells"].items() if pid == "5")
     assert cell["row"] == 1 and cell["column"] == 1
-    assert cell["ra_deg"] == 11.0 and cell["dec_deg"] == -19.0
+    assert cell["ra_deg"] == 165.0 and cell["dec_deg"] == -19.0      # 11 h in the CSV
     doc = build_native_grid_document(geometry, processed(5, 1.0), read_cell_status(grid_dir), "s", "X")
     point = next(p for p in doc["points"] if p["point_id"] == "5")
-    assert point["ra_deg"] == 11.0 and point["dec_deg"] == -19.0
+    assert point["ra_deg"] == 165.0 and point["dec_deg"] == -19.0
 
 
 # ---------------------------------------------------------------- §3/§10: map_mode contract

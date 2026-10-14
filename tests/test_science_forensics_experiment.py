@@ -6,6 +6,7 @@ import ast
 import csv
 import json
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -352,10 +353,16 @@ def test_frozen_modules_untouched():
                           "science_forensics/synthetic.py", "almita_science_forensics.py"],
                          cwd=ROOT, capture_output=True, text=True)
     assert out.stdout.strip() == "", out.stdout
-    # capture.py / observation_orchestrator.py re-pinned at 26fa261 (campaign-activity gate + explicit SDR tuning)
-    out = subprocess.run(["git", "diff", "--name-only", "26fa261", "--", "capture.py", "observation_orchestrator.py"],
-                         cwd=ROOT, capture_output=True, text=True)
-    assert out.stdout.strip() == "", out.stdout
+    # capture.py / observation_orchestrator.py were pinned at 26fa261 (campaign-activity gate + explicit SDR tuning).
+    # Re-pinned 2026-10-13/14 for the operator-authorised STOP fixes (zombie-aware process check; confirmed mount
+    # stop, stop report and end-of-session announcement). The pins are the ones the field tool itself enforces
+    # (scripts/science_forensics_field.FROZEN) - one place, so the two guards cannot drift apart again.
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import science_forensics_field as field
+    pins = dict(field.FROZEN)
+    for path in ("capture.py", "observation_orchestrator.py"):
+        out = subprocess.run(["git", "diff", "--name-only", pins[path], "--", path], cwd=ROOT, capture_output=True, text=True)
+        assert out.stdout.strip() == "", f"{path} differs from its pin {pins[path]}: {out.stdout}"
 
 
 @pytest.mark.skipif(not REAL_9.is_dir(), reason="real 9-point REDUCE session absent")
