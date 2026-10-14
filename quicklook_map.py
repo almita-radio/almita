@@ -194,7 +194,10 @@ def load_native_grid_geometry(grid_dir: str | Path) -> dict[str, Any]:
             point_id = csv_row["point_id"]
             cells[point_id] = {
                 "row": int(csv_row["grid_row"]), "column": int(csv_row["grid_col"]),
-                "ra_deg": float(csv_row["ra"]), "dec_deg": float(csv_row["dec"]),
+                # mosaic.csv's "ra" column is in HOURS (grid_generator writes normalize_ra_hours there, the same
+                # value as target_ra_hours). It used to be stored here as degrees unchanged, which squeezed every
+                # east-west offset derived from the cells by 15 (seen in the interpolated preview's axes).
+                "ra_deg": float(csv_row["ra"]) * 15.0, "dec_deg": float(csv_row["dec"]),
             }
     if len(cells) != rows_count * cols_count:
         raise MapError(f"grid geometry mismatch: mosaic.csv has {len(cells)} planned points "

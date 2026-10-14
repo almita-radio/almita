@@ -33,8 +33,27 @@ def _json_float(value: float):
     return float(value) if np.isfinite(value) else None
 
 
+# How far from a REAL observation the preview is allowed to paint, in units of the typical spacing between
+# neighbouring observations. The triangulation used to fill the whole convex hull of the processed points, so a
+# few points at the start of a session - or two points far apart - produced one large smooth gradient that looked
+# like a measured map (operator, 2026-10-14: "excessive"). With 0.75, neighbouring cells still join into a
+# continuous patch (they meet at 0.5), and anything farther from every real point stays blank.
+REACH_IN_SPACINGS = 0.75
+# Preview pixels per native cell along each axis: enough to soften the cell edges, not enough to suggest detail.
+PIXELS_PER_SPACING = 4
+
+
+def _typical_spacing_deg(x: np.ndarray, y: np.ndarray) -> float:
+    """Median distance from each real observation to its nearest neighbour."""
+    dx = x[:, None] - x[None, :]
+    dy = y[:, None] - y[None, :]
+    d = np.hypot(dx, dy)
+    np.fill_diagonal(d, np.inf)
+    return float(np.median(d.min(axis=1)))
+
+
 def build_interpolated_preview_document(geometry: dict[str, Any], points_state: dict[str, dict[str, Any]],
-                                        session_id: str, grid_size: int = 60) -> dict[str, Any]:
+                                        session_id: str, grid_size: int | None = None) -> dict[str, Any]:
     """OPTIONAL, purely visual companion to Antenna A's NATIVE_GRID map.
 
     Returns {"available": False, ...} rather than raising when fewer than
@@ -72,11 +91,34 @@ def build_interpolated_preview_document(geometry: dict[str, Any], points_state: 
                 map_uncertainty=float(item["map_point"]["map_uncertainty"]))
         for (pid, item), x, y in zip(processed.items(), x_off, y_off)
     ]
+    px = np.asarray([p.x_offset_deg for p in map_points]); py = np.asarray([p.y_offset_deg for p in map_points])
+    # The pitch of the PLANNED grid (all its cells), not of the points processed so far: early in a session the
+    # processed points are few and unevenly placed, and their own nearest-neighbour distance says little.
+    spacing = _typical_spacing_deg(px, py)
+    try:
+        cells = list(geometry["cells"].values())
+        if len(cells) >= 2:
+            cx, cy = project_offsets([c["ra_deg"] for c in cells], [c["dec_deg"] for c in cells], center)
+            spacing = _typical_spacing_deg(np.asarray(cx, float), np.asarray(cy, float))
+    except (MapError, KeyError, TypeError, ValueError):
+        pass
+    if grid_size is None:   # resolution follows the real sampling instead of a fixed 60x60
+        span = max(float(np.ptp(px)), float(np.ptp(py)), spacing)
+        grid_size = int(np.clip(round(PIXELS_PER_SPACING * span / spacing) + 1, 8, 120)) if spacing > 0 else 60
     try:
         grid = interpolate_visual(map_points, grid_size=grid_size)
     except MapError as error:
         return {**base, "available": False, "reason": str(error), "n_points_used": len(processed)}
     values = grid["value"]
+    # limited reach: blank every preview pixel farther than REACH_IN_SPACINGS spacings from all real observations
+    reach = REACH_IN_SPACINGS * spacing
+    if reach > 0:
+        xx, yy = np.meshgrid(grid["x_deg"], grid["y_deg"])
+        nearest = np.min(np.hypot(xx[..., None] - px, yy[..., None] - py), axis=-1)
+        values = np.where(nearest <= reach, values, np.nan)
+        grid = {**grid, "value": values, "coverage_mask": np.isfinite(values),
+                "method": (f"linear triangulation between neighbouring real observations, limited to "
+                           f"{REACH_IN_SPACINGS:g} x the typical point spacing ({spacing:.2f} deg) around each one")}
     finite = values[np.isfinite(values)]
     if finite.size >= 2:
         lo, hi = (float(v) for v in np.percentile(finite, [2, 98]))
@@ -105,7 +147,7 @@ def write_interpolated_preview_png(path: Path, document: dict[str, Any]) -> None
     masked = np.ma.masked_invalid(values)
     fig, axis = plt.subplots(figsize=(7, 6), constrained_layout=True)
     image = axis.imshow(masked, origin="lower", extent=extent, aspect="auto", cmap=cmap,
-                        interpolation="bilinear", vmin=document["color_scale"]["minimum"],
+                        interpolation="nearest", vmin=document["color_scale"]["minimum"],
                         vmax=document["color_scale"]["maximum"])
     real_x = [p["x_offset_deg"] for p in document["real_observation_points"]]
     real_y = [p["y_offset_deg"] for p in document["real_observation_points"]]
