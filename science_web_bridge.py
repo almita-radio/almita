@@ -1492,6 +1492,25 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         return ax.pcolormesh(corners[..., 0], corners[..., 1], values, cmap=cmap_, vmin=vmin_, vmax=vmax_,
                              shading="flat", edgecolors=GRIDLINE, linewidth=linewidth)
 
+    # Outline of the measured board (the outer edge of A's cells) in the shared projection. B and C are computed on
+    # the rectangle that bounds it, so their pictures used to be full rectangles next to A's deformed board, with
+    # estimates in corners where nothing was measured. They are now DRAWN only inside this outline, and everything
+    # without data is black (operator, 2026-10-14). Display only: the B/C arrays and their exports as data are
+    # unchanged.
+    _perimeter = np.concatenate([corners[0, :, :], corners[1:, -1, :], corners[-1, -2::-1, :], corners[-2:0:-1, 0, :]])
+    NO_DATA = "black"
+
+    def _footprint_clip(ax, *artists) -> None:
+        """Clips the given artists (a B/C image, its hatching) to the measured board's outline; black elsewhere."""
+        from matplotlib.patches import PathPatch
+        from matplotlib.path import Path as MplPath
+        patch = PathPatch(MplPath(_perimeter, closed=True), transform=ax.transData, facecolor="none", edgecolor="none")
+        ax.add_patch(patch)
+        ax.set_facecolor(NO_DATA)
+        for artist in artists:
+            for one in (getattr(artist, "collections", None) or [artist]):   # contour sets: matplotlib <3.10 / >=3.10
+                one.set_clip_path(patch)
+
     def _extent_and_aspect(ax) -> None:
         ax.set_xlim(-half_w, half_w)   # RA (east) increases to the RIGHT, as on the browser canvas
         ax.set_ylim(-half_h, half_h)
@@ -1506,7 +1525,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         xc, yc = (xs[:-1] + xs[1:]) / 2, (ys[:-1] + ys[1:]) / 2
         return np.meshgrid(xc, yc)
 
-    def _mark_low_confidence(ax, grid, science_map) -> np.ndarray:
+    def _mark_low_confidence(ax, grid, science_map, clip_with=None) -> np.ndarray:
         """Hatches every valid pixel backed by at most ONE real point (n_pointings <= 1, the frozen
         GriddingAccumulator's own count): its bump/dip may be that one point's own noise, not structure.
         Disclosed, never blurred away. Returns the mask."""
@@ -1517,6 +1536,8 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             for artist in (getattr(cs, "collections", None) or [cs]):   # matplotlib <3.10 / >=3.10
                 artist.set_edgecolor((1, 1, 1, 0.55))
                 artist.set_linewidth(0.0)
+            if clip_with is not None:
+                clip_with.append(cs)
         return low_conf
 
     def _single(panel: str, caption: str):
@@ -1608,13 +1629,17 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         written separately for download."""
         fig = plt.figure(figsize=(6.0, 6.0 * (grid_bc.height_deg / grid_bc.width_deg)))
         ax = fig.add_axes([0, 0, 1, 1])
-        ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
-                  extent=extent, alpha=alpha)
-        _mark_low_confidence(ax, grid_bc, science_map)
+        image = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
+                          extent=extent, alpha=alpha)
+        overlays: list = []
+        _mark_low_confidence(ax, grid_bc, science_map, overlays)
         _extent_and_aspect(ax)
-        ax.axis("off")
+        _footprint_clip(ax, image, *overlays)
+        ax.set_xticks([]); ax.set_yticks([])                 # chrome-free, but the axes patch stays: it is the black
+        for spine in ax.spines.values():                     # background of everything without data
+            spine.set_visible(False)
         p = out_dir / f"{name}_bare.png"
-        fig.savefig(p, dpi=200, transparent=True, pad_inches=0)
+        fig.savefig(p, dpi=200, facecolor=NO_DATA, pad_inches=0)
         plt.close(fig)
         written[f"{name}_bare"] = [p.name]
 
@@ -1633,8 +1658,10 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         alpha = np.where(low_conf, 0.45, 1.0)
         im = ax.imshow(masked, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax, interpolation=interp,
                        extent=extent, alpha=alpha)
-        _mark_low_confidence(ax, grid_bc, science_map)
+        overlays: list = []
+        _mark_low_confidence(ax, grid_bc, science_map, overlays)
         _extent_and_aspect(ax)
+        _footprint_clip(ax, im, *overlays)
         ax.legend(handles=[hatch_handle], loc="upper center", bbox_to_anchor=(0.5, -0.11), fontsize=FS_TICK, frameon=False)
         _colorbar(fig, im, cax, unit_label)
         _save(fig, key)
@@ -1654,12 +1681,17 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         else:
             sm, grid_bc = (built["map_b"], built["grid_b"]) if kind == "b" else (built["map_c"], built["grid_c"])
             low_conf = sm.valid & (sm.n_pointings <= 1)
-            ax.imshow(np.ma.masked_where(~sm.valid, sm.value), origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
-                      interpolation="nearest" if kind == "b" else "bilinear", extent=extent,
-                      alpha=np.where(low_conf, 0.45, 1.0))
-            _mark_low_confidence(ax, grid_bc, sm)
+            bc_image = ax.imshow(np.ma.masked_where(~sm.valid, sm.value), origin="lower", cmap=cmap, vmin=vmin, vmax=vmax,
+                                 interpolation="nearest" if kind == "b" else "bilinear", extent=extent,
+                                 alpha=np.where(low_conf, 0.45, 1.0))
+            overlays: list = []
+            _mark_low_confidence(ax, grid_bc, sm, overlays)
         ax.set_title(label, fontsize=FS_TITLE)
         _extent_and_aspect(ax)
+        if kind == "a":
+            ax.set_facecolor(NO_DATA)
+        else:
+            _footprint_clip(ax, bc_image, *overlays)
         ax.set_xlabel("x = ΔRA·cos(δ0) [deg] (east →)", fontsize=FS_LABEL)
     axes[0].set_ylabel("y = ΔDec [deg]", fontsize=FS_LABEL)
     _colorbar(fig, im, cax, unit_label)

@@ -432,7 +432,7 @@
     const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square box, like B/C's <img>
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#0d1317"; ctx.fillRect(0, 0, cssW, cssH);
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cssW, cssH);    // black wherever there is no data, same as the B/C images
     if (!lastBoard) return;
     // Each cell is drawn as its quadrilateral (corners_xy, deg) in the SAME projection and footprint as the B/C
     // images (extent_deg), fitted into the square box the way object-fit:contain fits those images: equal scale
