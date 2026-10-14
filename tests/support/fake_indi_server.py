@@ -41,6 +41,7 @@ class Mount:
         self.tracking_before_slew = self.tracking
         self.ra, self.dec = a.start_ra, a.start_dec
         self.slew = None                    # (ra0, dec0, ra1, dec1, t0, duration)
+        self.restore_at = None              # pending delayed tracking restore (--restore-delay)
         self.last = time.monotonic()
         self.coord_set = "TRACK"
         self.frozen = False                 # --freeze-after-stop: stop answering
@@ -50,6 +51,9 @@ class Mount:
     def advance(self) -> None:
         now = time.monotonic()
         dt, self.last = now - self.last, now
+        if self.restore_at is not None and now >= self.restore_at:
+            self.restore_at = None
+            self.tracking = self.tracking_before_slew
         if self.slew:
             ra0, dec0, ra1, dec1, t0, dur = self.slew
             f = min(1.0, (now - t0) / dur)
@@ -63,7 +67,10 @@ class Mount:
     def end_slew(self) -> None:
         self.slew = None
         if not self.a.no_track_restore:
-            self.tracking = self.tracking_before_slew      # OnStep: back to the pre-slew tracking state
+            if self.a.restore_delay > 0:                   # the real OnStep, 2026-10-14: tracking came back seconds
+                self.restore_at = time.monotonic() + self.a.restore_delay     # AFTER the abort, not with it
+            else:
+                self.tracking = self.tracking_before_slew  # back to the pre-slew tracking state
 
     def start_slew(self, ra: float, dec: float) -> None:
         self.advance()
@@ -258,6 +265,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--start-tracking", action="store_true")
     p.add_argument("--no-abort", action="store_true", help="the driver exposes no TELESCOPE_ABORT_MOTION")
     p.add_argument("--abort-ignored", action="store_true", help="ABORT is accepted but the slew goes on")
+    p.add_argument("--restore-delay", type=float, default=0.0, help="seconds after a slew ends/aborts before tracking is restored")
     p.add_argument("--no-track-restore", action="store_true", help="a finished slew does NOT restore the pre-slew tracking")
     p.add_argument("--ignore-track-off", action="store_true", help="tracking OFF commands have no effect")
     p.add_argument("--lie-track-off-after-stop", action="store_true", help="the switch reads OFF but the mount keeps tracking")

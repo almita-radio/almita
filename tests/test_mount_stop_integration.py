@@ -109,6 +109,17 @@ def test_stop_during_a_goto_aborts_the_slew_and_tracking_ends_off_despite_the_la
     assert "TELESCOPE_ABORT_MOTION" in names and "TELESCOPE_TRACK_STATE" in names
 
 
+def test_tracking_restored_seconds_after_the_abort_is_caught_by_repeating_the_proof(indi):
+    """What the real OnStep did on 2026-10-14: abort accepted, tracking OFF on three reads, and only THEN - seconds
+    later - tracking switched back on by the controller. The first proof must not be the last word."""
+    server = indi("--start-tracking", "--slew-seconds", "20", "--restore-delay", "6")
+    report, since = asyncio.run(_stop_mid_slew(server.port))
+    assert report["confirmed"], report["reason"]
+    assert report["tracking_reactivations"] >= 1 and len(report["stillness_attempts"]) >= 2
+    assert report["stillness"]["verdict"] == "STATIONARY"
+    _no_new_movement(server, since)
+
+
 def test_without_an_abort_property_the_slew_is_waited_for_then_tracking_is_switched_off(indi):
     server = indi("--start-tracking", "--slew-seconds", "4", "--no-abort")
     report, since = asyncio.run(_stop_mid_slew(server.port))
@@ -149,7 +160,7 @@ def test_tracking_switched_on_again_after_the_stop_is_caught_and_switched_off_ag
 
 @pytest.mark.parametrize("flags,expected", [
     (("--start-tracking", "--ignore-track-off"), "tracking is on after"),
-    (("--start-tracking", "--lie-track-off-after-stop"), "still following the sky"),
+    (("--start-tracking", "--lie-track-off-after-stop"), "following the sky"),
     (("--start-tracking", "--freeze-after-stop"), "INDI did not answer"),
     (("--start-tracking", "--drop-after-stop"), ""),
 ])
