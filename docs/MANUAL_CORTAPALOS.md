@@ -528,11 +528,11 @@ observación más la preparación.
     | RFI_REF / ANTENNA B | Enabled, 25 dB, BIAS-T marcado |
     | QUICKLOOK | Enabled, Native Grid, Interpolated Preview; perfil `WIZARD-20261014-001224-467117` (el más reciente a 40.2 dB) con **BROWSE ALMITA SERVER…** |
 
-    Pulsa **PLAN OBSERVATION**. Esta configuración se pasó por PLAN el 2026-10-13 y fue aceptada: 25 puntos,
-    13 min estimados (18 en la versión conservadora), 1.5 GB de disco, `Quicklook / calibration match` en PASS.
-    El único BLOCK de ese día fue `INDI/mount`, porque la montura no estaba lista; no es de la configuración.
-    **[C]** El centro lo calcula PLAN según la hora, y hay que pulsar START dentro de unos 8 min o volver a
-    planificar.
+    Pulsa **PLAN OBSERVATION**. Esta configuración, con ese perfil, se pasó por PLAN el 2026-10-14 a las 00:19 UTC
+    y fue aceptada sin ningún BLOCK: 25 puntos, 13 min estimados (18 en la versión conservadora), 1.5 GB de disco,
+    `Quicklook / calibration match` en PASS. Quedó en WARNING por una sola línea, `OnStep time snapshot`, que es
+    un aviso conocido y no impide observar. **[C]** El centro lo calcula PLAN según la hora, y hay que pulsar
+    START dentro de unos 8 min o volver a planificar.
 
     **No uses el gain pilot en esta primera validación.** Pulsa **START OBSERVATION**.
 
