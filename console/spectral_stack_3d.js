@@ -21,7 +21,7 @@
   // many seconds, so this only flags a genuinely stuck/hung producer.
 
   const COLOR_STOPS = [
-    [0.00, 0.10, 0.10, 0.60],
+    [0.00, 0.22, 0.32, 0.95],   // brighter than the old dark blue: the lowest values must stay visible on black
     [0.25, 0.00, 0.75, 0.80],
     [0.50, 0.05, 0.75, 0.10],
     [0.75, 1.00, 0.90, 0.00],
@@ -101,7 +101,7 @@
 
     _initScene() {
       this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
-      this.renderer.setClearColor(0xf4f6f8, 1);
+      this.renderer.setClearColor(0x000000, 1);   // black, like the rest of the console (operator request, BL-061)
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
       this._defaultCamera = { position: new THREE.Vector3(0, 6, 11), target: new THREE.Vector3(0, 0.5, 0) };
@@ -115,7 +115,7 @@
       this.scene.add(this.group);
       const box = new THREE.BoxGeometry(12, 4, 10);
       const edges = new THREE.EdgesGeometry(box);
-      this.boundsHelper = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xc7ced4 }));
+      this.boundsHelper = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x3a4a55 }));
       this.boundsHelper.position.set(0, 2, -5);
       this.scene.add(this.boundsHelper);
       this.raycaster = new THREE.Raycaster();
