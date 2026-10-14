@@ -28,6 +28,8 @@ físicos: el haz y la alimentación del LNA de la antena B.
 
 **Bloqueos actuales**
 
+- **El flujo completo corre desde la web:** CALIBRATE → ALIGN → OBSERVE → REDUCE → SCIENCE se hizo de corrido el
+  2026-10-14, sin errores, bajo techo ([BACKLOG.md §4.8](BACKLOG.md)). Falta repetirlo a cielo abierto.
 - **Las pruebas del 2026-10-13 y 2026-10-14 fueron bajo techo.** Valen para el software y la montura, no para
   nada que dependa del cielo. Falta confirmar si las sesiones del 2 al 8 de octubre, que este brief cuenta como
   datos reales del cielo, fueron a cielo abierto ([BACKLOG.md §4.0](BACKLOG.md)).

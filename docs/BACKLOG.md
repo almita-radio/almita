@@ -113,7 +113,7 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 | BL-030 | P3 | Bench `sdr --yes` en MAIN y la CLI de `mount_control.py`. | BL-008, BL-011 | Salida del bench con ACK; un GOTO por CLI |
 | BL-031 | P1 | Antena B: medir que el LNA recibe alimentación con el Bias-T de RFI REF. | BL-025 | Nivel de ruido de RFI REF con BIAS-T marcado y desmarcado, o tensión en el conector. No se puede sacar de los datos guardados: las seis sesiones con RFI REF usaron `-T` y no hay ninguna sin él. No mueve la montura. |
 | BL-032 | P2 | Ver el aviso del gain pilot en una sesión real: aprobar una ganancia sin perfil. | BL-023 | Captura de pantalla o `gain_pilot_state.json` de esa sesión |
-| BL-033 | P1 | Recorrido completo nocturno siguiendo el manual (§14, prueba D: grilla de 25 puntos, perfil existente, sin gain pilot), y dejar escrito el procedimiento de Ekos (alineación, hora, sitio). | BL-021 | Manual anotado donde se aparte de la realidad |
+| BL-033 | P1 | Recorrido completo nocturno siguiendo el manual (§14, prueba D), y dejar escrito el procedimiento de Ekos (alineación, hora, sitio). **Hecho como prueba de flujo, bajo techo, el 2026-10-14** (§4.8): ALIGN → OBSERVE → QUICKLOOK/RFI REF → REDUCE → SCIENCE, todo desde la web y sin errores. | BL-021 | Repetirlo a cielo abierto, que es lo único que valida los resultados; y el procedimiento de Ekos, que sigue sin escribirse |
 | BL-034 | P2 | Medir el haz (FWHM). Hoy es provisional: 20° en la configuración y 14° en `alignment.py`. | — | Barrido del Sol; afecta la separación de la grilla, ALIGN y SCIENCE. Depende de BL-026. |
 
 ### 2.3 Decisiones del operador
@@ -285,6 +285,30 @@ wizards y el ALIGN HI) fueron a cielo abierto. Este backlog y el brief las cuent
 | Perfil | **READY**: `observe_profile/calibration_profile_v1.json`, nivel `RELATIVE_INSTRUMENTAL`, misma frecuencia, muestreo y ganancia que la configuración central |
 | Montura al terminar | Quieta, sin seguimiento, sin error en OnStep |
 | Wizards anteriores del día | `WIZARD-20261013-181623-230083` y `WIZARD-20261013-193915-787403`, abortados: conservan todos sus archivos (12 y 5) |
+
+## 4.8 Flujo completo desde la web, bajo techo (2026-10-14)
+
+Prueba de flujo: comprueba que cada etapa arranca, termina y entrega lo que la siguiente necesita. No valida nada
+del cielo (§4.0).
+
+| etapa | hora UTC | resultado |
+|---|---|---|
+| CALIBRATE (wizard) | 00:12 a 00:18 | Perfil READY a 40.2 dB (§4.7) |
+| ALIGN HI | 00:23 a 00:27 | 10 posiciones capturadas; `NO DEFENDIBLE DIFFERENTIAL HI STRUCTURE`; SYNC pedido y **no enviado** («no offset estimated»); montura quieta al terminar. Trabajo PARTIAL, que es lo correcto |
+| OBSERVE | 00:36 a 00:46 | `data/mosaic/ALMITA-OBSERVE-20261014-00:36:00`: 25 de 25 puntos, 0 fallidos, 0 diferidos, 9 min 17 s; grilla de 10×10° con 1 s por punto, 40.2 dB; 25 `.h5`, ningún `.part`; `SESSION COMPLETE` con OnStep y `rtl_tcp` en HEALTHY. Terminó sola |
+| QUICKLOOK | en vivo | 25 de 25 puntos procesados, sin errores, con el perfil `WIZARD-20261002-013321-160933` |
+| RFI REF | en vivo | Lanzado con `-T`, ACK de sintonía; 864 bloques procesados y 155 descartados; cerrado al terminar (con SIGKILL tras 5 s, su comportamiento conocido) |
+| REDUCE | 00:47, 13 s | `REDUCE-20261014-004721-315027`: 25 de 25 puntos, todos RELATIVE, LSRK y calidad GOOD |
+| SCIENCE | 00:50 y 01:01, 20 s cada vez | 25 puntos usados, mapas A, B y C y exportes escritos. La segunda corrida ya tiene B y C con la forma de A y fondo negro (BL-064) |
+| MONITOR | todo el tiempo | Usado por el operador para seguir la sesión |
+
+Observaciones:
+
+- La etiqueta interna del orquestador sigue en `RUNNING` después de una sesión que termina sola; la web muestra el
+  estado efectivo, `COMPLETED`. Es lo ya descrito en BL-016.
+- QUICKLOOK y REDUCE usaron el perfil del 2026-10-02, no el nuevo del 2026-10-14. Los dos son a 40.2 dB y
+  compatibles; no es un error.
+- La montura quedó quieta, sin seguimiento y sin error al final.
 
 ## 5. Tests
 
