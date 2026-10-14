@@ -32,7 +32,7 @@ build `e696038`, posterior a todos esos commits.
 
 | id | pedido | commits | tests | datos | hardware | estado |
 |---|---|---|---|---|---|---|
-| BL-001 | CALIBRATE: mapa Alt/Az de las zonas HI del wizard | 156bfbd, 8a66860 | sí | sí, plan real WIZARD-20261002 | sí: el operador comprobó el 2026-10-14 (`WIZARD-20261014-001224-467117`) que la montura fue a HI ALTO y a HI BAJO en concordancia con el mapa. Observación a ojo, sin medida | **cerrado** |
+| BL-001 | CALIBRATE: mapa Alt/Az de las zonas HI del wizard | 156bfbd, 8a66860 | sí | sí, plan real WIZARD-20261002 | parcial: el 2026-10-14 (`WIZARD-20261014-001224-467117`) el operador vio que la montura fue a HI ALTO y a HI BAJO en la dirección que muestra el mapa. **Fue bajo techo:** comprueba que la montura apunta hacia donde dice el mapa, no que ahí esté el cielo esperado | abierto: falta verlo a cielo abierto |
 | BL-002 | OBSERVE: selector de perfil (explorador del servidor) | 4085ed8, 915f8fa | sí | sí, perfiles reales por HTTP | sí: las sesiones del 2026-10-08 llevan un perfil del servidor | **cerrado**; la subida desde el navegador es BL-038 |
 | BL-003 | Indicador de estado centrado | 03d263a | sí, navegador | — | — | **cerrado** |
 | BL-004 | Retiro del puerto 8090 | 704b168 | sí | — | sí: nada escucha en :8090 (2026-10-12) | **cerrado** |
@@ -165,6 +165,26 @@ Dependencias que fijan el orden:
   activos (revisarlo en un paso aparte).
 - Los scripts que lanza la web se cargan en cada trabajo.
 
+## 4.0 Condiciones de las pruebas del 2026-10-13 y 2026-10-14: bajo techo
+
+**Todas las pruebas de §4.1 a §4.7 se hicieron con la montura y la antena bajo techo** (lo indicó el operador el
+2026-10-14, después de hacerlas). La montura se movió y los SDR capturaron de verdad, pero la antena no miraba
+al cielo.
+
+| vale como prueba en el instrumento | no vale |
+|---|---|
+| Paradas (STOP OBSERVATION, STOP CURRENT STEP): tiempos de cierre, estados, archivos, liberación de los SDR | Cualquier resultado que dependa de la señal del cielo: contraste HI ALTO / HI BAJO, ALIGN con HI o con el Sol, QUICKLOOK como imagen del cielo |
+| Comportamiento de la montura: GOTO, seguimiento, error de llegada, límite de meridiano de OnStep, qué pasa al parar | Que las zonas del mapa correspondan al cielo real (BL-001) |
+| Flujo completo del wizard y construcción del perfil con 50 Ω en la entrada del LNA (la referencia de 50 Ω no depende del cielo; sí de la temperatura del lugar) | La calidad científica de cualquier captura con antena |
+| Lanzamiento de RFI REF con `-T` y su cierre | Lo que RFI REF dice del entorno de radio en terreno |
+
+**Un SYNC hecho bajo techo no tiene sentido y puede desajustar el apuntado:** ALIGN mediría ruido. El 2026-10-13 se
+lanzaron dos ALIGN con SYNC marcado (Sol a las 17:32 y HI a las 17:36) y los dos se detuvieron antes de terminar;
+no llegó a enviarse ningún SYNC.
+
+**Sin confirmar:** si las sesiones del 2026-10-02 al 2026-10-08 (la de 400 puntos, las de 676, 100 y 25, los
+wizards y el ALIGN HI) fueron a cielo abierto. Este backlog y el brief las cuentan como datos reales del cielo.
+
 ## 4.1 Primera prueba real de STOP OBSERVATION (2026-10-13)
 
 | | |
@@ -258,7 +278,7 @@ Dependencias que fijan el orden:
 | Zonas | Aprobadas a las 00:14 y capturadas a las 00:16 y 00:17, sin pausa. HI ALTO: RA 16.153 h, Dec −51.37°, a 35.8° de altura. HI BAJO: RA 23.101 h, Dec −43.35°, a 64.0° |
 | Apuntado | Error de llegada 0.12° y 0.13° (tolerancia 0.25°), mantenido durante las capturas con seguimiento confirmado |
 | Archivos | 15 `.h5` (5 por referencia), los 15 validados. Ningún `.part`, ninguna interrupción |
-| Contraste | `INCONCLUSIVE`: la diferencia entre HI ALTO y HI BAJO es de 0.20 sigma, por debajo del umbral de 3 sigma con este tiempo de integración. Igual que el 2026-10-07 y el 2026-10-08 |
+| Contraste | `INCONCLUSIVE` (0.20 sigma, umbral 3). **Bajo techo no puede salir otra cosa:** la antena no veía el cielo, así que no hay diferencia de HI que medir. No dice nada de la cadena |
 | Perfil | **READY**: `observe_profile/calibration_profile_v1.json`, nivel `RELATIVE_INSTRUMENTAL`, misma frecuencia, muestreo y ganancia que la configuración central |
 | Montura al terminar | Quieta, sin seguimiento, sin error en OnStep |
 | Wizards anteriores del día | `WIZARD-20261013-181623-230083` y `WIZARD-20261013-193915-787403`, abortados: conservan todos sus archivos (12 y 5) |

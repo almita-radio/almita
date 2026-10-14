@@ -225,6 +225,8 @@ completo toma unos 6 minutos.
 - El perfil se construye con las capturas de 50 Ω.
 - El contraste HI ALTO / HI BAJO es un diagnóstico de la cadena. Puede salir `DEFENSIBLE_CONTRAST` o
   `INCONCLUSIVE`. Con INCONCLUSIVE el perfil igual quedó READY el 2026-10-07 y el 2026-10-08.
+- Bajo techo el contraste sale siempre `INCONCLUSIVE`, porque la antena no ve el cielo. El perfil se construye
+  igual, con las capturas de 50 Ω (así fue el del 2026-10-14).
 
 Botones de control:
 
@@ -418,6 +420,11 @@ Cuatro pruebas pendientes en el instrumento. Ninguna se ha hecho todavía: lo qu
 tests **[C]**, y cada prueba dice qué anotar para convertirlo en **[H]**. Hazlas con la montura libre de
 obstáculos y alguien mirándola.
 
+**Las pruebas A y B del 2026-10-13 se hicieron bajo techo.** Valen para lo que comprueban, que es el
+comportamiento del software y de la montura (cierres, estados, archivos, seguimiento). No dicen nada de la señal
+del cielo. **Las pruebas C y D solo cuentan a cielo abierto:** bajo techo, ALIGN mide ruido y un SYNC desajustaría
+el apuntado, así que no marques la casilla de SYNC si la antena no ve el cielo.
+
 **Cómo se guarda un punto (vale para A y B).** Durante la captura las muestras están solo en memoria: no hay
 ningún archivo del punto en curso. Al terminar la captura se escribe `<punto>.h5.part`, se valida y se renombra
 a `<punto>.h5`. Por eso:
@@ -504,6 +511,9 @@ Evidencias: las tres carpetas `data/alignment/WEB-SUN-…` y el texto del recuad
 vez que se envía un SYNC a la montura real: quédate junto a ella.
 
 ### Prueba D — Recorrido completo nocturno
+
+**Tiene que ser a cielo abierto.** Bajo techo se puede recorrer el flujo para comprobar botones y estados,
+pero no valida nada del cielo y no cierra esta prueba; en ese caso salta el ALIGN.
 
 Primera validación: **grilla pequeña, perfil existente y sin gain pilot**. Dura unos 15 a 20 minutos de
 observación más la preparación.
