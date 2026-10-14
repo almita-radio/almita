@@ -28,6 +28,7 @@ físicos: el haz y la alimentación del LNA de la antena B.
 
 **Bloqueos actuales**
 
+- **Condiciones exteriores de las sesiones del 2 al 8 de octubre: siguen sin confirmar.**
 - **El flujo completo corre desde la web:** CALIBRATE → ALIGN → OBSERVE → REDUCE → SCIENCE se hizo de corrido el
   2026-10-14, sin errores, bajo techo ([BACKLOG.md §4.8](BACKLOG.md)). Falta repetirlo a cielo abierto.
 - **Las pruebas del 2026-10-13 y 2026-10-14 fueron bajo techo.** Valen para el software y la montura, no para
@@ -38,9 +39,12 @@ físicos: el haz y la alimentación del LNA de la antena B.
   2026-10-13 que ese acceso es el que quiere; quedan tres comprobaciones suyas.
 - **ALIGN no corrige todavía:** el SYNC nunca se envió a la montura real y ALIGN SOLAR nunca corrió (BL-026). La
   única corrida real, con HI, no logró estimar un offset.
-- **STOP OBSERVATION:** probado en hardware el 2026-10-13 en tres fases (tras un GOTO, durante un GOTO y
-  durante una captura). Cierre, estado y datos funcionan. **Tras un STOP durante un GOTO la montura queda en
-  seguimiento** (BL-059): hay que apagarlo en Ekos.
+- **STOP OBSERVATION durante un GOTO sigue fallido en hardware.** En la prueba del 2026-10-13 la montura terminó
+  el movimiento y quedó en seguimiento. Está corregido en origen desde el 2026-10-14 (`3bfeb98`: parada abortada
+  y comprobada leyendo INDI, o «PARADA NO CONFIRMADA»), con pruebas de procesos y señales reales contra una
+  montura simulada, **pero no se ha repetido en la montura** (BL-059). Las otras dos fases (tras un GOTO, durante
+  una captura) y los tres casos del STOP del wizard pasaron. Hay además un botón PARAR MONTURA en todas las
+  páginas, también sin probar en la montura (BL-065).
 - **El haz no está medido** (BL-034): 20° en la configuración y 14° en `alignment.py`, ambos provisionales.
 - **Antena B:** el Bias-T se envía, pero nadie midió que el LNA reciba alimentación (BL-031). Desde el
   2026-10-13 toda la configuración lo trae encendido por defecto.

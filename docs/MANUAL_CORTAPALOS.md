@@ -436,10 +436,23 @@ a `<punto>.h5`. Por eso:
   cuando lo que la corta es el STOP. **Un `.part` no es un dato válido y tampoco es un fallo de la prueba:**
   anótalo y no lo borres.
 
-**Qué pasa con la montura (vale para A y B).** El STOP no envía ninguna orden de abortar el movimiento. Si llega
-**durante un GOTO**, la montura termina ese GOTO por su cuenta; el programa se cierra y pide apagar el
-seguimiento, pero esa orden no surte efecto mientras la montura se mueve: **queda siguiendo el cielo** (visto el
-2026-10-13). Si necesitas detener la montura de inmediato, usa el botón de parada de Ekos o el control
+**Qué pasa con la montura (vale para A y B).** Hasta el 2026-10-13 el STOP no detenía la montura: si llegaba
+durante un GOTO, la montura lo terminaba y **quedaba siguiendo el cielo**. Desde el 2026-10-14 el STOP hace una
+parada comprobada **[C: probado con una montura simulada, todavía no en la real]**:
+
+1. pide a la montura que aborte el movimiento; si el driver no lo permite, espera a que termine (máximo 2 min);
+2. apaga el seguimiento y comprueba que siga apagado, volviéndolo a apagar si se reactiva solo;
+3. lee la posición dos veces para confirmar que la montura ni se mueve ni sigue el cielo.
+
+Si todo eso se confirma leyendo la montura, la web dice **MOUNT STOPPED AND VERIFIED**. Si algo no se puede
+comprobar (INDI no responde, el seguimiento no se apaga, la montura sigue moviéndose), la web dice **PARADA NO
+CONFIRMADA** con el motivo y el estado queda en **BLOCKED — needs operator attention**: en ese caso mira la
+montura de inmediato. Nunca aparca, ni va a home, ni inicia otro movimiento para detenerla.
+
+**Botón PARAR MONTURA** (arriba, en todas las páginas): detiene la observación y cualquier trabajo que pueda mover
+la montura, y después la montura misma, y muestra el resultado real. **Es una parada por software, no un freno
+físico:** si INDI o el controlador no responden, no puede detener nada; usa Ekos, el control de mano o la
+alimentación. Si necesitas detener la montura de inmediato, usa el botón de parada de Ekos o el control
 de mano.
 
 ### Prueba A — STOP OBSERVATION con una grilla pequeña
@@ -457,11 +470,24 @@ de mano.
   tres vistas; quedó el `.h5` del punto anterior, completo, y **ningún archivo ni `.part` del punto
   interrumpido**; la montura quedó quieta y sin seguimiento.
 
-> ⚠ **Después de cualquier STOP, apaga el seguimiento o aparca la montura en Ekos.** El STOP no lo garantiza:
-> si cae durante un GOTO, la montura completa el movimiento y sigue el cielo sola (BL-059).
+> ⚠ **Hasta que la repetición de abajo pase en la montura real, después de cualquier STOP comprueba en Ekos que el
+> seguimiento quedó apagado.** La corrección está probada con una montura simulada, no con la tuya (BL-059).
 
-Con esto la prueba A está hecha en sus dos casos. Lo único que no pasó es la montura tras un STOP durante un
-GOTO. Detalle en `docs/BACKLOG.md` §4.1 a §4.3.
+Con esto la prueba A está hecha en sus dos casos **con el software anterior**. Lo que no pasó, la montura tras un
+STOP durante un GOTO, está corregido desde el 2026-10-14 y **hay que repetirlo** (abajo). Detalle en
+`docs/BACKLOG.md` §4.1 a §4.3.
+
+**Repetición con la corrección (pendiente).** Dos sesiones cortas, con 20 s de captura para tener margen:
+
+| | A2: durante un GOTO | A1: durante una captura |
+|---|---|---|
+| Cuándo pulsar STOP OBSERVATION | En el punto 2, apenas la montura empiece a moverse | En el punto 2, 5 s después de `CAPTURE  SETTLE  OK` |
+| Qué mirar en la montura | Que **se detenga antes de llegar** (o, si no aborta, que al llegar no quede siguiendo) | Que quede quieta y sin seguimiento |
+| Qué mirar en OBSERVE | El aviso **MOUNT STOPPED AND VERIFIED**, o **PARADA NO CONFIRMADA** con su motivo | Lo mismo |
+| Qué mirar en Ekos, sin tocar nada | Seguimiento apagado | Seguimiento apagado |
+
+Después, con la montura quieta, pulsa **PARAR MONTURA** una vez y anota lo que muestra. No apagues el seguimiento
+a mano antes de avisar: lo que se quiere comprobar es que la web lo deja apagado sola.
 
 | | |
 |---|---|
