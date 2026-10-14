@@ -905,7 +905,7 @@ out.detailOutsideSlantedEdge = $("cell-detail").textContent;
     assert out["errors"] == []
     assert out["left"] == [0x44, 0x01, 0x54]      # west (col 0) on the left
     assert out["right"] == [0xfd, 0xe7, 0x25]     # east on the right
-    assert out["above"] == [0x0d, 0x13, 0x17]     # inside the footprint but outside every cell: background
+    assert out["above"] == [0x00, 0x00, 0x00]     # inside the footprint but outside every cell: black, like B/C without data
     assert "real point 2" in out["detailRight"]
     # (10, 210) is inside cell 0's bounding box but left of its slanted edge (-4,-2)->(-3,0), at x=45 px there
     assert out["detailOutsideSlantedEdge"] == ""
