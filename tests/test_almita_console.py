@@ -1216,7 +1216,7 @@ def test_60_spectral_stack_pure_functions(tmp_path):
     harness = """<!doctype html><html><body><pre id="out"></pre>
 <script src="spectral_stack_3d.js"></script>
 <script>
-const {colormap, robustLimits, dataLimits, parseDocument} = window.AlmitaSpectralStack3D;
+const {colormap, robustLimits, dataLimits, parseDocument, outlierRows} = window.AlmitaSpectralStack3D;
 const lines = [];
 function check(name, cond) { lines.push((cond ? "ok: " : "FAIL: ") + name); }
 
@@ -1234,6 +1234,15 @@ check("dataLimits spans the full data range (as the session waterfall)", full.lo
 check("dataLimits handles all-null", Number.isFinite(dataLimits([{values:[null]}]).lo));
 const nullLimits = robustLimits([{values:[null,null]}]);
 check("robustLimits handles all-null", Number.isFinite(nullLimits.lo) && Number.isFinite(nullLimits.hi));
+
+// outlier captures (2026-10-14: 2 of 625 captures +3.6 / +10.2 dB over the band flattened the other 623)
+const ordinary = Array.from({length:40}, (_,k)=>({values:Array.from({length:16}, (_,i)=>0.05*Math.sin(i+k))}));
+const withHot = ordinary.concat([{values:Array(16).fill(10.2)}, {values:Array(16).fill(3.6)}]);
+const flagged = outlierRows(withHot);
+check("outlierRows flags the two anomalous captures and only them", flagged.size === 2 && flagged.has(40) && flagged.has(41));
+check("outlierRows leaves an ordinary session alone", outlierRows(ordinary).size === 0);
+check("the ordinary captures keep their full range once outliers are set aside",
+      dataLimits(withHot.filter((_,i)=>!flagged.has(i))).hi < 0.1);
 
 const doc = {session_id:"s1", frequency_mhz:[1,2,3],
   rows:[{point_id:"3",relative_db:[.3,.3,.3]},{point_id:"1",relative_db:[.1,.1,.1]},{point_id:"2",relative_db:[.2,.2,.2]}]};

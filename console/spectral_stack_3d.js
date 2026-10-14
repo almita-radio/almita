@@ -61,6 +61,26 @@
     return hi > lo ? { lo, hi } : { lo: lo - 1, hi: hi + 1 };
   }
 
+  // Captures that are not like the rest of the session. The scale above follows the FULL range of the data, so a
+  // single anomalous capture can flatten all the others: on 2026-10-14 two captures out of 625 (+3.6 and +10.2 dB
+  // over the whole band, at 6-7 deg altitude) made the other 623 - spread over +/-0.2 dB - look like one flat sheet.
+  // A capture is an outlier when its median offset from the session's median spectrum is far from every other
+  // capture's: more than max(1 dB, 8 robust sigmas of the per-capture offsets).
+  function outlierRows(rows) {
+    const out = new Map();
+    if (rows.length < 5 || !rows[0].values.length) return out;
+    const nBins = rows[0].values.length;
+    const median = (arr) => { const a = arr.filter(Number.isFinite).sort((x, y) => x - y); if (!a.length) return NaN; const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+    const sessionMedian = [];
+    for (let i = 0; i < nBins; i++) sessionMedian.push(median(rows.map((r) => r.values[i])));
+    const offsets = rows.map((r) => median(r.values.map((v, i) => (Number.isFinite(v) && Number.isFinite(sessionMedian[i]) ? v - sessionMedian[i] : NaN))));
+    const center = median(offsets);
+    const mad = median(offsets.map((o) => Math.abs(o - center)));
+    const limit = Math.max(1.0, 8 * 1.4826 * (Number.isFinite(mad) ? mad : 0));
+    offsets.forEach((o, index) => { if (Number.isFinite(o) && Math.abs(o - center) > limit) out.set(index, o - center); });
+    return out;
+  }
+
   function parseDocument(doc, sessionId) {
     if (!doc || doc.session_id !== sessionId) return null;
     const freq = Array.isArray(doc.frequency_mhz) ? doc.frequency_mhz : [];
@@ -77,8 +97,10 @@
   }
 
   class SpectralStack3D {
-    constructor({ canvas, viewport, tooltip, message, badge, resetButton, scale }) {
+    constructor({ canvas, viewport, tooltip, message, badge, resetButton, scale, rangeButton }) {
       this.canvas = canvas; this.viewport = viewport; this.tooltip = tooltip; this.scale = scale || null;
+      this.rangeButton = rangeButton || null;
+      this.fullRange = false;          // false: scale from the ordinary captures, outliers clipped and marked
       this.message = message; this.badge = badge; this.resetButton = resetButton;
       this.lastSessionId = null; this.lastUpdatedUtc = null; this.lastFetchFailed = false;
       this.fetchInFlight = false;
@@ -91,6 +113,10 @@
         this._setState("ERROR", `WebGL unavailable: ${error && error.message ? error.message : error}`);
       }
       if (this.resetButton) this.resetButton.addEventListener("click", () => this._resetCamera());
+      if (this.rangeButton) this.rangeButton.addEventListener("click", () => {
+        this.fullRange = !this.fullRange;
+        if (this.rows.length) this._buildGeometry(this.freq, this.rows);
+      });
       if (this.webglAvailable) {
         this.canvas.addEventListener("mousemove", (event) => this._onHover(event));
         this.canvas.addEventListener("mouseleave", () => this._hideTooltip());
@@ -176,19 +202,34 @@
     _buildGeometry(freq, rows) {
       this._clearGeometry();
       if (!rows.length || !freq.length) return;
-      const { lo, hi } = dataLimits(rows);
+      const outliers = outlierRows(rows);
+      const clipOutliers = !this.fullRange && outliers.size > 0;
+      const { lo, hi } = clipOutliers ? dataLimits(rows.filter((_, i) => !outliers.has(i))) : dataLimits(rows);
       const span = hi - lo || 1;
+      const fmt = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
       if (this.scale) {
         this.scale.hidden = false;
-        this.scale.textContent = `height & colour: relative PSD ${lo.toFixed(2)} … ${hi >= 0 ? "+" : ""}${hi.toFixed(2)} dB `
-          + "(full data range, as in the session waterfall)";
+        if (clipOutliers) {
+          const list = [...outliers.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4)
+            .map(([i, o]) => `point ${rows[i].pointId} (${fmt(o)} dB)`).join(", ");
+          this.scale.textContent = `height & colour: relative PSD ${lo.toFixed(2)} … ${fmt(hi)} dB (full range of the `
+            + `${rows.length - outliers.size} ordinary captures). ${outliers.size} capture(s) far off the rest, drawn `
+            + `CLIPPED in white: ${list}${outliers.size > 4 ? ", …" : ""}`;
+        } else {
+          this.scale.textContent = `height & colour: relative PSD ${lo.toFixed(2)} … ${fmt(hi)} dB `
+            + "(full data range, as in the session waterfall)";
+        }
+      }
+      if (this.rangeButton) {
+        this.rangeButton.hidden = outliers.size === 0;
+        this.rangeButton.textContent = this.fullRange ? "CLIP OUTLIERS" : "FULL RANGE";
       }
       const scanOrders = rows.map((r) => r.scanOrder);
       const minScan = Math.min(...scanOrders), maxScan = Math.max(...scanOrders);
       const scanSpan = (maxScan - minScan) || 1;
       const xFor = (i) => (i / Math.max(1, freq.length - 1)) * 12 - 6;
       const yFor = (rawValue) => {
-        const v = Number.isFinite(rawValue) ? rawValue : lo;
+        const v = Math.min(hi, Math.max(lo, Number.isFinite(rawValue) ? rawValue : lo));   // clipped only when outliers are excluded
         return ((v - lo) / span) * 3.6;
       };
       const zFor = (scanOrder) => -((scanOrder - minScan) / scanSpan) * 10;
@@ -196,16 +237,17 @@
       // Shared per-vertex position/color, indexed [row][freqBin] - reused
       // both by the per-capture ridge lines and the filled surface below,
       // so the DSP-derived values are only walked once.
-      const rowVertices = rows.map((row) => {
+      const rowVertices = rows.map((row, rowIndex) => {
         const positions = new Float32Array(freq.length * 3);
         const colors = new Float32Array(freq.length * 3);
         const z = zFor(row.scanOrder);
+        const marked = clipOutliers && outliers.has(rowIndex);
         for (let i = 0; i < freq.length; i++) {
           const raw = row.values[i];
           positions[i * 3] = xFor(i);
           positions[i * 3 + 1] = yFor(raw);
           positions[i * 3 + 2] = z;
-          const [r, g, b] = colormap(((Number.isFinite(raw) ? raw : lo) - lo) / span);
+          const [r, g, b] = marked ? [1, 1, 1] : colormap(((Number.isFinite(raw) ? Math.min(hi, Math.max(lo, raw)) : lo) - lo) / span);
           colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
         }
         return { positions, colors };
@@ -369,6 +411,7 @@
       badge: document.getElementById("spectral-stack-badge"),
       resetButton: document.getElementById("spectral-stack-reset"),
       scale: document.getElementById("spectral-stack-scale"),
+      rangeButton: document.getElementById("spectral-stack-range"),
     });
     window.SpectralStack3D = instance;
   }
@@ -376,5 +419,5 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
 
-  window.AlmitaSpectralStack3D = { colormap, robustLimits, dataLimits, parseDocument };
+  window.AlmitaSpectralStack3D = { colormap, robustLimits, dataLimits, parseDocument, outlierRows };
 })();

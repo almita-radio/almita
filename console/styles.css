@@ -223,3 +223,5 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 @media(max-width:1219px){.topbar{justify-content:flex-start}}   /* narrower: logo, then title, then the rest, all from the left */
 @media(max-width:900px){.topbar::before{margin-bottom:8px;max-width:100%}}   /* stacked phone header: logo on its own line */
 .mount-stop{margin-left:6px;padding:3px 10px;border:0;cursor:pointer;font:700 11px/1.6 monospace;letter-spacing:.1em;align-self:center}   /* PARAR MONTURA, in every page header */
+.spectral-stack-range{right:122px}   /* next to RESET CAMERA: FULL RANGE / CLIP OUTLIERS */
+.spectral-stack-scale{max-width:calc(100% - 250px)}
