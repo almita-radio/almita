@@ -24,3 +24,10 @@ def test_without_a_recorded_stop_a_silent_session_is_still_degraded():
 def test_a_live_capture_is_never_relabelled():
     a = watcher.build_acquisition(NOW, SESSION, True, {"session_id": "20261013_174835", "orchestrator_state": "STOPPING"})
     assert a["state"] == "RUNNING"
+
+
+def test_instrument_reports_one_minute_load_with_core_count():
+    snapshot = {"system": {"cpu_percent": 12.5, "memory_percent": 25.0, "load_1m": 1.37}, "storage": {"percent": 18.0}}
+    inst = watcher.build_instrument(100.0, watcher.WatcherState(), lambda: snapshot)
+    assert inst["load_1m"] == 1.37 and inst["cpu_cores"] >= 1
+    assert inst["cpu"] == 12.5  # aggregate over all cores, 0-100

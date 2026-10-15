@@ -21,6 +21,7 @@ real 2-second polling loop.
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import time
 from dataclasses import dataclass
@@ -115,7 +116,7 @@ def build_instrument(now_monotonic: float, state: WatcherState, collect_fn: Call
     )
     if snapshot is None:
         return {
-            "cpu": None, "ram": None, "disk": None, "network_interfaces": None,
+            "cpu": None, "ram": None, "load_1m": None, "cpu_cores": os.cpu_count(), "disk": None, "network_interfaces": None,
             "rtl_tcp_process": False, "rtl_tcp_listening": None,
             "sdr_temperature_c": None, "lna_temperature_c": None,
             "mount_state": None, "telemetry_stale": True,
@@ -129,6 +130,8 @@ def build_instrument(now_monotonic: float, state: WatcherState, collect_fn: Call
     return {
         "cpu": system.get("cpu_percent"),
         "ram": system.get("memory_percent"),
+        "load_1m": system.get("load_1m"),      # runnable+uninterruptible tasks, 1-minute average: compare with cpu_cores
+        "cpu_cores": os.cpu_count(),
         "disk": storage.get("percent"),
         "network_interfaces": snapshot.get("network"),
         "rtl_tcp_process": bool(sdr.get("rtl_tcp_process_detected")),

@@ -85,6 +85,7 @@ function renderInstrument(instrument,wifi){
   $("instrument-kv").innerHTML=[
     pair("CPU",instrument.cpu==null?"N/A":`${num(instrument.cpu)}%`),
     pair("RAM",instrument.ram==null?"N/A":`${num(instrument.ram)}%`),
+    pair("LOAD 1M",instrument.load_1m==null?"N/A":`${Number(instrument.load_1m).toFixed(2)}`+(instrument.cpu_cores?` / ${instrument.cpu_cores} cores`:"")),
     pair("DISK",instrument.disk==null?"N/A":`${num(instrument.disk)}%`),
     pair("RTL_TCP",instrument.rtl_tcp_process?"DETECTED":"NOT DETECTED"),
     pair("PORT 1234",instrument.rtl_tcp_listening===true?"LISTENING":instrument.rtl_tcp_listening===false?"NOT LISTENING":"UNKNOWN"),
