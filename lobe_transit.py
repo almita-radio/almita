@@ -126,6 +126,18 @@ def plan(mode: str, now: Time, location: EarthLocation, expected_fwhm_deg: float
         positions = [{"offset_deg": float(x), "ra_hours": float(ra), "dec_deg": float(dec), "alt_deg": float(alt), "az_deg": float(az)}
                      for x, ra, dec, alt, az in zip(offsets, ras, suns.dec.deg, altaz.alt.deg, altaz.az.deg)]
         low = [f"{q['offset_deg']:+.1f}" for q in positions if q["alt_deg"] < min_elevation_deg]
+        # SOLAR tracking holds each position for settle + capture: one whose hour angle passes OnStep's meridian limit
+        # (+12 min) meanwhile makes OnStep stop and latch the error mid-scan (BL-060)
+        from calibration_engine.hi_reference_selection import ONSTEP_MERIDIAN_LIMIT_MIN, SIDEREAL_RATE, hour_angle_hours
+        lim = ONSTEP_MERIDIAN_LIMIT_MIN / 60.0
+        ha0 = hour_angle_hours(ras, location, times)
+        ha1 = ha0 + (settle_s + capture_s + scan_overhead_s) / 3600.0 * SIDEREAL_RATE
+        crossing = [f"{x:+.1f}" for x, a0, a1 in zip(offsets, ha0, ha1) if a0 < lim <= a1]
+        for q, h in zip(positions, ha0):
+            q["hour_angle_h"] = float(h)
+        if crossing:
+            out["problems"].append(f"scan position(s) {', '.join(crossing)} would reach OnStep's meridian limit (+{ONSTEP_MERIDIAN_LIMIT_MIN:g} min) "
+                                   "while held - OnStep would stop and latch the error; start a few minutes later")
         out.update(positions=positions, duration_s=duration_s, samples_expected=n, scan_step_deg=scan_step_deg,
                    point_ra_hours=positions[0]["ra_hours"], point_dec_deg=positions[0]["dec_deg"],
                    point_alt_deg=positions[0]["alt_deg"], point_az_deg=positions[0]["az_deg"],

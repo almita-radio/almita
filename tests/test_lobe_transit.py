@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import lobe_transit as lt  # noqa: E402
 from astropy.time import Time  # noqa: E402
+import astropy.units as u  # noqa: E402
 
 CFG = json.loads((Path(lt.ROOT) / "observer_config.json").read_text())
 LOC = lt.observer_location(CFG)
@@ -125,3 +126,23 @@ def test_fit_samples_skips_clipped_and_failed_rows(tmp_path):
     assert len(rows) == 60
     f = lt.fit_samples(rows, max_clipping=0.001)
     assert f["n"] == 58
+
+
+def test_scan_plan_blocks_exactly_when_a_held_position_crosses_the_meridian_limit():
+    # start times every 30 s around the Sun's transit (16:27 UTC): with a 4 s hold per position only a few starts put
+    # a position across the +12 min limit while it is held - the plan must block those, and only those
+    held_h = (2 + 2 + 8) / 3600 * 1.0027379
+    blocked = 0
+    for k in range(0, 160):
+        t = Time("2026-10-15T16:00:00", scale="utc") + k * 30 * u.s
+        p = lt.plan("scan", t, LOC, 10, 1.5, 5, 2, 1.0, 2, min_elevation_deg=10)
+        crosses = any(q["hour_angle_h"] < 0.2 <= q["hour_angle_h"] + held_h for q in p["positions"])
+        flagged = any("meridian limit" in q for q in p["problems"])
+        assert crosses == flagged, (t.isot, crosses, flagged)
+        blocked += flagged
+    assert blocked > 0
+
+
+def test_scan_plan_with_the_sun_far_from_the_meridian_has_no_meridian_problem():
+    p = lt.plan("scan", Time("2026-10-15T13:00:00", scale="utc"), LOC, 10, 1.0, 5, 1, 1.0, 2, min_elevation_deg=5)
+    assert not any("meridian" in q for q in p["problems"])

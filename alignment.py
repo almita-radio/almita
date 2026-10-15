@@ -1012,8 +1012,29 @@ class AlignmentRunner:
                 await self.telescope.set_track_mode(self._previous_track_mode)
                 restored = await self.telescope.wait_track_mode(self._previous_track_mode, timeout=5.0)
                 print(f"Tracking       restore {'confirmed' if restored else 'NOT CONFIRMED - check the mount manually'}")
+            if self.telescope:
+                await self.tracking_off_before_meridian_limit(center)
             if self.sdr: await self.sdr.close()
             if self.telescope: await self.telescope.disconnect()
+
+    async def tracking_off_before_meridian_limit(self, center, horizon_h: float = 8.0) -> Optional[dict]:
+        """A run that ends with the mount still tracking a target east of OnStep's meridian limit leaves it to reach
+        that limit on its own (a morning solar ALIGN: at ~13:39 Chile on 2026-10-15); OnStep then stops and latches
+        the error, blocking every later movement until tracking is toggled in Ekos (BL-060). Tracking goes OFF here
+        instead - any SYNC was already applied - and the log says why. A target already past the limit is left alone."""
+        from calibration_engine.hi_reference_selection import meridian_limit_check
+        try:
+            m = meridian_limit_check(center.ra.hour, horizon_h * 3600.0, self.location)
+            if m["clears"]:
+                return m
+            await self.telescope.set_tracking(False)
+            off = await self.telescope.wait_tracking_state(False, timeout=5.0)
+            print(f"Tracking       OFF ({'confirmed' if off else 'NOT CONFIRMED - check the mount'}): the target reaches OnStep's "
+                  f"meridian limit in {m['minutes_to_limit']:.0f} min; left tracking, OnStep would stop there and latch the error")
+            return {**m, "tracking_off_confirmed": off}
+        except Exception as exc:  # noqa: BLE001 - the run's own result is already saved; never fail it here
+            print(f"Tracking       meridian guard skipped: {type(exc).__name__}: {exc}")
+            return None
 
     async def maybe_sync(self, center, estimate, selection) -> bool:
         """The one SYNC path for both references (Sun and HI). SYNC is sent only when ALL hold, and the decision

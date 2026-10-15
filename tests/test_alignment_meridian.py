@@ -40,3 +40,42 @@ def test_web_solar_align_runs_at_the_operating_gain_not_the_20_db_default():
     assert argv[argv.index("--sun-gain") + 1] == "30.0"
     argv, _ = ops.build_command("align_plan", {"reference": "hi"}, "JOB-1")
     assert "--sun-gain" not in argv
+
+
+class _Scope:
+    def __init__(self):
+        self.calls = []
+
+    async def set_tracking(self, on):
+        self.calls.append(on)
+        return True
+
+    async def wait_tracking_state(self, on, timeout=5.0):
+        return True
+
+
+def _runner_with(scope):
+    import types
+    r = types.SimpleNamespace(telescope=scope, location=LOC)
+    r.guard = alignment.AlignmentRunner.tracking_off_before_meridian_limit.__get__(r)
+    return r
+
+
+def test_after_align_tracking_goes_off_when_the_target_would_reach_the_limit(monkeypatch):
+    import asyncio
+    from calibration_engine import hi_reference_selection as hrs
+    real = hrs.meridian_limit_check
+    monkeypatch.setattr(hrs, "meridian_limit_check", lambda ra, hold, loc, obstime=None, **k: real(ra, hold, loc, T0, **k))
+    scope = _Scope()
+    m = asyncio.run(_runner_with(scope).guard(_centre_at_hour_angle(-2.0)))       # morning: 2 h before transit
+    assert scope.calls == [False] and m["tracking_off_confirmed"] is True
+
+
+def test_after_align_tracking_is_left_alone_when_the_target_is_already_past_the_limit(monkeypatch):
+    import asyncio
+    from calibration_engine import hi_reference_selection as hrs
+    real = hrs.meridian_limit_check
+    monkeypatch.setattr(hrs, "meridian_limit_check", lambda ra, hold, loc, obstime=None, **k: real(ra, hold, loc, T0, **k))
+    scope = _Scope()
+    asyncio.run(_runner_with(scope).guard(_centre_at_hour_angle(0.5)))              # afternoon, west of the limit
+    assert scope.calls == []
