@@ -684,11 +684,11 @@
       }
       for (const p of o.points) {
         if (p.state !== "current" || p.alt_deg < -5) continue;
-        const [x, y] = toXY(p.az_deg, p.alt_deg), k = 7;
+        const [x, y] = toXY(p.az_deg, p.alt_deg), k = 3.5;                                   // half size (operator)
         ctx.save(); ctx.lineCap = "round";
-        ctx.strokeStyle = ringBg; ctx.lineWidth = 5.5;                                      // dark halo so it reads on any colour
+        ctx.strokeStyle = ringBg; ctx.lineWidth = 2.75;                                     // dark halo so it reads on any colour
         ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
-        ctx.strokeStyle = "#ff2d2d"; ctx.lineWidth = 3;
+        ctx.strokeStyle = "#ff2d2d"; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
         ctx.restore();
       }
