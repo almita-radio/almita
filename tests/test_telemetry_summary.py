@@ -2,6 +2,10 @@ import json,time
 from pathlib import Path
 import telemetry_summary as ts
 
+def _slave(d,millic,crc="YES"):
+    """A DS18B20 w1_slave file as the kernel writes it (the reader checks its CRC line)."""
+    (d/"w1_slave").write_text(f"72 01 4b 46 7f ff 0e 10 57 : crc=57 {crc}\n72 01 4b 46 7f ff 0e 10 57 t={millic}\n")
+
 def test_load_memory_cpu_network_parsers():
     assert ts.parse_load("1.0 2.0 3.0 1/2 3")== (1.,2.,3.)
     mem=ts.parse_meminfo("MemTotal: 1000 kB\nMemAvailable: 400 kB\n")
@@ -11,7 +15,7 @@ def test_load_memory_cpu_network_parsers():
     assert net["eth0"]=={"rx_bytes":100,"tx_bytes":200}
 
 def test_w1_temperature_and_missing(tmp_path):
-    sensor=tmp_path/"28-test";sensor.mkdir();(sensor/"temperature").write_text("25125\n")
+    sensor=tmp_path/"28-test";sensor.mkdir();_slave(sensor,25125)
     assert ts.read_w1("28-test",tmp_path)["value_c"]==25.125
     assert ts.read_w1("missing",tmp_path)["status"]=="NOT_AVAILABLE"
 
@@ -25,16 +29,16 @@ def test_w1_implausible_298_9_glitch_is_invalid_not_published(tmp_path):
     (this reader feeds almita_status.json's instrument.sdr_temperature_c
     directly, unlike temperature_sensors.py's separate per-point reader) -
     must reject it, not publish it as a real reading."""
-    sensor=tmp_path/"28-glitch";sensor.mkdir();(sensor/"temperature").write_text("298900\n")
+    sensor=tmp_path/"28-glitch";sensor.mkdir();_slave(sensor,298900)
     result=ts.read_w1("28-glitch",tmp_path)
     assert result["value_c"] is None and result["status"]=="INVALID"
 
 def test_w1_implausible_low_temperature_is_invalid(tmp_path):
-    sensor=tmp_path/"28-cold";sensor.mkdir();(sensor/"temperature").write_text("-60000\n")
+    sensor=tmp_path/"28-cold";sensor.mkdir();_slave(sensor,-60000)
     assert ts.read_w1("28-cold",tmp_path)["status"]=="INVALID"
 
 def test_w1_datasheet_boundary_values_are_valid(tmp_path):
-    sensor=tmp_path/"28-hi";sensor.mkdir();(sensor/"temperature").write_text("125000\n")
+    sensor=tmp_path/"28-hi";sensor.mkdir();_slave(sensor,125000)
     assert ts.read_w1("28-hi",tmp_path)["status"]=="OK"
 
 def test_collect_never_publishes_implausible_sdr_temperature(tmp_path,monkeypatch):
@@ -46,7 +50,7 @@ def test_collect_never_publishes_implausible_sdr_temperature(tmp_path,monkeypatc
     (proc/"uptime").write_text("100 50");(proc/"stat").write_text("cpu 1 1 1 10 0\n")
     (proc/"net/dev").write_text("a\nb\nlo: 1 0 0 0 0 0 0 0 2 0 0 0 0 0 0 0")
     (proc/"net/tcp").write_text("sl local_address rem_address st\n");(proc/"net/tcp6").write_text("sl local_address rem_address st\n")
-    w1=tmp_path/"w1";sdr_dir=w1/ts.SDR_SENSOR;sdr_dir.mkdir(parents=True);(sdr_dir/"temperature").write_text("298900\n")
+    w1=tmp_path/"w1";sdr_dir=w1/ts.SDR_SENSOR;sdr_dir.mkdir(parents=True);_slave(sdr_dir,298900)
     monkeypatch.setattr(ts,"cpu_percent",lambda *a,**k:12.5)
     value=ts.collect(tmp_path,proc,w1)
     assert value["temperatures"]["sdr_c"] is None
@@ -92,3 +96,12 @@ def test_source_contains_no_socket_connect_or_destructive_commands():
     source=Path(ts.__file__).read_text()
     assert ".connect(" not in source
     for token in ("systemctl"," kill ","restart","sudo","rtl_tcp -"):assert token not in source
+
+
+def test_w1_reads_the_crc_checked_file_only(tmp_path):
+    """BL-050/BL-069: the kernel's "temperature" file has no CRC - a corrupted conversion inside the plausible range
+    (-24 C, 2026-10-14) went straight to MONITOR. Only w1_slave (with CRC) is read now."""
+    only_unchecked=tmp_path/"28-nocrc";only_unchecked.mkdir();(only_unchecked/"temperature").write_text("-24062\n")
+    assert ts.read_w1("28-nocrc",tmp_path)["status"]=="NOT_AVAILABLE"
+    bad=tmp_path/"28-crcno";bad.mkdir();_slave(bad,-24062,crc="NO")
+    assert ts.read_w1("28-crcno",tmp_path)=={"value_c":None,"status":"INVALID","path":str(bad/"w1_slave")}

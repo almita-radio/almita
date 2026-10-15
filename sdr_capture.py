@@ -538,18 +538,21 @@ class SDRCapture:
     
     async def configure(self, center_freq: Optional[int] = None,
                        sample_rate: int = 2400000,
-                       gain: str = 'auto') -> CaptureMetrics:
+                       gain: Optional[Any] = None) -> CaptureMetrics:
         """
         Configure SDR parameters
         
         Args:
             center_freq: Center frequency in Hz (default: the operating frequency, sdr_tuning.operating_config())
             sample_rate: Sample rate in Hz
-            gain: Gain setting ('auto' or numeric value)
+            gain: Gain setting - required: a fixed dB value, or 'auto' explicitly
         
         Returns:
             Metrics with configuration timing
         """
+        if gain is None:
+            # No silent AGC (BL-050): every operational flow tunes with a fixed gain; 'auto' must be asked for by name.
+            raise ValueError("configure() needs an explicit gain: a fixed dB value, or 'auto' explicitly")
         metrics = CaptureMetrics()
         metrics.sample_rate = sample_rate
         if center_freq is None:
@@ -1113,7 +1116,7 @@ async def test_sdr_modes():
         sdr_usb = SDRCapture(mode="usb", verbose=True)
         
         conn_metrics = await sdr_usb.connect()
-        config_metrics = await sdr_usb.configure(center_freq, sample_rate)
+        config_metrics = await sdr_usb.configure(center_freq, sample_rate, sdr_tuning.operating_config()["gain_db"])
         capture_metrics = await sdr_usb.capture(test_duration, "/tmp/test_usb.dat", sample_rate)
         
         await sdr_usb.close()
@@ -1146,7 +1149,7 @@ async def test_sdr_modes():
         sdr_net = SDRCapture(mode="network", host="localhost", port=1234, verbose=True)
         
         conn_metrics = await sdr_net.connect()
-        config_metrics = await sdr_net.configure(center_freq, sample_rate)
+        config_metrics = await sdr_net.configure(center_freq, sample_rate, sdr_tuning.operating_config()["gain_db"])
         capture_metrics = await sdr_net.capture(test_duration, "/tmp/test_network.dat", sample_rate)
         
         await sdr_net.close()

@@ -41,14 +41,31 @@ class DS18B20Reader:
     """Read explicitly assigned DS18B20 sensors directly from Linux sysfs."""
 
     def __init__(self, sensors: Dict[str, str], sysfs_root: Path = Path("/sys/bus/w1/devices"),
-                 warning: Optional[Callable[[str], None]] = None):
+                 warning: Optional[Callable[[str], None]] = None, attempts: int = 2):
         self.sensors = {str(role).lower(): str(sensor_id) for role, sensor_id in sensors.items()}
+        # A CRC failure, the -127 sentinel or an implausible value is retried once (each read of w1_slave is a fresh
+        # conversion, ~0.75 s): sporadic 1-Wire noise no longer costs the point its temperature. A sensor that keeps
+        # failing (the SDR branch on 2026-10-14, BL-069) still fails - that is wiring, not software.
+        self.attempts = max(1, int(attempts))
         self.sysfs_root = Path(sysfs_root)
         self.warning = warning or (lambda message: logging.warning(message))
         self._consecutive_85 = {role: 0 for role in self.sensors}
 
     def read(self, role: str) -> Dict:
         role = role.lower()
+        failures = []
+        for attempt in range(1, self.attempts + 1):
+            result = self._read_once(role)
+            if result["valid"] or result.get("error_kind") == "missing":
+                break
+            failures.append(result.get("error"))
+        result["attempts"] = attempt
+        result["failed_attempts"] = failures if result["valid"] else failures[:-1]
+        if not result["valid"]:
+            self.warning(f"Temperature sensor {role.upper()} ({result['sensor_id']}) invalid after {attempt} attempt(s): {result.get('error')}")
+        return result
+
+    def _read_once(self, role: str) -> Dict:
         sensor_id = self.sensors[role]
         timestamp = datetime.now(timezone.utc).isoformat()
         result = {
@@ -79,9 +96,12 @@ class DS18B20Reader:
                     )
             else:
                 self._consecutive_85[role] = 0
-        except (OSError, ValueError, IndexError) as exc:
+        except OSError as exc:
             self._consecutive_85[role] = 0
-            self.warning(f"Temperature sensor {role.upper()} ({sensor_id}) invalid: {exc}")
+            result.update(error=str(exc), error_kind="missing")
+        except (ValueError, IndexError) as exc:
+            self._consecutive_85[role] = 0
+            result.update(error=str(exc), error_kind="invalid")
         return result
 
     def read_all(self) -> Dict[str, Dict]:

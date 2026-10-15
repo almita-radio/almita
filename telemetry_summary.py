@@ -49,21 +49,15 @@ def select_network(items):
     name,value=max(candidates,key=lambda x:x[1]["rx_bytes"]+x[1]["tx_bytes"])
     return {"interface":name,**value}
 def read_w1(sensor,root=Path("/sys/bus/w1/devices")):
-    # This convenience "temperature" file (when the kernel driver exposes
-    # it) has no CRC-8 of its own to check, unlike w1_slave - a plausibility
-    # guard is the only defense either candidate has against a glitched
-    # conversion. See temperature_sensors.py for why this exact range.
-    candidates=[root/sensor/"temperature",root/sensor/"w1_slave"]
-    for path in candidates:
-        try:
-            text=path.read_text().strip()
-            raw=text if path.name=="temperature" else text.rsplit("t=",1)[1]
-            value=int(raw)/1000
-            if not is_plausible_temperature_c(value):
-                return {"value_c":None,"status":"INVALID","path":str(path)}
-            return {"value_c":value,"status":"OK","path":str(path)}
-        except (OSError,ValueError,IndexError):continue
-    return {"value_c":None,"status":"NOT_AVAILABLE","path":None}
+    # The one DS18B20 reader (temperature_sensors.DS18B20Reader, BL-050): w1_slave with its CRC-8, the -127 sentinel
+    # and the plausibility range, one retry. The kernel's "temperature" file used before has NO CRC: a corrupted
+    # conversion inside the plausible range (-24 C seen 2026-10-14 on the SDR sensor) went straight to MONITOR.
+    from temperature_sensors import DS18B20Reader
+    r=DS18B20Reader({"t":sensor},root,warning=lambda message:None).read("t")
+    path=str(root/sensor/"w1_slave")
+    if r["valid"]:return {"value_c":r["temperature_c"],"status":"OK","path":path}
+    if r.get("error_kind")=="missing":return {"value_c":None,"status":"NOT_AVAILABLE","path":None}
+    return {"value_c":None,"status":"INVALID","path":path}
 def read_temperatures(root=Path("/sys/bus/w1/devices")):
     with ThreadPoolExecutor(max_workers=2) as pool:
         sdr_future=pool.submit(read_w1,SDR_SENSOR,root);lna_future=pool.submit(read_w1,LNA_SENSOR,root)
