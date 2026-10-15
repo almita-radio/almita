@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import struct
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -39,7 +40,9 @@ _ACK_PATTERNS = {
     "center_frequency_hz": re.compile(r"\bset freq (\d+)\b"),
     "sample_rate_hz": re.compile(r"\bset sample rate (\d+)\b"),
     "gain_tenths_db": re.compile(r"\bset gain (\d+)\b"),
+    "rtl_agc_mode": re.compile(r"\bset agc mode (\d+)\b"),
 }
+RTL_AGC_COMMAND = 0x08        # rtl_tcp: RTL2832 digital AGC on/off. rtl_tcp keeps what the previous client set (BL-076)
 _PLL_NOT_LOCKED = re.compile(r"PLL not locked")
 # librtlsdr failures rtl_tcp prints right AFTER its "set freq/sample rate/gain" lines when the dongle cannot be driven
 # (e.g. -4 = LIBUSB_ERROR_NO_DEVICE: the USB device re-enumerated under a running rtl_tcp). rtl_tcp prints the "set"
@@ -157,8 +160,22 @@ async def tune_explicitly(sdr: Any, center_frequency_hz: float, sample_rate_hz: 
     sdr.current_gain = None
     await sdr.configure(center_freq=requested["center_frequency_hz"], sample_rate=requested["sample_rate_hz"],
                         gain=requested["gain_db"])
+    # The RTL2832's own digital AGC is not part of configure(): rtl_tcp keeps whatever the previous client left (SDR++
+    # turned it on on 2026-10-14 and it stayed on until rtl_tcp restarted). Every acquisition switches it off explicitly.
+    agc_sent = False
+    sock = getattr(sdr, "socket", None)
+    if sock is not None and getattr(sdr, "mode", "network") == "network":
+        await asyncio.get_event_loop().run_in_executor(None, sock.sendall, struct.pack(">BI", RTL_AGC_COMMAND, 0))
+        agc_sent = True
 
-    return await verify_acknowledged(source, requested, operating=operating, ack_timeout=ack_timeout, sleep=sleep)
+    record = await verify_acknowledged(source, requested, operating=operating, ack_timeout=ack_timeout, sleep=sleep)
+    record["rtl_agc"] = ("off: command sent" if agc_sent else "not sent (no rtl_tcp socket)")
+    if agc_sent:
+        ack = parse_acks(source.lines()).get("rtl_agc_mode")
+        if ack == 1:
+            raise TuningIncoherent(f"rtl_tcp acknowledged RTL AGC mode 1 after it was switched off ({source.describe}) - NO capture taken")
+        record["rtl_agc"] += "; acknowledged mode 0" if ack == 0 else "; no acknowledgement line seen"
+    return record
 
 
 async def verify_acknowledged(source: Any, requested: Dict[str, Any], *, operating: Optional[Dict[str, Any]] = None,
@@ -249,4 +266,5 @@ def tuning_attrs(record: Dict[str, Any]) -> Dict[str, Any]:
         "tuning_evidence_detail": record["evidence_detail"],
         "tuning_pll_not_locked_count": record["pll_not_locked_count"],
         "tuned_utc": record["tuned_utc"],
+        "rtl_agc": record.get("rtl_agc", "not recorded"),
     }

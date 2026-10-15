@@ -21,7 +21,7 @@ The expected beam FWHM is NOT measured yet (observer_config.json says 20 deg, al
 provisional): measuring it is the point. The half range is a multiple of that expectation, so the run is long
 enough to record both sides and the background.
 """
-import argparse, asyncio, csv, json, math, struct, time
+import argparse, asyncio, csv, json, math, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -267,10 +267,11 @@ class LobeRun:
         await self.sdr.connect()
         self.tuning = await sdr_tuning.tune_explicitly(self.sdr, a.center_freq, a.sample_rate, a.gain,
                                                        operating=sdr_tuning.operating_config())
-        # Fixed gain is the whole point: tuner gain is manual (tune_explicitly) and the RTL2832 digital AGC
-        # (rtl_tcp command 0x08) is forced off - rtl_tcp keeps whatever the previous client left.
-        self.sdr.socket.sendall(struct.pack(">BI", 0x08, 0))
-        self.log(f"MAIN tuned {a.center_freq / 1e6:.6f} MHz, {a.sample_rate / 1e6:g} MS/s, gain {a.gain:.1f} dB fixed, RTL AGC off")
+        # Fixed gain is the whole point: tuner gain is manual and tune_explicitly() switches the RTL2832 digital AGC
+        # off on this connection (BL-076) - refuse to measure if rtl_tcp says otherwise.
+        if not str(self.tuning.get("rtl_agc", "")).startswith("off"):
+            raise RuntimeError(f"RTL AGC not confirmed off: {self.tuning.get('rtl_agc')}")
+        self.log(f"MAIN tuned {a.center_freq / 1e6:.6f} MHz, {a.sample_rate / 1e6:g} MS/s, gain {a.gain:.1f} dB fixed, RTL AGC {self.tuning['rtl_agc']}")
 
     def _sun(self):
         t = Time.now()
@@ -292,7 +293,7 @@ class LobeRun:
             temps = self.temps.read_all() if self.temps else {}
             t, sra, sdec, _ = self._sun()
             await self.sdr.capture(a.capture_seconds, str(path), a.sample_rate,
-                                   {**sdr_tuning.tuning_attrs(self.tuning), "gain_requested_db": a.gain, "rtl_agc": "off",
+                                   {**sdr_tuning.tuning_attrs(self.tuning), "gain_requested_db": a.gain,
                                     "lobe_mode": a.mode, "lobe_index": self.index, "sun_ra_hours": sra, "sun_dec_deg": sdec})
             pra, pdec = await self.telescope.get_coordinates(force_refresh=True)
             if pra is None or pdec is None:
@@ -371,7 +372,7 @@ class LobeRun:
         fit.pop("profile", None)
         res = {"status": status, "ended_utc": datetime.now(timezone.utc).isoformat(), "plan": p, "samples": len(rows),
                "valid": sum(1 for r in rows if r.get("status") == "VALID"), "clipped": sum(1 for r in rows if r.get("status") == "CLIPPED"),
-               "gain_db": self.args.gain, "rtl_agc": "off", "tuning": self.tuning, "fit": fit, "notes": self.notes,
+               "gain_db": self.args.gain, "rtl_agc": (self.tuning or {}).get("rtl_agc"), "tuning": self.tuning, "fit": fit, "notes": self.notes,
                "stop_report": stop_report, "location": self.args.location_note}
         (self.out / "lobe_result.json").write_text(json.dumps(res, indent=2, default=str))
         return res

@@ -174,7 +174,8 @@ def synthetic_iq(seconds: float, step: str, seed: int = 0) -> np.ndarray:
     n = int(seconds * SAMPLE_RATE)
     t = np.arange(n) / SAMPLE_RATE
     z = rng.normal(0, 0.6, n) + 1j * rng.normal(0, 0.6, n)
-    fc = 1420.405752e6
+    import sdr_tuning
+    fc = float(sdr_tuning.operating_center_frequency_hz())
     if STEPS[step]["receiver"] == "main" and step != "M3":
         z += 0.25 * np.exp(2j * np.pi * (1419.50e6 - fc) * t)
     if STEPS[step]["receiver"] == "rfi":
@@ -273,9 +274,10 @@ def cmd_capture(args) -> int:
         if load_ctx:
             load_ctx.__enter__()
         if args.simulate:
+            import sdr_tuning
             from sdr_capture import write_hdf5_atomic
             iq = synthetic_iq(args.seconds, args.step, seed=n)
-            write_hdf5_atomic(str(path), iq, {**meta, "center_frequency_hz": 1420405752, "sample_rate_hz": SAMPLE_RATE,
+            write_hdf5_atomic(str(path), iq, {**meta, "center_frequency_hz": sdr_tuning.operating_center_frequency_hz(), "sample_rate_hz": SAMPLE_RATE,
                                                "num_samples": len(iq) // 2, "capture_status": "complete",
                                                "final_filename": path.name, "created_at": utcnow()},
                               expected_samples=len(iq) // 2)
@@ -305,10 +307,13 @@ def _running_median(a: np.ndarray, k: int = 15) -> np.ndarray:
     return np.median(np.lib.stride_tricks.sliding_window_view(padded, k), axis=1)
 
 
-def analyze_iq(iq, center_hz: float = 1420405752.0) -> Dict[str, Any]:
+def analyze_iq(iq, center_hz: Optional[float] = None) -> Dict[str, Any]:
     """Metrics of one capture: mean spectrum lines (excess over a 15-bin running median), per-second burst
     fraction of the RFI comb, MAIN's line near 1419.5 and the raw ADC spread. iq: interleaved uint8, an array or an
     h5py dataset - read one second at a time (a 60 s capture is 288 MB of samples; this Pi has ~0 free swap)."""
+    if center_hz is None:
+        import sdr_tuning
+        center_hz = float(sdr_tuning.operating_center_frequency_hz())
     block = 2 * SAMPLE_RATE                                  # one second of interleaved samples
     frames = SAMPLE_RATE // NFFT
     window = np.hanning(NFFT)
@@ -458,7 +463,7 @@ def cmd_watch(args) -> int:
             fh.write("utc,freq_mhz,excess_db\n")
             sk.recv(12)                                       # rtl_tcp header
             if not args.main_private:                         # the service keeps its own tuning; set ours explicitly
-                for cmd, val in ((1, fc), (2, sr), (3, 1), (4, int(round(args.gain * 10)))):
+                for cmd, val in ((1, fc), (2, sr), (3, 1), (4, int(round(args.gain * 10))), (8, 0)):   # 8, 0: RTL AGC off (BL-076)
                     sk.sendall(bytes([cmd]) + int(val).to_bytes(4, "big"))
             while time.monotonic() < end:
                 t0 = time.monotonic()

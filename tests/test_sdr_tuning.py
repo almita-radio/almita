@@ -262,3 +262,42 @@ def test_a_main_dongle_reattached_after_rtl_tcp_started_is_reported():
     assert sdr_tuning.main_device_reenumerated_since_rtl_tcp_start(run=_Run("Wed 2026-10-07 00:20:00 UTC", "")) is None
     other = "2026-10-07T00:11:58+0000 stellarmate kernel: usb 3-1: SerialNumber: 00000002\n"   # the RFI dongle
     assert sdr_tuning.main_device_reenumerated_since_rtl_tcp_start(run=_Run("x", other)) is None
+
+
+# ------------------------------------------------------------------ RTL2832 digital AGC (BL-076)
+class _Sock:
+    def __init__(self):
+        self.sent = []
+
+    def sendall(self, data):
+        self.sent.append(data)
+
+
+def test_tune_switches_the_rtl_agc_off_and_records_the_acknowledgement():
+    source = _FakeAckSource()
+    sdr = _FakeSDR(_acking(source))
+    sdr.socket, sdr.mode = _Sock(), "network"
+    source.all.append("set agc mode 1")                                  # what a previous client left: before mark()
+    real_log = sdr.ack_log
+    sdr.ack_log = lambda f, r, g: (real_log(f, r, g), source.all.append("set agc mode 0"))
+    rec = asyncio.run(sdr_tuning.tune_explicitly(sdr, 1420405752, 2400000, 40.2, ack_source=source))
+    assert sdr.socket.sent == [b"\x08\x00\x00\x00\x00"]
+    assert rec["rtl_agc"] == "off: command sent; acknowledged mode 0"
+    assert sdr_tuning.tuning_attrs(rec)["rtl_agc"] == rec["rtl_agc"]
+
+
+def test_tune_refuses_when_rtl_tcp_acknowledges_the_agc_on():
+    source = _FakeAckSource()
+    sdr = _FakeSDR(_acking(source))
+    sdr.socket, sdr.mode = _Sock(), "network"
+    real_log = sdr.ack_log
+    sdr.ack_log = lambda f, r, g: (real_log(f, r, g), source.all.append("set agc mode 1"))
+    with pytest.raises(sdr_tuning.TuningIncoherent, match="AGC"):
+        asyncio.run(sdr_tuning.tune_explicitly(sdr, 1420405752, 2400000, 40.2, ack_source=source))
+
+
+def test_tune_without_a_socket_says_the_agc_command_was_not_sent():
+    source = _FakeAckSource()
+    sdr = _FakeSDR(_acking(source))
+    rec = asyncio.run(sdr_tuning.tune_explicitly(sdr, 1420405752, 2400000, 40.2, ack_source=source))
+    assert rec["rtl_agc"].startswith("not sent")
