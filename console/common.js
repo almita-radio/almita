@@ -669,7 +669,7 @@
       ctx.stroke(); ctx.restore();
     }
     if (o.points && o.points.length) {
-      const dot = Math.max(0.4, Math.min(0.85, 18 / Math.sqrt(o.points.length)));   // a third of the first size: a 400-point grid stays a grid
+      const dot = Math.max(0.27, Math.min(0.57, 12 / Math.sqrt(o.points.length)));  // 0.57 px at 400 points (operator: two thirds of 0.85)
       for (const p of o.points) {
         if (p.alt_deg < -5) continue;
         const [x, y] = toXY(p.az_deg, p.alt_deg);
