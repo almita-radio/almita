@@ -184,7 +184,7 @@
 
   // ------------------------------------------------------------------ shared page chrome (header, health strip, footer)
   const NAV = [
-    { key: "PIPELINE", href: "/pipeline.html" }, { key: "OBSERVE", href: "/observe.html" }, { key: "ALIGN", href: "/align.html" }, { key: "CALIBRATE", href: "/calibrate.html" },
+    { key: "PIPELINE", href: "/pipeline.html" }, { key: "OBSERVE", href: "/observe.html" }, { key: "ALIGN", href: "/align.html" }, { key: "LOBE", href: "/lobe.html" }, { key: "CALIBRATE", href: "/calibrate.html" },
     { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" }, { key: "STATUS", href: "/status.html" },
   ];
   function consoleBase() { return ""; }  // MONITOR is served by this same origin (single web port)

@@ -37,7 +37,7 @@ OPS_DIR = ROOT / "data" / "runtime" / "web_ops"
 PY = sys.executable
 DATA = ROOT / "data"
 SERVE_ROOTS = {"mosaic": DATA / "mosaic", "reduced": DATA / "reduced", "science": DATA / "science", "alignment": DATA / "alignment",
-               "calibration": DATA / "calibration", "web_ops": OPS_DIR}
+               "calibration": DATA / "calibration", "web_ops": OPS_DIR, "lobe": DATA / "lobe"}
 SERVE_SUFFIXES = {".png": "image/png", ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain", ".log": "text/plain", ".md": "text/plain",
                   ".svg": "image/svg+xml", ".pdf": "application/pdf"}
 MAX_SERVE_BYTES = 25 * 1024 * 1024
@@ -468,6 +468,9 @@ STAGES: Dict[str, Dict[str, Any]] = {
     # A/B/C rendering the native CLI does not offer.
     "science_heatmaps_plan": {"physical": False, "resources": ()},
     "science_heatmaps": {"physical": False, "resources": ("cpu",)},
+    # LOBE: the beam from a solar transit (lobe_transit.py). Real GOTO + real MAIN captures: the same real-preflight
+    # and typed-MOVE gate as ALIGN's RUN, plus a valid real solar ALIGN (lobe_alignment()), checked in build_command.
+    "lobe": {"physical": True, "resources": ("mount", "sdr")},
 }
 
 
@@ -973,6 +976,22 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             argv += ["--output-root", str(SERVE_ROOTS["science"].relative_to(ROOT))]
             _require_fresh_plan("science_heatmaps", meta, p)
         return argv, meta
+    if stage == "lobe":
+        mode = str(p.get("mode", "drift"))
+        if mode not in ("drift", "scan"):
+            raise ValueError("mode must be drift or scan")
+        al = lobe_alignment()
+        if not al["ok"]:
+            raise ValueError(f"LOBE needs a valid real solar ALIGN first: {al['detail']}")
+        out = f"data/lobe/WEB-LOBE-{mode.upper()}-{stamp}"
+        argv = [PY, "lobe_transit.py", "--mode", mode, "--output-dir", out]
+        for key, flag, lo, hi in (("expected_fwhm", "--expected-fwhm", 1, 90), ("half_range_fwhm", "--half-range-fwhm", 0.5, 4),
+                                  ("every", "--every", 1, 60), ("capture_seconds", "--capture-seconds", 0.2, 10),
+                                  ("scan_step", "--scan-step", 0.2, 10), ("gain", "--gain", 0, 50), ("min_elevation", "--min-elevation", 5, 80)):
+            v = _float(p, key, lo, hi)
+            if v is not None:
+                argv += [flag, str(v)]
+        return argv, {"output_dir": out, "mode": mode, "alignment": al}
     raise ValueError(f"unknown stage {stage!r}")
 
 
@@ -1552,6 +1571,20 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 out["verdict"] = "PASS" if status == "COMPLETED" else "FAIL"
                 out["detail"] = (f"SCIENCE HEATMAPS {status} - {blob.get('n_points_used')} point(s) used, "
                                  f"calibration_level_filter={blob.get('calibration_level_filter')}")
+    if stage == "lobe":
+        out["output_dir"] = (j.get("meta") or {}).get("output_dir")
+        res = _read_json(ROOT / out["output_dir"] / "lobe_result.json") if out["output_dir"] else None
+        if res:
+            fit = res.get("fit") or {}
+            out["facts"] = {"status": res.get("status"), "valid_samples": res.get("valid"), "clipped": res.get("clipped"),
+                            "fit": fit.get("status"), "fwhm_deg": fit.get("fwhm_deg"), "peak_offset_deg": fit.get("x0_deg"),
+                            "snr": fit.get("snr"), "flags": "; ".join(fit.get("flags") or []) or None}
+            if state == "EXITED":
+                out["verdict"] = ("PASS" if res.get("status") == "COMPLETE" and fit.get("status") == "FIT" else
+                                  "PARTIAL" if fit.get("fwhm_deg") is not None else "FAIL")
+                out["detail"] = f"LOBE {res.get('status')} - fit {fit.get('status')}"
+        elif state == "EXITED":
+            out["detail"] = f"exit {rc}; no lobe_result.json: {_tail(Path(j['log']), 5)}"
     if state == "EXITED" and j.get("stopped_by_operator"):
         if out["verdict"] == "PASS":
             out["verdict"] = "PARTIAL"
@@ -1605,6 +1638,8 @@ def get_job(job_id: str, tail: int = 80) -> Dict[str, Any]:
            "physical": j["physical"], "params": j["params"], "verdict": c["verdict"], "detail": c["detail"], "facts": c["facts"], "output_dir": c["output_dir"],
            "artifacts": _artifacts(od), "log_tail": _tail(Path(j["log"]), tail), "stopped_by_operator": bool(j.get("stopped_by_operator")),
            "elapsed_s": ((datetime.fromisoformat(j["ended_utc"]) if j.get("ended_utc") else datetime.now(timezone.utc)) - datetime.fromisoformat(j["started_utc"])).total_seconds()}
+    if j["stage"] == "lobe" and od:
+        out["progress"] = {"samples_written": max(0, sum(1 for _ in open(od / "lobe_samples.csv")) - 1) if (od / "lobe_samples.csv").is_file() else 0}
     if j["stage"] == "align" and od:                              # live progress: real samples written so far
         out["progress"] = {"samples_written": len(list(od.glob("alignment_sample_*.h5"))) or len(list(od.glob("**/alignment_sample_*.h5")))}
     return out
@@ -2275,3 +2310,105 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--runner":
         sys.exit(_runner(sys.argv[2]))
     sys.exit("almita_web_ops.py is a library for almita_orchestrator_server.py (and its own --runner)")
+
+
+# ------------------------------------------------------------------ LOBE (beam from a solar transit)
+LOBE_ALIGN_MAX_AGE_H = 12.0
+
+
+def lobe_alignment(root: Optional[Path] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """The newest REAL solar ALIGN (data/alignment/WEB-SUN-*, never a PLAN) and whether LOBE may use it: PASS and
+    younger than LOBE_ALIGN_MAX_AGE_H. Reports the measured offset and whether it was SYNCed - an unsynced PASS
+    leaves the mount off by that offset, which the transit will show as the peak's position."""
+    root = root or SERVE_ROOTS["alignment"]
+    now = now or datetime.now(timezone.utc)
+    newest = None
+    for d in sorted(root.glob("WEB-SUN-*"), reverse=True):
+        res = _read_json(d / "alignment_result.json")
+        if res:
+            newest = (d, res)
+            break
+    if not newest:
+        return {"ok": False, "verdict": "NOT ALIGNED", "detail": "no completed real solar ALIGN on record (ALIGN -> SOLAR, RUN)"}
+    d, res = newest
+    ts = res.get("timestamp_utc")
+    try:
+        age_h = (now - datetime.fromisoformat(ts)).total_seconds() / 3600.0
+    except (TypeError, ValueError):
+        age_h = None
+    off = res.get("offsets") or {}
+    info = {"dir": str(d.relative_to(ROOT)) if d.is_relative_to(ROOT) else str(d), "result_status": res.get("result_status"),
+            "timestamp_utc": ts, "age_h": age_h, "offset_ra_deg": off.get("offset_ra_deg"), "offset_dec_deg": off.get("offset_dec_deg"),
+            "separation_deg": off.get("separation_deg"), "confidence": res.get("confidence"), "sync_applied": bool(res.get("sync_applied"))}
+    if res.get("result_status") != "PASS":
+        return {"ok": False, "verdict": "NOT ALIGNED", "detail": f"newest solar ALIGN is {res.get('result_status')} ({info['dir']})", **info}
+    if age_h is None or age_h > LOBE_ALIGN_MAX_AGE_H:
+        return {"ok": False, "verdict": "ALIGN TOO OLD", "detail": f"newest solar ALIGN PASS is {age_h if age_h is None else round(age_h, 1)} h old "
+                f"(limit {LOBE_ALIGN_MAX_AGE_H:g} h) - ALIGN again", **info}
+    verdict = "ALIGNED (SYNCED)" if info["sync_applied"] else "ALIGNED (OFFSET KNOWN, NOT SYNCED)"
+    return {"ok": True, "verdict": verdict, "detail": f"solar ALIGN PASS {age_h:.1f} h ago, offset {info['separation_deg']}", **info}
+
+
+def _lobe_params(p: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = json.loads((ROOT / "observer_config.json").read_text())
+    import lobe_transit
+    return {"mode": str(p.get("mode") or "drift"),
+            "expected_fwhm": _float(p, "expected_fwhm", 1, 90, float(cfg.get("observation_defaults", {}).get("beam_fwhm_deg") or 20.0)),
+            "half_range_fwhm": _float(p, "half_range_fwhm", 0.5, 4, lobe_transit.DEFAULT_HALF_RANGE_FWHM),
+            "every": _float(p, "every", 1, 60, 5.0), "capture_seconds": _float(p, "capture_seconds", 0.2, 10, 1.0),
+            "scan_step": _float(p, "scan_step", 0.2, 10, 1.0), "gain": _float(p, "gain", 0, 50, 40.2),
+            "min_elevation": _float(p, "min_elevation", 5, 80, 10.0), "settle": 2.0}
+
+
+def lobe_status(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Everything the LOBE page shows before/while running: the Sun now, the mount (alt/az from its readback),
+    the solar ALIGN verdict, the plan for these parameters (moves nothing) and the newest LOBE job."""
+    import lobe_transit as lt
+    from astropy.time import Time
+    from astropy.coordinates import AltAz, CIRS, SkyCoord
+    import astropy.units as u
+    q = _lobe_params(p)
+    if q["mode"] not in ("drift", "scan"):
+        raise ValueError("mode must be drift or scan")
+    cfg = json.loads((ROOT / "observer_config.json").read_text())
+    loc = lt.observer_location(cfg)
+    now = Time.now()
+    sun = lt.sun_eod(now)
+    sun_aa = sun.transform_to(AltAz(obstime=now, location=loc))
+    out: Dict[str, Any] = {"computed_utc": _utc(), "params": q,
+                           "sun": {"ra_hours": float(sun.ra.hour), "dec_deg": float(sun.dec.deg), "alt_deg": float(sun_aa.alt.deg),
+                                   "az_deg": float(sun_aa.az.deg), "above_horizon": bool(sun_aa.alt.deg > 0)},
+                           "alignment": lobe_alignment()}
+    m = read_mount()
+    mount: Dict[str, Any] = {k: m.get(k) for k in ("ra_h", "dec_deg", "tracking", "mount_state", "parked", "error", "read_utc")}
+    if m.get("ra_h") is not None and m.get("dec_deg") is not None:
+        aa = SkyCoord(ra=m["ra_h"] * u.hourangle, dec=m["dec_deg"] * u.deg, frame=CIRS(obstime=now)).transform_to(AltAz(obstime=now, location=loc))
+        mount.update(alt_deg=float(aa.alt.deg), az_deg=float(aa.az.deg),
+                     sun_separation_deg=lt.separation_deg(m["ra_h"], m["dec_deg"], out["sun"]["ra_hours"], out["sun"]["dec_deg"]))
+    out["mount"] = mount
+    pl = lt.plan(q["mode"], now, loc, q["expected_fwhm"], q["half_range_fwhm"], q["every"], q["capture_seconds"], q["scan_step"],
+                 q["settle"], q["min_elevation"])
+    out["plan"] = pl
+    jobs = [j for j in list_jobs(limit=40) if j.get("stage") == "lobe"]
+    out["latest_job"] = jobs[0] if jobs else None
+    return out
+
+
+_LOBE_FIT_CACHE: Dict[str, Any] = {}
+
+
+def lobe_samples(rel_dir: str) -> Dict[str, Any]:
+    """The samples written so far by one LOBE run (the page polls this every 5 s) and a fit of what is there.
+    The fit is recomputed only when the CSV changed."""
+    import lobe_transit as lt
+    d = _path_in({"dir": rel_dir}, "dir", SERVE_ROOTS["lobe"])
+    csv_path = d / "lobe_samples.csv"
+    rows = lt.read_samples(csv_path)
+    keep = ("index", "utc", "elapsed_s", "offset_deg", "separation_deg", "power_lin", "power_db", "clipping_fraction",
+            "t_sdr_c", "t_lna_c", "tracking", "status")
+    sig = (str(csv_path), csv_path.stat().st_mtime_ns if csv_path.is_file() else 0)
+    if _LOBE_FIT_CACHE.get("sig") != sig:
+        _LOBE_FIT_CACHE.update(sig=sig, fit=lt.fit_samples(rows, 0.001) if rows else None)
+    return {"dir": str(d.relative_to(ROOT)) if d.is_relative_to(ROOT) else str(d), "plan": _read_json(d / "lobe_plan.json"),
+            "result": _read_json(d / "lobe_result.json"),
+            "samples": [{k: r.get(k) for k in keep} for r in rows], "fit": _LOBE_FIT_CACHE["fit"]}

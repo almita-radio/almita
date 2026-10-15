@@ -38,6 +38,7 @@ Other pieces: `almita_console_watcher.py` (read-only status writer, every 2 s, p
 | `/api/observe/start` | POST | needs `confirm:true` and a plan under `data/mosaic/<campaign>/observation_resolved.json` | raw JSON |
 | `/api/observe/stop` | POST | needs `confirm:true`; SIGINT to the tracked capture; blocks until it exits (up to 120 s) | raw JSON |
 | `/api/observe/plan-assets/<dir>/<file>` | GET | `.png/.json/.csv` under `data/mosaic/` only | file |
+| `/lobe.html`, `/lobe.js`, `/api/ops/lobe/status`, `/api/ops/lobe/samples` | GET | LOBE: Sun/mount/solar-ALIGN verdict + transit plan (moves nothing); samples + live fit of one run under `data/lobe/`. The run itself is the physical ops stage `lobe` (`/api/ops/start/lobe`, typed MOVE, real solar ALIGN PASS < 12 h) | `{ok,data}`; 400 on invalid parameters |
 | `/api/align/*`, `/api/calibrate/*` | GET/POST | status, plan, preflight, run (simulation), replay, compare, sessions, profile | envelope `{ok, blocked, reason, data}` |
 
 ## Contracts

@@ -74,6 +74,8 @@ CONSOLE_SOURCE = Path(__file__).resolve().parent / "console"
 DEFAULT_PUBLIC_ROOT = Path(__file__).resolve().parent / "data" / "console_web"   # prepared at startup by almita_console_server.prepare_console_web
 DEFAULT_RUNTIME_DIR = Path(__file__).resolve().parent / "data" / "runtime"
 STATIC_FILES = {
+    "/lobe.html": "lobe.html",
+    "/lobe.js": "lobe.js",
     "/observe.html": "observe.html",
     "/observe.js": "observe.js",
     "/styles.css": "styles.css",
@@ -230,7 +232,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
     timeout = CLIENT_SOCKET_TIMEOUT_SECONDS
 
     # ---- logging: UTC timestamp, level, component, request id; never bodies
-    _QUIET_POLL_PATHS = ("/healthz", "/api/system/health", "/api/system/version", "/api/observe/status", "/api/align/status", "/api/calibrate/status", "/mount_camera/status")
+    _QUIET_POLL_PATHS = ("/healthz", "/api/system/health", "/api/system/version", "/api/observe/status", "/api/align/status", "/api/calibrate/status", "/mount_camera/status",
+                         "/api/ops/lobe/status", "/api/ops/lobe/samples")
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
         # Successful polls (every open page asks every few seconds) would fill the journal: log them only when they fail.
@@ -355,6 +358,13 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.calibrate_wizard_defaults()})
             if path == "/api/ops/align/sky":
                 return self._ops_align_sky()
+            if path in ("/api/ops/lobe/status", "/api/ops/lobe/samples"):
+                q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                try:
+                    data = almita_web_ops.lobe_status(q) if path.endswith("status") else almita_web_ops.lobe_samples(q.get("dir", ""))
+                except ValueError as exc:
+                    return _error_response(self, 400, str(exc))
+                return _json_response(self, 200, {"ok": True, "data": data})
             if path == "/api/ops/file":
                 return self._ops_file()
             ops_job = _OPS_JOB_RE.match(path)

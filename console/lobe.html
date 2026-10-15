@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Lobe</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <header id="almita-header"><h1>LOBE</h1></header>
+
+  <main id="app">
+    <section class="panel" aria-labelledby="h-sky">
+      <header><h2 id="h-sky">SUN NOW <span class="muted">(real position · the circle is the mount's pointing, radius = expected FWHM / 2)</span></h2><span id="sun-badge" class="badge">—</span></header>
+      <canvas id="lobe-sky" width="420" height="360" style="width:100%;max-width:420px;height:360px;display:block;margin:10px auto;border:1px solid var(--line);border-radius:8px"></canvas>
+      <dl class="kv" id="sky-kv"></dl>
+    </section>
+
+    <section class="panel" aria-labelledby="h-align">
+      <header><h2 id="h-align">ALIGNMENT <span class="muted">(newest real solar ALIGN; LOBE needs a PASS from the last 12 h)</span></h2><span id="align-badge" class="badge">—</span></header>
+      <dl class="kv" id="align-kv"></dl>
+      <div class="obs-summary" id="align-note"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-config">
+      <header><h2 id="h-config">TRANSIT <span class="muted">(lobe_transit.py · real mount + real MAIN · fixed gain, RTL AGC off, raw IQ kept)</span></h2><span id="plan-badge" class="badge">—</span></header>
+      <div class="obs-actions">
+        <button type="button" id="mode-drift" class="mode-btn active">DRIFT (mount still, tracking OFF)</button>
+        <button type="button" id="mode-scan" class="mode-btn">SCAN (mount steps in RA)</button>
+      </div>
+      <div class="obs-summary" id="mode-note"></div>
+      <div class="obs-row"><label for="p-fwhm">EXPECTED BEAM FWHM (deg — provisional: observer_config 20, alignment.py 14; not measured)</label><input type="number" id="p-fwhm" min="1" max="90" step="any"></div>
+      <div class="obs-row"><label for="p-half">HALF RANGE (× expected FWHM, each side of the Sun)</label><input type="number" id="p-half" min="0.5" max="4" step="0.1"></div>
+      <div class="obs-row"><label for="p-every">ONE SAMPLE EVERY (s, drift)</label><input type="number" id="p-every" min="1" max="60" step="any"></div>
+      <div class="obs-row"><label for="p-capture">CAPTURE PER SAMPLE (s, raw IQ kept)</label><input type="number" id="p-capture" min="0.2" max="10" step="any"></div>
+      <div class="obs-row" id="row-step" hidden><label for="p-step">SCAN STEP (deg)</label><input type="number" id="p-step" min="0.2" max="10" step="any"></div>
+      <div class="obs-row"><label for="p-gain">GAIN (dB, fixed for the whole run)</label><input type="number" id="p-gain" min="0" max="50" step="0.1"></div>
+      <div class="obs-row"><label for="p-minel">MIN ELEVATION (deg)</label><input type="number" id="p-minel" min="5" max="80" step="any"></div>
+      <pre class="obs-summary" id="plan-out">Loading plan…</pre>
+      <div class="obs-row"><label for="p-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="p-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
+      <div class="obs-actions"><button type="button" id="btn-start">START TRANSIT</button></div>
+      <div class="reason" data-for="btn-start" role="status"></div>
+      <div id="lobe-job"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-live">
+      <header><h2 id="h-live">LIVE TRANSIT <span class="muted">(intensity → · time ↓ · refreshed every 5 s · linear band power, narrow lines removed)</span></h2><span id="live-badge" class="badge">—</span></header>
+      <canvas id="lobe-plot" style="width:100%;height:520px;display:block;margin:8px 0;border:1px solid var(--line);border-radius:8px"></canvas>
+      <pre class="obs-summary" id="fit-out">No transit yet.</pre>
+    </section>
+
+    <div id="error-banner" class="banner connection" hidden></div>
+  </main>
+
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
+  <script src="lobe.js"></script>
+</body></html>
