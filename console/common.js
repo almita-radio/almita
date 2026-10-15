@@ -677,7 +677,7 @@
         ctx.beginPath(); ctx.arc(x, y, dot, 0, 2 * Math.PI);
         // MONITOR's running campaign passes p.state: done green, failed orange, pending white; the current point is
         // drawn after the loop as a large red X. OBSERVE passes below_min instead.
-        ctx.fillStyle = p.state === "done" ? "#55c985" : p.state === "failed" ? "#e6b85c" : p.below_min ? "#e5484d" : "#ffffff";
+        ctx.fillStyle = p.state === "done" ? "#39ff14" : p.state === "failed" ? "#e6b85c" : p.below_min ? "#e5484d" : "#ffffff";
         if (p.state !== "current") ctx.fill();
       }
       for (const p of o.points) {
