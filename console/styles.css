@@ -91,6 +91,16 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:#c4d1d8}
 .obs-check-row.status-warning{color:var(--warn)}
 .obs-check-row.status-block{color:var(--error)}
 .obs-actions{display:flex;gap:10px;padding:11px}
+.obs-estimate{border:1px solid var(--line);background:#0d1317;padding:12px;margin:6px 0;display:grid;gap:10px}
+.est-cells{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.est-label{font:700 10px/1.4 monospace;letter-spacing:.1em;color:var(--muted)}
+.est-big{font:700 34px/1.15 ui-monospace,monospace;color:var(--text)}
+.est-sub{font:11px/1.5 ui-monospace,monospace;color:var(--muted);white-space:pre-wrap}
+.obs-estimate.est-pending .est-big{opacity:.45}
+.est-verdict{font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;padding:6px 8px;border-left:3px solid var(--line)}
+.est-verdict.est-ok{color:var(--ok);border-color:var(--ok)}
+.est-verdict.est-warn{color:var(--warn);border-color:var(--warn)}
+.est-verdict.est-block{color:var(--error);border-color:var(--error)}
 
 /* ALIGN + CALIBRATE (console/align.html, console/calibrate.html) —
    additive only, shares OBSERVE's tokens/classes above. */

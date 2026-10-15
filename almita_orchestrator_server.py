@@ -139,6 +139,19 @@ def _write_body(handler: BaseHTTPRequestHandler, data: bytes) -> None:
         handler.wfile.write(data)
 
 
+def _duration_from_raw(body: Any) -> Dict[str, Any]:
+    """The duration estimate even when another part of the spec is still invalid (it only needs points + timing)."""
+    try:
+        grid, capture = body["grid"], observation_spec._validate_capture(body["capture"])
+        rows, cols = int(grid["rows"]), int(grid["cols"])
+    except (KeyError, TypeError, ValueError):
+        return {"duration": None}
+    if rows < 2 or cols < 2:
+        return {"duration": None}
+    return {"duration": observation_plan.estimate_duration(rows * cols, capture["seconds"], capture["settle_seconds"]),
+            "requested_point_count": rows * cols}
+
+
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any]) -> None:
     body = json.dumps(_sanitize(payload), indent=2, allow_nan=False, default=str).encode("utf-8")
     handler.send_response(status)
@@ -438,6 +451,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return self._mount_camera_set_config()
             if path == "/api/observe/plan":
                 return self._handle_plan()
+            if path == "/api/observe/estimate":
+                return self._handle_estimate()
             if path == "/api/observe/start":
                 return self._handle_start()
             if path == "/api/observe/stop":
@@ -534,6 +549,17 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         finally:
             _PLAN_LOCK.release()
         _json_response(self, 200, plan)
+
+    def _handle_estimate(self) -> None:
+        """Live duration + feasibility while the operator types: PLAN's own calculation, nothing written to disk.
+        A spec PLAN would reject comes back as 200 with spec_error (it is the answer, not a failed request)."""
+        body = _read_json_body(self)
+        try:
+            spec = observation_spec.validate_spec_dict(body)
+        except observation_spec.ObservationSpecError as exc:
+            return _json_response(self, 200, {"spec_valid": False, "spec_error": str(exc), "feasible": False,
+                                              **_duration_from_raw(body)})
+        _json_response(self, 200, {"spec_valid": True, "spec_error": None, **observation_plan.estimate_observation(spec)})
 
     def _handle_align_action(self, action: str, mode: str) -> None:
         body = _read_json_body(self)

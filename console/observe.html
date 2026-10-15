@@ -32,6 +32,14 @@
         <div class="obs-row"><label for="f-capture">CAPTURE (s)</label><input type="number" id="f-capture" step="any" min="0.1" value="10"></div>
         <div class="obs-row"><label for="f-settle">SETTLE (s)</label><input type="number" id="f-settle" step="any" min="0" value="2"></div>
 
+        <div id="estimate" class="obs-estimate" aria-live="polite">
+          <div class="est-cells">
+            <div class="est-cell"><div class="est-label">ESTIMATED RUN</div><div class="est-big" id="est-duration">—</div><div class="est-sub" id="est-duration-sub"></div></div>
+            <div class="est-cell"><div class="est-label">SKY TIME LEFT FOR THIS REGION</div><div class="est-big" id="est-sky">—</div><div class="est-sub" id="est-sky-sub"></div></div>
+          </div>
+          <div class="est-verdict" id="est-verdict" role="status"></div>
+        </div>
+
         <h3>MAIN</h3>
         <div class="obs-row"><label for="f-freq">Frequency (Hz)</label><input type="number" id="f-freq" value=""></div>
         <div class="obs-row"><label for="f-rate">Sample rate (Hz)</label><input type="number" id="f-rate" value=""></div>

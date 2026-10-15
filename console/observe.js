@@ -57,6 +57,77 @@
     };
   }
 
+  // ------------------------------------------------------------------ live estimate
+  // Recomputed by the server with PLAN's own code (nothing is written) while the operator types, so the duration and
+  // the region's remaining sky time are visible before PLAN, and a spec PLAN would reject shows up here first.
+  const fmtDur = (sec) => {
+    if (!U.finite(sec)) return "—";
+    const m = Math.round(sec / 60);
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+  };
+  const estimate = { timer: null, inFlight: false, dirty: false };
+
+  function setVerdict(kind, text) {
+    const el = $("est-verdict");
+    el.className = "est-verdict" + (kind ? ` est-${kind}` : "");
+    el.textContent = text;
+  }
+
+  function renderEstimate(e) {
+    const d = e.duration;
+    $("est-duration").textContent = d ? fmtDur(d.estimated_seconds) : "—";
+    $("est-duration-sub").textContent = d
+      ? `conservative ${fmtDur(d.conservative_seconds)} · ${e.point_count || e.requested_point_count || "—"} points`
+        + (U.finite(e.spacing_deg) ? ` · spacing ${U.deg(e.spacing_deg, 2)}` : "")
+        + (e.estimated_end_utc ? `\nif started now: ends ~${U.utcTime(e.estimated_end_utc)} (conservative ${U.utcTime(e.conservative_end_utc)})` : "")
+      : "";
+    const w = e.sky_window;
+    if (!w) {
+      $("est-sky").textContent = "—";
+      $("est-sky-sub").textContent = e.spec_valid && $("f-placement").value === "EASTMOST_SAFE"
+        ? "no region can be placed with these values" : "";
+    } else if (!w.window_end_utc) {
+      $("est-sky").textContent = "never";
+      $("est-sky-sub").textContent = `the whole region is never above ${U.deg(w.min_altitude_deg, 0)} in the next ${w.horizon_hours} h`
+        + ` (best lowest point ${U.deg(w.best_lowest_altitude_deg, 1)})`;
+    } else {
+      const more = w.window_open_past_horizon ? "+" : "";
+      $("est-sky").textContent = fmtDur(w.seconds_until_window_end) + more;
+      $("est-sky-sub").textContent = `whole region above ${U.deg(w.min_altitude_deg, 0)}: ${U.utcTime(w.window_start_utc)} → `
+        + `${U.utcTime(w.window_end_utc)}${more} (${fmtDur(w.window_seconds)}${more})`
+        + `\nlowest point now ${U.deg(w.lowest_altitude_now_deg, 1)}` + (w.visible_now ? "" : " (not all up yet)");
+    }
+    if (!e.spec_valid) return setVerdict("block", `PLAN would reject these values: ${e.spec_error}`);
+    if (!e.feasible) return setVerdict("block", `PLAN would refuse: ${e.blocking_reason}`
+      + (w && w.window_start_utc ? `\nThis region is wholly up from ${U.utcTime(w.window_start_utc)} — plan then, or change it.` : ""));
+    const spare = w && U.finite(w.seconds_until_window_end) ? w.seconds_until_window_end - d.conservative_seconds : null;
+    const tail = U.finite(e.max_recommended_start_delay_minutes)
+      ? `\nStart within ~${Math.round(e.max_recommended_start_delay_minutes)} min of planning.` : "";
+    if (U.finite(spare) && spare < 0) {
+      return setVerdict("warn", `PLAN would accept, but the conservative end is ${fmtDur(-spare)} after the region sets.${tail}`);
+    }
+    setVerdict("ok", "PLAN would accept these values" + (U.finite(spare) ? ` · ${fmtDur(spare)}${w.window_open_past_horizon ? "+" : ""} of sky to spare after the conservative end` : "") + "." + tail);
+  }
+
+  async function runEstimate() {
+    if (estimate.inFlight) { estimate.dirty = true; return; }
+    estimate.inFlight = true;
+    estimate.dirty = false;
+    $("estimate").classList.add("est-pending");
+    const r = await U.api("/api/observe/estimate", { method: "POST", body: readSpec(), timeoutMs: 30000 });
+    estimate.inFlight = false;
+    if (estimate.dirty) return runEstimate();          // the form changed while this one ran: its answer is already stale
+    $("estimate").classList.remove("est-pending");
+    if (!r.ok) { setVerdict("", `estimate unavailable: ${(r.error && r.error.message) || "no answer"}`); return; }
+    renderEstimate(r.data);
+  }
+
+  function scheduleEstimate() {
+    clearTimeout(estimate.timer);
+    $("estimate").classList.add("est-pending");
+    estimate.timer = setTimeout(runEstimate, 700);
+  }
+
   // ------------------------------------------------------------------ plan
   function planLines(plan) {
     const r = plan.resolved || {};
@@ -392,7 +463,10 @@
   U.setEnabled($("btn-start"), false, "plan first");
   U.setEnabled($("btn-stop"), false, "no observation is running");
 
-  loadDefaults();
+  loadDefaults().finally(scheduleEstimate);
+  $("observe-form").addEventListener("input", scheduleEstimate);
+  $("observe-form").addEventListener("change", scheduleEstimate);
+  setInterval(() => { if (!document.hidden && !estimate.inFlight) runEstimate(); }, 60000);  // the sky moves: keep "now" current
   // Page reload during a run: rebuild the state from the backend (the run is server-side and never depended on this page).
   (async function recover() {
     const r = await U.api("/api/observe/status", { timeoutMs: 8000 });

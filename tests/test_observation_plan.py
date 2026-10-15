@@ -107,6 +107,26 @@ def test_resolve_eastmost_safe_meets_altitude_margin_and_explains_reasoning():
     assert len(resolved["points"]) == 9
 
 
+def test_resolve_eastmost_safe_long_run_is_placed_by_altitude_floor_not_meridian():
+    """2026-10-14: 15x15 / 30 deg at 50 s capture (5.75 h conservative) was rejected because a meridian-centred
+    start sets below the floor before the end, although starting further east keeps every point high."""
+    spec = _valid_spec(grid={"width_deg": 30, "height_deg": 30, "rows": 15, "cols": 15},
+                       capture={"seconds": 50, "settle_seconds": 5})
+    grid_spec = dict(spec["grid"])
+    grid_spec["center_dec_deg"] = -33.4489  # observer latitude
+    location, t0 = _location_and_t0()
+    per_point = pl.estimate_duration(225, 50, 5)["per_point_conservative_seconds"]
+    lst = t0.sidereal_time("apparent", longitude=location.lon).hour
+    meridian_points, _ = pl._grid_points(lst, grid_spec["center_dec_deg"], 30, 30, grid_spec["nominal_spacing_deg"])
+    meridian_low = min(p["predicted_altitude_deg"] for p in pl._predicted_altitudes(meridian_points, location, t0, per_point))
+    assert meridian_low < grid_spec["min_altitude_deg"] + pl.EASTMOST_ALTITUDE_MARGIN_DEG  # the old search gave up here
+    resolved = pl._resolve_eastmost_safe(grid_spec, location, t0, per_point)
+    assert resolved["min_predicted_altitude_deg"] >= grid_spec["min_altitude_deg"] + pl.EASTMOST_ALTITUDE_MARGIN_DEG - 0.5
+    start_ha = (lst - resolved["center_ra_hours"] + 12.0) % 24.0 - 12.0
+    assert start_ha < -1.0  # placed rising in the east
+    assert len(resolved["points"]) == 225
+
+
 def test_resolve_eastmost_safe_never_touches_indi_or_subprocess(monkeypatch):
     def _boom(*args, **kwargs):
         raise AssertionError("EASTMOST_SAFE search must never launch a subprocess or mutate INDI state")
@@ -178,3 +198,38 @@ def test_fixed_center_plan_preserves_rfi_ref_bias_tee(fixed_center_plan):
     session_dir = data_dir / plan["grid_session_dir"].split("/")[-1]
     on_disk = json.loads((session_dir / "observation_resolved.json").read_text())
     assert on_disk["rfi_ref"]["bias_tee"] is True
+
+
+# --------------------------------------------------------------- live estimate (OBSERVE form): PLAN's own
+# resolution, nothing written to disk
+
+def test_estimate_observation_matches_plan_duration_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # anything written would land here
+    spec = _valid_spec()
+    est = pl.estimate_observation(spec, observer_config_path=str(pl.Path(__file__).resolve().parents[1] / TEST_OBSERVER_CONFIG))
+    assert est["feasible"] is True and est["blocking_reason"] is None
+    assert est["duration"] == pl.estimate_duration(9, 1, 0.5)
+    assert est["point_count"] == 9
+    w = est["sky_window"]
+    assert w["window_end_utc"] is not None and w["seconds_until_window_end"] >= est["duration"]["conservative_seconds"] - 300
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_estimate_observation_reports_plan_refusal_instead_of_raising():
+    spec = _valid_spec(grid={"placement": "FIXED_CENTER", "center_ra_hours": 0.0, "center_dec_deg": 80.0,
+                              "min_altitude_deg": 45})
+    est = pl.estimate_observation(spec, observer_config_path=TEST_OBSERVER_CONFIG)
+    assert est["feasible"] is False
+    assert "predicted minimum altitude" in est["blocking_reason"]
+    assert est["duration"]["estimated_seconds"] > 0
+    assert est["sky_window"]["window_end_utc"] is None  # dec +80 never reaches 45 deg from -33
+
+
+def test_sky_window_open_now_and_closes_when_the_region_sets():
+    location, t0 = _location_and_t0()
+    lst = t0.sidereal_time("apparent", longitude=location.lon).hour
+    points, _ = pl._grid_points(lst, -33.4489, 4, 4, 2)  # on the meridian at the zenith now
+    w = pl.sky_window(points, location, t0, 10.0)
+    assert w["visible_now"] is True and w["window_start_utc"] == t0.utc.isot + "Z"
+    assert 4 * 3600 < w["seconds_until_window_end"] < 8 * 3600  # sets ~5-6 h after transit at this altitude floor
+    assert w["seconds_until_window_end"] == w["window_seconds"]

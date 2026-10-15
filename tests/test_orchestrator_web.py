@@ -120,6 +120,22 @@ def test_plan_calls_core_and_returns_its_output(monkeypatch):
     assert captured["spec"]["session"]["name"] == "WEBTEST"
 
 
+def test_estimate_returns_core_answer_and_spec_errors_as_200(monkeypatch):
+    monkeypatch.setattr(observation_plan, "plan_observation", lambda *a, **k: pytest.fail("estimate must not plan"))
+    monkeypatch.setattr(observation_plan, "estimate_observation",
+                        lambda spec, **k: {"feasible": True, "duration": {"estimated_seconds": 1.0}, "rows": spec["grid"]["rows"]})
+    bad_spec = dict(VALID_SPEC)
+    bad_spec["grid"] = dict(VALID_SPEC["grid"], width_deg=10)  # spacing no longer matches height/rows
+    with running_server() as base:
+        status, body = _post(f"{base}/api/observe/estimate", VALID_SPEC)
+        assert status == 200 and body["spec_valid"] is True and body["rows"] == 3
+        status, body = _post(f"{base}/api/observe/estimate", bad_spec)
+        assert status == 200 and body["spec_valid"] is False and body["feasible"] is False
+        assert "must match" in body["spec_error"]
+        assert body["duration"]["estimated_seconds"] == observation_plan.estimate_duration(9, 1, 0.5)["estimated_seconds"]
+        assert body["requested_point_count"] == 9
+
+
 def test_start_requires_confirm_true():
     with running_server() as base:
         status, body = _post(f"{base}/api/observe/start", {"resolved_plan_path": "/x/observation_resolved.json"})
