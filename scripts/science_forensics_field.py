@@ -57,7 +57,9 @@ FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("scien
           ("capture.py", "69b9b61"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
-          ("observation_orchestrator.py", "0148b78"), ("observation_spec.py", "7b2eefb"))
+          # observation_spec.py re-pinned from 7b2eefb to e4b0a0b (2026-10-15): operator-ordered grid ANGLE - an optional
+          # grid.rotation_deg, default 0. An unrotated spec validates to the same values plus rotation_deg=0.
+          ("observation_orchestrator.py", "0148b78"), ("observation_spec.py", "e4b0a0b"))
 DEFAULT_WINDOW = (150857.0, 5607.0)          # candidate LSRK window (m/s) of the feature campaign
 MIN_ALT_DEG, HA_MARGIN_H = 30.0, 0.25        # same values the plan/`windows` use
 ENDPOINTS = {"MAIN rtl_tcp": 1234, "INDI": 7624}
