@@ -261,7 +261,7 @@ def test_estimate_returns_each_point_where_it_will_be_captured():
 
 def test_observe_page_draws_the_grid_with_the_minimum_altitude_circle():
     root = pl.Path(__file__).resolve().parents[1]
-    assert 'id="est-sky"' in (root / "console" / "observe.html").read_text()
+    assert 'id="est-skymap"' in (root / "console" / "observe.html").read_text()
     js = (root / "console" / "observe.js").read_text()
     assert "minAlt: sky.min_altitude_deg" in js and "points: pts" in js
     assert "o.minAlt" in (root / "console" / "common.js").read_text()
@@ -272,3 +272,13 @@ def test_planning_pace_is_the_mean_of_projected_and_conservative():
     assert d["planning_seconds"] == pytest.approx((d["estimated_seconds"] + d["conservative_seconds"]) / 2)
     assert d["estimated_seconds"] < d["planning_seconds"] < d["conservative_seconds"]
     assert d["per_point_planning_seconds"] * 100 == pytest.approx(d["planning_seconds"])
+
+
+def test_no_console_page_repeats_an_element_id():
+    """A repeated id made OBSERVE draw its sky map on the SKY TIME LEFT text, throw, and stop updating (2026-10-15)."""
+    import re
+    from collections import Counter
+    root = pl.Path(__file__).resolve().parents[1] / "console"
+    for page in sorted(root.glob("*.html")):
+        ids = Counter(re.findall(r'\bid="([^"]+)"', page.read_text()))
+        assert not [i for i, n in ids.items() if n > 1], (page.name, [i for i, n in ids.items() if n > 1])

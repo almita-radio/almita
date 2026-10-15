@@ -76,7 +76,7 @@
   // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
   // schedule), red below the minimum altitude, the first one ringed, the visiting order dashed; Sun and HI4PI layer.
   function renderEstimateSky(sky) {
-    const canvas = $("est-sky"), legend = $("est-sky-legend"), note = $("est-sky-note");
+    const canvas = $("est-skymap"), legend = $("est-skymap-legend"), note = $("est-skymap-note");
     if (!sky || !sky.points || !sky.points.length) {
       canvas.hidden = true; legend.hidden = true; note.textContent = "";
       return;
