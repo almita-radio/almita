@@ -74,7 +74,7 @@
   }
 
   // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
-  // schedule), small red points (hollow white: below the minimum altitude when captured), the first one ringed; Sun and HI4PI layer.
+  // schedule), small light-grey points (red: below the minimum altitude when captured), the first one ringed; Sun and HI4PI layer.
   let skyView = "now", lastSky = null;
   function renderEstimateSky(sky) {
     lastSky = sky;
@@ -93,7 +93,7 @@
     if (range) U.drawHi4piLegend(legend, range);
     const low = pts.filter((p) => p.below_min).length, below = pts.filter((p) => p.alt_deg < 0).length;
     note.textContent = (skyView === "now" ? `${pts.length} points, all at the start time (ringed: first captured) · ` : `${pts.length} points where the mount will be at each capture (ringed: first) · `)
-      + (low ? `${low} below the minimum altitude ${sky.min_altitude_deg}° when captured (hollow white; green circle = minimum altitude)${below ? `, ${below} under the horizon (not drawn)` : ""}` : "all above the minimum altitude (green circle)")
+      + (low ? `${low} below the minimum altitude ${sky.min_altitude_deg}° when captured (red; green circle = minimum altitude)${below ? `, ${below} under the horizon (not drawn)` : ""}` : "all above the minimum altitude (green circle)")
       + ` · Sun ${sky.sun.above_horizon ? `az ${sky.sun.az_deg.toFixed(0)}° alt ${sky.sun.alt_deg.toFixed(0)}°` : "below the horizon"}`
       + (sky.hi4pi_grid ? " · colour: real HI4PI map now" : sky.hi4pi_error ? ` · HI4PI layer unavailable (${sky.hi4pi_error})` : "");
   }
