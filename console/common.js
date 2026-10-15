@@ -591,7 +591,7 @@
   U.drawSkyView = function (canvas, data, opts) {
     // Optional (backward compatible, ALIGN passes none of these): opts.colors {label: css}, opts.path [[az,alt],...]
     // drawn as the visiting order; per area: order (number shown before the label) and warn (dashed red outline).
-    // opts.points [{az_deg, alt_deg, below_min}] (OBSERVE's grid): small dots, red when below the minimum altitude,
+    // opts.points [{az_deg, alt_deg, below_min}] (OBSERVE's grid): small red dots, hollow white when below the minimum altitude,
     // the first one ringed; drawn over the path and under the areas.
     // opts.minAlt: the minimum-altitude circle, in green (OBSERVE).
     const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null }, opts || {});
@@ -669,12 +669,13 @@
       ctx.stroke(); ctx.restore();
     }
     if (o.points && o.points.length) {
-      const dot = Math.max(1.6, Math.min(4, 90 / Math.sqrt(o.points.length)));
+      const dot = Math.max(1.0, Math.min(2.5, 55 / Math.sqrt(o.points.length)));
       for (const p of o.points) {
         if (p.alt_deg < -5) continue;
         const [x, y] = toXY(p.az_deg, p.alt_deg);
-        ctx.fillStyle = p.below_min ? "#e5484d" : "#5cc8e6";
-        ctx.beginPath(); ctx.arc(x, y, dot, 0, 2 * Math.PI); ctx.fill();
+        ctx.beginPath(); ctx.arc(x, y, dot, 0, 2 * Math.PI);
+        if (p.below_min) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1; ctx.stroke(); }      // hollow white: below the floor
+        else { ctx.fillStyle = "#e5484d"; ctx.fill(); }
       }
       const first = o.points[0];
       if (first && first.alt_deg >= -5) {
