@@ -183,9 +183,11 @@
   };
 
   // ------------------------------------------------------------------ shared page chrome (header, health strip, footer)
+  // Operator's order (2026-10-15): STATUS PIPELINE ALIGN (LOBE) CALIBRATE OBSERVE MONITOR REDUCE SCIENCE.
   const NAV = [
-    { key: "PIPELINE", href: "/pipeline.html" }, { key: "OBSERVE", href: "/observe.html" }, { key: "ALIGN", href: "/align.html" }, { key: "LOBE", href: "/lobe.html" }, { key: "CALIBRATE", href: "/calibrate.html" },
-    { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" }, { key: "STATUS", href: "/status.html" },
+    { key: "STATUS", href: "/status.html" }, { key: "PIPELINE", href: "/pipeline.html" }, { key: "ALIGN", href: "/align.html" },
+    { key: "LOBE", href: "/lobe.html" }, { key: "CALIBRATE", href: "/calibrate.html" }, { key: "OBSERVE", href: "/observe.html" },
+    { key: "MONITOR", href: "/" }, { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" },
   ];
   function consoleBase() { return ""; }  // MONITOR is served by this same origin (single web port)
   U.consoleBase = consoleBase;
@@ -205,7 +207,7 @@
     const nav = document.createElement("nav");
     nav.className = "obs-nav";
     nav.setAttribute("aria-label", "ALMITA sections");
-    const items = NAV.concat([{ key: "MONITOR", href: consoleBase() + "/" }]);
+    const items = NAV.map((it) => (it.key === "MONITOR" ? { key: "MONITOR", href: consoleBase() + "/" } : it));
     for (const it of items) {
       const a = document.createElement("a");
       a.className = "obs-nav-link" + (it.key === section ? " active" : "");
