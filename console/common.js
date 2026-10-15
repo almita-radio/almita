@@ -597,13 +597,28 @@
     // the first one ringed; drawn over the path and under the areas.
     // opts.minAlt: the minimum-altitude circle, in green (OBSERVE).
     // opts.dotScale multiplies the point size; opts.ringFirst=false drops the ring on the first point (MONITOR).
-    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null, dotScale: 1, ringFirst: true }, opts || {});
+    // opts.zoomToPoints: frame the view on the points with opts.zoomMargin (fraction of their extent, each side) -
+    // the projection is linear on screen, so only the centre and the scale change and every layer follows (MONITOR).
+    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null, dotScale: 1, ringFirst: true,
+                              zoomToPoints: false, zoomMargin: 0.3 }, opts || {});
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) { canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const w = cssW, h = cssH, cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 22;
+    const w = cssW, h = cssH;
+    let cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 22;
+    if (o.zoomToPoints && o.points && o.points.length) {
+      const base = (az, alt) => { const r = R * (1 - Math.max(0, Math.min(90, alt)) / 90), t = (az * Math.PI) / 180; return [cx + r * Math.sin(t), cy - r * Math.cos(t)]; };
+      const xy = o.points.filter((p) => p.alt_deg >= -5).map((p) => base(p.az_deg, p.alt_deg));
+      if (xy.length) {
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        for (const [x, y] of xy) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+        const ext = Math.max(x1 - x0, y1 - y0, 8);
+        const S = Math.max(1, Math.min(w, h) / (ext * (1 + 2 * o.zoomMargin)));
+        cx = w / 2 + S * (cx - (x0 + x1) / 2); cy = h / 2 + S * (cy - (y0 + y1) / 2); R *= S;
+      }
+    }
     // this app is fixed dark (console/styles.css sets color-scheme:dark with no light variant): match its own palette, not the OS theme.
     const fg = "#e6edf1", muted = "rgba(145,162,173,0.75)", ringBg = "#121a20";
     ctx.clearRect(0, 0, w, h);
