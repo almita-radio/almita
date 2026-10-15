@@ -183,10 +183,10 @@
   };
 
   // ------------------------------------------------------------------ shared page chrome (header, health strip, footer)
-  // Operator's order (2026-10-15): STATUS PIPELINE ALIGN (LOBE) CALIBRATE OBSERVE MONITOR REDUCE SCIENCE.
+  // Operator's order (2026-10-15): STATUS PIPELINE LOBE ALIGN CALIBRATE OBSERVE MONITOR REDUCE SCIENCE.
   const NAV = [
-    { key: "STATUS", href: "/status.html" }, { key: "PIPELINE", href: "/pipeline.html" }, { key: "ALIGN", href: "/align.html" },
-    { key: "LOBE", href: "/lobe.html" }, { key: "CALIBRATE", href: "/calibrate.html" }, { key: "OBSERVE", href: "/observe.html" },
+    { key: "STATUS", href: "/status.html" }, { key: "PIPELINE", href: "/pipeline.html" }, { key: "LOBE", href: "/lobe.html" },
+    { key: "ALIGN", href: "/align.html" }, { key: "CALIBRATE", href: "/calibrate.html" }, { key: "OBSERVE", href: "/observe.html" },
     { key: "MONITOR", href: "/" }, { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" },
   ];
   function consoleBase() { return ""; }  // MONITOR is served by this same origin (single web port)
