@@ -646,6 +646,12 @@ def cmd_final_check(args) -> int:
 
 def cmd_abort(args) -> int:
     session_dir = Path(args.session_dir)
+    if read_json_safe(_state_path(session_dir)) is None:
+        # ABORT with no pilot planned: nothing to abort is the answer, not a failed job (BL-058, same as status/BL-048).
+        # Nothing is written - an abort must not create a pilot state where there was none.
+        _emit({"session_dir": str(session_dir), "state": None, "planned": False, "aborted": False,
+               "detail": "no gain pilot planned for this session: nothing to abort"})
+        return 0
     state = _load_state(session_dir)
     state["step"] = "ABORTED"
     state["aborted"] = True

@@ -1445,9 +1445,9 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
             # blob means the script itself failed to produce a real result at all.
             if not blob:
                 out["detail"] = f"exit {rc}; no JSON result from observation_gain_pilot.py: {_tail(Path(j['log']), 5)}"
-            elif action == "status" and not blob.get("state"):
-                out["verdict"] = "PASS"       # a status query with no pilot planned: an answer, not a failure (BL-048)
-                out["detail"] = "no gain pilot planned for this session"
+            elif action in ("status", "abort") and not blob.get("state"):
+                out["verdict"] = "PASS"       # status/abort with no pilot planned: an answer, not a failure (BL-048, BL-058)
+                out["detail"] = "no gain pilot planned for this session" + (": nothing to abort" if action == "abort" else "")
             elif stage == "observe_gain_pilot_plan":
                 out["verdict"] = "PASS"
                 out["detail"] = (f"plan only, nothing moved; {out['facts'].get('estimated_extra_points')} pilot point(s), "
