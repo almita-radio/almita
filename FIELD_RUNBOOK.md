@@ -277,11 +277,10 @@ No hay pasos adicionales de hardware documentados más allá de esto.
 - ~~visibility TOCTOU~~ — capture.py recalcula la altitud al momento del GOTO y difiere el punto si no cumple.
 - ~~console header Gain/Bias-T histórico~~ — ya no existe ese texto fijo.
 - ~~CSV de sesión/mosaic no atómico~~ — capture.py escribe vía `.csv.tmp` + `os.replace`.
-- identidad de sesión canónica global (3 IDs distintos según el artefacto) — **abierto**
-- INDI process lock (sin exclusión mutua forzada) — **abierto**
-- `sdr_capture.configure(gain='auto')` como valor por omisión — ningún flujo operativo lo usa (todos sintonizan
-  explícito con ganancia fija); **abierto** como limpieza
-- duplicación de lectores DS18B20 (`temperature_sensors.py` / `telemetry_summary.py`) — **abierto**
+- ~~identidad de sesión canónica global~~ — resuelto 2026-10-15: la canónica es la campaña (`data/mosaic/<campaign_id>`); `session_identity.resolve()` la encuentra desde cualquiera de los 3 IDs y `last_session.json` guarda `campaign_id` e `iq_session_dir`
+- ~~INDI process lock~~ — resuelto 2026-10-15: `mount_lock.py`; el primer GOTO/SYNC/tracking ON de un proceso reclama la montura (flock en `data/runtime/mount.lock`) y otro proceso no puede moverla; parar nunca lo necesita. Emergencia: `ALMITA_MOUNT_LOCK=off`
+- ~~`sdr_capture.configure(gain='auto')` como valor por omisión~~ — resuelto 2026-10-15: sin ganancia explícita lanza error
+- ~~duplicación de lectores DS18B20~~ — resuelto 2026-10-15: `telemetry_summary` usa `temperature_sensors.DS18B20Reader` (con CRC y un reintento)
 - ~~`FLUJO_COMPLETO.md` desactualizado~~ — marcado como documento histórico (7b2eefb)
 - `README.md` con referencias desactualizadas — **abierto**; se resuelve al unir con `main` (BL-035)
 
