@@ -353,9 +353,9 @@ class LobeRun:
         except (OSError, ValueError, KeyError, RuntimeError) as exc:
             row["error"] = str(exc)
             spectrum = np.full(SPECTRUM_NFFT, np.nan, dtype=np.float32)
+            self.log(f"sample {self.index}: {exc}")
         with open(self.out / "lobe_spectra.f32", "ab") as sf:          # row k = sample k+1 (NaN when it failed)
             sf.write(spectrum.tobytes())
-            self.log(f"sample {self.index}: {exc}")
         writer.writerow({k: row.get(k) for k in CSV_FIELDS})
         fh.flush()
         if row["status"] != "CAPTURE_FAILED":

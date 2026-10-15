@@ -155,3 +155,137 @@ def test_spectrum_view_marks_the_injected_narrow_peak():
     k = int(np.argmin(np.abs(np.array(v["freq_mhz"]) - v["peak"]["freq_mhz"])))
     assert v["peak"]["excess_db"] > 3 and abs(v["peak"]["offset_khz"] - (-703.125)) < 2.4
     assert v["usable"][k] and not v["usable"][512] and len(v["db"]) == lt.SPECTRUM_NFFT
+
+
+def test_sample_with_fake_hardware_writes_csv_spectrum_and_survives_a_failed_capture(tmp_path):
+    """sample() end to end without hardware: a good capture and a failed one (2026-10-15: a misplaced log line made
+    every GOOD sample raise NameError - only a run with fakes catches that)."""
+    import asyncio, csv as _csv, types
+    from sdr_capture import write_hdf5_atomic
+
+    class FakeSDR:
+        def __init__(self):
+            self.calls = 0
+
+        async def capture(self, seconds, path, rate, meta):
+            self.calls += 1
+            if self.calls == 2:
+                raise OSError("simulated capture failure")
+            iq = _iq(int(rate * seconds) // 2 // 256 * 256)
+            write_hdf5_atomic(path, iq, {"center_frequency_hz": 1420405752, "sample_rate_hz": rate, "num_samples": len(iq) // 2,
+                                         "capture_status": "complete", "final_filename": Path(path).name, "created_at": "x"},
+                              expected_samples=len(iq) // 2)
+
+    class FakeScope:
+        async def get_coordinates(self, force_refresh=False):
+            return 13.0, -8.5
+
+    args = types.SimpleNamespace(output_dir=str(tmp_path / "run"), observer_config="observer_config.json", capture_seconds=0.2,
+                                 sample_rate=2_400_000, gain=40.2, mode="scan", max_clipping=0.001)
+    run = lt.LobeRun(args)
+    run.temps = None
+    run.sdr, run.telescope = FakeSDR(), FakeScope()
+    run.tuning = {"requested": {"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000, "gain_db": 40.2},
+                  "applied": {"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000, "gain_db": 40.2},
+                  "evidence": "TEST", "evidence_detail": "", "pll_not_locked_count": 0, "tuned_utc": "x", "rtl_agc": "off: test"}
+    with open(run.csv_path, "w", newline="") as fh:
+        w = _csv.DictWriter(fh, fieldnames=lt.CSV_FIELDS); w.writeheader()
+        good = asyncio.run(run.sample(w, fh, "on"))
+        bad = asyncio.run(run.sample(w, fh, "on"))
+    assert good["status"] == "VALID" and good["power_lin"] > 0 and bad["status"] == "CAPTURE_FAILED"
+    spectra = np.fromfile(tmp_path / "run" / "lobe_spectra.f32", dtype=np.float32).reshape(-1, lt.SPECTRUM_NFFT)
+    assert spectra.shape[0] == 2 and np.isfinite(spectra[0]).all() and np.isnan(spectra[1]).all()
+    assert [r["status"] for r in lt.read_samples(run.csv_path)] == ["VALID", "CAPTURE_FAILED"]
+
+
+class _FakeMount:
+    def __init__(self):
+        self.calls, self.tracking = [], False
+
+    async def goto(self, ra, dec):
+        self.calls.append(("goto", round(ra, 3), round(dec, 3))); self.ra, self.dec = ra, dec
+        return True
+
+    async def set_track_mode(self, mode):
+        self.calls.append(("mode", mode)); return True
+
+    async def wait_track_mode(self, mode, timeout=5.0):
+        return True
+
+    async def set_tracking(self, on):
+        self.calls.append(("tracking", on)); self.tracking = on; return True
+
+    async def wait_tracking_state(self, on, timeout=5.0):
+        return self.tracking == on
+
+    async def get_tracking_state(self, timeout=1.0):
+        return "on" if self.tracking else "off"
+
+    async def get_coordinates(self, force_refresh=False):
+        return self.ra, self.dec
+
+    async def disconnect(self):
+        self.calls.append(("disconnect",))
+
+
+def _fake_run(tmp_path, monkeypatch, mode, plan_out):
+    import types
+    from sdr_capture import write_hdf5_atomic
+
+    class FakeSDR:
+        async def capture(self, seconds, path, rate, meta):
+            iq = _iq(int(rate * seconds) // 2 // 256 * 256)
+            write_hdf5_atomic(path, iq, {"center_frequency_hz": 1420405752, "sample_rate_hz": rate, "num_samples": len(iq) // 2,
+                                         "capture_status": "complete", "final_filename": Path(path).name, "created_at": "x"},
+                              expected_samples=len(iq) // 2)
+
+        async def close(self):
+            pass
+
+    args = lt.parse_args(["--mode", mode, "--output-dir", str(tmp_path / mode), "--capture-seconds", "0.2", "--every", "1",
+                          "--settle", "0"])
+    run = lt.LobeRun(args)
+    run.temps = None
+    mount = _FakeMount()
+
+    async def fake_connect():
+        run.telescope, run.sdr = mount, FakeSDR()
+        run.tuning = {"requested": {"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000, "gain_db": 40.2},
+                      "applied": {"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000, "gain_db": 40.2},
+                      "evidence": "TEST", "evidence_detail": "", "pll_not_locked_count": 0, "tuned_utc": "x", "rtl_agc": "off: test"}
+    monkeypatch.setattr(run, "connect", fake_connect)
+    monkeypatch.setattr(lt, "plan", lambda *a, **k: plan_out)
+    import asyncio
+    rc = asyncio.run(run.run())
+    return rc, mount, json.loads((tmp_path / mode / "lobe_result.json").read_text()), lt.read_samples(run.csv_path)
+
+
+def test_a_full_scan_run_with_fake_hardware_completes_and_leaves_tracking_off(tmp_path, monkeypatch):
+    sun = lt.sun_eod(Time.now())
+    positions = [{"offset_deg": x, "ra_hours": 0, "dec_deg": float(sun.dec.deg), "alt_deg": 40, "az_deg": 90} for x in (-2.0, 0.0, 2.0)]
+    p = {"mode": "scan", "half_range_deg": 2.0, "duration_s": 30, "point_alt_deg": 40.0, "positions": positions, "problems": []}
+    rc, mount, res, rows = _fake_run(tmp_path, monkeypatch, "scan", p)
+    assert rc == 0 and res["status"] == "COMPLETE" and [r["status"] for r in rows] == ["VALID"] * 3
+    assert ("mode", "solar") in mount.calls and sum(c[0] == "goto" for c in mount.calls) == 3
+    assert mount.calls[-2:] == [("tracking", False), ("disconnect",)]
+
+
+def test_a_drift_run_with_fake_hardware_samples_until_the_sun_passes_and_stops_at_the_time_limit(tmp_path, monkeypatch):
+    sun = lt.sun_eod(Time.now())
+    # pointing far east of the Sun so the offset never reaches the half range: the time limit ends it
+    p = {"mode": "drift", "half_range_deg": 30.0, "duration_s": 1.0, "point_alt_deg": 40.0, "point_ra_hours": (float(sun.ra.hour) + 1) % 24,
+         "point_dec_deg": float(sun.dec.deg), "crossing_utc": "x", "problems": []}
+    monkeypatch.setattr(lt.time, "monotonic", _clock())
+    rc, mount, res, rows = _fake_run(tmp_path, monkeypatch, "drift", p)
+    assert res["status"] == "COMPLETE" and rows and all(r["status"] == "VALID" for r in rows)
+    assert ("tracking", False) in mount.calls and not any(c == ("tracking", True) for c in mount.calls)
+    assert any("time limit" in n for n in res["notes"])
+
+
+def _clock():
+    t = {"v": 0.0}
+
+    def mono():
+        t["v"] += 20.0                      # every call jumps 20 s: the drift loop reaches its deadline after a few samples
+        return t["v"]
+    return mono
