@@ -397,7 +397,12 @@
     const wizardAction = (params, timeoutMs) => startAndPoll("calibrate_wizard", params, null, timeoutMs);
     const wizardMoveAction = (params, confirmText, timeoutMs) => startAndPoll("calibrate_wizard_move", params, confirmText, timeoutMs);
 
-    function updateCpExplain() { $w("wz-cp-explain").textContent = CONNECTION_EXPLAIN[$w("wz-cp").value] || ""; }
+    function updateCpExplain() {
+      $w("wz-cp-explain").textContent = CONNECTION_EXPLAIN[$w("wz-cp").value] || "";
+      const dcLoad = $w("wz-cp").value !== "LNA_INPUT";   // terminator not behind the LNA: Bias-T DC reaches it
+      $w("wz-dc-row").hidden = !dcLoad; $w("wz-dc-note").hidden = !dcLoad;
+      if (!dcLoad) $w("wz-dc-block").checked = false;
+    }
     $w("wz-cp").addEventListener("change", updateCpExplain);
     updateCpExplain();
 
@@ -727,7 +732,8 @@
 
     $w("wz-confirm-connected").addEventListener("click", U.guard($w("wz-confirm-connected"), async () => {
       try {
-        const job = await wizardAction({ action: "set_reference", session_dir: sessionDir, connection_point: $w("wz-cp").value }, 15000);
+        const job = await wizardAction({ action: "set_reference", session_dir: sessionDir, connection_point: $w("wz-cp").value,
+                                         dc_block_confirmed: $w("wz-cp").value !== "LNA_INPUT" && $w("wz-dc-block").checked }, 15000);
         wzErr(""); render(job.facts);
       } catch (err) { wzErr(`confirm failed: ${msg(err)}`); }
     }, "CONFIRMING…"));

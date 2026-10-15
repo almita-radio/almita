@@ -747,6 +747,8 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             if cp not in ("LNA_INPUT", "LNA_OUTPUT", "SDR_INPUT"):
                 raise ValueError("connection_point must be LNA_INPUT, LNA_OUTPUT or SDR_INPUT")
             argv = [PY, "calibrate_reference_wizard.py", "set-reference", "--session-dir", rel, "--connection-point", cp]
+            if p.get("dc_block_confirmed") is True:
+                argv.append("--dc-block-confirmed")
         elif action == "skip_reference":
             argv = [PY, "calibrate_reference_wizard.py", "skip-reference", "--session-dir", rel]
             if p.get("reason"):

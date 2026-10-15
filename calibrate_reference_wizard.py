@@ -26,7 +26,7 @@ from runtime_state import atomic_write_json, read_json_safe
 
 from calibration_engine.reference_wizard import (
     WIZARD_REFERENCE_ORDER, PhysicalReferenceConfig, WizardConfig, WizardStep,
-    bias_t_known_facts, evaluate_reference_captures,
+    bias_t_known_facts, bias_t_load_refusal, evaluate_reference_captures,
 )
 from calibration_engine.spectral_contrast import compute_spectral_contrast, evaluate_hi_spectral_captures
 import sdr_tuning
@@ -186,9 +186,14 @@ def cmd_set_reference(args) -> int:
     session_dir = Path(args.session_dir)
     state = _load_state(session_dir)
     _require_step(state, WizardStep.PREPARE_50R)
+    dc_block = bool(getattr(args, "dc_block_confirmed", False))
+    refusal = bias_t_load_refusal(args.connection_point, dc_block, port=1234)
+    if refusal:
+        raise SystemExit(f"refusing: {refusal}")
     ref = PhysicalReferenceConfig(kind="AMBIENT_50R", connection_point=args.connection_point,
                                   confirmed_utc=datetime.now(timezone.utc).isoformat())
-    state["fifty_ohm"] = {**ref.to_dict(), "status": "PENDING_CAPTURE"}
+    state["fifty_ohm"] = {**ref.to_dict(), "status": "PENDING_CAPTURE",
+                          "dc_block_confirmed": dc_block}
     state["step"] = WizardStep.STABILIZE_50R.value
     _save_state(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
@@ -255,6 +260,11 @@ def cmd_capture_50r(args) -> int:
     session_dir = Path(args.session_dir)
     state = _load_state(session_dir)
     _require_step(state, WizardStep.STABILIZE_50R)
+    fifty = state.get("fifty_ohm") or {}
+    if not getattr(args, "simulate", None):  # re-checked at capture time: rtl_tcp may have been restarted with -T since
+        refusal = bias_t_load_refusal(fifty.get("connection_point", "LNA_INPUT"), bool(fifty.get("dc_block_confirmed")), port=1234)
+        if refusal:
+            raise SystemExit(f"refusing to capture: {refusal}")
     cap_dir = session_dir / "captures" / "AMBIENT_50R"
     cap_dir.mkdir(parents=True, exist_ok=True)
     _preserve_previous_attempt(cap_dir, state, "AMBIENT_50R")
@@ -691,6 +701,8 @@ def build_parser() -> argparse.ArgumentParser:
     sr = sub.add_parser("set-reference")
     sr.add_argument("--session-dir", required=True)
     sr.add_argument("--connection-point", required=True, choices=["LNA_INPUT", "LNA_OUTPUT", "SDR_INPUT"])
+    sr.add_argument("--dc-block-confirmed", action="store_true",
+                    help="operator confirms a DC block between the Bias-T feed and the terminator (needed at LNA_OUTPUT/SDR_INPUT while rtl_tcp runs with -T)")
     sr.set_defaults(func=cmd_set_reference)
 
     sk = sub.add_parser("skip-reference")

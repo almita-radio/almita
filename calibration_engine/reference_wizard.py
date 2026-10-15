@@ -177,6 +177,28 @@ def bias_t_known_facts(port: int = 1234) -> Dict[str, Any]:
     }
 
 
+# Connection points where the 50 ohm terminator is NOT behind the LNA: the coax that carries the Bias-T feed ends
+# on the terminator itself, so with rtl_tcp -T the termination takes DC (operator rule, 2026-10-14).
+DC_LOAD_CONNECTION_POINTS = (ConnectionPoint.LNA_OUTPUT.value, ConnectionPoint.SDR_INPUT.value)
+
+
+def bias_t_load_refusal(connection_point: str, dc_block_confirmed: bool, port: int = 1234,
+                        facts: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """None when it is safe to put the reference at connection_point; otherwise why not. LNA_INPUT is the normal
+    case (Bias-T must stay ON to power the LNA). At LNA_OUTPUT / SDR_INPUT a running rtl_tcp with -T - or one whose
+    Bias-T state cannot be read - requires the operator to confirm a DC block in line."""
+    if connection_point not in DC_LOAD_CONNECTION_POINTS:
+        return None
+    facts = facts if facts is not None else bias_t_known_facts(port=port)
+    flag = facts.get("flag_present_in_service_command_line")
+    if flag is False or dc_block_confirmed:
+        return None
+    state = "was started with -T (Bias-T ON)" if flag else "Bias-T state cannot be read"
+    return (f"{connection_point}: the 50 ohm terminator is not behind the LNA and rtl_tcp on port {port} {state} - "
+            "the termination would take the Bias-T DC. Put a DC block in line and confirm it "
+            "(--dc-block-confirmed / the DC BLOCK checkbox), or run rtl_tcp without -T")
+
+
 def evaluate_reference_captures(iq_arrays: List[np.ndarray], sample_rate_hz: float, center_frequency_hz: float,
                                 config: WizardConfig) -> Dict[str, Any]:
     """Same real analysis calibration_operational_realtest.py itself uses, applied to one reference's captures -

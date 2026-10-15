@@ -42,6 +42,8 @@
           <div class="obs-row"><label for="wz-cp">CONNECTION POINT</label>
             <select id="wz-cp"><option value="LNA_INPUT">LNA INPUT (replaces the antenna)</option><option value="LNA_OUTPUT">LNA OUTPUT (bypasses the LNA)</option><option value="SDR_INPUT">SDR INPUT (dongle only)</option></select></div>
           <div id="wz-cp-explain" class="obs-summary"></div>
+          <div class="obs-row" id="wz-dc-row" hidden><label><input type="checkbox" id="wz-dc-block"> DC BLOCK in line between the Bias-T feed and the 50 Ω terminator</label></div>
+          <div id="wz-dc-note" class="banner warn" hidden>⚠ The terminator is NOT behind the LNA here. If rtl_tcp runs with -T (Bias-T ON, as the MAIN service does), the 50 Ω termination takes the Bias-T DC. Put a DC block in line and tick the box, or run rtl_tcp without -T. The wizard refuses otherwise.</div>
           <div class="obs-actions">
             <button type="button" id="wz-confirm-connected">I'VE CONNECTED IT — CONFIRM</button>
             <button type="button" id="wz-skip">SKIP THIS REFERENCE (not available)</button>

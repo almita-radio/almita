@@ -297,3 +297,15 @@ def test_jobs_are_listed_newest_first_by_start_time_across_stages(jobs):
     assert [r["job_id"] for r in ops.list_jobs()] == ["CALIBRATE_WIZARD-20261007-002617-dc9d",
                                                       "CALIBRATE_WIZARD_STATE-20261007-001415-6e58",
                                                       "REDUCE-20261007-000000-aaaa"]
+
+
+def test_bias_t_dc_load_rule_for_terminator_not_behind_the_lna():
+    """2026-10-14 operator rule: a 50 ohm terminator at LNA_OUTPUT/SDR_INPUT with rtl_tcp -T takes the Bias-T DC."""
+    from calibration_engine.reference_wizard import bias_t_load_refusal
+    on, off, unknown = ({"flag_present_in_service_command_line": v} for v in (True, False, None))
+    assert bias_t_load_refusal("LNA_INPUT", False, facts=on) is None          # normal case: Bias-T powers the LNA
+    for cp in ("LNA_OUTPUT", "SDR_INPUT"):
+        assert "DC block" in bias_t_load_refusal(cp, False, facts=on)
+        assert "cannot be read" in bias_t_load_refusal(cp, False, facts=unknown)
+        assert bias_t_load_refusal(cp, True, facts=on) is None                # DC block confirmed by the operator
+        assert bias_t_load_refusal(cp, False, facts=off) is None              # rtl_tcp without -T
