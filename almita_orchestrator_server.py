@@ -287,6 +287,9 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
 
     def _fail(self, exc: BaseException, status: int, public: str) -> None:
         """Traceback -> backend log only (with the request id); the browser gets a short message + the id."""
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):  # client went away mid-response: nothing to answer
+            _log("INFO", f"req={self._request_id} {self.command} {self.path} client disconnected ({type(exc).__name__})")
+            return
         _log("ERROR", f"req={self._request_id} {self.command} {self.path} -> {status} {type(exc).__name__}: {exc}")
         traceback.print_exc(file=sys.stdout)
         _error_response(self, status, f"{public} (request id {self._request_id})")
