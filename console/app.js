@@ -621,7 +621,7 @@ function initRunSky(){
     catch(err){note.textContent="sky map unavailable: "+String(err&&err.message||err);return}
     if(!r||!r.available){badge.textContent="NO RUN";badge.className="badge";note.textContent=(r&&r.reason)||"no OBSERVE campaign";return}
     badge.textContent=r.running?"RUNNING":String(r.state||"LAST RUN");badge.className="badge "+(r.running?"status-running":"status-idle");
-    AlmitaUI.drawSkyView(canvas,{sun:r.sun,hi4pi_grid:r.hi4pi_grid||null,areas:[]},{points:r.points,minAlt:r.min_altitude_deg});
+    AlmitaUI.drawSkyView(canvas,{sun:r.sun,hi4pi_grid:r.hi4pi_grid||null,areas:[]},{points:r.points,minAlt:r.min_altitude_deg,dotScale:2,ringFirst:false});
     const range=r.hi4pi_grid&&r.hi4pi_grid.value_range_1e20cm2;legend.hidden=!range;if(range)AlmitaUI.drawHi4piLegend(legend,range);
     const c=r.counts||{},cur=(r.points||[]).find(p=>p.state==="current");
     note.textContent=`${r.campaign_id} · ${c.done||0}/${r.total} captured`+(c.failed?` · ${c.failed} failed`:"")

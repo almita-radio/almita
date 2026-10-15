@@ -594,7 +594,8 @@
     // opts.points [{az_deg, alt_deg, below_min}] (OBSERVE's grid): small white dots, red when below the minimum altitude,
     // the first one ringed; drawn over the path and under the areas.
     // opts.minAlt: the minimum-altitude circle, in green (OBSERVE).
-    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null }, opts || {});
+    // opts.dotScale multiplies the point size; opts.ringFirst=false drops the ring on the first point (MONITOR).
+    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null, dotScale: 1, ringFirst: true }, opts || {});
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
     const dpr = window.devicePixelRatio || 1;
@@ -669,7 +670,7 @@
       ctx.stroke(); ctx.restore();
     }
     if (o.points && o.points.length) {
-      const dot = Math.max(0.22, Math.min(0.44, 9 / Math.sqrt(o.points.length)));   // 0.44 px at 400 points (operator)
+      const dot = Math.max(0.22, Math.min(0.44, 9 / Math.sqrt(o.points.length))) * o.dotScale;   // 0.44 px at 400 points (operator)
       for (const p of o.points) {
         if (p.alt_deg < -5) continue;
         const [x, y] = toXY(p.az_deg, p.alt_deg);
@@ -689,7 +690,7 @@
         ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
         ctx.restore();
       }
-      const first = o.points[0];
+      const first = o.ringFirst ? o.points[0] : null;
       if (first && first.alt_deg >= -5) {
         const [x, y] = toXY(first.az_deg, first.alt_deg);
         ctx.strokeStyle = fg; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, dot + 4, 0, 2 * Math.PI); ctx.stroke();
