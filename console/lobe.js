@@ -113,7 +113,7 @@
   // ------------------------------------------------------------------ live plot: intensity (x) vs time (y, downwards)
   function drawPlot(data) {
     const canvas = $("lobe-plot"), ctx = canvas.getContext("2d");
-    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 520, dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
