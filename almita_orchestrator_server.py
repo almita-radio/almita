@@ -233,7 +233,7 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
 
     # ---- logging: UTC timestamp, level, component, request id; never bodies
     _QUIET_POLL_PATHS = ("/healthz", "/api/system/health", "/api/system/version", "/api/observe/status", "/api/align/status", "/api/calibrate/status", "/mount_camera/status",
-                         "/api/ops/lobe/status", "/api/ops/lobe/samples")
+                         "/api/ops/lobe/status", "/api/ops/lobe/samples", "/api/observe/sky")
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
         # Successful polls (every open page asks every few seconds) would fill the journal: log them only when they fail.
@@ -358,6 +358,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.calibrate_wizard_defaults()})
             if path == "/api/ops/align/sky":
                 return self._ops_align_sky()
+            if path == "/api/observe/sky":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.observe_sky_progress()})
             if path in ("/api/ops/lobe/status", "/api/ops/lobe/samples"):
                 q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
                 try:

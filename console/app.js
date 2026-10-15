@@ -606,6 +606,29 @@ function initMountCamera(){
   setInterval(()=>{if(!document.hidden){try{refreshStatus()}catch(e){/* isolated - never throws into the main poll loop */}}},5000);
 }
 
+// SKY — CURRENT RUN: the running (or last) campaign on ALIGN's sky map, every point where it is now - white pending,
+// green captured, orange failed, a large red X on the one being captured. Isolated: a failure here never touches the
+// other tiles. /api/observe/sky recomputes positions once a minute; this polls every 10 s.
+function initRunSky(){
+  const canvas=$("run-sky"),legend=$("run-sky-legend"),note=$("run-sky-note"),badge=$("run-sky-badge");
+  async function refresh(){
+    let r;
+    try{const ctl=window.AbortController?new AbortController():null;const t=setTimeout(()=>ctl&&ctl.abort(),45000);
+      const resp=await fetch("/api/observe/sky",{cache:"no-store",signal:ctl?ctl.signal:undefined});clearTimeout(t);
+      if(!resp.ok)throw new Error("HTTP "+resp.status);r=(await resp.json()).data}
+    catch(err){note.textContent="sky map unavailable: "+String(err&&err.message||err);return}
+    if(!r||!r.available){badge.textContent="NO RUN";badge.className="badge";note.textContent=(r&&r.reason)||"no OBSERVE campaign";return}
+    badge.textContent=r.running?"RUNNING":String(r.state||"LAST RUN");badge.className="badge "+(r.running?"status-running":"status-idle");
+    AlmitaUI.drawSkyView(canvas,{sun:r.sun,hi4pi_grid:r.hi4pi_grid||null,areas:[]},{points:r.points,minAlt:r.min_altitude_deg});
+    const range=r.hi4pi_grid&&r.hi4pi_grid.value_range_1e20cm2;legend.hidden=!range;if(range)AlmitaUI.drawHi4piLegend(legend,range);
+    const c=r.counts||{},cur=(r.points||[]).find(p=>p.state==="current");
+    note.textContent=`${r.campaign_id} · ${c.done||0}/${r.total} captured`+(c.failed?` · ${c.failed} failed`:"")
+      +(cur?` · capturing point ${cur.point_id} (az ${cur.az_deg.toFixed(0)}° alt ${cur.alt_deg.toFixed(0)}°, red X)`:"")
+      +` · green captured · white pending`+(c.failed?" · orange failed":"")+` · positions now (${String(r.computed_utc||"").slice(11,16)} UTC)`;
+  }
+  refresh();setInterval(()=>{if(!document.hidden)refresh()},10000);
+}
+
 function start(){
   if(PARAMETERS.get("snapshot")==="1"){const status=syncJson("almita_status.json");if(status)render(status);return}
   poll();
@@ -616,6 +639,7 @@ function start(){
   if(window.AlmitaUI&&AlmitaUI.mountFooter)AlmitaUI.mountFooter();
   if(window.AlmitaUI&&AlmitaUI.mountStopButton)AlmitaUI.mountStopButton(document.querySelector(".topbar .obs-nav"));
   try{initMountCamera()}catch(e){console.error("mount camera init failed (isolated, other tiles unaffected):",e)}
+  try{if(window.AlmitaUI&&AlmitaUI.drawSkyView)initRunSky()}catch(e){console.error("run sky init failed (isolated):",e)}
 }
 window.AlmitaConsole={renderInstrument,renderSession,renderQuicklook,renderRfiRef,renderRfiProducts,
   drawRfiSpectrum,drawRfiWaterfall,renderActivityLog,renderLastSession,render,CONFIG,linkState,LINK};

@@ -674,7 +674,20 @@
         if (p.alt_deg < -5) continue;
         const [x, y] = toXY(p.az_deg, p.alt_deg);
         ctx.beginPath(); ctx.arc(x, y, dot, 0, 2 * Math.PI);
-        ctx.fillStyle = p.below_min ? "#e5484d" : "#ffffff"; ctx.fill();                      // white; red: below the floor
+        // MONITOR's running campaign passes p.state: done green, failed orange, pending white; the current point is
+        // drawn after the loop as a large red X. OBSERVE passes below_min instead.
+        ctx.fillStyle = p.state === "done" ? "#55c985" : p.state === "failed" ? "#e6b85c" : p.below_min ? "#e5484d" : "#ffffff";
+        if (p.state !== "current") ctx.fill();
+      }
+      for (const p of o.points) {
+        if (p.state !== "current" || p.alt_deg < -5) continue;
+        const [x, y] = toXY(p.az_deg, p.alt_deg), k = 7;
+        ctx.save(); ctx.lineCap = "round";
+        ctx.strokeStyle = ringBg; ctx.lineWidth = 5.5;                                      // dark halo so it reads on any colour
+        ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
+        ctx.strokeStyle = "#ff2d2d"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
+        ctx.restore();
       }
       const first = o.points[0];
       if (first && first.alt_deg >= -5) {

@@ -2474,3 +2474,58 @@ def lobe_samples(rel_dir: str) -> Dict[str, Any]:
     return {"dir": str(d.relative_to(ROOT)) if d.is_relative_to(ROOT) else str(d), "plan": plan, "last_spectrum": last_spectrum,
             "result": _read_json(d / "lobe_result.json"),
             "samples": [{k: r.get(k) for k in keep} for r in rows], "fit": _LOBE_FIT_CACHE["fit"]}
+
+
+# ------------------------------------------------------------------ MONITOR: the running campaign on the sky map
+_RUN_SKY_CACHE: Dict[str, Any] = {}
+
+
+def observe_sky_progress(runtime_dir: Optional[Path] = None, mosaic_root: Optional[Path] = None) -> Dict[str, Any]:
+    """The current (or last) OBSERVE campaign on ALIGN's sky map: every point where it is NOW, with its state -
+    captured, the one being captured, failed, pending - plus the Sun and the HI4PI layer. Positions are recomputed
+    once a minute per campaign (they only move with the sky); the states are re-read from mosaic.csv on every call."""
+    import csv as _csv
+    import session_identity
+    runtime_dir = Path(runtime_dir or DATA / "runtime")
+    mosaic_root = Path(mosaic_root or SERVE_ROOTS["mosaic"])
+    cur = _read_json(runtime_dir / "current_session.json") or {}
+    last = _read_json(runtime_dir / "last_session.json") or {}
+    campaign = session_identity.from_session_root(cur.get("session_root")).get("campaign_id") or last.get("campaign_id")
+    running = cur.get("state") in ("RUNNING", "STARTING", "PAUSED") and bool(cur.get("session_root"))
+    if not campaign or not (mosaic_root / campaign / "mosaic.csv").is_file():
+        return {"available": False, "reason": "no OBSERVE campaign on record"}
+    camp = mosaic_root / campaign
+    with open(camp / "mosaic.csv", newline="") as fh:
+        rows = list(_csv.DictReader(fh))
+    current_id = str(cur.get("current_point_id")) if running and cur.get("current_point_id") is not None else None
+    minute = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    key = (campaign, minute)
+    if _RUN_SKY_CACHE.get("key") != key:
+        from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
+        from astropy.time import Time
+        import astropy.units as u
+        obs = json.loads((ROOT / "observer_config.json").read_text())["observer"]
+        loc = EarthLocation(lat=obs["latitude_deg"] * u.deg, lon=obs["longitude_deg"] * u.deg, height=obs["elevation_m"] * u.m)
+        now = Time.now()
+        frame = AltAz(obstime=now, location=loc)
+        aa = SkyCoord(ra=[float(r["target_ra_hours"]) * 15 for r in rows] * u.deg,
+                      dec=[float(r["target_dec_degrees"]) for r in rows] * u.deg).transform_to(frame)
+        sun = get_sun(now).transform_to(frame)
+        _RUN_SKY_CACHE.update(key=key, az=aa.az.deg.tolist(), alt=aa.alt.deg.tolist(), computed_utc=_utc(),
+                              sun={"az_deg": float(sun.az.deg), "alt_deg": float(sun.alt.deg), "above_horizon": bool(sun.alt.deg > 0)})
+    # capture.py's own row states (capture.py: planned -> capturing -> success | failed)
+    state_of = {"success": "done", "failed": "failed", "capturing": "current", "planned": "pending", "": "pending"}
+    points = []
+    for r, az, alt in zip(rows, _RUN_SKY_CACHE["az"], _RUN_SKY_CACHE["alt"]):
+        st = state_of.get(str(r.get("capture_status") or "").strip().lower(), "pending")
+        if st == "current" and not running:
+            st = "pending"                          # a stopped run leaves its last row at "capturing": nothing is being captured
+        elif current_id is not None and str(r.get("point_id")) == current_id and st == "pending":
+            st = "current"
+        points.append({"point_id": r.get("point_id"), "scan_order": int(float(r.get("scan_order") or 0)), "az_deg": az, "alt_deg": alt, "state": st})
+    resolved = _read_json(camp / "observation_resolved.json") or {}
+    min_alt = ((resolved.get("requested") or {}).get("grid") or {}).get("min_altitude_deg")
+    counts = {s: sum(1 for p in points if p["state"] == s) for s in ("done", "current", "failed", "pending")}
+    return {"available": True, "campaign_id": campaign, "running": running, "state": cur.get("state") if running else last.get("final_state"),
+            "current_point_id": current_id, "counts": counts, "total": len(points), "points": points, "min_altitude_deg": min_alt,
+            "sun": _RUN_SKY_CACHE["sun"], "computed_utc": _RUN_SKY_CACHE["computed_utc"], **sky_layer_now()}
