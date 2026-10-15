@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from runtime_state import atomic_write_json, is_script_cmdline, read_json_safe, utcnow
+import session_identity
 import telemetry_summary
 import wifi_health
 
@@ -413,6 +414,8 @@ def build_status(now_utc: str, now_monotonic: float, state: WatcherState, runtim
             "completed_utc": (current_session or {}).get("updated_utc", now_utc),
             "points_success": acquisition["points_success"],
             "points_total": acquisition["points_total"],
+            # BL-050: the campaign (canonical identity) and the IQ directory, so the archive leads back to the data
+            **session_identity.from_session_root((current_session or {}).get("session_root")),
         }
         state.last_session_archive = archive
         try:
