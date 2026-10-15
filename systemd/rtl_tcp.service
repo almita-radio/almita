@@ -17,6 +17,9 @@ ExecStart=/usr/bin/stdbuf -oL /usr/bin/rtl_tcp -d 00000001 -a 127.0.0.1 -p 1234 
 
 Restart=always
 RestartSec=3
+# After serving a client, rtl_tcp does not exit on SIGTERM or SIGINT (measured 2026-10-15: >200 s, BL-073); systemd's
+# default 90 s wait always ended in SIGKILL anyway. Same end, 85 s sooner. Nothing is written on exit.
+TimeoutStopSec=5
 
 User=stellarmate
 Group=stellarmate
