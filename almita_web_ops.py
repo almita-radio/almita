@@ -203,7 +203,11 @@ def mount_idle_problems(m: Dict[str, Any]) -> List[str]:
         p.append(f"mount state {state!r} is not a known rest state (expected Idle or Tracking) - real movement, "
                  "an unrecognised OnStep status, or none reported at all")
     if m.get("parked"): p.append("mount is parked")
-    if m.get("onstep_error") not in (None, "None", "Goto No Error"): p.append(f"OnStep error {m.get('onstep_error')}")
+    if m.get("onstep_error") not in (None, "None", "Goto No Error"):
+        err = str(m.get("onstep_error"))
+        hint = (" - OnStep keeps this error latched: switch tracking OFF and then ON in Ekos to clear it (home, a GOTO "
+                "from Ekos and restarting Ekos do not clear it; seen 2026-10-13/14, BL-060)") if "meridian" in err.lower() else ""
+        p.append(f"OnStep error {err}{hint}")
     return p
 
 

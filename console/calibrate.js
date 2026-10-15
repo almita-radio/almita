@@ -596,7 +596,11 @@
         const cand = state.hi_plan.candidates[label];
         $w("wz-step-ready-hi").hidden = false;
         $w("wz-ready-hi-label").textContent = `${label} — RA ${cand.ra_hours.toFixed(4)} h, Dec ${cand.dec_deg.toFixed(3)}°`;
-        $w("wz-ready-hi-note").textContent = `Real GOTO + ${state.config.n_captures} capture(s) at this approved point. ${cand.reason}. The mount WILL move.`;
+        const mer = cand.meridian_check;
+        const merText = mer && mer.minutes_to_limit != null
+          ? ` OnStep's meridian limit (+${mer.limit_min} min) was ${mer.minutes_to_limit.toFixed(0)} min away when proposed (${mer.checked_utc}); CAPTURE re-checks it and refuses if the hold would cross it - RE-PROPOSE then.`
+          : "";
+        $w("wz-ready-hi-note").textContent = `Real GOTO + ${state.config.n_captures} capture(s) at this approved point. ${cand.reason}. The mount WILL move.${merText}`;
         $w("wz-hi-move-confirm").value = "";
         const pv = state.hi_plan_preview || null;
         $w("wz-ready-sky").hidden = !pv;
@@ -776,6 +780,15 @@
       } catch (err) { wzErr(`propose failed: ${msg(err)}`); }
     }, "PROPOSING…"));
     $w("wz-replan-hi").addEventListener("click", U.guard($w("wz-replan-hi"), async () => {
+      try {
+        const job = await wizardAction({ action: "plan_hi", session_dir: sessionDir }, 30000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`re-propose failed: ${msg(err)}`); }
+    }, "…"));
+
+    $w("wz-repropose-ready").addEventListener("click", U.guard($w("wz-repropose-ready"), async () => {
+      if (!confirm("Replace the approved zones with a new proposal? The new plan needs APPROVE again before any capture"
+                   + (lastState && lastState.hi_references && lastState.hi_references.HI_ALTO ? " (HI ALTO, already measured, is kept)." : "."))) return undefined;
       try {
         const job = await wizardAction({ action: "plan_hi", session_dir: sessionDir }, 30000);
         wzErr(""); render(job.facts);

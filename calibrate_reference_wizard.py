@@ -321,17 +321,25 @@ def cmd_confirm_antenna(args) -> int:
 def cmd_plan_hi(args) -> int:
     session_dir = Path(args.session_dir)
     state = _load_state(session_dir)
-    _require_step(state, WizardStep.PLAN_HI)
+    # RE-PROPOSE is also allowed after approval, before the capture (BL-060: an approved zone can drift toward OnStep's
+    # meridian limit while the operator waits). Once HI ALTO is measured, only HI BAJO is proposed again.
+    _require_step(state, WizardStep.PLAN_HI, WizardStep.READY_HI_ALTO, WizardStep.READY_HI_BAJO)
     if state.get("reconnect_antenna_confirmed_utc") is None:
         raise SystemExit("antenna reconnect/connected was never confirmed - refusing to plan a real sky pointing")
     from calibration_engine.hi_reference_selection import NoHIContrastAvailable, select_hi_alto_bajo_candidates
     cfg = WizardConfig.from_dict(state["config"])
+    keep_alto = "HI_ALTO" in (state.get("hi_references") or {})
+    fixed_high = state["hi_references"]["HI_ALTO"]["candidate"] if keep_alto else None
     try:
         plan = select_hi_alto_bajo_candidates(min_elevation_deg=cfg.min_elevation_deg, beam_fwhm_deg=cfg.beam_fwhm_deg,
-                                              hold_seconds=cfg.hi_hold_seconds)
+                                              hold_seconds=cfg.hi_hold_seconds, fixed_high=fixed_high)
     except NoHIContrastAvailable as exc:
         raise SystemExit(f"could not propose HI ALTO/HI BAJO candidates: {exc}")
+    if state.get("hi_plan") and state["step"] != WizardStep.PLAN_HI.value:
+        state.setdefault("hi_plan_history", []).append({"plan": state["hi_plan"], "approved_utc": state.get("hi_plan_approved_utc"),
+                                                        "replaced_utc": datetime.now(timezone.utc).isoformat()})
     state["hi_plan"] = plan
+    state["step"] = WizardStep.PLAN_HI.value
     state["hi_plan_approved_utc"] = None      # a fresh plan always needs a fresh approval
     _save_state(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
@@ -345,7 +353,8 @@ def cmd_approve_hi_plan(args) -> int:
     if not state.get("hi_plan"):
         raise SystemExit("no HI plan on record yet - run plan-hi first")
     state["hi_plan_approved_utc"] = datetime.now(timezone.utc).isoformat()
-    state["step"] = WizardStep.READY_HI_ALTO.value
+    # a re-proposal after HI ALTO was measured continues at HI BAJO
+    state["step"] = (WizardStep.READY_HI_BAJO if "HI_ALTO" in (state.get("hi_references") or {}) else WizardStep.READY_HI_ALTO).value
     _save_state(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
     return 0
@@ -510,6 +519,13 @@ def cmd_capture_hi(args) -> int:
             raise SystemExit(f"{label} PLAN is no longer valid: real altitude check now gives margin "
                              f"{fresh['margin_deg']:+.1f} deg over the {cfg.hi_hold_seconds:g} s hold - "
                              f"PLAN the HI candidates again ({fresh})")
+        from calibration_engine.hi_reference_selection import meridian_limit_check
+        mer = meridian_limit_check(cand["ra_hours"], cfg.hi_hold_seconds)
+        fresh["meridian_check"] = mer
+        if not mer["clears"]:
+            raise SystemExit(f"{label} would reach OnStep's meridian limit ({mer['limit_min']:g} min past the meridian) in "
+                             f"{mer['minutes_to_limit']:.1f} min, inside the {cfg.hi_hold_seconds:g} s hold: OnStep would stop "
+                             f"tracking mid-step (BL-060). Nothing moved - RE-PROPOSE the zones")
     else:
         fresh = {"skipped": True, "reason": "altitude re-check skipped for --simulate (no real sky/mount involved)"}
 

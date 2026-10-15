@@ -71,6 +71,40 @@ def point_stays_above_elevation(ra_hours: float, dec_deg: float, min_elevation_d
             "checked_utc": obstime.utc.isot + "Z"}
 
 
+# OnStep stops tracking once a target is this far past the meridian ("Meridian Limit (W) Exceeded"): measured
+# 2026-10-13 19:31:59, the HI ALTO target at hour angle +0.202 h (BL-060). The error then stays latched in OnStep
+# and ALMITA refuses to move until it is cleared (tracking OFF then ON in Ekos).
+ONSTEP_MERIDIAN_LIMIT_MIN = 12.0
+# An approved plan is used later than it is proposed (2026-10-13: approved 18:53, captured 19:31): a zone that would
+# reach the limit within this long after PROPOSE is not offered.
+PLAN_MERIDIAN_LOOKAHEAD_S = 45 * 60
+SIDEREAL_RATE = 1.0027379        # hour angle advances this many hours per hour
+
+
+def hour_angle_hours(ra_hours, location, obstime):
+    """Hour angle in hours, wrapped to [-12, 12): negative = east of the meridian (still rising), positive = past it."""
+    lst = obstime.sidereal_time("apparent", longitude=location.lon).hour
+    return (np.asarray(lst - np.asarray(ra_hours)) + 12.0) % 24.0 - 12.0
+
+
+def meridian_limit_check(ra_hours: float, hold_seconds: float, location=None, obstime=None,
+                         limit_min: float = ONSTEP_MERIDIAN_LIMIT_MIN) -> Dict[str, Any]:
+    """Does this point cross OnStep's west meridian limit between now and now+hold_seconds? A point already past the
+    limit at GOTO time is not a crossing (OnStep slews it on the other side of the pier); a point that reaches the
+    limit WHILE it is being held stops the tracking mid-step - that is what failed on 2026-10-13."""
+    from astropy.time import Time
+    location = location if location is not None else _observer_location()
+    obstime = obstime if obstime is not None else Time.now()
+    ha0 = float(hour_angle_hours(ra_hours, location, obstime))
+    ha1 = ha0 + hold_seconds / 3600.0 * SIDEREAL_RATE
+    lim = limit_min / 60.0
+    crosses = ha0 < lim <= ha1
+    to_limit = (lim - ha0) * 60.0 / SIDEREAL_RATE if ha0 < lim else None
+    return {"hour_angle_now_h": ha0, "hour_angle_at_end_h": ha1, "limit_min": limit_min, "hold_seconds": hold_seconds,
+            "minutes_to_limit": to_limit, "crosses_limit": bool(crosses), "clears": not crosses,
+            "checked_utc": obstime.utc.isot + "Z"}
+
+
 @dataclass
 class HICandidate:
     label: str                       # "HI_ALTO" | "HI_BAJO"
@@ -81,15 +115,18 @@ class HICandidate:
     mean_n_hi_1e20cm2: float         # real HI4PI beam-averaged column density at this point - ORIENTATION ONLY
     reason: str
     altitude_check: Dict[str, Any]
+    meridian_check: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {"label": self.label, "ra_hours": self.ra_hours, "dec_deg": self.dec_deg, "alt_deg": self.alt_deg,
                 "az_deg": self.az_deg, "mean_n_hi_1e20cm2": self.mean_n_hi_1e20cm2, "reason": self.reason,
-                "altitude_check": self.altitude_check}
+                "altitude_check": self.altitude_check, "meridian_check": self.meridian_check}
 
 
 def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: float, hold_seconds: float,
-                                   grid_n: int = 180, min_separation_beams: float = 2.0) -> Dict[str, Any]:
+                                   grid_n: int = 180, min_separation_beams: float = 2.0,
+                                   fixed_high: Optional[Dict[str, Any]] = None,
+                                   meridian_lookahead_s: float = PLAN_MERIDIAN_LOOKAHEAD_S) -> Dict[str, Any]:
     """Real, no-hardware computation. Rasters the currently-visible sky (same disk-projection convention as
     hi4pi_map.sky_grid_and_ranking()), reads the real HI4PI beam-smoothed map at each grid point (beam_fwhm_deg -
     "considera el haz ancho"), and proposes the highest-mean point as HI_ALTO and the lowest-mean (but still
@@ -141,7 +178,11 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
     valid = (yi >= 0) & (yi < ny)
     means = np.full(ra_deg.shape, np.nan)
     means[valid] = smoothed[yi[valid], xi[valid]]
-    finite = np.isfinite(means) & (means >= 0)
+    # BL-060: never offer a zone that reaches OnStep's meridian limit between PROPOSE and the end of its hold
+    ha = hour_angle_hours(ra_deg / 15.0, location, now)
+    lim = ONSTEP_MERIDIAN_LIMIT_MIN / 60.0
+    meridian_bad = (ha < lim) & (ha + (meridian_lookahead_s + hold_seconds) / 3600.0 * SIDEREAL_RATE >= lim)
+    finite = np.isfinite(means) & (means >= 0) & ~meridian_bad
     if finite.sum() < 2:
         raise NoHIContrastAvailable("fewer than 2 visible points had a real, finite HI4PI value - cannot propose a HIGH/LOW pair")
     order = np.argsort(np.where(finite, means, -np.inf))[::-1]        # descending mean, non-finite last
@@ -149,6 +190,8 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
     min_sep_deg = min_separation_beams * beam_fwhm_deg
     high_i = int(order[0])
     high_coord = SkyCoord(ra=ra_deg[high_i] * u.deg, dec=dec_deg[high_i] * u.deg)
+    if fixed_high is not None:          # RE-PROPOSE after HI ALTO was measured: only HI BAJO is chosen again, away from it
+        high_coord = SkyCoord(ra=fixed_high["ra_hours"] * 15 * u.deg, dec=fixed_high["dec_deg"] * u.deg)
     # Vectorized separation from HI ALTO to every candidate at once (astropy SkyCoord array ops are numpy-
     # vectorized internally), instead of a per-candidate scalar .separation() call in a Python loop.
     all_coords = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
@@ -168,13 +211,19 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
         if other_ra_dec is not None:
             sep = SkyCoord(ra=ra_deg[i] * u.deg, dec=dec_deg[i] * u.deg).separation(other_ra_dec).deg
             reason += f"; {sep:.1f} deg from the other candidate ({sep / beam_fwhm_deg:.1f} beam widths - real slew distance)"
+        mcheck = meridian_limit_check(ra_deg[i] / 15.0, hold_seconds, location, now)
+        if mcheck["minutes_to_limit"] is not None and mcheck["minutes_to_limit"] < 6 * 60:
+            reason += f"; reaches OnStep's meridian limit in {mcheck['minutes_to_limit']:.0f} min"
         return HICandidate(label=label, ra_hours=float(ra_deg[i] / 15.0), dec_deg=float(dec_deg[i]),
                            alt_deg=float(alt_c[i]), az_deg=float(az_c[i]), mean_n_hi_1e20cm2=float(means[i]),
-                           reason=reason, altitude_check=check)
+                           reason=reason, altitude_check=check, meridian_check=mcheck)
 
     hi_alto = _row(high_i, "HI_ALTO", None)
-    hi_bajo = _row(low_i, "HI_BAJO", SkyCoord(ra=ra_deg[high_i] * u.deg, dec=dec_deg[high_i] * u.deg))
-    if not hi_alto.altitude_check["clears"]:
+    hi_bajo = _row(low_i, "HI_BAJO", high_coord)
+    if fixed_high is not None:
+        hi_alto = HICandidate(**{k: fixed_high[k] for k in ("label", "ra_hours", "dec_deg", "alt_deg", "az_deg", "mean_n_hi_1e20cm2",
+                                                             "reason", "altitude_check")}, meridian_check=fixed_high.get("meridian_check"))
+    if fixed_high is None and not hi_alto.altitude_check["clears"]:
         raise NoHIContrastAvailable(f"HI ALTO candidate would not stay above min_elevation_deg for the whole "
                                     f"{hold_seconds:g} s hold ({hi_alto.altitude_check})")
     if not hi_bajo.altitude_check["clears"]:
@@ -185,6 +234,8 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
             "generated_utc": now.utc.isot + "Z", "grid_points_considered": int(finite.sum()),
             "beam_fwhm_deg": beam_fwhm_deg, "min_elevation_deg": min_elevation_deg, "hold_seconds": hold_seconds,
             "min_separation_deg": min_sep_deg, "source": hi4pi_map.SOURCE,
+            "meridian_limit_min": ONSTEP_MERIDIAN_LIMIT_MIN, "meridian_lookahead_s": meridian_lookahead_s,
+            "meridian_excluded_points": int(meridian_bad.sum()), "hi_alto_kept_from_previous_plan": fixed_high is not None,
             "rfi_note": "RFI is not predicted here (no per-sky-position RFI forecast exists in this project) - "
                         "each real capture's own bandpass usable-band-fraction proxy reports RFI-proxy findings "
                         "after the fact, at the RESULT step."}
