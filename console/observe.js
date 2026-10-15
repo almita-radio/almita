@@ -74,7 +74,7 @@
   }
 
   // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
-  // schedule), red below the minimum altitude, the first one ringed, the visiting order dashed; Sun and HI4PI layer.
+  // schedule), small red points (hollow white: below the minimum altitude when captured), the first one ringed; Sun and HI4PI layer.
   let skyView = "now", lastSky = null;
   function renderEstimateSky(sky) {
     lastSky = sky;
