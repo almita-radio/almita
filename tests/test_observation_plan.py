@@ -282,3 +282,11 @@ def test_no_console_page_repeats_an_element_id():
     for page in sorted(root.glob("*.html")):
         ids = Counter(re.findall(r'\bid="([^"]+)"', page.read_text()))
         assert not [i for i, n in ids.items() if n > 1], (page.name, [i for i, n in ids.items() if n > 1])
+
+
+def test_estimate_also_returns_the_footprint_at_the_start_coloured_by_capture_altitude():
+    spec = _valid_spec()
+    sky = pl.estimate_observation(spec, observer_config_path=str(pl.Path(__file__).resolve().parents[1] / TEST_OBSERVER_CONFIG))["sky"]
+    assert len(sky["points_now"]) == len(sky["points"])
+    assert sky["points_now"][0]["az_deg"] == pytest.approx(sky["points"][0]["az_deg"], abs=0.5)    # first point: now = its capture
+    assert [p["below_min"] for p in sky["points_now"]] == [p["below_min"] for p in sky["points"]]

@@ -75,24 +75,36 @@
 
   // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
   // schedule), red below the minimum altitude, the first one ringed, the visiting order dashed; Sun and HI4PI layer.
+  let skyView = "now", lastSky = null;
   function renderEstimateSky(sky) {
+    lastSky = sky;
     const canvas = $("est-skymap"), legend = $("est-skymap-legend"), note = $("est-skymap-note");
     if (!sky || !sky.points || !sky.points.length) {
       canvas.hidden = true; legend.hidden = true; note.textContent = "";
       return;
     }
     canvas.hidden = false;
-    const pts = sky.points;
+    // AREA NOW: every point at the same instant - the region's real shape. AT EACH CAPTURE: where the sky will have
+    // carried each point when its turn comes - a long run drags the footprint along the sky's rotation.
+    const pts = skyView === "now" && sky.points_now ? sky.points_now : sky.points;
     const path = pts.length <= 400 ? pts.map((p) => [p.az_deg, p.alt_deg]) : null;   // a dense grid's path is just noise
     U.drawSkyView(canvas, { sun: sky.sun, hi4pi_grid: sky.hi4pi_grid || null, areas: [] }, { points: pts, path, minAlt: sky.min_altitude_deg });
     const range = sky.hi4pi_grid && sky.hi4pi_grid.value_range_1e20cm2;
     legend.hidden = !range;
     if (range) U.drawHi4piLegend(legend, range);
     const low = pts.filter((p) => p.below_min).length, below = pts.filter((p) => p.alt_deg < 0).length;
-    note.textContent = `${pts.length} points where the mount will be at each capture (ringed: first) · `
+    note.textContent = (skyView === "now" ? `${pts.length} points, all at the start time (ringed: first captured) · ` : `${pts.length} points where the mount will be at each capture (ringed: first) · `)
       + (low ? `${low} below the minimum altitude ${sky.min_altitude_deg}° (red; green circle = minimum altitude)${below ? `, ${below} under the horizon (not drawn)` : ""}` : "all above the minimum altitude (green circle)")
       + ` · Sun ${sky.sun.above_horizon ? `az ${sky.sun.az_deg.toFixed(0)}° alt ${sky.sun.alt_deg.toFixed(0)}°` : "below the horizon"}`
       + (sky.hi4pi_grid ? " · colour: real HI4PI map now" : sky.hi4pi_error ? ` · HI4PI layer unavailable (${sky.hi4pi_error})` : "");
+  }
+
+  for (const [id, view] of [["est-view-now", "now"], ["est-view-capture", "capture"]]) {
+    $(id).addEventListener("click", () => {
+      skyView = view;
+      $("est-view-now").classList.toggle("active", view === "now"); $("est-view-capture").classList.toggle("active", view === "capture");
+      renderEstimateSky(lastSky);
+    });
   }
 
   function renderEstimate(e) {

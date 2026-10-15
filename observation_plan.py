@@ -392,10 +392,15 @@ def sky_view(points: List[Dict[str, Any]], location: EarthLocation, t0: Time, pe
     coords = SkyCoord(ra=[p["target_ra_hours"] * 15.0 for p in points] * u.deg,
                       dec=[p["target_dec_degrees"] for p in points] * u.deg, frame="icrs")
     aa = coords.transform_to(AltAz(obstime=times, location=location))
+    now = coords.transform_to(AltAz(obstime=t0, location=location))       # the footprint itself: every point at t0
     sun = get_sun(t0).transform_to(AltAz(obstime=t0, location=location))
     return {"computed_utc": t0.utc.isot + "Z", "min_altitude_deg": min_altitude_deg,
             "points": [{"scan_order": int(p["scan_order"]), "az_deg": float(az), "alt_deg": float(alt),
                         "below_min": bool(alt < min_altitude_deg)} for p, az, alt in zip(points, aa.az.deg, aa.alt.deg)],
+            # red means "below the floor WHEN captured" in both views: a point low now may be captured after it rose
+            "points_now": [{"scan_order": int(p["scan_order"]), "az_deg": float(az), "alt_deg": float(alt), "alt_now_deg": float(alt),
+                            "below_min": bool(cap < min_altitude_deg)}
+                           for p, az, alt, cap in zip(points, now.az.deg, now.alt.deg, aa.alt.deg)],
             "sun": {"az_deg": float(sun.az.deg), "alt_deg": float(sun.alt.deg), "above_horizon": bool(sun.alt.deg > 0)}}
 
 
