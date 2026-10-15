@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Tuple
 import argparse
 import sys
+
+import mount_lock
 import re
 import math
 import time
@@ -652,6 +654,7 @@ class INDITelescopeControl:
     
     async def goto(self, ra_hours: float, dec_degrees: float) -> bool:
         """Ejecuta comando GOTO"""
+        mount_lock.claim("GOTO")            # one process moves the mount at a time (BL-050); raises MountBusy
         try:
             goto_enter_clock = time.perf_counter()
 
@@ -1032,6 +1035,7 @@ class INDITelescopeControl:
     
     async def sync(self, ra_real: float, dec_real: float) -> bool:
         """Ejecuta comando SYNC"""
+        mount_lock.claim("SYNC")
         try:
             self.explain_indi('sync')
 
@@ -1402,6 +1406,7 @@ class INDITelescopeControl:
         """Write TELESCOPE_TRACK_MODE (sidereal/solar/lunar/custom). Returns True only if the command was sent;
         callers MUST confirm with wait_track_mode() before relying on it - a driver can refuse or ignore the write."""
         switch = self._TRACK_MODE_SWITCHES.get(mode)
+        mount_lock.claim("tracking mode change")
         if switch is None:
             self.log(f"Unknown track mode requested: {mode!r}", "ERROR")
             return False
@@ -1418,6 +1423,8 @@ class INDITelescopeControl:
 
     async def set_tracking(self, enable: bool) -> bool:
         """Activa o desactiva el tracking"""
+        if enable:                          # switching tracking OFF is a stop: it never needs the mount lock
+            mount_lock.claim("tracking ON")
         try:
             self.explain_indi('tracking')
 

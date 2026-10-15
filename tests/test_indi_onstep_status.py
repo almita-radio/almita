@@ -232,8 +232,10 @@ def test_dispatcher_migration_keeps_reviewed_goto_and_tracking_structure():
     expected = {
         # Re-reviewed after compact trace suppression plus the minimal abort fix:
         # KeyboardInterrupt returns failure; CancelledError propagates unchanged.
-        "goto": "e19aaa55df91c292c50c64beedf50fb6acd02edf938408126485017f09d6c8d8",
-        "set_tracking": "6a4e3bc1832284a4a03ab3945dc08932ac1f0f623b879163a14b42d96bc346fe",
+        # Re-reviewed 2026-10-15 (BL-050): goto() claims mount_lock before anything else; set_tracking() claims it
+        # only for tracking ON (OFF is a stop and never needs it). Nothing else in either method changed.
+        "goto": "362b5b39f4f5eebd8674e8b7bd7d493f034d25f6ffd21a6beade5e7132eb26ce",
+        "set_tracking": "ce654e52c95069057e7f02d21b726faffe223fd76c7fb8949058a1427b18f618",
         "get_tracking_state": "f38553b64ab83039b83e4a58287d131e195f2714734ece23c053822a503bfa0d",
         "wait_tracking_state": "3ad71d3aa87200b051dc260890bde7f7d5632ee9c7dfa13af702b5e61a3078b0",
     }

@@ -1163,6 +1163,9 @@ def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> 
     if spec["physical"]:
         if confirm != "MOVE":
             raise OpsBlocked("physical movement needs the operator's typed confirmation: send confirm = \"MOVE\" (uppercase, exactly)")
+        held = mount_lock_problem()
+        if held:
+            raise OpsBlocked(held)
         pf = preflight()
         if pf["overall"] == "BLOCK":
             raise OpsBlocked("real preflight is BLOCK: " + "; ".join(f"{c['name']}: {c['detail']}" for c in pf["checks"] if c["status"] == "BLOCK"))
@@ -1183,6 +1186,16 @@ def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> 
     subprocess.Popen([PY, str(Path(__file__).resolve()), "--runner", str(d / "job.json")], cwd=str(ROOT), start_new_session=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)       # the runner records its own pid / exit code in job.json
     return get_job(job_id, tail=20)
+
+
+def mount_lock_problem() -> Optional[str]:
+    """Another process already moves the mount (mount_lock, BL-050): the job would fail at its first GOTO - say so first."""
+    import mount_lock
+    h = mount_lock.holder()
+    if h and not h.get("this_process"):
+        return (f"the mount is held by {h.get('owner', 'another process')} (pid {h.get('pid', '?')}, since "
+                f"{h.get('since_utc', '?')}): stop that process first (STOP MOUNT stops every web job and the observation)")
+    return None
 
 
 def stop(job_id: str) -> Dict[str, Any]:

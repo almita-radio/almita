@@ -79,3 +79,15 @@ def transiting_ra_hours():
     import astropy.units as u
     lon = _json.loads((_Path(__file__).resolve().parents[1] / "observer_config.json").read_text())["observer"]["longitude_deg"]
     return round(float(Time.now().sidereal_time("apparent", longitude=lon * u.deg).hour), 4)
+
+
+@pytest.fixture(autouse=True)
+def _private_mount_lock(tmp_path, monkeypatch):
+    """Tests never touch the real data/runtime/mount.lock (BL-050): each test gets its own, released afterwards."""
+    import os
+    import mount_lock
+    monkeypatch.setenv("ALMITA_MOUNT_LOCK_PATH", str(tmp_path / "mount.lock"))
+    yield
+    if mount_lock._held is not None:
+        os.close(mount_lock._held[0])
+        mount_lock._held = None
