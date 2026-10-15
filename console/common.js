@@ -669,7 +669,7 @@
       ctx.stroke(); ctx.restore();
     }
     if (o.points && o.points.length) {
-      const dot = Math.max(0.27, Math.min(0.57, 12 / Math.sqrt(o.points.length)));  // 0.57 px at 400 points (operator: two thirds of 0.85)
+      const dot = Math.max(0.14, Math.min(0.29, 6 / Math.sqrt(o.points.length)));   // 0.29 px at 400 points (operator: half of 0.57)
       for (const p of o.points) {
         if (p.alt_deg < -5) continue;
         const [x, y] = toXY(p.az_deg, p.alt_deg);
