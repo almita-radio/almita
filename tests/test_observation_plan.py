@@ -263,7 +263,7 @@ def test_observe_page_draws_the_grid_with_the_minimum_altitude_circle():
     root = pl.Path(__file__).resolve().parents[1]
     assert 'id="est-skymap"' in (root / "console" / "observe.html").read_text()
     js = (root / "console" / "observe.js").read_text()
-    assert "minAlt: sky.min_altitude_deg" in js and "points: pts" in js
+    assert "minAlt: sky.min_altitude_deg" in js and "points: pts" in js and "path" not in js.split("function renderEstimateSky")[1].split("function renderEstimate(")[0]
     assert "o.minAlt" in (root / "console" / "common.js").read_text()
 
 

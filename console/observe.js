@@ -87,8 +87,7 @@
     // AREA NOW: every point at the same instant - the region's real shape. AT EACH CAPTURE: where the sky will have
     // carried each point when its turn comes - a long run drags the footprint along the sky's rotation.
     const pts = skyView === "now" && sky.points_now ? sky.points_now : sky.points;
-    const path = pts.length <= 400 ? pts.map((p) => [p.az_deg, p.alt_deg]) : null;   // a dense grid's path is just noise
-    U.drawSkyView(canvas, { sun: sky.sun, hi4pi_grid: sky.hi4pi_grid || null, areas: [] }, { points: pts, path, minAlt: sky.min_altitude_deg });
+    U.drawSkyView(canvas, { sun: sky.sun, hi4pi_grid: sky.hi4pi_grid || null, areas: [] }, { points: pts, minAlt: sky.min_altitude_deg });
     const range = sky.hi4pi_grid && sky.hi4pi_grid.value_range_1e20cm2;
     legend.hidden = !range;
     if (range) U.drawHi4piLegend(legend, range);
