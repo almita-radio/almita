@@ -146,3 +146,12 @@ def test_scan_plan_blocks_exactly_when_a_held_position_crosses_the_meridian_limi
 def test_scan_plan_with_the_sun_far_from_the_meridian_has_no_meridian_problem():
     p = lt.plan("scan", Time("2026-10-15T13:00:00", scale="utc"), LOC, 10, 1.0, 5, 1, 1.0, 2, min_elevation_deg=5)
     assert not any("meridian" in q for q in p["problems"])
+
+
+def test_spectrum_view_marks_the_injected_narrow_peak():
+    raw = _iq(1024 * 200, line_bin=-75, line_amp=1.5)                           # -75 x 9.375 kHz = -703 kHz from the centre
+    sp = lt.capture_spectrum(raw)
+    v = lt.spectrum_view(sp, 1420405752.0, 2_400_000)
+    k = int(np.argmin(np.abs(np.array(v["freq_mhz"]) - v["peak"]["freq_mhz"])))
+    assert v["peak"]["excess_db"] > 3 and abs(v["peak"]["offset_khz"] - (-703.125)) < 2.4
+    assert v["usable"][k] and not v["usable"][512] and len(v["db"]) == lt.SPECTRUM_NFFT

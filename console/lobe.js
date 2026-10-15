@@ -175,11 +175,50 @@
     $("fit-out").textContent = lines.join("\n");
   }
 
+  // ------------------------------------------------------------------ newest capture's spectrum, strongest narrow peak marked
+  let specMode = "power", lastData = null;
+  function drawSpectrum(data) {
+    const s = data && data.last_spectrum, canvas = $("lobe-spectrum"), ctx = canvas.getContext("2d");
+    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    const muted = "rgba(145,162,173,0.75)";
+    ctx.font = "11px ui-monospace,monospace"; ctx.fillStyle = muted;
+    if (!s) { ctx.fillText("no spectrum yet (runs before this version did not keep one)", 20, 30); $("spec-out").textContent = "No spectrum yet."; return; }
+    const ys = specMode === "power" ? s.db : s.excess_db, xs = s.freq_mhz, use = s.usable;
+    const L = 56, R = 12, T = 14, B = 30;
+    const vals = ys.filter((v, i) => use[i]);
+    let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || 0.1; lo -= pad; hi += pad;
+    const X = (f) => L + (w - L - R) * (f - xs[0]) / (xs[xs.length - 1] - xs[0]);
+    const Y = (v) => T + (h - T - B) * (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo));
+    ctx.fillStyle = "rgba(43,57,66,0.35)";                                   // DC and band edges: outside the usable band
+    for (let i = 0; i < xs.length; i++) if (!use[i]) ctx.fillRect(X(xs[i]) - 1, T, 2.5, h - T - B);
+    ctx.strokeStyle = "#2b3942"; ctx.strokeRect(L, T, w - L - R, h - T - B);
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = muted;
+    for (let f = Math.ceil(xs[0] * 4) / 4; f <= xs[xs.length - 1]; f += 0.25) { ctx.fillText(f.toFixed(2), X(f), h - B + 6); }
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4; ctx.fillText(v.toFixed(2), L - 4, Y(v)); }
+    const hiLine = 1420.405752;                                             // HI rest frequency
+    ctx.strokeStyle = "rgba(101,183,216,0.5)"; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(X(hiLine), T); ctx.lineTo(X(hiLine), h - B); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = "#e6edf1"; ctx.lineWidth = 1; ctx.beginPath();
+    xs.forEach((f, i) => { const x = X(f), y = Y(ys[i]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke();
+    const pk = s.peak, py = Y(ys[xs.indexOf(pk.freq_mhz)] ?? hi);
+    ctx.strokeStyle = "#e6b85c"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X(pk.freq_mhz), py, 6, 0, 2 * Math.PI); ctx.stroke();
+    ctx.fillStyle = "#e6b85c"; ctx.textAlign = X(pk.freq_mhz) > w * 0.7 ? "right" : "left"; ctx.textBaseline = "bottom";
+    ctx.fillText(`peak ${pk.freq_mhz.toFixed(4)} MHz  +${pk.excess_db.toFixed(2)} dB`, X(pk.freq_mhz) + (ctx.textAlign === "left" ? 9 : -9), py - 4);
+    $("spec-out").textContent = `sample #${s.sample_index}${s.utc ? " · " + whenText(s.utc) : ""}${U.finite(s.offset_deg) ? ` · Sun offset ${s.offset_deg.toFixed(2)}°` : ""} · ` +
+      `strongest narrow peak ${pk.freq_mhz.toFixed(4)} MHz, ${pk.offset_khz >= 0 ? "+" : ""}${pk.offset_khz.toFixed(0)} kHz from the centre, +${pk.excess_db.toFixed(2)} dB over its local median ` +
+      `(dashed: HI rest frequency; shaded: DC and band edges, outside the band power)`;
+  }
+  $("spec-power").addEventListener("click", () => { specMode = "power"; $("spec-power").classList.add("active"); $("spec-excess").classList.remove("active"); drawSpectrum(lastData); });
+  $("spec-excess").addEventListener("click", () => { specMode = "excess"; $("spec-excess").classList.add("active"); $("spec-power").classList.remove("active"); drawSpectrum(lastData); });
+
   async function refreshLive() {
     if (!liveDir) return true;
     const r = await U.api(`/api/ops/lobe/samples?dir=${encodeURIComponent(liveDir)}`, { timeoutMs: 20000 });
     if (!r.ok) return false;
-    drawPlot(r.data.data); renderFit(r.data.data);
+    lastData = r.data.data;
+    drawPlot(lastData); renderFit(lastData); drawSpectrum(lastData);
     return true;
   }
 

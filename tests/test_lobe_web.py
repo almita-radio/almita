@@ -103,3 +103,25 @@ def test_page_routes_and_navigation(monkeypatch):
             urllib.request.urlopen(base + "/api/ops/lobe/status?mode=spin", timeout=10)
         assert e.value.code == 400
     assert 'key: "LOBE", href: "/lobe.html"' in (ROOT / "console" / "common.js").read_text()
+
+
+def test_samples_route_returns_the_newest_valid_spectrum(tmp_path, monkeypatch):
+    import numpy as np
+    monkeypatch.setitem(ops.SERVE_ROOTS, "lobe", tmp_path)
+    d = tmp_path / "WEB-LOBE-SCAN-X"
+    d.mkdir()
+    (d / "lobe_plan.json").write_text(json.dumps({"center_frequency_hz": 1420405752, "sample_rate_hz": 2400000, "spectrum_nfft": 1024}))
+    rng = np.random.default_rng(1)
+    good = (1 + 0.05 * rng.standard_normal(1024)).astype(np.float32)
+    good[200] = 3.0                                                       # a strong narrow peak in the usable band
+    nan = np.full(1024, np.nan, dtype=np.float32)
+    (d / "lobe_spectra.f32").write_bytes(good.tobytes() + nan.tobytes())  # sample 2 failed: sample 1 is shown
+    with open(d / "lobe_samples.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=lt.CSV_FIELDS)
+        w.writeheader()
+        w.writerow({"index": 1, "utc": "2026-10-15T15:00:00Z", "offset_deg": -3.0, "status": "VALID"})
+        w.writerow({"index": 2, "status": "CAPTURE_FAILED"})
+    s = ops.lobe_samples(str(d))["last_spectrum"]
+    assert s["sample_index"] == 1 and s["offset_deg"] == -3.0 and s["utc"] == "2026-10-15T15:00:00Z"
+    assert s["peak"]["freq_mhz"] == pytest.approx(s["freq_mhz"][200]) and s["peak"]["excess_db"] > 4
+    assert len(ops.lobe_samples(str(d))["samples"]) == 2

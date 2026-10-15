@@ -38,6 +38,7 @@ NFFT = 256
 EDGE_FRACTION = 0.12                 # each side: the RTL2832 decimation filter rolls off there
 DC_BINS = 2                          # each side of the centre bin
 MEDIAN_BINS = 15                     # running median that removes narrow lines before averaging
+SPECTRUM_NFFT = 1024                 # per-sample spectrum kept in lobe_spectra.f32 (2.34 kHz bins at 2.4 MS/s)
 SOLAR_RA_RATE_DEG_PER_H = 15.0       # Sun in hour angle: 15.041 sidereal - 0.041 (Sun's own ~1 deg/day eastward)
 DEFAULT_HALF_RANGE_FWHM = 1.5
 MAX_HALF_RANGE_DEG = 60.0
@@ -152,6 +153,31 @@ def plan(mode: str, now: Time, location: EarthLocation, expected_fwhm_deg: float
 def _running_median(a: np.ndarray, k: int = MEDIAN_BINS) -> np.ndarray:
     p = k // 2
     return np.median(np.lib.stride_tricks.sliding_window_view(np.pad(a, (p, p), mode="edge"), k), axis=1)
+
+
+def capture_spectrum(raw: np.ndarray, nfft: int = SPECTRUM_NFFT) -> np.ndarray:
+    """Mean power spectrum (fftshifted, linear) of one capture: what the LOBE page draws for the latest sample."""
+    x = np.asarray(raw, dtype=np.uint8).astype(np.float32)
+    z = (x[0::2] - 127.4) + 1j * (x[1::2] - 127.4)
+    m = len(z) // nfft
+    return (np.abs(np.fft.fftshift(np.fft.fft(z[:m * nfft].reshape(m, nfft) * np.hanning(nfft), axis=1), axes=1)) ** 2).mean(axis=0)
+
+
+def spectrum_view(sp: np.ndarray, center_hz: float, sample_rate_hz: float) -> Dict[str, Any]:
+    """dB, excess over a running median and the strongest narrow peak (outside DC and the band edges) of one spectrum."""
+    n = len(sp)
+    db = 10 * np.log10(np.maximum(sp, 1e-20))
+    p = 15
+    excess = db - np.median(np.lib.stride_tricks.sliding_window_view(np.pad(db, (p, p), mode="edge"), 2 * p + 1), axis=1)
+    freqs = (center_hz + (np.arange(n) - n // 2) * sample_rate_hz / n) / 1e6
+    usable = np.ones(n, dtype=bool)
+    edge = int(n * EDGE_FRACTION)
+    usable[:edge] = usable[n - edge:] = False
+    dc = max(DC_BINS, n // 128)
+    usable[n // 2 - dc:n // 2 + dc + 1] = False
+    j = int(np.flatnonzero(usable)[np.argmax(excess[usable])])
+    return {"freq_mhz": freqs.tolist(), "db": db.tolist(), "excess_db": excess.tolist(), "usable": usable.tolist(),
+            "peak": {"freq_mhz": float(freqs[j]), "excess_db": float(excess[j]), "offset_khz": float((freqs[j] - center_hz / 1e6) * 1e3)}}
 
 
 def band_power(raw: np.ndarray) -> Dict[str, float]:
@@ -317,6 +343,7 @@ class LobeRun:
             raw = np.empty(i_.size * 2, dtype=np.uint8)
             raw[0::2], raw[1::2] = i_, q_
             m = band_power(raw)
+            spectrum = capture_spectrum(raw).astype(np.float32)
             row.update(utc=t.utc.isot + "Z", elapsed_s=round(time.monotonic() - self.t0, 2), sun_ra_hours=sra, sun_dec_deg=sdec,
                        point_ra_hours=pra, point_dec_deg=pdec, offset_deg=offset_deg(sra, sdec, pra),
                        separation_deg=separation_deg(sra, sdec, pra, pdec), point_alt_deg=self._alt(t, pra, pdec),
@@ -325,6 +352,9 @@ class LobeRun:
                        status="VALID" if m["clipping_fraction"] <= a.max_clipping else "CLIPPED")
         except (OSError, ValueError, KeyError, RuntimeError) as exc:
             row["error"] = str(exc)
+            spectrum = np.full(SPECTRUM_NFFT, np.nan, dtype=np.float32)
+        with open(self.out / "lobe_spectra.f32", "ab") as sf:          # row k = sample k+1 (NaN when it failed)
+            sf.write(spectrum.tobytes())
             self.log(f"sample {self.index}: {exc}")
         writer.writerow({k: row.get(k) for k in CSV_FIELDS})
         fh.flush()
@@ -393,6 +423,7 @@ class LobeRun:
         a = self.args
         p = plan(a.mode, Time.now(), self.location, a.expected_fwhm, a.half_range_fwhm, a.every, a.capture_seconds,
                  a.scan_step, a.settle, a.min_elevation)
+        p.update(center_frequency_hz=a.center_freq, sample_rate_hz=a.sample_rate, spectrum_nfft=SPECTRUM_NFFT)
         (self.out / "lobe_plan.json").write_text(json.dumps(p, indent=2))
         self.log(f"PLAN {a.mode}: half range {p['half_range_deg']:.1f} deg (expected FWHM {a.expected_fwhm:g} x {a.half_range_fwhm:g}), "
                  f"duration {p['duration_s'] / 60:.1f} min, pointing alt {p['point_alt_deg']:.1f} deg")

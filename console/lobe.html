@@ -45,6 +45,13 @@
       <pre class="obs-summary" id="fit-out">No transit yet.</pre>
     </section>
 
+    <section class="panel" aria-labelledby="h-spec">
+      <header><h2 id="h-spec">LATEST CAPTURE SPECTRUM <span class="muted">(the newest sample, 1024 channels of 2.34 kHz · refreshed every 5 s)</span></h2>
+        <span class="obs-actions" style="padding:0"><button type="button" id="spec-power" class="mode-btn active">POWER (dB)</button><button type="button" id="spec-excess" class="mode-btn">EXCESS OVER LOCAL MEDIAN (dB)</button></span></header>
+      <canvas id="lobe-spectrum" style="width:100%;height:320px;display:block;margin:8px 0;border:1px solid var(--line);border-radius:8px"></canvas>
+      <div class="obs-summary" id="spec-out">No spectrum yet.</div>
+    </section>
+
     <div id="error-banner" class="banner connection" hidden></div>
   </main>
 

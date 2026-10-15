@@ -2439,6 +2439,22 @@ def lobe_samples(rel_dir: str) -> Dict[str, Any]:
     sig = (str(csv_path), csv_path.stat().st_mtime_ns if csv_path.is_file() else 0)
     if _LOBE_FIT_CACHE.get("sig") != sig:
         _LOBE_FIT_CACHE.update(sig=sig, fit=lt.fit_samples(rows, 0.001) if rows else None)
-    return {"dir": str(d.relative_to(ROOT)) if d.is_relative_to(ROOT) else str(d), "plan": _read_json(d / "lobe_plan.json"),
+    plan = _read_json(d / "lobe_plan.json") or {}
+    last_spectrum = None
+    spath, nfft = d / "lobe_spectra.f32", int(plan.get("spectrum_nfft") or lt.SPECTRUM_NFFT)
+    if spath.is_file() and plan.get("center_frequency_hz") and spath.stat().st_size >= nfft * 4:
+        import numpy as np
+        n_rows = spath.stat().st_size // (nfft * 4)
+        with open(spath, "rb") as fh:                       # the newest sample that has a spectrum (failed ones are NaN)
+            for k in range(n_rows - 1, max(-1, n_rows - 6), -1):
+                fh.seek(k * nfft * 4)
+                sp = np.frombuffer(fh.read(nfft * 4), dtype=np.float32).astype(float)
+                if np.isfinite(sp).all():
+                    last_spectrum = {"sample_index": k + 1, **lt.spectrum_view(sp, plan["center_frequency_hz"], plan["sample_rate_hz"])}
+                    row = next((r for r in rows if r.get("index") == k + 1), None)
+                    if row:
+                        last_spectrum.update(utc=row.get("utc"), offset_deg=row.get("offset_deg"))
+                    break
+    return {"dir": str(d.relative_to(ROOT)) if d.is_relative_to(ROOT) else str(d), "plan": plan, "last_spectrum": last_spectrum,
             "result": _read_json(d / "lobe_result.json"),
             "samples": [{k: r.get(k) for k in keep} for r in rows], "fit": _LOBE_FIT_CACHE["fit"]}
