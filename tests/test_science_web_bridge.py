@@ -1002,3 +1002,24 @@ def test_exports_have_one_size_short_captions_and_notes_file(tmp_path):
     assert exports["notes"] == ["NOTES.md"]
     for section in ("## Noise check", "## B/C consistency", "## Method", "Hatched / dimmed B/C pixels", "## SNR map"):
         assert section in notes, section
+
+
+def test_thermal_note_reads_the_captures_hdf5_temperatures(tmp_path):
+    """The DS18B20 readings live in each capture's HDF5 attributes; REDUCE's refs carry the file name only (2026-10-15:
+    SCIENCE reported NOT_EVALUABLE on a campaign whose 16 captures all had temperatures)."""
+    import json as _json
+    import types
+    import h5py
+    import science_web_bridge as swb
+    camp = tmp_path / "CAMP"
+    iq = camp / "data" / "iq" / "RUN"
+    iq.mkdir(parents=True)
+    for i, (ts, tl) in enumerate(((33.1, 25.0), (33.4, 25.2)), 1):
+        with h5py.File(iq / f"ALMITA-OBSERVE_{i:04d}.h5", "w") as h:
+            h.attrs.update(temperature_sdr_valid_count=2, temperature_sdr_mean_c=ts, temperature_lna_valid_count=2, temperature_lna_mean_c=tl)
+    red = tmp_path / "RED"
+    red.mkdir()
+    (red / "manifest.json").write_text(_json.dumps({"source_campaign_root": str(camp)}))
+    pts = [types.SimpleNamespace(capture_refs=[{"capture_id": f"ALMITA-OBSERVE_{i:04d}.h5"}]) for i in (1, 2)]
+    note = swb._thermal_drift_note(types.SimpleNamespace(points=pts, reduce_session_dir=str(red)))
+    assert note["status"] == "AVAILABLE" and note["temperature_range_c"] == {"sdr": [33.1, 33.4], "lna": [25.0, 25.2]}

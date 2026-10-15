@@ -1998,6 +1998,41 @@ def _thermal_drift_note(science_input) -> dict[str, Any]:
     if found:
         return {"status": "AVAILABLE", "note": f"{found}/{checked} sampled captures have a non-empty recorded "
                                                "temperature - inspect environment.json per session for values."}
+    # Current captures carry the DS18B20 readings (pre/post, dated) as HDF5 attributes (capture.py
+    # temperature_metadata) - environment.json is the legacy location and is empty on this hardware.
+    import h5py
+    temps: dict[str, list] = {"sdr": [], "lna": []}
+    sampled = 0
+    # REDUCE's capture refs carry the file name only: find it under the source campaign (REDUCE's manifest)
+    by_name: dict[str, Path] = {}
+    try:
+        manifest = json.loads((Path(science_input.reduce_session_dir) / "manifest.json").read_text())
+        root = manifest.get("source_campaign_root")
+        if root:
+            root_path = Path(root) if Path(root).is_absolute() else Path(__file__).resolve().parent / root
+            by_name = {f.name: f for f in (root_path / "data" / "iq").glob("*/*.h5")}
+    except (OSError, ValueError, AttributeError):
+        pass
+    for p in science_input.points:
+        for ref in p.capture_refs:
+            src = ref.get("source_path") or by_name.get(str(ref.get("capture_id") or ""))
+            if not src or not str(src).endswith(".h5") or not Path(src).is_file():
+                continue
+            sampled += 1
+            try:
+                with h5py.File(src, "r") as h:
+                    for role in temps:
+                        if int(h.attrs.get(f"temperature_{role}_valid_count", 0) or 0) > 0:
+                            temps[role].append(float(h.attrs[f"temperature_{role}_mean_c"]))
+            except (OSError, KeyError, ValueError, TypeError):
+                continue
+    if temps["sdr"] or temps["lna"]:
+        rng = {role: [round(min(v), 2), round(max(v), 2)] for role, v in temps.items() if v}
+        return {"status": "AVAILABLE", "temperature_range_c": rng, "captures_with_temperature": {r: len(v) for r, v in temps.items()},
+                "captures_sampled": sampled,
+                "note": "dated DS18B20 readings from the captures' own HDF5 attributes; ranges over the used captures: "
+                        + ", ".join(f"{r.upper()} {lo}-{hi} C" for r, (lo, hi) in rng.items())
+                        + " (MAIN's moving instrumental line depends on both, BL-072)"}
     return {"status": "NOT_EVALUABLE",
            "note": "deriva térmica no evaluable: no real, dated LNA/SDR temperature reading was found for this "
                    "campaign's captures (environment.json's temperature_before/after are empty on this hardware). "
