@@ -211,7 +211,7 @@ def test_estimate_observation_matches_plan_duration_and_writes_nothing(tmp_path,
     assert est["duration"] == pl.estimate_duration(9, 1, 0.5)
     assert est["point_count"] == 9
     w = est["sky_window"]
-    assert w["window_end_utc"] is not None and w["seconds_until_window_end"] >= est["duration"]["conservative_seconds"] - 300
+    assert w["window_end_utc"] is not None and w["seconds_until_window_end"] >= est["duration"]["planning_seconds"] - 300
     assert list(tmp_path.iterdir()) == []
 
 
@@ -233,3 +233,42 @@ def test_sky_window_open_now_and_closes_when_the_region_sets():
     assert w["visible_now"] is True and w["window_start_utc"] == t0.utc.isot + "Z"
     assert 4 * 3600 < w["seconds_until_window_end"] < 8 * 3600  # sets ~5-6 h after transit at this altitude floor
     assert w["seconds_until_window_end"] == w["window_seconds"]
+
+
+def test_sky_window_ends_on_the_last_sample_still_wholly_up():
+    """Conservative end: the window never includes the sample where the region is already below the floor."""
+    import astropy.units as u
+    from astropy.coordinates import AltAz, SkyCoord
+    cfg = pl._load_observer_config(pl.Path(__file__).resolve().parents[1] / TEST_OBSERVER_CONFIG)
+    location, _ = pl._observer_location(cfg)
+    points, _ = pl._grid_points(transiting_ra_hours(), -30.0, 4, 4, 2.0)
+    t0 = pl.Time.now()
+    w = pl.sky_window(points, location, t0, 30.0)
+    end = pl.Time(w["window_end_utc"].rstrip("Z"), scale="utc")
+    coords = SkyCoord(ra=[p["target_ra_hours"] * 15 for p in points] * u.deg, dec=[p["target_dec_degrees"] for p in points] * u.deg)
+    lowest = lambda t: coords.transform_to(AltAz(obstime=t, location=location)).alt.deg.min()  # noqa: E731
+    assert lowest(end) >= 30.0 > lowest(end + w["step_minutes"] * u.min)
+
+
+def test_estimate_returns_each_point_where_it_will_be_captured():
+    spec = _valid_spec()
+    est = pl.estimate_observation(spec, observer_config_path=str(pl.Path(__file__).resolve().parents[1] / TEST_OBSERVER_CONFIG))
+    sky = est["sky"]
+    assert len(sky["points"]) == 9 and [p["scan_order"] for p in sky["points"]] == list(range(1, 10))
+    assert all(0 <= p["az_deg"] < 360 and isinstance(p["below_min"], bool) for p in sky["points"])
+    assert sky["min_altitude_deg"] == spec["grid"]["min_altitude_deg"] and "alt_deg" in sky["sun"]
+
+
+def test_observe_page_draws_the_grid_with_the_minimum_altitude_circle():
+    root = pl.Path(__file__).resolve().parents[1]
+    assert 'id="est-sky"' in (root / "console" / "observe.html").read_text()
+    js = (root / "console" / "observe.js").read_text()
+    assert "minAlt: sky.min_altitude_deg" in js and "points: pts" in js
+    assert "o.minAlt" in (root / "console" / "common.js").read_text()
+
+
+def test_planning_pace_is_the_mean_of_projected_and_conservative():
+    d = pl.estimate_duration(100, 10, 2)
+    assert d["planning_seconds"] == pytest.approx((d["estimated_seconds"] + d["conservative_seconds"]) / 2)
+    assert d["estimated_seconds"] < d["planning_seconds"] < d["conservative_seconds"]
+    assert d["per_point_planning_seconds"] * 100 == pytest.approx(d["planning_seconds"])

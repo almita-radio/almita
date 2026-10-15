@@ -591,7 +591,10 @@
   U.drawSkyView = function (canvas, data, opts) {
     // Optional (backward compatible, ALIGN passes none of these): opts.colors {label: css}, opts.path [[az,alt],...]
     // drawn as the visiting order; per area: order (number shown before the label) and warn (dashed red outline).
-    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null }, opts || {});
+    // opts.points [{az_deg, alt_deg, below_min}] (OBSERVE's grid): small dots, red when below the minimum altitude,
+    // the first one ringed; drawn over the path and under the areas.
+    // opts.minAlt: the minimum-altitude circle, in green (OBSERVE).
+    const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null }, opts || {});
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
     const dpr = window.devicePixelRatio || 1;
@@ -638,6 +641,11 @@
       ctx.fillStyle = muted; ctx.fillText(alt + "°", cx + 3, ty);
     }
     ctx.fillStyle = fg; ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 2 * Math.PI); ctx.fill();          // zenith
+    if (U.finite(o.minAlt) && o.minAlt > 0) {
+      ctx.save(); ctx.strokeStyle = "#55c985"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.arc(cx, cy, rFor(o.minAlt), 0, 2 * Math.PI); ctx.stroke(); ctx.restore();
+      ctx.font = "10px ui-monospace,monospace"; ctx.fillStyle = "#55c985"; ctx.fillText(`min ${o.minAlt}°`, cx - rFor(o.minAlt) * 0.71 - 4, cy + rFor(o.minAlt) * 0.71 + 12);
+    }
     ctx.font = "bold 12px ui-monospace,monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     for (const [label, az] of [["N", 0], ["E", 90], ["S", 180], ["O", 270]]) {
       const [x, y] = toXY(az, -8);
@@ -659,6 +667,20 @@
       ctx.save(); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5; ctx.strokeStyle = muted; ctx.beginPath();
       o.path.forEach(([az, alt], i) => { const [x, y] = toXY(az, alt); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
       ctx.stroke(); ctx.restore();
+    }
+    if (o.points && o.points.length) {
+      const dot = Math.max(1.6, Math.min(4, 90 / Math.sqrt(o.points.length)));
+      for (const p of o.points) {
+        if (p.alt_deg < -5) continue;
+        const [x, y] = toXY(p.az_deg, p.alt_deg);
+        ctx.fillStyle = p.below_min ? "#e5484d" : "#5cc8e6";
+        ctx.beginPath(); ctx.arc(x, y, dot, 0, 2 * Math.PI); ctx.fill();
+      }
+      const first = o.points[0];
+      if (first && first.alt_deg >= -5) {
+        const [x, y] = toXY(first.az_deg, first.alt_deg);
+        ctx.strokeStyle = fg; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, dot + 4, 0, 2 * Math.PI); ctx.stroke();
+      }
     }
     for (const area of data.areas || []) {
       const [x, y] = toXY(area.az_deg, area.alt_deg);

@@ -284,6 +284,22 @@ def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/pro
 _HI_PLAN_SKY_CACHE: Dict[Any, Dict[str, Any]] = {}
 
 
+_SKY_NOW_CACHE: Dict[Any, Dict[str, Any]] = {}
+
+
+def sky_layer_now(beam_fwhm_deg: Optional[float] = None) -> Dict[str, Any]:
+    """ALIGN's HI4PI Alt/Az layer for "now", for OBSERVE's sky map. The live estimate asks on every form change:
+    cached per minute (the sky moves 0.25 deg/min, far below the map's resolution). Never raises."""
+    if beam_fwhm_deg is None:
+        beam_fwhm_deg = float(json.loads((ROOT / "observer_config.json").read_text()).get("observation_defaults", {}).get("beam_fwhm_deg") or 20.0)
+    minute = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:00")
+    key = (minute, round(float(beam_fwhm_deg), 3))
+    if key not in _SKY_NOW_CACHE:
+        _SKY_NOW_CACHE.clear()
+        _SKY_NOW_CACHE[key] = _hi_plan_sky({"generated_utc": minute, "beam_fwhm_deg": beam_fwhm_deg})
+    return _SKY_NOW_CACHE[key]
+
+
 def _hi_plan_sky(hi_plan: Dict[str, Any]) -> Dict[str, Any]:
     """ALIGN's HI4PI Alt/Az layer (hi4pi_map.sky_grid, same smoothing as the plan: its own beam_fwhm_deg) at the
     plan's OWN instant, so the colour under each zone is what the plan saw. Cached per plan (job facts are polled

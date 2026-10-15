@@ -28,7 +28,7 @@ import astropy_offline  # noqa: F401 - configures offline IERS policy on import,
 
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
 from astropy.time import Time
 
 import grid_generator
@@ -93,10 +93,16 @@ def estimate_duration(num_points: int, capture_s: float, settle_s: float) -> Dic
     """Estimate total session duration. Returns estimated/conservative seconds + assumptions."""
     per_point_estimated = capture_s + settle_s + MEASURED_OVERHEAD_MEDIAN_SEC
     per_point_conservative = (capture_s + settle_s + MEASURED_OVERHEAD_P90_SEC) * CONSERVATIVE_SAFETY_FACTOR
+    # Planning value (operator, 2026-10-15): the mean of the projected and the conservative pace - real campaigns keep
+    # to the projection closely, the conservative one over-reserves sky. It schedules the altitude predictions and the
+    # sky-window check; the conservative figure stays reported as the outer bound.
+    per_point_planning = (per_point_estimated + per_point_conservative) / 2.0
     return {
         "estimated_seconds": num_points * per_point_estimated,
         "conservative_seconds": num_points * per_point_conservative,
+        "planning_seconds": num_points * per_point_planning,
         "per_point_conservative_seconds": per_point_conservative,
+        "per_point_planning_seconds": per_point_planning,
         "assumptions": [
             f"per-point overhead (GOTO+guards+tracking-confirm+SDR flush+HDF5 write) modeled as a "
             f"constant {MEASURED_OVERHEAD_MEDIAN_SEC:.1f}s median / {MEASURED_OVERHEAD_P90_SEC:.1f}s p90, "
@@ -173,7 +179,9 @@ def sky_window(points: List[Dict[str, Any]], location: EarthLocation, t0: Time, 
     end = start
     while end < steps and up[end]:
         end += 1
-    last = min(end, steps - 1)
+    # the last sample still wholly up: the true setting time lies before the next sample, so ending the window there
+    # never promises sky that is not there (it used to end at the first sample already below: up to one step late)
+    last = end - 1
     out.update(window_start_utc=times[start].utc.isot + "Z", window_end_utc=times[last].utc.isot + "Z",
                window_seconds=(last - start) * step_minutes * 60.0,
                seconds_until_window_end=last * step_minutes * 60.0, window_open_past_horizon=end >= steps)
@@ -195,7 +203,7 @@ def _grid_points(center_ra_hours: float, center_dec_deg: float, width_deg: float
 def _resolve_eastmost_safe(grid_spec: Dict[str, Any], location: EarthLocation, t0: Time,
                             per_point_seconds: float) -> Dict[str, Any]:
     """The most-eastward center RA for which every point clears the altitude floor (+margin) at its predicted
-    execution time over the conservative window. The reference is the altitude floor, not the meridian: candidates
+    execution time over the planned window (mean of projected and conservative pace). The reference is the altitude floor, not the meridian: candidates
     are scanned east -> west over the whole hour-angle range and the first one that clears is refined by bisection
     against its (failing) eastern neighbour. A long run is therefore placed rising in the east, where it has the
     most time ahead of it, instead of being rejected because a meridian-centred start would set before the end
@@ -252,7 +260,7 @@ def _resolve_eastmost_safe(grid_spec: Dict[str, Any], location: EarthLocation, t
         f"Center RA chosen as the easternmost candidate (hour angle {resolved_ha:+.2f}h at plan time) "
         f"for which all {len(points)} predicted execution points remain above "
         f"{grid_spec['min_altitude_deg']:.1f} deg planning altitude (+{EASTMOST_ALTITUDE_MARGIN_DEG:.1f} deg "
-        f"safety margin) over the conservative session window; minimum predicted altitude "
+        f"safety margin) over the planned session window (mean of projected and conservative pace); minimum predicted altitude "
         f"{min_predicted:.1f} deg."
     )
     return {
@@ -331,7 +339,7 @@ def _plan_time_preflight(resolved_plan: Dict[str, Any]) -> Dict[str, Any]:
 
 def _resolve_grid(spec: Dict[str, Any], observer_config_path: str, now: Optional[datetime],
                   duration: Dict[str, Any]) -> Dict[str, Any]:
-    """Placement + predicted altitudes over the conservative window: everything PLAN computes before it touches
+    """Placement + predicted altitudes over the planned window (mean of projected and conservative pace): everything PLAN computes before it touches
     the disk. Shared by plan_observation() and estimate_observation() so the live estimate can never disagree
     with the plan. Raises ObservationPlanError exactly as PLAN does."""
     observer_config = _load_observer_config(Path(observer_config_path))
@@ -345,7 +353,7 @@ def _resolve_grid(spec: Dict[str, Any], observer_config_path: str, now: Optional
 
     t0 = Time(now.astimezone(timezone.utc)) if now else Time.now()
 
-    per_point_seconds = duration["per_point_conservative_seconds"]
+    per_point_seconds = duration["per_point_planning_seconds"]
 
     if grid_spec["placement"] == "FIXED_CENTER":
         points, metadata = _grid_points(grid_spec["center_ra_hours"], grid_spec["center_dec_deg"],
@@ -359,7 +367,7 @@ def _resolve_grid(spec: Dict[str, Any], observer_config_path: str, now: Optional
             raise ObservationPlanError(
                 f"FIXED_CENTER: predicted minimum altitude {min_predicted:.1f} deg falls below "
                 f"planning floor {grid_spec['min_altitude_deg']:.1f} deg at some point during the "
-                "conservative session window"
+                "planned session window (mean of projected and conservative pace)"
             )
     elif grid_spec["placement"] == "EASTMOST_SAFE":
         resolved = _resolve_eastmost_safe(grid_spec, location, t0, per_point_seconds)
@@ -376,6 +384,21 @@ def _resolve_grid(spec: Dict[str, Any], observer_config_path: str, now: Optional
             "resolved_ra": resolved_ra, "reasoning": reasoning}
 
 
+def sky_view(points: List[Dict[str, Any]], location: EarthLocation, t0: Time, per_point_seconds: float,
+             min_altitude_deg: float) -> Dict[str, Any]:
+    """Where each point will be in the sky WHEN it is captured (scan order, the same schedule as the altitude
+    prediction): az/alt for OBSERVE's sky map, plus the Sun now. Read-only."""
+    times = t0 + [timedelta(seconds=i * per_point_seconds) for i in range(len(points))]
+    coords = SkyCoord(ra=[p["target_ra_hours"] * 15.0 for p in points] * u.deg,
+                      dec=[p["target_dec_degrees"] for p in points] * u.deg, frame="icrs")
+    aa = coords.transform_to(AltAz(obstime=times, location=location))
+    sun = get_sun(t0).transform_to(AltAz(obstime=t0, location=location))
+    return {"computed_utc": t0.utc.isot + "Z", "min_altitude_deg": min_altitude_deg,
+            "points": [{"scan_order": int(p["scan_order"]), "az_deg": float(az), "alt_deg": float(alt),
+                        "below_min": bool(alt < min_altitude_deg)} for p, az, alt in zip(points, aa.az.deg, aa.alt.deg)],
+            "sun": {"az_deg": float(sun.az.deg), "alt_deg": float(sun.alt.deg), "above_horizon": bool(sun.alt.deg > 0)}}
+
+
 def estimate_observation(spec: Dict[str, Any], *, observer_config_path: str = "observer_config.json",
                          now: Optional[datetime] = None) -> Dict[str, Any]:
     """What PLAN would say right now, without writing anything (no grid directory, no plots, no preflight):
@@ -388,8 +411,11 @@ def estimate_observation(spec: Dict[str, Any], *, observer_config_path: str = "o
     try:
         r = _resolve_grid(spec, observer_config_path, now, duration)
     except ValueError as exc:  # ObservationPlanError, or a footprint the sky geometry rejects (e.g. past a pole)
-        return {**out, "feasible": False, "blocking_reason": str(exc), "sky_window": _fixed_center_window(spec, observer_config_path, now)}
+        return {**out, "feasible": False, "blocking_reason": str(exc), "sky_window": _fixed_center_window(spec, observer_config_path, now),
+                "sky": _fixed_center_sky(spec, observer_config_path, now, duration)}
     md = r["metadata"]
+    out["sky"] = sky_view(r["points"], r["location"], r["t0"], r["duration"]["per_point_planning_seconds"],
+                          r["grid_spec"]["min_altitude_deg"])
     return {**out, "feasible": True, "blocking_reason": None,
             "point_count": md["total_points"], "rows": md["rows"], "cols": md["columns"],
             "spacing_deg": md["nominal_spacing_deg"],
@@ -399,7 +425,24 @@ def estimate_observation(spec: Dict[str, Any], *, observer_config_path: str = "o
                 r["predictions"], r["grid_spec"]["min_altitude_deg"]),
             "sky_window": sky_window(r["points"], r["location"], r["t0"], r["grid_spec"]["min_altitude_deg"]),
             "estimated_end_utc": (r["t0"] + timedelta(seconds=duration["estimated_seconds"])).utc.isot + "Z",
-            "conservative_end_utc": (r["t0"] + timedelta(seconds=duration["conservative_seconds"])).utc.isot + "Z"}
+            "conservative_end_utc": (r["t0"] + timedelta(seconds=duration["conservative_seconds"])).utc.isot + "Z",
+            "planning_end_utc": (r["t0"] + timedelta(seconds=duration["planning_seconds"])).utc.isot + "Z"}
+
+
+def _fixed_center_sky(spec: Dict[str, Any], observer_config_path: str, now: Optional[datetime],
+                      duration: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The requested FIXED_CENTER points on the sky map even when PLAN rejects them (so the operator SEES why)."""
+    g = spec["grid"]
+    if g["placement"] != "FIXED_CENTER":
+        return None
+    try:
+        location, _ = _observer_location(_load_observer_config(Path(observer_config_path)))
+        points, _ = _grid_points(g["center_ra_hours"], g["center_dec_deg"], g["width_deg"], g["height_deg"],
+                                 g["nominal_spacing_deg"])
+        t0 = Time(now.astimezone(timezone.utc)) if now else Time.now()
+        return sky_view(points, location, t0, duration["per_point_planning_seconds"], g["min_altitude_deg"])
+    except Exception:  # noqa: BLE001 - a footprint the geometry rejects (e.g. past a pole) simply has no map
+        return None
 
 
 def _fixed_center_window(spec: Dict[str, Any], observer_config_path: str,

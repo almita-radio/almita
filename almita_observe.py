@@ -62,6 +62,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
     print("")
     print(f"Estimated duration  {_format_duration(plan['duration']['estimated_seconds'])}")
     print(f"Conservative        {_format_duration(plan['duration']['conservative_seconds'])}")
+    if "planning_seconds" in plan["duration"]:
+        print(f"Planned             {_format_duration(plan['duration']['planning_seconds'])}  (mean of estimated and conservative: used for the altitude/sky checks)")
     print(f"Estimated storage   {_gib(plan['storage']['required_bytes']):.2f} GiB")
     print(f"Free storage        {_gib(plan['storage']['free_bytes_at_plan_time']):.2f} GiB")
     print("")

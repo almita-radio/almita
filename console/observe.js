@@ -73,13 +73,36 @@
     el.textContent = text;
   }
 
+  // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
+  // schedule), red below the minimum altitude, the first one ringed, the visiting order dashed; Sun and HI4PI layer.
+  function renderEstimateSky(sky) {
+    const canvas = $("est-sky"), legend = $("est-sky-legend"), note = $("est-sky-note");
+    if (!sky || !sky.points || !sky.points.length) {
+      canvas.hidden = true; legend.hidden = true; note.textContent = "";
+      return;
+    }
+    canvas.hidden = false;
+    const pts = sky.points;
+    const path = pts.length <= 400 ? pts.map((p) => [p.az_deg, p.alt_deg]) : null;   // a dense grid's path is just noise
+    U.drawSkyView(canvas, { sun: sky.sun, hi4pi_grid: sky.hi4pi_grid || null, areas: [] }, { points: pts, path, minAlt: sky.min_altitude_deg });
+    const range = sky.hi4pi_grid && sky.hi4pi_grid.value_range_1e20cm2;
+    legend.hidden = !range;
+    if (range) U.drawHi4piLegend(legend, range);
+    const low = pts.filter((p) => p.below_min).length, below = pts.filter((p) => p.alt_deg < 0).length;
+    note.textContent = `${pts.length} points where the mount will be at each capture (ringed: first) · `
+      + (low ? `${low} below the minimum altitude ${sky.min_altitude_deg}° (red; green circle = minimum altitude)${below ? `, ${below} under the horizon (not drawn)` : ""}` : "all above the minimum altitude (green circle)")
+      + ` · Sun ${sky.sun.above_horizon ? `az ${sky.sun.az_deg.toFixed(0)}° alt ${sky.sun.alt_deg.toFixed(0)}°` : "below the horizon"}`
+      + (sky.hi4pi_grid ? " · colour: real HI4PI map now" : sky.hi4pi_error ? ` · HI4PI layer unavailable (${sky.hi4pi_error})` : "");
+  }
+
   function renderEstimate(e) {
+    renderEstimateSky(e.sky);
     const d = e.duration;
     $("est-duration").textContent = d ? fmtDur(d.estimated_seconds) : "—";
     $("est-duration-sub").textContent = d
-      ? `conservative ${fmtDur(d.conservative_seconds)} · ${e.point_count || e.requested_point_count || "—"} points`
+      ? `planned ${fmtDur(d.planning_seconds ?? d.conservative_seconds)} (mean of this and the conservative ${fmtDur(d.conservative_seconds)}) · ${e.point_count || e.requested_point_count || "—"} points`
         + (U.finite(e.spacing_deg) ? ` · spacing ${U.deg(e.spacing_deg, 2)}` : "")
-        + (e.estimated_end_utc ? `\nif started now: ends ~${U.utcTime(e.estimated_end_utc)} (conservative ${U.utcTime(e.conservative_end_utc)})` : "")
+        + (e.estimated_end_utc ? `\nif started now: ends ~${U.utcTime(e.estimated_end_utc)} (planned ${U.utcTime(e.planning_end_utc || e.conservative_end_utc)}, conservative ${U.utcTime(e.conservative_end_utc)})` : "")
       : "";
     const w = e.sky_window;
     if (!w) {
@@ -100,13 +123,13 @@
     if (!e.spec_valid) return setVerdict("block", `PLAN would reject these values: ${e.spec_error}`);
     if (!e.feasible) return setVerdict("block", `PLAN would refuse: ${e.blocking_reason}`
       + (w && w.window_start_utc ? `\nThis region is wholly up from ${U.utcTime(w.window_start_utc)} — plan then, or change it.` : ""));
-    const spare = w && U.finite(w.seconds_until_window_end) ? w.seconds_until_window_end - d.conservative_seconds : null;
+    const spare = w && U.finite(w.seconds_until_window_end) ? w.seconds_until_window_end - (d.planning_seconds ?? d.conservative_seconds) : null;   // operator: the mean of projected and conservative
     const tail = U.finite(e.max_recommended_start_delay_minutes)
       ? `\nStart within ~${Math.round(e.max_recommended_start_delay_minutes)} min of planning.` : "";
     if (U.finite(spare) && spare < 0) {
-      return setVerdict("warn", `PLAN would accept, but the conservative end is ${fmtDur(-spare)} after the region sets.${tail}`);
+      return setVerdict("warn", `PLAN would accept, but the planned end is ${fmtDur(-spare)} after the region sets.${tail}`);
     }
-    setVerdict("ok", "PLAN would accept these values" + (U.finite(spare) ? ` · ${fmtDur(spare)}${w.window_open_past_horizon ? "+" : ""} of sky to spare after the conservative end` : "") + "." + tail);
+    setVerdict("ok", "PLAN would accept these values" + (U.finite(spare) ? ` · ${fmtDur(spare)}${w.window_open_past_horizon ? "+" : ""} of sky to spare after the planned end` : "") + "." + tail);
   }
 
   async function runEstimate() {

@@ -572,7 +572,10 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         except observation_spec.ObservationSpecError as exc:
             return _json_response(self, 200, {"spec_valid": False, "spec_error": str(exc), "feasible": False,
                                               **_duration_from_raw(body)})
-        _json_response(self, 200, {"spec_valid": True, "spec_error": None, **observation_plan.estimate_observation(spec)})
+        est = observation_plan.estimate_observation(spec)
+        if est.get("sky"):
+            est["sky"].update(almita_web_ops.sky_layer_now())      # the same HI4PI layer ALIGN draws, for OBSERVE's map
+        _json_response(self, 200, {"spec_valid": True, "spec_error": None, **est})
 
     def _handle_align_action(self, action: str, mode: str) -> None:
         body = _read_json_body(self)
