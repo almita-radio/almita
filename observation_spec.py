@@ -111,7 +111,7 @@ def _validate_session(raw: dict) -> dict:
 def _validate_grid(raw: dict) -> dict:
     where = "grid"
     allowed = ("mode", "placement", "center_ra_hours", "center_dec_deg", "width_deg",
-               "height_deg", "rows", "cols", "min_altitude_deg", "traversal")
+               "height_deg", "rows", "cols", "min_altitude_deg", "traversal", "rotation_deg")
     _require_keys(raw, allowed, where)
 
     mode = _enum(raw, "mode", where, GRID_MODES)
@@ -129,6 +129,8 @@ def _validate_grid(raw: dict) -> dict:
                             min_value=0.0, max_value=24.0)
     center_dec_deg = _num(raw, "center_dec_deg", where, required=False, default=None,
                            min_value=-90.0, max_value=90.0)
+    # the grid turned about its centre: position angle of its "up" axis, North through East (0 = rows along RA)
+    rotation_deg = float(_num(raw, "rotation_deg", where, required=False, default=0.0, min_value=-180.0, max_value=180.0))
 
     if placement == "FIXED_CENTER":
         _require(center_ra_hours is not None, f"{where}.center_ra_hours: required when placement=FIXED_CENTER")
@@ -160,6 +162,7 @@ def _validate_grid(raw: dict) -> dict:
         "min_altitude_deg": min_altitude_deg,
         "traversal": traversal,
         "nominal_spacing_deg": spacing_w,
+        "rotation_deg": rotation_deg,
     }
 
 

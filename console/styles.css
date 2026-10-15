@@ -235,3 +235,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .mount-stop{margin-left:6px;padding:3px 10px;border:0;cursor:pointer;font:700 11px/1.6 monospace;letter-spacing:.1em;align-self:center}   /* STOP MOUNT, in every page header */
 .spectral-stack-range{right:122px}   /* next to RESET CAMERA: FULL RANGE / CLIP OUTLIERS */
 .spectral-stack-scale{max-width:calc(100% - 250px)}
+
+/* OBSERVE: the grid's sky map beside the specification column (OBSERVATION NAME .. SETTLE); stacked on narrow screens */
+.obs-split{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}
+.obs-split-map{display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:8px}
+@media (max-width:900px){.obs-split{grid-template-columns:minmax(0,1fr)}}

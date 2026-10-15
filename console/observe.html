@@ -9,28 +9,40 @@
     <section id="form-section" class="panel obs-form">
       <header><h2>OBSERVATION SPECIFICATION</h2></header>
       <form id="observe-form">
-        <div class="obs-row"><label for="f-name">OBSERVATION NAME</label><input type="text" id="f-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}" value="ALMITA-OBSERVE"></div>
+        <div class="obs-split">
+          <div class="obs-split-form" id="obs-split-form">
+          <div class="obs-row"><label for="f-name">OBSERVATION NAME</label><input type="text" id="f-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}" value="ALMITA-OBSERVE"></div>
 
-        <div class="obs-row"><label for="f-mode">MODE</label>
-          <select id="f-mode"><option value="EQUATORIAL_RECT">EQUATORIAL_RECT</option></select></div>
-        <div class="obs-row"><label for="f-placement">PLACEMENT</label>
-          <select id="f-placement">
-            <option value="EASTMOST_SAFE">EASTMOST_SAFE</option>
-            <option value="FIXED_CENTER">FIXED_CENTER</option>
-          </select></div>
-        <div class="obs-row" id="row-center-ra" hidden><label for="f-center-ra">CENTER RA (hours, 0-24)</label>
-          <input type="number" id="f-center-ra" step="any" min="0" max="24"></div>
-        <div class="obs-row" id="row-center-dec"><label for="f-center-dec">CENTER DEC (deg, optional)</label>
-          <input type="number" id="f-center-dec" step="any" min="-90" max="90" placeholder="defaults to observer latitude"></div>
+          <div class="obs-row"><label for="f-mode">MODE</label>
+            <select id="f-mode"><option value="EQUATORIAL_RECT">EQUATORIAL_RECT</option></select></div>
+          <div class="obs-row"><label for="f-placement">PLACEMENT</label>
+            <select id="f-placement">
+              <option value="EASTMOST_SAFE">EASTMOST_SAFE</option>
+              <option value="FIXED_CENTER">FIXED_CENTER</option>
+            </select></div>
+          <div class="obs-row" id="row-center-ra" hidden><label for="f-center-ra">CENTER RA (hours, 0-24)</label>
+            <input type="number" id="f-center-ra" step="any" min="0" max="24"></div>
+          <div class="obs-row" id="row-center-dec"><label for="f-center-dec">CENTER DEC (deg, optional)</label>
+            <input type="number" id="f-center-dec" step="any" min="-90" max="90" placeholder="defaults to observer latitude"></div>
+          <div class="obs-row"><label for="f-rotation" title="turns the grid about its centre: 0 = rows along RA; + turns its up axis from North toward East">ANGLE (deg, + from N toward E)</label>
+            <input type="number" id="f-rotation" step="any" min="-180" max="180" value="0"></div>
 
-        <div class="obs-row"><label for="f-width">WIDTH (deg)</label><input type="number" id="f-width" step="any" min="0.01" value="30"></div>
-        <div class="obs-row"><label for="f-height">HEIGHT (deg)</label><input type="number" id="f-height" step="any" min="0.01" value="30"></div>
-        <div class="obs-row"><label for="f-rows">ROWS</label><input type="number" id="f-rows" min="2" value="20"></div>
-        <div class="obs-row"><label for="f-cols">COLS</label><input type="number" id="f-cols" min="2" value="20"></div>
-        <div class="obs-row"><label for="f-min-alt">MIN PLANNING ALTITUDE (deg)</label><input type="number" id="f-min-alt" step="any" min="0" max="89" value="10"></div>
+          <div class="obs-row"><label for="f-width">WIDTH (deg)</label><input type="number" id="f-width" step="any" min="0.01" value="30"></div>
+          <div class="obs-row"><label for="f-height">HEIGHT (deg)</label><input type="number" id="f-height" step="any" min="0.01" value="30"></div>
+          <div class="obs-row"><label for="f-rows">ROWS</label><input type="number" id="f-rows" min="2" value="20"></div>
+          <div class="obs-row"><label for="f-cols">COLS</label><input type="number" id="f-cols" min="2" value="20"></div>
+          <div class="obs-row"><label for="f-min-alt">MIN PLANNING ALTITUDE (deg)</label><input type="number" id="f-min-alt" step="any" min="0" max="89" value="10"></div>
 
-        <div class="obs-row"><label for="f-capture">CAPTURE (s)</label><input type="number" id="f-capture" step="any" min="0.1" value="10"></div>
-        <div class="obs-row"><label for="f-settle">SETTLE (s)</label><input type="number" id="f-settle" step="any" min="0" value="2"></div>
+          <div class="obs-row"><label for="f-capture">CAPTURE (s)</label><input type="number" id="f-capture" step="any" min="0.1" value="10"></div>
+          <div class="obs-row"><label for="f-settle">SETTLE (s)</label><input type="number" id="f-settle" step="any" min="0" value="2"></div>
+          </div>
+          <div class="obs-split-map">
+            <div class="obs-actions" id="est-view-bar" style="justify-content:center;padding:0"><button type="button" id="est-view-now" class="mode-btn active">AREA NOW</button><button type="button" id="est-view-capture" class="mode-btn">AT EACH CAPTURE</button></div>
+            <canvas id="est-skymap" width="420" height="420" style="display:block;border:1px solid var(--line);border-radius:8px" aria-label="Alt/Az map of the requested grid points" title="AREA NOW: every point at the start (the region's shape). AT EACH CAPTURE: where the mount will be at each point's turn."></canvas>
+            <canvas id="est-skymap-legend" width="300" height="34" style="width:300px;height:34px;display:block" hidden title="HI4PI real map colour scale - N_HI column density, not an Almita measurement"></canvas>
+            <div class="est-sub" id="est-skymap-note" style="max-width:420px"></div>
+          </div>
+        </div>
 
         <div id="estimate" class="obs-estimate" aria-live="polite">
           <div class="est-cells">
@@ -38,10 +50,6 @@
             <div class="est-cell"><div class="est-label">SKY TIME LEFT FOR THIS REGION</div><div class="est-big" id="est-sky">—</div><div class="est-sub" id="est-sky-sub"></div></div>
           </div>
           <div class="est-verdict" id="est-verdict" role="status"></div>
-          <div class="obs-actions" style="justify-content:center"><button type="button" id="est-view-now" class="mode-btn active">AREA NOW (footprint at the start)</button><button type="button" id="est-view-capture" class="mode-btn">AT EACH CAPTURE (where the mount will be)</button></div>
-          <canvas id="est-skymap" width="420" height="420" style="width:100%;max-width:420px;height:420px;display:block;margin:6px auto;border:1px solid var(--line);border-radius:8px" aria-label="Alt/Az map of the requested grid points"></canvas>
-          <canvas id="est-skymap-legend" width="300" height="34" style="width:100%;max-width:300px;height:34px;display:block;margin:0 auto" hidden title="HI4PI real map colour scale - N_HI column density, not an Almita measurement"></canvas>
-          <div class="est-sub" id="est-skymap-note"></div>
         </div>
 
         <h3>MAIN</h3>

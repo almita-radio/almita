@@ -189,7 +189,7 @@ def sky_window(points: List[Dict[str, Any]], location: EarthLocation, t0: Time, 
 
 
 def _grid_points(center_ra_hours: float, center_dec_deg: float, width_deg: float, height_deg: float,
-                  nominal_spacing_deg: float) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                  nominal_spacing_deg: float, rotation_deg: float = 0.0) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     return grid_generator.build_spherical_grid(
         center_ra_hours=center_ra_hours,
         center_dec_deg=center_dec_deg,
@@ -197,6 +197,7 @@ def _grid_points(center_ra_hours: float, center_dec_deg: float, width_deg: float
         height_deg=height_deg,
         beam_fwhm_deg=nominal_spacing_deg,
         beam_sampling_fraction=1.0,
+        rotation_deg=rotation_deg,
     )
 
 
@@ -215,7 +216,7 @@ def _resolve_eastmost_safe(grid_spec: Dict[str, Any], location: EarthLocation, t
     lst = t0.sidereal_time("apparent", longitude=location.lon).hour
     # The grid around a centre at RA 0 shifted in RA IS the grid around any other centre at the same declination
     # (equal to a fresh build within 1e-9 arcsec), so the search builds it once; the chosen centre is built for real.
-    template, _ = _grid_points(0.0, grid_spec["center_dec_deg"], width, height, spacing)
+    template, _ = _grid_points(0.0, grid_spec["center_dec_deg"], width, height, spacing, grid_spec.get("rotation_deg", 0.0))
 
     def lowest(ha_hours: float) -> float:
         ra_hours = (lst - ha_hours) % 24.0
@@ -252,7 +253,8 @@ def _resolve_eastmost_safe(grid_spec: Dict[str, Any], location: EarthLocation, t
                 lo = mid
         resolved_ha = hi
     resolved_ra = (lst - resolved_ha) % 24.0
-    points, metadata = _grid_points(resolved_ra, grid_spec["center_dec_deg"], width, height, spacing)
+    points, metadata = _grid_points(resolved_ra, grid_spec["center_dec_deg"], width, height, spacing,
+                                    grid_spec.get("rotation_deg", 0.0))
     predictions = _predicted_altitudes(points, location, t0, per_point_seconds)
     min_predicted = min(p["predicted_altitude_deg"] for p in predictions)
 
@@ -277,7 +279,7 @@ def _resolve_eastmost_safe(grid_spec: Dict[str, Any], location: EarthLocation, t
 def _config_hash_payload(*, grid_mode: str, placement: str, resolved_ra: float, resolved_dec: float,
                           rows: int, cols: int, spacing_deg: float, traversal: str, min_altitude_deg: float,
                           capture: Dict[str, Any], main: Dict[str, Any], rfi_ref: Dict[str, Any],
-                          quicklook: Dict[str, Any]) -> Dict[str, Any]:
+                          quicklook: Dict[str, Any], rotation_deg: float = 0.0) -> Dict[str, Any]:
     """The exact payload compute_config_hash() is applied to. Single source of truth so
     plan_observation() (at PLAN time) and recompute_config_hash() (at PREFLIGHT/RUN time,
     used to detect tampering/corruption of a resolved plan file) can never drift apart."""
@@ -290,6 +292,8 @@ def _config_hash_payload(*, grid_mode: str, placement: str, resolved_ra: float, 
             "rows": rows, "cols": cols,
             "nominal_spacing_deg": round(spacing_deg, 10),
             "traversal": traversal, "min_altitude_deg": min_altitude_deg,
+            # only when turned: an unrotated plan keeps exactly the hash it always had
+            **({"rotation_deg": round(float(rotation_deg), 8)} if rotation_deg else {}),
         },
         "capture": capture,
         "main": main,
@@ -312,7 +316,7 @@ def recompute_config_hash(resolved_plan: Dict[str, Any]) -> str:
         rows=resolved["rows"], cols=resolved["cols"], spacing_deg=resolved["spacing_deg"],
         traversal=resolved["traversal"], min_altitude_deg=requested["grid"]["min_altitude_deg"],
         capture=requested["capture"], main=requested["main"], rfi_ref=requested["rfi_ref"],
-        quicklook=requested["quicklook"],
+        quicklook=requested["quicklook"], rotation_deg=resolved.get("rotation_deg", 0.0),
     )
     return observation_spec.compute_config_hash(payload)
 
@@ -358,7 +362,7 @@ def _resolve_grid(spec: Dict[str, Any], observer_config_path: str, now: Optional
     if grid_spec["placement"] == "FIXED_CENTER":
         points, metadata = _grid_points(grid_spec["center_ra_hours"], grid_spec["center_dec_deg"],
                                          grid_spec["width_deg"], grid_spec["height_deg"],
-                                         grid_spec["nominal_spacing_deg"])
+                                         grid_spec["nominal_spacing_deg"], grid_spec.get("rotation_deg", 0.0))
         predictions = _predicted_altitudes(points, location, t0, per_point_seconds)
         min_predicted = min(p["predicted_altitude_deg"] for p in predictions)
         resolved_ra = grid_spec["center_ra_hours"]
@@ -443,7 +447,7 @@ def _fixed_center_sky(spec: Dict[str, Any], observer_config_path: str, now: Opti
     try:
         location, _ = _observer_location(_load_observer_config(Path(observer_config_path)))
         points, _ = _grid_points(g["center_ra_hours"], g["center_dec_deg"], g["width_deg"], g["height_deg"],
-                                 g["nominal_spacing_deg"])
+                                 g["nominal_spacing_deg"], g.get("rotation_deg", 0.0))
         t0 = Time(now.astimezone(timezone.utc)) if now else Time.now()
         return sky_view(points, location, t0, duration["per_point_planning_seconds"], g["min_altitude_deg"])
     except Exception:  # noqa: BLE001 - a footprint the geometry rejects (e.g. past a pole) simply has no map
@@ -460,7 +464,7 @@ def _fixed_center_window(spec: Dict[str, Any], observer_config_path: str,
     try:
         location, _ = _observer_location(_load_observer_config(Path(observer_config_path)))
         points, _ = _grid_points(g["center_ra_hours"], g["center_dec_deg"], g["width_deg"], g["height_deg"],
-                                 g["nominal_spacing_deg"])
+                                 g["nominal_spacing_deg"], g.get("rotation_deg", 0.0))
     except ValueError:
         return None
     t0 = Time(now.astimezone(timezone.utc)) if now else Time.now()
@@ -499,6 +503,7 @@ def plan_observation(spec: Dict[str, Any], *, observer_config_path: str = "obser
         center_dec=grid_spec["center_dec_deg"],
         width_deg=grid_spec["width_deg"],
         height_deg=grid_spec["height_deg"],
+        rotation_deg=grid_spec.get("rotation_deg", 0.0),
     )
 
     max_start_delay_minutes = _max_recommended_start_delay_minutes(predictions, grid_spec["min_altitude_deg"])
@@ -508,7 +513,7 @@ def plan_observation(spec: Dict[str, Any], *, observer_config_path: str = "obser
         resolved_dec=grid_spec["center_dec_deg"], rows=metadata["rows"], cols=metadata["columns"],
         spacing_deg=metadata["nominal_spacing_deg"], traversal=grid_spec["traversal"],
         min_altitude_deg=grid_spec["min_altitude_deg"], capture=spec["capture"], main=spec["main"],
-        rfi_ref=spec["rfi_ref"], quicklook=spec["quicklook"],
+        rfi_ref=spec["rfi_ref"], quicklook=spec["quicklook"], rotation_deg=grid_spec.get("rotation_deg", 0.0),
     ))
 
     resolved_plan = {
@@ -529,6 +534,7 @@ def plan_observation(spec: Dict[str, Any], *, observer_config_path: str = "obser
             "footprint_width_deg": metadata["width_deg"],
             "footprint_height_deg": metadata["height_deg"],
             "spacing_deg": metadata["nominal_spacing_deg"],
+            "rotation_deg": grid_spec.get("rotation_deg", 0.0),
             "traversal": grid_spec["traversal"],
             "placement_reasoning": reasoning,
         },

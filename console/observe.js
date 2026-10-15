@@ -46,6 +46,7 @@
         width_deg: Number($("f-width").value), height_deg: Number($("f-height").value),
         rows: Number($("f-rows").value), cols: Number($("f-cols").value),
         min_altitude_deg: Number($("f-min-alt").value), traversal: "SERPENTINE",
+        rotation_deg: $("f-rotation").value === "" ? 0 : Number($("f-rotation").value),
       },
       capture: { seconds: Number($("f-capture").value), settle_seconds: Number($("f-settle").value) },
       main: { center_frequency_hz: Number($("f-freq").value), sample_rate: Number($("f-rate").value), gain_db: Number($("f-gain").value), bias_tee: true },
@@ -76,6 +77,19 @@
   // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
   // schedule), small white points (red: below the minimum altitude when captured), the first one ringed; Sun and HI4PI layer.
   let skyView = "now", lastSky = null;
+  // The map is a square as tall as the specification column beside it (OBSERVATION NAME .. SETTLE), never wider
+  // than the space left; on a narrow screen (stacked) it takes the width instead.
+  function sizeSkyMap() {
+    const form = $("obs-split-form"), canvas = $("est-skymap");
+    if (!form || !canvas) return;
+    const stacked = window.matchMedia("(max-width:900px)").matches;
+    const other = $("est-view-bar").offsetHeight + ($("est-skymap-legend").hidden ? 0 : 40) + $("est-skymap-note").offsetHeight + 28;
+    const byHeight = form.offsetHeight - other;
+    const byWidth = stacked ? form.offsetWidth : Math.max(280, form.parentElement.offsetWidth * 0.5);
+    const side = Math.round(Math.max(260, Math.min(stacked ? byWidth : byHeight, byWidth, 640)));
+    canvas.style.width = canvas.style.height = side + "px";
+  }
+  window.addEventListener("resize", () => { if (lastSky) renderEstimateSky(lastSky); });
   function renderEstimateSky(sky) {
     lastSky = sky;
     const canvas = $("est-skymap"), legend = $("est-skymap-legend"), note = $("est-skymap-note");
@@ -84,6 +98,7 @@
       return;
     }
     canvas.hidden = false;
+    sizeSkyMap();
     // AREA NOW: every point at the same instant - the region's real shape. AT EACH CAPTURE: where the sky will have
     // carried each point when its turn comes - a long run drags the footprint along the sky's rotation.
     const pts = skyView === "now" && sky.points_now ? sky.points_now : sky.points;
@@ -174,6 +189,7 @@
       `Grid                ${r.rows} x ${r.cols} = ${r.point_count} points`,
       `Footprint           ${U.deg(r.footprint_width_deg, 2)} x ${U.deg(r.footprint_height_deg, 2)}`,
       `Center              RA ${U.raHours(r.center_ra_hours)}  Dec ${U.decDeg(r.center_dec_deg)}`,
+      `Angle               ${U.deg(r.rotation_deg || 0, 1)} (position angle of the grid's up axis, North through East)`,
       `Spacing             ${U.deg(r.spacing_deg, 3)}`,
       `Capture / settle    ${U.num(cap.seconds, 2, "s")} / ${U.num(cap.settle_seconds, 2, "s")}`,
       "",

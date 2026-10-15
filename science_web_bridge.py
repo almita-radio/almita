@@ -342,6 +342,12 @@ def load_planned_lattice(filtered_input) -> Optional[PlannedLattice]:
         center_dec_deg = float(grid["center_dec_degrees"])
     except (KeyError, TypeError, ValueError) as exc:
         raise MosaicShapeError(f"campaign plan {meta_path} lacks rows/columns/nominal_spacing_deg/center: {exc}")
+    rotation = float(grid.get("rotation_deg") or 0.0)
+    if abs(rotation) > 1e-9:
+        # The A/B/C board is aligned with RA/Dec: a turned grid's corners would fall off it and its rows would not run
+        # east. Refuse clearly rather than draw a wrong map (support: work in the grid's own frame - BL-077).
+        raise MosaicShapeError(f"campaign plan {meta_path} is a grid rotated {rotation:g} deg: SCIENCE A/B/C maps do not "
+                               "support rotated grids yet (BL-077) - REDUCE and QUICKLOOK do")
     cell_by_point: dict[int, tuple[int, int]] = {}
     target_by_point: dict[int, tuple[float, float]] = {}
     for row in rows:

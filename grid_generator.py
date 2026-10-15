@@ -96,12 +96,15 @@ def build_spherical_grid(
     height_deg: float,
     beam_fwhm_deg: float,
     beam_sampling_fraction: float,
+    rotation_deg: float = 0.0,
 ) -> Tuple[List[Dict], Dict]:
     """
     Build a spherical grid around center coordinates.
 
     The grid is defined in an offset frame centered on the target, then transformed
     to ICRS RA/DEC. This keeps geometry angularly meaningful over the sphere.
+    rotation_deg turns the whole grid about its centre: it is the position angle of the grid's "up" (height)
+    axis, measured from North through East (0 = rows along RA, as before).
     """
     if not (-90.0 <= center_dec_deg <= 90.0):
         raise ValueError("center_dec_deg must be between -90 and +90")
@@ -113,7 +116,7 @@ def build_spherical_grid(
     lat_offsets = _axis_offsets(height_deg, rows)
 
     center = SkyCoord(ra=center_ra_hours * u.hourangle, dec=center_dec_deg * u.deg, frame="icrs")
-    offset_frame = SkyOffsetFrame(origin=center)
+    offset_frame = SkyOffsetFrame(origin=center, rotation=rotation_deg * u.deg)
 
     # Geometric identity is row-major; scan order is assigned separately.
     geometric_points: Dict[Tuple[int, int], Dict] = {}
@@ -165,6 +168,7 @@ def build_spherical_grid(
         "scan_strategy": "serpentine",
         "actual_spacing_ra_axis_deg": width_deg / (cols - 1),
         "actual_spacing_dec_axis_deg": height_deg / (rows - 1),
+        "rotation_deg": float(rotation_deg),
     }
 
     return points, metadata
@@ -720,6 +724,7 @@ class GridGenerator:
         width_deg: float,
         height_deg: float,
         num_points: Optional[int] = None,
+        rotation_deg: float = 0.0,
     ) -> bool:
         self.log("=" * 80)
         self.log("GENERATING GRID OBSERVATION PLAN")
@@ -735,6 +740,7 @@ class GridGenerator:
             height_deg=height_deg,
             beam_fwhm_deg=self.beam_fwhm_deg,
             beam_sampling_fraction=self.beam_sampling_fraction,
+            rotation_deg=rotation_deg,
         )
 
         nominal_spacing_deg = metadata["nominal_spacing_deg"]
