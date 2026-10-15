@@ -30,3 +30,13 @@ def test_a_run_that_starts_just_east_of_the_meridian_is_refused():
 def test_runs_well_east_or_already_past_the_limit_pass():
     assert _check(-2.0)["ok"]
     assert _check(0.4)["ok"]
+
+
+def test_web_solar_align_runs_at_the_operating_gain_not_the_20_db_default():
+    import almita_web_ops as ops
+    argv, _ = ops.build_command("align_plan", {"reference": "sun"}, "JOB-1")
+    assert argv[argv.index("--sun-gain") + 1] == "40.2"
+    argv, _ = ops.build_command("align_plan", {"reference": "sun", "sun_gain": 30}, "JOB-1")
+    assert argv[argv.index("--sun-gain") + 1] == "30.0"
+    argv, _ = ops.build_command("align_plan", {"reference": "hi"}, "JOB-1")
+    assert "--sun-gain" not in argv

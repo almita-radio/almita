@@ -658,6 +658,14 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             v = _float(p, key, lo, hi)
             if v is not None:
                 argv += [flag, str(v)]
+        if ref in ("sun", "auto"):
+            # alignment.py's solar default (--sun-gain 20 dB) leaves this receiver's ADC on 5-6 codes (std 0.525 codes,
+            # vs 0.577 with 50 ohm on the SDR itself: the real WEB-SUN-20261013T173229Z samples) - the Sun barely
+            # rises above the ADC's own noise. Even 40.2 dB uses ~7 of 256 codes (BL-068), and clipped captures are
+            # already refused (--max-clipping 1 %). The web runs the Sun at the operating gain unless told otherwise.
+            sun_gain = _float(p, "sun_gain", 0, 50, float(json.loads((ROOT / "observer_config.json").read_text())
+                                                          .get("observation_defaults", {}).get("gain_db") or 40.2))
+            argv += ["--sun-gain", str(sun_gain)]
         ring = _ring_pattern(p)
         meta = {"output_dir": out, "reference": ref}
         if ring is not None:
