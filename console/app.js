@@ -159,6 +159,8 @@ function renderThumbs(quicklook){
 
 function renderQuicklook(quicklook){
   const state=quicklook.state||"IDLE";
+  // The QUICKLOOK status tile was replaced by SKY - CURRENT RUN (operator, 2026-10-15): only its thumbnails remain.
+  if(!$("quicklook-kv")){if(state==="IDLE")$("quicklook-thumbs").hidden=true;else renderThumbs(quicklook);return}
   $("quicklook-badge").textContent=state;$("quicklook-badge").className=badgeClass(state);
   if(state==="IDLE"){$("quicklook-kv").innerHTML=pair("QUICKLOOK","NO ACTIVE SESSION");$("quicklook-thumbs").hidden=true;return}
   $("quicklook-kv").innerHTML=[
