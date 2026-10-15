@@ -171,9 +171,13 @@
       (alignMode === "hi" && f && f.center ? `Approved centre: RA ${Number(f.center.ra_hours).toFixed(3)} h, Dec ${Number(f.center.dec_deg).toFixed(2)}° (exactly what RUN will use).\n`
         : alignMode === "solar" ? "The Sun's position is recomputed fresh at RUN time; the reference (Sun) and pattern are exactly what was approved.\n" : "") +
       (alignMode === "solar" ? "RUN will switch OnStep to SOLAR tracking rate and verify it before moving; it restores the previous mode when done or stopped.\n" : "") +
-      "SYNC is never sent.\nConfirm physically: free travel, cables, antenna, nobody in the way.\nProceed?");
+      ($("al-sync").checked
+        ? `SYNC at the end: YES, only if confidence clears the threshold and the offset ≤ ${$("al-max-sync").value}° (the mount will GOTO the corrected position and SYNC there).\n`
+        : "SYNC: NO - the offset is only measured and shown.\n") +
+      "Confirm physically: free travel, cables, antenna, nobody in the way.\nProceed?");
     if (!ok || !j) return undefined;
-    return P.align.start("align", { ...alignPlanParams(), approved_plan_dir: j.output_dir }, $("al-confirm").value);
+    return P.align.start("align", { ...alignPlanParams(), approved_plan_dir: j.output_dir, sync: $("al-sync").checked,
+                                    max_sync_offset_deg: Number($("al-max-sync").value) }, $("al-confirm").value);
   }, "STARTING…"));
   $("btn-calibrate-run").addEventListener("click", U.guard($("btn-calibrate-run"), () => P.calibrate.start("calibrate", { n_captures: Number($("ca-n").value), capture_seconds: Number($("ca-s").value) }), "STARTING…"));
   $("btn-reduce-plan").addEventListener("click", U.guard($("btn-reduce-plan"), () => P.reduce_plan.start("reduce_plan", reduceParams())));

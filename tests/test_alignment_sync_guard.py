@@ -171,3 +171,12 @@ def test_hi_run_with_an_estimate_is_judged_like_the_sun_and_can_sync(tmp_path, m
     assert result["sync_applied"] is True and result["sync_decision"]["applied"] is True
     assert result["sync_eligible"] is True and result["offsets"]["confidence"] == 0.9
     assert [c[0] for c in tel.calls][:2] == ["goto", "sync"]
+
+
+def test_pipeline_align_run_passes_the_operators_sync_choice():
+    """BL-043: PIPELINE's ALIGN section offers the same SYNC checkbox as ALIGN (the backend gate is the same)."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[1] / "console" / "pipeline.js").read_text()
+    html = (Path(__file__).resolve().parents[1] / "console" / "pipeline.html").read_text()
+    assert 'id="al-sync"' in html and 'id="al-max-sync"' in html
+    assert 'sync: $("al-sync").checked' in js and 'max_sync_offset_deg: Number($("al-max-sync").value)' in js
