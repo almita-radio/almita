@@ -1302,7 +1302,7 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                             # temporal_check: PLAN's real evaluation of every pattern point's altitude at the wall-clock
                             # time it would actually be captured over the WHOLE run (not just the instant PLAN ran) -
                             # RUN re-checks this fresh before its first movement using the same function.
-                            "temporal_check": res.get("temporal_check")}
+                            "temporal_check": res.get("temporal_check"), "meridian_check": res.get("meridian_check")}
             if planned:                                                   # PLAN (dry-run) only: the real computed preview, before any RUN
                 out["facts"]["planned_positions"] = planned
                 out["facts"]["max_separation_from_center_deg"] = max((row["separation_from_center_deg"] for row in planned), default=None)
@@ -1321,6 +1321,11 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                                      f"point {tc.get('min_altitude_point_index')} (~{tc.get('min_altitude_utc')}), below MIN ELEVATION "
                                      f"{tc.get('min_elevation_deg')} deg, before this ~{(tc.get('run_duration_s') or 0)/60:.1f} min run "
                                      "would finish - pick a different candidate or shrink the pattern")
+                elif res.get("result_status") == "MERIDIAN LIMIT CHECK FAILED":
+                    mc = res.get("meridian_check") or {}
+                    out["detail"] = (f"plan only, nothing moved; OnStep's meridian limit (+{mc.get('limit_min')} min) would be reached during the run "
+                                     f"(centre {mc.get('centre_minutes_to_limit') and round(mc['centre_minutes_to_limit'])} min from it) - OnStep would stop "
+                                     "tracking and latch the error. Run when the target is >~15 min past the meridian, or earlier so the run ends first")
                 else:
                     out["detail"] = f"plan only, nothing moved; status {res.get('result_status')}"
             else:

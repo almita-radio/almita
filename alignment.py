@@ -182,6 +182,31 @@ def pattern_temporal_altitudes(center, radii, ring_points, location, start_time,
     }
 
 
+def meridian_limit_crossings(temporal, center, location, sync_margin_s=300.0, limit_min=None):
+    """OnStep stops tracking a target 12 min past the meridian and latches the error (BL-060). Returns the pattern
+    points whose own capture window crosses that limit, and whether the CENTRE crosses it before the run (plus the
+    SYNC's compensated GOTO / repeat, sync_margin_s) ends - a solar ALIGN around local noon does exactly that."""
+    from calibration_engine.hi_reference_selection import ONSTEP_MERIDIAN_LIMIT_MIN, hour_angle_hours
+    lim = (limit_min if limit_min is not None else ONSTEP_MERIDIAN_LIMIT_MIN) / 60.0
+    bad = []
+    for p in temporal.get("points") or []:
+        if not all(k in p for k in ("ra_hours", "capture_start_utc", "capture_end_utc")):
+            continue
+        h0 = float(hour_angle_hours(p["ra_hours"], location, Time(datetime.fromisoformat(p["capture_start_utc"]))))
+        h1 = float(hour_angle_hours(p["ra_hours"], location, Time(datetime.fromisoformat(p["capture_end_utc"]))))
+        if h0 < lim <= h1:
+            bad.append(p["index"])
+    start = Time(datetime.fromisoformat(temporal["start_utc"])) if temporal.get("start_utc") else Time.now()
+    end = start + (float(temporal.get("run_duration_s") or 0.0) + sync_margin_s) * u.s
+    c0 = float(hour_angle_hours(center.ra.hour, location, start))
+    c1 = float(hour_angle_hours(center.ra.hour, location, end))
+    centre_crosses = c0 < lim <= c1
+    minutes_to_limit = (lim - c0) * 60.0 / 1.0027379 if c0 < lim else None
+    return {"limit_min": lim * 60.0, "points_crossing": bad, "centre_crosses_before_end": bool(centre_crosses),
+            "centre_hour_angle_start_h": c0, "centre_minutes_to_limit": minutes_to_limit,
+            "ok": not bad and not centre_crosses}
+
+
 def shifted_positions(positions, center, east, north):
     local = positions.transform_to(SkyOffsetFrame(origin=center))
     return offset_coordinates(center, local.lon.deg + east, local.lat.deg + north)
@@ -814,18 +839,25 @@ class AlignmentRunner:
         if self.args.dry_run:
             temporal = pattern_temporal_altitudes(center, self.args.ring_radii, self.args.ring_points, self.location,
                                                   Time.now(), capture_time_s)
-            temporal_ok = temporal["min_altitude_deg"] >= self.args.min_elevation
+            meridian = meridian_limit_crossings(temporal, center, self.location)
+            temporal_ok = temporal["min_altitude_deg"] >= self.args.min_elevation and meridian["ok"]
             preview = [{"index": i, "ra_hours": float(p.ra.hour), "dec_deg": float(p.dec.deg),
                         "separation_from_center_deg": float(center.separation(p).deg),
                         "elapsed_offset_s": temporal["points"][i]["elapsed_offset_s"],
                         "capture_start_utc": temporal["points"][i]["capture_start_utc"],
                         "alt_min_deg": temporal["points"][i]["alt_min_deg"]} for i, p in enumerate(positions)]
-            status = "PASS" if temporal_ok else "TEMPORAL ALTITUDE CHECK FAILED"
+            status = ("PASS" if temporal_ok else "TEMPORAL ALTITUDE CHECK FAILED"
+                      if temporal["min_altitude_deg"] < self.args.min_elevation else "MERIDIAN LIMIT CHECK FAILED")
             self.save(reference, center, [], None, selection, False, status,
                      {"planned_positions": preview,
                       "temporal_check": {**temporal, "min_elevation_deg": self.args.min_elevation,
                                          "margin_deg": temporal["min_altitude_deg"] - self.args.min_elevation,
-                                         "ok": temporal_ok}})
+                                         "ok": temporal_ok},
+                      "meridian_check": meridian})
+            if not meridian["ok"]:
+                print(f"Meridian check FAILED: OnStep's limit (+{meridian['limit_min']:g} min) is reached during the run "
+                      f"(centre {meridian['centre_minutes_to_limit'] and round(meridian['centre_minutes_to_limit'])} min from it; "
+                      f"points {meridian['points_crossing']}) - wait until the target is past the limit or run earlier")
             print(f"Temporal check {'OK' if temporal_ok else 'FAILED'}: minimum altitude over the run "
                   f"{temporal['min_altitude_deg']:.2f} deg at point {temporal['min_altitude_point_index']} "
                   f"(~{temporal['min_altitude_utc']}), margin {temporal['min_altitude_deg']-self.args.min_elevation:+.2f} deg "
@@ -847,6 +879,14 @@ class AlignmentRunner:
                     f"{temporal['points'][temporal['min_altitude_point_index']]['elapsed_offset_s']/60:.1f} min into "
                     f"the run), below --min-elevation {self.args.min_elevation:.1f} deg - PLAN is no longer "
                     "executable, PLAN again")
+            meridian = meridian_limit_crossings(temporal, center, self.location)
+            if not meridian["ok"]:
+                raise RuntimeError(
+                    f"OnStep's meridian limit (+{meridian['limit_min']:g} min) would be reached during the run "
+                    f"(centre {meridian['centre_minutes_to_limit'] and round(meridian['centre_minutes_to_limit'])} min from it, "
+                    f"crossing points {meridian['points_crossing']}): OnStep would stop tracking and latch the error (BL-060). "
+                    "Nothing moved - run when the target is more than ~15 min past the meridian, or earlier with the run "
+                    "ending before the limit")
         self._previous_track_mode = None
         try:
             if reference == "hi":
