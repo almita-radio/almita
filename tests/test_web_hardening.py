@@ -485,11 +485,12 @@ def test_no_external_or_cdn_dependency_in_any_page_script_or_style():
         assert "@import" not in text and not re.search(r"url\(\s*[\"']?https?://", text), f.name
         assert not re.search(r"fetch\(\s*[\"'`]https?://", text) and "googleapis" not in text and "cdn." not in text.lower(), f.name
         assert "WebSocket(" not in text and "EventSource(" not in text, f.name
-    # the only absolute URL in first-party code is the project link the user may click (never fetched)
+    # the only absolute URLs in first-party code are the project link the user may click and the SVG namespace
+    # (an identifier for createElementNS, never fetched - ALIGN's live reading draws with it); neither is loaded
     urls = set()
     for f in files:
         urls |= set(re.findall(r"https?://[A-Za-z0-9./_-]+", f.read_text()))
-    assert urls <= {"https://github.com/almita-radio/almita"}, urls
+    assert urls <= {"https://github.com/almita-radio/almita", "http://www.w3.org/2000/svg"}, urls
 
 
 def test_no_shell_eval_or_unsafe_dom_patterns_in_the_web_layer():
