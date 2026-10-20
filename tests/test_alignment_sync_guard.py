@@ -180,3 +180,84 @@ def test_pipeline_align_run_passes_the_operators_sync_choice():
     html = (Path(__file__).resolve().parents[1] / "console" / "pipeline.html").read_text()
     assert 'id="al-sync"' in html and 'id="al-max-sync"' in html
     assert 'sync: $("al-sync").checked' in js and 'max_sync_offset_deg: Number($("al-max-sync").value)' in js
+
+
+def test_solar_fit_recovers_a_known_offset_around_the_real_sun():
+    # WEB-SUN-20261015T190428Z: the template was centred on sun_eod() (CIRS at 1 AU), ~55 deg from the commanded
+    # points, so the fit pinned at the search edge with confidence 0.19 and SYNC was refused.
+    import math
+    import numpy as np
+    from astropy.time import Time
+    sun = alignment.sun_eod(Time("2026-10-15T19:04:31"))
+    center = alignment.solar_fit_center(sun)
+    assert (center.ra.hour, center.dec.deg) == (sun.ra.hour, sun.dec.deg)   # SYNC sends the same numbers
+    pattern = alignment.multiscale_pattern(sun, (5.0, 2.0, 0.6), 8)
+    positions = SkyCoord(ra=pattern.ra.hour * u.hourangle, dec=pattern.dec.deg * u.deg)
+    assert positions[0].separation(center).deg < 0.01
+    sigma = 20.0 / (2 * math.sqrt(2 * math.log(2)))
+    template = lambda coords: np.exp(-.5 * (coords.separation(center).deg / sigma) ** 2)
+    observed = template(alignment.shifted_positions(positions, center, 1.5, -1.0))
+    est = alignment.estimate_template_offset(positions, observed, center, template)
+    assert abs(est.offset_ra_deg - 1.5) < 0.05 and abs(est.offset_dec_deg + 1.0) < 0.05
+    assert est.confidence > 0.65
+
+
+def test_offset_at_the_search_edge_is_never_synced():
+    # WEB-SUN-20261015T200532Z: -6.75/+6.75 was exactly the old search limit, confidence 0.79, and it was SYNCed.
+    center, est = _estimate(east=1.0, north=1.0)
+    est.at_search_edge = True
+    r = _runner(max_off=10.0)
+    applied, decision, _ = _sync(r, center, est)
+    assert not applied and "edge of the fit search" in decision["reason"]
+    assert r.telescope.calls == []
+
+
+def test_search_edge_flag_and_wider_search():
+    import math
+    import numpy as np
+    from astropy.time import Time
+    center = alignment.solar_fit_center(alignment.sun_eod(Time("2026-10-15T20:05:32")))
+    pattern = alignment.multiscale_pattern(center, (5.0, 2.0, 0.6), 6)
+    positions = SkyCoord(ra=pattern.ra.hour * u.hourangle, dec=pattern.dec.deg * u.deg)
+    sigma = 20.0 / (2 * math.sqrt(2 * math.log(2)))
+    template = lambda coords: np.exp(-.5 * (coords.separation(center).deg / sigma) ** 2)
+    observed = template(alignment.shifted_positions(positions, center, -8.0, 0.0))
+    old = alignment.estimate_template_offset(positions, observed, center, template)
+    assert old.at_search_edge and abs(old.offset_ra_deg + 6.75) < 1e-6          # pinned at the old limit
+    wide = alignment.estimate_template_offset(positions, observed, center, template, search_radius_deg=11.0)
+    assert not wide.at_search_edge and abs(wide.offset_ra_deg + 8.0) < 0.05
+    inside = alignment.estimate_template_offset(positions, template(alignment.shifted_positions(
+        positions, center, 1.5, -1.0)), center, template)
+    assert not inside.at_search_edge
+
+
+def test_align_sky_is_cached_per_parameters_and_minute(monkeypatch):
+    # 2026-10-15: each ~20 s HI ranking was recomputed for every refresh, in parallel, until the server stalled.
+    calls = []
+    monkeypatch.setattr(ops, "_align_sky_compute", lambda *a: calls.append(a) or {"areas": [len(calls)]})
+    ops._ALIGN_SKY_CACHE.clear()
+    first = ops.align_sky("hi", [10, 5, 2], 6, 20, 20, 20)
+    assert ops.align_sky("hi", [10.0, 5.0, 2.0], 6, 20, 20, 20) is first and len(calls) == 1
+    ops.align_sky("hi", [8, 4, 1.5], 6, 20, 20, 20)
+    assert len(calls) == 2                                          # other parameters: computed
+    monkeypatch.setattr(ops, "ALIGN_SKY_CACHE_SECONDS", 0.0)
+    ops.align_sky("hi", [10, 5, 2], 6, 20, 20, 20)
+    assert len(calls) == 3                                          # expired: computed again
+
+
+def test_hi_template_and_search_cover_an_offset_past_the_old_limit():
+    # three HI runs on 2026-10-15 pinned at the old +/-6.75 deg limit; the run path now widens search AND template
+    import json
+    from pathlib import Path
+    root = Path(alignment.__file__).resolve().parent
+    center = SkyCoord(ra=16.0 * u.hourangle, dec=-40.0 * u.deg)
+    cat, vals = alignment.load_hi_catalog(root / "data/hi_sky_catalog_2000pts.csv")
+    radii = (5.0, 2.0, 0.6)
+    search = max(5.5, max(radii) + 1.0)
+    extent = max(12.0, max(radii) + search + 1.25 + 1.0)
+    template = alignment.LocalSphericalTemplate(center, cat, vals, 20.0, extent_deg=extent, step_deg=.5)
+    pattern = alignment.multiscale_pattern(center, radii, 6)
+    positions = SkyCoord(ra=pattern.ra.hour * u.hourangle, dec=pattern.dec.deg * u.deg)
+    observed = template(alignment.shifted_positions(positions, center, -7.0, 0.5))
+    est = alignment.estimate_template_offset(positions, observed, center, template, search_radius_deg=search)
+    assert not est.at_search_edge and abs(est.offset_ra_deg + 7.0) < 0.1 and abs(est.offset_dec_deg - 0.5) < 0.1

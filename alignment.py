@@ -57,6 +57,14 @@ def sun_eod(obstime):
     return get_sun(obstime).transform_to(CIRS(obstime=obstime))
 
 
+def solar_fit_center(sun):
+    """The Sun's EOD RA/Dec numbers as the same plain coordinate the solar fit rebuilds the commanded positions
+    with. sun_eod() is CIRS at 1 AU: separating plain (ICRS-labelled) positions from it applies the Sun's parallax
+    and put the fit template ~55 deg away (WEB-SUN-20261015T190428Z: offset pinned at the search edge, confidence
+    0.19, SYNC refused). Same numbers, no distance, so SYNC still sends exactly sun.ra/dec."""
+    return SkyCoord(ra=sun.ra, dec=sun.dec)
+
+
 def sync_allowed(requested, confidence, threshold=DEFAULT_CONFIDENCE_THRESHOLD):
     """SYNC is possible only after explicit authorization and sufficient confidence."""
     return bool(requested and confidence >= threshold)
@@ -71,6 +79,9 @@ class AlignmentEstimate:
     residual: float
     score: float
     samples: int
+    # The best offset sits at the outer limit of the search: the real one may be larger, so it is never SYNCed
+    # (WEB-SUN-20261015T200532Z SYNCed -6.75/+6.75, exactly the old +/-6.75 deg limit).
+    at_search_edge: bool = False
 
 
 def load_hi_catalog(path):
@@ -223,9 +234,11 @@ def _match(observed, expected):
 
 
 def estimate_template_offset(positions, observed, center, template,
-                             search_levels=((5.5, .5), (1.0, .1), (.25, .025))):
+                             search_levels=((5.5, .5), (1.0, .1), (.25, .025)), search_radius_deg=None):
     local = positions.transform_to(SkyOffsetFrame(origin=center))
     sample_east, sample_north = local.lon.deg, local.lat.deg
+    if search_radius_deg is not None:
+        search_levels = ((float(search_radius_deg), search_levels[0][1]),) + tuple(search_levels[1:])
     best_east = best_north = 0.0
     best_score, best_residual = -2.0, float("inf")
     for radius, step in search_levels:
@@ -244,9 +257,11 @@ def estimate_template_offset(positions, observed, center, template,
                 best_score, best_residual = score, residual
     confidence = float(np.clip((best_score + 1) / 2 * math.exp(-.35 * best_residual), 0, 1))
     corrected = offset_coordinates(center, [best_east], [best_north])[0]
+    reach = sum(radius for radius, _ in search_levels)
+    at_edge = max(abs(best_east), abs(best_north)) >= reach - search_levels[-1][1] / 2
     return AlignmentEstimate(best_east, best_north,
                              float(center.separation(corrected).deg), confidence,
-                             best_residual, best_score, len(observed))
+                             best_residual, best_score, len(observed), bool(at_edge))
 
 
 def compute_hi_metric(iq_bytes, sample_rate, center_frequency_hz, fft_size=8192,
@@ -285,6 +300,32 @@ def compute_sun_metric(iq_bytes, fft_size=8192):
     power = np.abs(np.fft.fft(blocks, axis=1)) ** 2
     return {"metric": float(np.median(np.mean(power, axis=1))),
             "clipping_fraction": clipping, "fft_segments": count}
+
+
+def live_reading(iq_bytes, sample_rate, center_frequency_hz, fft_size=4096, max_blocks=128,
+                 line_half_width_hz=250_000.0):
+    """DISPLAY-ONLY reading of one capture for the ALIGN page, while the run is still acquiring (operator, 2026-10-18:
+    "to get an idea whether it is seeing the star or not"). Never used by the analysis: the offset comes from the full
+    ensemble pass. Up to max_blocks FFT blocks spread evenly over the whole capture, so it costs the same for any length.
+    power_db: total band power (what the Sun raises). hi_excess_pct: median PSD within +/-line_half_width_hz of the
+    HI rest frequency over the median of the side bands, minus 1 (None when the HI window does not fit the band)."""
+    raw = np.asarray(iq_bytes, dtype=np.uint8)
+    n_complex = raw.size // 2
+    count = min(max_blocks, n_complex // fft_size)
+    if count < 2:
+        raise ValueError("insufficient IQ for a live reading")
+    starts = np.linspace(0, n_complex - fft_size, count).astype(np.int64)
+    idx = (starts[:, None] + np.arange(fft_size)[None, :]) * 2
+    iq = ((raw[idx].astype(np.float32) - 127.5) + 1j * (raw[idx + 1].astype(np.float32) - 127.5)) / 127.5
+    power_db = float(10 * np.log10(max(float(np.mean(np.abs(iq) ** 2)), 1e-20)))
+    psd = np.median(np.abs(np.fft.fftshift(np.fft.fft(iq * np.hanning(fft_size), axis=1), axes=1)) ** 2, axis=0)
+    distance = np.abs(center_frequency_hz + np.fft.fftshift(np.fft.fftfreq(fft_size, 1 / sample_rate)) - HI_REST_HZ)
+    line = distance <= line_half_width_hz
+    sides = (distance >= 1.5 * line_half_width_hz) & (distance <= min(.45 * sample_rate, 950_000))
+    hi = None
+    if line.any() and sides.any():
+        hi = float((np.median(psd[line]) / max(float(np.median(psd[sides])), 1e-30) - 1.0) * 100.0)
+    return {"power_db": power_db, "hi_excess_pct": hi, "blocks": int(count)}
 
 
 def choose_hi_region(catalog_coords, values, location, obstime, min_altitude, beam):
@@ -489,7 +530,17 @@ class AlignmentRunner:
         connected (connect_hardware())."""
         duration = self.args.integration_seconds if reference == "hi" else (self.args.capture_time or 2.0)
         records = []
+        live = {"reference": reference, "planned_points": len(positions), "display_only": True,
+                "note": "quick reading per point while acquiring - not the alignment metric", "points": []}
+        try:
+            east, north = positions[0].spherical_offsets_to(positions)
+            live["planned"] = [{"index": i, "east_deg": float(e), "north_deg": float(n)}
+                               for i, (e, n) in enumerate(zip(east.deg, north.deg), 1)]
+            self._flush_live(live)
+        except Exception as exc:  # noqa: BLE001 - display only
+            print(f"live pattern not written: {type(exc).__name__}: {exc}", flush=True)
         for index, position in enumerate(positions, 1):
+            raw = None
             path = self.output_dir / f"alignment_sample_{index:03d}.h5"
             record = {"index": index, "status": "CAPTURE_FAILED",
                       "commanded_ra_hours": position.ra.hour,
@@ -524,7 +575,38 @@ class AlignmentRunner:
                 record.update(status="INVALID_HDF5", error=str(exc))
             except Exception as exc:
                 record.update(status="CAPTURE_FAILED", error=str(exc))
+            self._write_live_point(live, record, position, positions[0], raw)
         return records
+
+    def _flush_live(self, live):
+        live["updated_utc"] = datetime.now(timezone.utc).isoformat()
+        target = self.output_dir / "alignment_live.json"
+        tmp = target.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(live))
+        tmp.replace(target)
+
+    def _write_live_point(self, live, record, position, center, raw):
+        """Appends this point to alignment_live.json (atomic replace). Never lets the display break the acquisition."""
+        try:
+            east, north = center.spherical_offsets_to(position)
+            point = {"index": record["index"], "status": record["status"], "east_deg": float(east.deg),
+                     "north_deg": float(north.deg), "utc": record.get("capture_completed_utc") or datetime.now(timezone.utc).isoformat(),
+                     "clipping_fraction": record.get("clipping_fraction"), "error": record.get("error")}
+            if raw is not None:
+                try:
+                    applied = (self.tuning or {}).get("applied") or {}
+                    point.update(live_reading(raw, float(applied.get("sample_rate_hz") or self.args.sample_rate),
+                                              float(applied.get("center_frequency_hz") or self.args.center_freq)))
+                except (ValueError, TypeError) as exc:
+                    point["reading_error"] = str(exc)
+            live["points"].append(point)
+            if "power_db" in point:
+                hi = point.get("hi_excess_pct")
+                print(f"LIVE point {point['index']:03d}/{live['planned_points']} offset E {point['east_deg']:+.2f} N {point['north_deg']:+.2f} deg: "
+                      f"power {point['power_db']:.2f} dB" + (f", HI excess {hi:+.2f} %" if hi is not None else "") + " (display only)", flush=True)
+            self._flush_live(live)
+        except Exception as exc:  # noqa: BLE001 - display only
+            print(f"live reading not written for point {record.get('index')}: {type(exc).__name__}: {exc}", flush=True)
 
     def replay_records(self):
         """Load immutable capture references without creating hardware objects."""
@@ -928,9 +1010,16 @@ class AlignmentRunner:
                         ra=[r["commanded_ra_hours"] for r in valid] * u.hourangle,
                         dec=[r["commanded_dec_deg"] for r in valid] * u.deg)
                     observed = np.asarray([r["metric_value"] for r in valid])
+                    # Same wider search as the Sun (outer ring + 1 deg, never under 5.5): three HI runs on
+                    # 2026-10-15 pinned at the old +/-6.75 deg limit. The template must cover every shifted sample
+                    # (outer ring + full search reach), or it would read values clamped at its own edge.
+                    search_radius = max(5.5, max(self.args.ring_radii) + 1.0)
+                    extent = max(12.0, max(self.args.ring_radii) + search_radius + 1.25 + 1.0)
                     template = LocalSphericalTemplate(center, self.catalog_coords,
-                                                      self.catalog_values, self.args.beam_fwhm)
-                    estimate = estimate_template_offset(valid_positions, observed, center, template)
+                                                      self.catalog_values, self.args.beam_fwhm,
+                                                      extent_deg=extent, step_deg=.3 if extent <= 12.0 else .5)
+                    estimate = estimate_template_offset(valid_positions, observed, center, template,
+                                                        search_radius_deg=search_radius)
                     expected_best = template(shifted_positions(
                         valid_positions, center, estimate.offset_ra_deg, estimate.offset_dec_deg))
                     for record, expected in zip(valid, expected_best):
@@ -985,9 +1074,14 @@ class AlignmentRunner:
                     ra=[r["commanded_ra_hours"] for r in valid] * u.hourangle,
                     dec=[r["commanded_dec_deg"] for r in valid] * u.deg)
                 observed = np.asarray([r["metric"] for r in valid])
+                center = solar_fit_center(center)
                 sigma = self.args.beam_fwhm / (2 * math.sqrt(2 * math.log(2)))
                 template = lambda coords: np.exp(-.5 * (coords.separation(center).deg / sigma) ** 2)
-            estimate = estimate_template_offset(valid_positions, observed, center, template)
+                # Search a little beyond the pattern's own outer ring (never less than the old 5.5 deg), so a wider
+                # pattern can actually measure a wider offset; past the pattern an offset is not constrained anyway.
+                search_radius = max(5.5, max(self.args.ring_radii) + 1.0)
+            estimate = estimate_template_offset(valid_positions, observed, center, template,
+                                                search_radius_deg=search_radius)
             expected_best = template(shifted_positions(
                 valid_positions, center, estimate.offset_ra_deg, estimate.offset_dec_deg))
             for record, expected in zip(valid, expected_best):
@@ -1059,6 +1153,9 @@ class AlignmentRunner:
             decision["reason"] = f"confidence {estimate.confidence:.3f} below threshold {thr:.2f}"
         elif estimate.separation_deg > max_off:
             decision["reason"] = f"offset {estimate.separation_deg:.3f} deg larger than the {max_off:g} deg SYNC limit"
+        elif getattr(estimate, "at_search_edge", False):
+            decision["reason"] = ("offset at the edge of the fit search - the real offset may be larger; "
+                                  "use wider ring radii and ALIGN again")
         if "reason" in decision:
             print(f"SYNC           NOT SENT: {decision['reason']}")
             return False
@@ -1101,7 +1198,7 @@ class AlignmentRunner:
         if "status" in analysis_metadata:
             analysis_metadata["ensemble_status"] = analysis_metadata.pop("status")
         result = {"timestamp_utc": datetime.now(timezone.utc).isoformat(), "git_commit": git_commit(),
-                  "reference": reference, "center_coordinates": {"ra_hours": center.ra.hour, "dec_deg": center.dec.deg},
+                  "mount_device": self.args.device, "reference": reference, "center_coordinates": {"ra_hours": center.ra.hour, "dec_deg": center.dec.deg},
                   "measured_positions": records,
                   "measured_hi_metric": [r["metric"] for r in records
                                            if reference == "hi" and r.get("status") == "VALID"
@@ -1180,6 +1277,8 @@ class AlignmentRunner:
         print(f"Samples        {e.samples}\nOffset RA      {e.offset_ra_deg:+.3f} deg (tangent east)")
         print(f"Offset DEC     {e.offset_dec_deg:+.3f} deg (tangent north)\nSeparation     {e.separation_deg:.3f} deg")
         print(f"Confidence     {e.confidence:.3f}\nResidual       {e.residual:.3f}")
+        if getattr(e, "at_search_edge", False):
+            print("Search edge    YES - the offset hit the fit's search limit; the real one may be larger")
         print(f"SYNC           {'APPLIED' if sync else 'NO'}\nResult         {status}")
         print(f"OFFSET RESULT  dRA(east) {e.offset_ra_deg:+.3f} deg, dDec {e.offset_dec_deg:+.3f} deg, "
               f"total {e.separation_deg:.3f} deg, confidence {e.confidence:.3f}")
@@ -1270,4 +1369,17 @@ async def async_main(args):
 
 
 def main(argv=None): return asyncio.run(async_main(parse_args(argv)))
-if __name__ == "__main__": raise SystemExit(main())
+def _main_cli():
+    try:
+        return main()
+    except KeyboardInterrupt:
+        # Operator STOP (SIGINT): the run already stopped the mount and printed its readback; no Python traceback. The
+        # process still ends BY SIGINT (exit -2), exactly as before, so whoever launched it sees the same outcome.
+        import os, signal
+        print("STOPPED by the operator (SIGINT)", flush=True)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGINT)
+        raise
+
+
+if __name__ == "__main__": raise SystemExit(_main_cli())
