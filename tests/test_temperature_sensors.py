@@ -190,3 +190,19 @@ def test_executor_sensor_failure_does_not_raise(tmp_path):
     metadata = temperature_metadata(readings, readings)
     assert metadata["temperature_sdr_valid_count"] == 0
     assert math.isnan(metadata["temperature_sdr_mean_c"])
+
+
+def test_all_zero_scratchpad_is_invalid_but_a_real_zero_is_valid(tmp_path):
+    # 2026-10-17: DATA held low gave nine 0x00 bytes, CRC 00 "YES", t=0 - logged as 0.0 C on every sensor.
+    stuck = tmp_path / "28-stuck"
+    stuck.mkdir()
+    (stuck / "w1_slave").write_text("00 00 00 00 00 00 00 00 00 : crc=00 YES\n00 00 00 00 00 00 00 00 00 t=0\n")
+    real = tmp_path / "28-ice"
+    real.mkdir()
+    (real / "w1_slave").write_text("00 00 4b 46 7f ff 0c 10 1c : crc=1c YES\n00 00 4b 46 7f ff 0c 10 1c t=0\n")
+    reader = DS18B20Reader({"sdr": "28-stuck", "lna": "28-ice"}, sysfs_root=tmp_path, warning=lambda m: None)
+    stuck_result = reader.read("sdr")
+    assert not stuck_result["valid"] and stuck_result["temperature_c"] is None
+    assert "all-zero scratchpad" in stuck_result["error"]
+    ice = reader.read("lna")
+    assert ice["valid"] and ice["temperature_c"] == 0.0

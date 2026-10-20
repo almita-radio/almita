@@ -76,6 +76,12 @@ class DS18B20Reader:
             lines = (self.sysfs_root / sensor_id / "w1_slave").read_text().splitlines()
             if not lines or not lines[0].rstrip().endswith("YES"):
                 raise ValueError("CRC check failed")
+            # DATA held low (short / bad contact) reads nine 0x00 bytes, whose CRC-8 is also 0x00, so the kernel says
+            # YES and t=0. A real 0 C never looks like this: the configuration byte is never zero (2026-10-17 bus
+            # fault logged 0.0 C on all four sensors for 14 min).
+            scratchpad = lines[0].split(":", 1)[0].split()
+            if scratchpad and all(byte == "00" for byte in scratchpad):
+                raise ValueError("all-zero scratchpad (1-Wire DATA line held low) - not a reading")
             if len(lines) < 2 or "t=" not in lines[1]:
                 raise ValueError("temperature field t= is missing")
             raw = lines[1].rsplit("t=", 1)[1].strip()

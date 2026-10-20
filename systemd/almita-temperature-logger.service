@@ -1,0 +1,16 @@
+[Unit]
+Description=ALMITA temperature logger - DS18B20 sensors every minute for STATUS (warm-up / stable since)
+After=local-fs.target
+
+[Service]
+Type=simple
+User=stellarmate
+WorkingDirectory=/home/stellarmate/almita
+ExecStart=/home/stellarmate/almita/.venv/bin/python /home/stellarmate/almita/temperature_logger.py --interval 60
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

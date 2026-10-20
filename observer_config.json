@@ -28,7 +28,9 @@
   },
   "temperature_sensors": {
     "sdr": "28-082471f4e41b",
-    "lna": "28-2c5acd1e64ff"
+    "lna": "28-2c5acd1e64ff",
+    "cable": "28-0000006fad9d",
+    "load": "28-0000006f80a5"
   },
   "comments": {
     "latitude": "Negativo = Sur, Positivo = Norte",
