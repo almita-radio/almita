@@ -54,12 +54,17 @@ FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("scien
           # capture.py re-pinned from 26fa261 to 69b9b61 (2026-10-14; first as 3bfeb98): operator-authorised exception limited to STOP -
           # own SIGINT handling, confirmed mount stop (mount_stop.py), stop_report.json and the end-of-session
           # announcement. The acquisition loop, the spectral data path and the HDF5 format are unchanged.
-          ("capture.py", "69b9b61"),
+          # capture.py re-pinned from 69b9b61 to 72fd7cf (2026-10-20, operator: "keep everything that works backed up"):
+          # Telescope Simulator stand-in for the OnStep status gates. LX200 behaviour, acquisition loop, spectral path
+          # and HDF5 format unchanged.
+          ("capture.py", "72fd7cf"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
           # observation_spec.py re-pinned from 7b2eefb to e4b0a0b (2026-10-15): operator-ordered grid ANGLE - an optional
           # grid.rotation_deg, default 0. An unrotated spec validates to the same values plus rotation_deg=0.
-          ("observation_orchestrator.py", "0148b78"), ("observation_spec.py", "e4b0a0b"))
+          # observation_orchestrator.py re-pinned from 0148b78 to 8b0659e (2026-10-20, same authorisation): passes the
+          # selected mount (--device) and starts QUICKLOOK on a late session announcement. The capture path is unchanged.
+          ("observation_orchestrator.py", "8b0659e"), ("observation_spec.py", "e4b0a0b"))
 DEFAULT_WINDOW = (150857.0, 5607.0)          # candidate LSRK window (m/s) of the feature campaign
 MIN_ALT_DEG, HA_MARGIN_H = 30.0, 0.25        # same values the plan/`windows` use
 ENDPOINTS = {"MAIN rtl_tcp": 1234, "INDI": 7624}
