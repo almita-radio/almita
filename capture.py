@@ -38,6 +38,7 @@ from temperature_sensors import DS18B20Reader, format_temperatures, temperature_
 from runtime_state import announce_session, atomic_write_json
 from rfi_monitor import RFIReferenceMonitor
 import mount_stop
+import mount_device
 
 
 def should_execute_after_preflight(report: Dict, preflight_only: bool) -> bool:
@@ -1053,6 +1054,12 @@ class CaptureExecutor:
 
     async def read_onstep_status(self, *, retry_unknown: bool = False) -> Dict:
         """Wait for a hardware-polled OnStep status, optionally retrying unknown once."""
+        if mount_device.is_simulator(self.device_name):
+            status = await self.read_simulator_mount_status()
+            if retry_unknown and status.get("state") == "unknown":
+                await asyncio.sleep(0.1)
+                status = await self.read_simulator_mount_status()
+            return status
         status = await self.telescope.wait_onstep_status_update(timeout=self.tracking_timeout)
         if retry_unknown and status.get("state") == "unknown":
             await asyncio.sleep(0.1)
@@ -1061,6 +1068,37 @@ class CaptureExecutor:
             status = dict(status)
             status["reason"] = "onstep_status_hardware_timeout"
         return status
+
+    async def read_simulator_mount_status(self) -> Dict:
+        """Stand-in for the OnStep status gates when the mount is INDI's Telescope Simulator (operator, 2026-10-17).
+
+        The simulator publishes no "OnStep Status", so the OnStep gates would always time out and pause the session.
+        Here each gate ASKS the driver for its coordinates (getProperties EQUATORIAL_EOD_COORD) and accepts only the
+        answer that arrives after that request - the simulator keeps no stale hardware state, so that answer is its
+        current state. Passive updates are not waited for: the simulator only publishes coordinates when they change,
+        which with tracking on they do not. Healthy = an answer whose vector state is not Alert; no answer stays
+        "unknown" (gate closed, exactly as with OnStep). The record says source=telescope_simulator_eod and
+        reason=not_applicable_simulator, so no capture taken this way can pass for a real-mount one."""
+        t = self.telescope
+        key = (self.device_name, "EQUATORIAL_EOD_COORD")
+        baseline = t._property_cache.get(key, {}).get("update_seq", 0)
+        try:
+            await t._send_command(f'<getProperties device="{self.device_name}" name="EQUATORIAL_EOD_COORD" version="1.7"/>')
+            item = await t._wait_property("EQUATORIAL_EOD_COORD", self.tracking_timeout, baseline)
+        except (asyncio.TimeoutError, ConnectionError, OSError):
+            status = t._unknown_onstep_status("simulator_no_coordinates")
+            status["source"] = "telescope_simulator_eod"
+            return status
+        vector_state = item.get("state")
+        is_error = vector_state == "Alert"
+        return {
+            "state": "error" if is_error else "healthy",
+            "message": f"{self.device_name}: EQUATORIAL_EOD_COORD {vector_state} (OnStep status not applicable)",
+            "is_error": is_error, "vector_state": vector_state, "timestamp": item.get("timestamp"),
+            "received_at": item.get("received_at"), "fresh": True, "indi_fresh": True, "hardware_fresh": True,
+            "source": "telescope_simulator_eod", "update_seq": item.get("update_seq"),
+            "reason": "not_applicable_simulator", "elements": item.get("elements", {}), "raw": item.get("raw"),
+        }
 
     def persist_onstep_status(self, point: Dict, phase: str, status: Dict) -> None:
         """Persist the stable OnStep status fields needed for causal diagnosis."""

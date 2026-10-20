@@ -329,9 +329,11 @@ def _plan_time_preflight(resolved_plan: Dict[str, Any]) -> Dict[str, Any]:
     Imported lazily to avoid a circular import (observation_preflight imports this module
     for recompute_config_hash())."""
     import asyncio
+    import mount_device
     import observation_preflight
     try:
-        return asyncio.run(observation_preflight.run_plan_preflight(resolved_plan))
+        # the mount selected in the web header (LX200 OnStep or Telescope Simulator) - the same one START will drive
+        return asyncio.run(observation_preflight.run_plan_preflight(resolved_plan, device_name=mount_device.current()))
     except Exception as exc:  # noqa: BLE001 - never let a hardware probe failure abort PLAN
         return {
             "checks": [{"name": "Preflight probe", "category": "SOFTWARE", "criticality": "OPTIONAL",

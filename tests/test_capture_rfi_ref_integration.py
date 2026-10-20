@@ -138,6 +138,7 @@ def make_executor(tmp_path, count=2, **kwargs):
                         "capture_status": "planned", "data_filename": f"p{n}.dat", "session_name": "rfi-int"})
     (tmp_path / "observer_config.json").write_text(json.dumps(
         {"observer": {"latitude_deg": -33.4, "longitude_deg": -70.6, "elevation_m": 550}}))
+    kwargs.setdefault("device_name", "LX200 OnStep")   # OnStep gates under test (unnamed would mean the simulator)
     ex = CaptureExecutor(str(plan), config_path="observer_config.json", min_altitude_deg=-90, **kwargs)
     ex.session_manager = FakeSession()
     ex.hour_angle_for_point = lambda p, obstime=None: -1

@@ -203,14 +203,14 @@ def choose_pilot_candidates(resolved_plan: Dict[str, Any], beam_fwhm_deg: float,
 # ------------------------------------------------------------------ real capture + analysis (reused primitives)
 async def _capture_at(host: str, port: int, sdr_host: str, sdr_port: int, ra_hours: float, dec_deg: float,
                       gain_db: float, capture_seconds: float, settle_seconds: float, sample_rate_hz: float,
-                      center_frequency_hz: float, output_path: Path) -> Dict[str, Any]:
+                      center_frequency_hz: float, output_path: Path, device: str = "LX200 OnStep") -> Dict[str, Any]:
     """Real GOTO + real MAIN capture at one point - mirrors alignment.AlignmentRunner's own connect/goto/capture
     pattern (same classes, not reimplemented). Connects and disconnects fresh each call: pilot captures are a
     handful of discrete, infrequent events, not a tight per-point loop, so the small reconnect overhead is an
     acceptable, simpler trade for never holding INDI/SDR open across separate CLI invocations."""
     from indi_telescope_control import INDITelescopeControl
     from sdr_capture import SDRCapture
-    telescope = INDITelescopeControl(host, port, "LX200 OnStep", False)
+    telescope = INDITelescopeControl(host, port, device, False)
     sdr = SDRCapture("network", sdr_host, sdr_port, verbose=False)
     try:
         if not await telescope.connect():
@@ -225,8 +225,10 @@ async def _capture_at(host: str, port: int, sdr_host: str, sdr_port: int, ra_hou
         mount_ra, mount_dec = await telescope.get_coordinates(force_refresh=True)
         await sdr.capture(capture_seconds, str(output_path), int(sample_rate_hz),
                           {**sdr_tuning.tuning_attrs(tuning), "gain_requested_db": gain_db,
-                           "purpose": "observe_gain_pilot", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg})
+                           "purpose": "observe_gain_pilot", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg,
+                           "mount_device": device})
         return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg, "mount_ra_hours": mount_ra, "mount_dec_deg": mount_dec,
+               "mount_device": device,
                "gain_db": gain_db, "capture_seconds": capture_seconds, "sample_rate_hz": sample_rate_hz,
                "center_frequency_hz": center_frequency_hz, "captured_utc": datetime.now(timezone.utc).isoformat(),
                "hdf5_path": str(output_path), "tuning": tuning}
@@ -384,7 +386,8 @@ async def _simulate_capture_at(ra_hours: float, dec_deg: float, gain_db: float, 
            "hdf5_path": str(output_path), "simulated": True, "simulated_scenario": scenario}
 
 
-async def _do_capture(state: Dict[str, Any], label: str, gain_db: float, simulate: Optional[str] = None) -> Dict[str, Any]:
+async def _do_capture(state: Dict[str, Any], label: str, gain_db: float, simulate: Optional[str] = None,
+                      device: str = "LX200 OnStep") -> Dict[str, Any]:
     resolved_plan = _load_resolved_plan(Path(state["resolved_plan_path"]))
     cand = state["candidates"][label]
     session_dir = Path(state["grid_session_dir"])
@@ -420,7 +423,7 @@ async def _do_capture(state: Dict[str, Any], label: str, gain_db: float, simulat
                                    ra_hours=cand["ra_hours"], dec_deg=cand["dec_deg"], gain_db=gain_db,
                                    capture_seconds=state["config"]["capture_seconds"], settle_seconds=state["config"]["settle_seconds"],
                                    sample_rate_hz=resolved_plan["main"]["sample_rate"], center_frequency_hz=resolved_plan["main"]["center_frequency_hz"],
-                                   output_path=path)
+                                   output_path=path, device=device)
     config = PilotConfig.from_dict(state["config"])
     evaluation = evaluate_capture(path, resolved_plan["main"]["sample_rate"], resolved_plan["main"]["center_frequency_hz"], config)
     # Recorded on the evaluation itself (not just in the capture record) so any later comparison - especially the
@@ -443,7 +446,7 @@ def cmd_capture_high(args) -> int:
     _require_step(state, "PREPARE_HIGH")
     _check_grid_still_matches(state)
     gain = state["initial_gain_db"]
-    result = asyncio.run(_do_capture(state, "HIGH", gain, simulate=args.simulate))
+    result = asyncio.run(_do_capture(state, "HIGH", gain, simulate=args.simulate, device=args.device))
     state["captures"]["HIGH_0"] = result["capture"]
     state["evaluations"]["HIGH"] = result["evaluation"]
     if result["evaluation"]["clipping"]["status"] == "CLIPPED":
@@ -478,7 +481,7 @@ def cmd_capture_low(args) -> int:
     _require_step(state, "PREPARE_LOW", "GAIN_DECISION")
     _check_grid_still_matches(state)
     gain = state["initial_gain_db"]
-    result = asyncio.run(_do_capture(state, "LOW", gain, simulate=args.simulate))
+    result = asyncio.run(_do_capture(state, "LOW", gain, simulate=args.simulate, device=args.device))
     state["captures"][f"LOW_{sum(1 for k in state['captures'] if k.startswith('LOW'))}"] = result["capture"]
     state["evaluations"]["LOW"] = result["evaluation"]
     state["gain_recommendation"] = recommend_gain(state["evaluations"], gain, PilotConfig.from_dict(state["config"]))
@@ -523,7 +526,7 @@ def cmd_verify_gain(args) -> int:
     _require_step(state, "VERIFY_GAIN")
     _check_grid_still_matches(state)
     gain = state["approved_gain_db"]
-    result = asyncio.run(_do_capture(state, "HIGH", gain, simulate=args.simulate))
+    result = asyncio.run(_do_capture(state, "HIGH", gain, simulate=args.simulate, device=args.device))
     idx = sum(1 for k in state["captures"] if k.startswith("VERIFY"))
     state["captures"][f"VERIFY_{idx}"] = result["capture"]
     state["evaluations"]["VERIFY"] = result["evaluation"]
@@ -608,7 +611,7 @@ def cmd_final_check(args) -> int:
         _emit({"session_dir": str(session_dir), "state": state})
         return 2
     gain = state["verified_gain_db"]
-    result = asyncio.run(_do_capture(state, "HIGH", gain, simulate=args.simulate))
+    result = asyncio.run(_do_capture(state, "HIGH", gain, simulate=args.simulate, device=args.device))
     idx = sum(1 for k in state["captures"] if k.startswith("FINAL"))
     state["captures"][f"FINAL_{idx}"] = result["capture"]
     now = result["evaluation"]
@@ -691,6 +694,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.set_defaults(func=cmd_plan)
 
     sim_help = "offline-testing only: HEALTHY|CLIPPED|THERMAL_DRIFT|RFI_CONTAMINATED - never used for a real pilot measurement"
+    dev_help = "INDI mount device (the web passes the mount selected in its header: LX200 OnStep or Telescope Simulator)"
     ch = sub.add_parser("capture-high"); ch.add_argument("--session-dir", required=True)
     ch.add_argument("--simulate", default=None, help=sim_help); ch.set_defaults(func=cmd_capture_high)
     cl = sub.add_parser("capture-low"); cl.add_argument("--session-dir", required=True)
@@ -700,6 +704,8 @@ def build_parser() -> argparse.ArgumentParser:
     vg.add_argument("--simulate", default=None, help=sim_help); vg.set_defaults(func=cmd_verify_gain)
     fc = sub.add_parser("final-check"); fc.add_argument("--session-dir", required=True)
     fc.add_argument("--simulate", default=None, help=sim_help); fc.set_defaults(func=cmd_final_check)
+    for moving in (ch, cl, vg, fc):
+        moving.add_argument("--device", default="LX200 OnStep", help=dev_help)
     ab = sub.add_parser("abort"); ab.add_argument("--session-dir", required=True); ab.set_defaults(func=cmd_abort)
     st = sub.add_parser("status"); st.add_argument("--session-dir", required=True); st.set_defaults(func=cmd_status)
     return p

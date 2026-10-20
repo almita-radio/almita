@@ -91,3 +91,11 @@ def _private_mount_lock(tmp_path, monkeypatch):
     if mount_lock._held is not None:
         os.close(mount_lock._held[0])
         mount_lock._held = None
+
+
+@pytest.fixture(autouse=True)
+def _private_mount_device(tmp_path, monkeypatch):
+    """The web's mount selection (data/runtime/mount_device.json) is live operator state: no test reads or writes the real
+    one. Every test starts on the default (LX200 OnStep) unless it selects otherwise."""
+    import mount_device
+    monkeypatch.setattr(mount_device, "STATE_PATH", tmp_path / "_mount_device" / "mount_device.json")

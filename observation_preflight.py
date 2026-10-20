@@ -143,6 +143,10 @@ async def _onstep_time_snapshot_check(host: str, port: int, device_name: str,
     live-clock read-only query is found in the future, a true CLOCK_DRIFT
     REQUIRED/BLOCK check can be reinstated — this is deliberately not that.
     """
+    import mount_device
+    if mount_device.is_simulator(device_name):
+        return _check("OnStep time snapshot", "MOUNT", OPTIONAL, PASS,
+                      f"not applicable: {device_name} selected (no OnStep clock)")
     try:
         process = await asyncio.create_subprocess_exec(
             "indi_getprop", "-h", host, "-p", str(port), f"{device_name}.TIME_UTC.UTC",
@@ -442,7 +446,10 @@ async def run_plan_preflight(resolved_plan: Dict[str, Any], *, host: str = "loca
     try:
         connected = await telescope.connect()
         if not connected:
-            checks.append(_check("INDI/mount", "MOUNT", REQUIRED, BLOCK, "failed to connect to INDI server"))
+            checks.append(_check("INDI/mount", "MOUNT", REQUIRED, BLOCK,
+                                 f"failed to connect to INDI device {executor.device_name!r} at {host}:{port} - the INDI "
+                                 "server is down, or that device is not loaded in it (is the mount selected in the page "
+                                 "header the one INDI is running?)"))
         else:
             checks.append(await _indi_read_only_check(executor))
             checks.append(await _onstep_time_snapshot_check(
@@ -501,7 +508,10 @@ async def run_execution_preflight(resolved_plan: Dict[str, Any], *, host: str = 
     try:
         connected = await telescope.connect()
         if not connected:
-            checks.append(_check("INDI/mount", "MOUNT", REQUIRED, BLOCK, "failed to connect to INDI server"))
+            checks.append(_check("INDI/mount", "MOUNT", REQUIRED, BLOCK,
+                                 f"failed to connect to INDI device {executor.device_name!r} at {host}:{port} - the INDI "
+                                 "server is down, or that device is not loaded in it (is the mount selected in the page "
+                                 "header the one INDI is running?)"))
         else:
             capture_report = await executor.run_preflight(
                 capture_time=resolved_plan["requested"]["capture"]["seconds"],

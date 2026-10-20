@@ -58,7 +58,8 @@ def make_executor(tmp_path,count=3,min_altitude=30):
         w=csv.DictWriter(h,fieldnames=FIELDS);w.writeheader()
         for n in range(1,count+1):w.writerow({"point_number":n,"scan_order":n,"target_ra_hours":n,"target_dec_degrees":-40,"target_ra_hms":str(n),"target_dec_dms":"-40","capture_status":"planned","data_filename":f"p{n}.dat","session_name":"test"})
     (tmp_path/"observer_config.json").write_text(json.dumps({"observer":{"latitude_deg":-33.4,"longitude_deg":-70.6,"elevation_m":550}}))
-    ex=CaptureExecutor(str(plan),config_path="observer_config.json",min_altitude_deg=min_altitude);ex.session_manager=FakeSession();ex.hour_angle_for_point=lambda p,obstime=None:-1;assert ex.load_observation_plan();return ex
+    # the real mount's name: these tests exercise the OnStep gates (an unnamed executor falls back to "Telescope Simulator")
+    ex=CaptureExecutor(str(plan),config_path="observer_config.json",min_altitude_deg=min_altitude,device_name="LX200 OnStep");ex.session_manager=FakeSession();ex.hour_angle_for_point=lambda p,obstime=None:-1;assert ex.load_observation_plan();return ex
 
 def visibility_map(ex,altitudes):
     def value(point,obstime=None):
@@ -103,7 +104,7 @@ async def test_compact_console_operational_output(monkeypatch,tmp_path,capsys):
     assert "SESSION  elapsed=00:00:00" not in output
     final_elapsed=re.search(r"Elapsed\s+(\d\d:\d\d:\d\d)",output)
     assert final_elapsed and final_elapsed.group(1)==":".join(session_elapsed.groups())
-    assert "OnStep       N/D" in output
+    assert "OnStep       HEALTHY" in output        # an OnStep-named mount reports its last OnStep state (was N/D: unnamed = simulator)
 
 def test_above_and_equal_minimum_are_executable(tmp_path):
     ex=make_executor(tmp_path,count=2);visibility_map(ex,{1:31,2:30});assert [int(p["point_number"]) for p in ex.iter_runtime_visible_points()]==[1,2]
@@ -169,7 +170,7 @@ async def test_safety_paused_plan_can_resume_preserving_failed_and_planned(monke
     ex.telescope=FakeTelescope(state="off",wait_on=False)
     assert not await ex.execute_observation_plan(0,0)
 
-    resumed=CaptureExecutor(str(ex.csv_path),session_id="session",config_path="observer_config.json")
+    resumed=CaptureExecutor(str(ex.csv_path),session_id="session",config_path="observer_config.json",device_name="LX200 OnStep")
     resumed.session_manager=FakeSession();resumed.hour_angle_for_point=lambda p,obstime=None:-1
     assert resumed.load_observation_plan(resume=True)
     rows=csv_rows(resumed)

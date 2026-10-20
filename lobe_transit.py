@@ -412,7 +412,8 @@ class LobeRun:
         rows = read_samples(self.csv_path)
         fit = fit_samples(rows, self.args.max_clipping)
         fit.pop("profile", None)
-        res = {"status": status, "ended_utc": datetime.now(timezone.utc).isoformat(), "plan": p, "samples": len(rows),
+        res = {"status": status, "ended_utc": datetime.now(timezone.utc).isoformat(), "mount_device": self.args.device,
+               "plan": p, "samples": len(rows),
                "valid": sum(1 for r in rows if r.get("status") == "VALID"), "clipped": sum(1 for r in rows if r.get("status") == "CLIPPED"),
                "gain_db": self.args.gain, "rtl_agc": (self.tuning or {}).get("rtl_agc"), "tuning": self.tuning, "fit": fit, "notes": self.notes,
                "stop_report": stop_report, "location": self.args.location_note}

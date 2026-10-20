@@ -363,13 +363,13 @@ def cmd_approve_hi_plan(args) -> int:
 # ------------------------------------------------------------------ real GOTO + capture (the ONLY place this script moves the mount)
 async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captures: int, capture_seconds: float,
                         settle_seconds: float, sample_rate_hz: float, center_frequency_hz: float,
-                        cap_dir: Path) -> Dict[str, Any]:
+                        cap_dir: Path, device: str = "LX200 OnStep") -> Dict[str, Any]:
     """Real GOTO ONCE, held there for n_captures back-to-back captures (no further GOTO in between) - mirrors
     observation_gain_pilot._capture_at()'s own connect/goto/capture pattern (same classes, not reimplemented),
     extended to repeat the capture step without re-issuing GOTO, since the point does not move between captures."""
     from indi_telescope_control import INDITelescopeControl
     from sdr_capture import SDRCapture
-    telescope = INDITelescopeControl("localhost", 7624, "LX200 OnStep", False)
+    telescope = INDITelescopeControl("localhost", 7624, device, False)
     sdr = SDRCapture("network", "localhost", 1234, verbose=False)
     paths: List[Path] = []
     tracking_restore = False
@@ -431,12 +431,12 @@ async def _capture_n_at(ra_hours: float, dec_deg: float, gain_db: float, n_captu
             await sdr.capture(capture_seconds, str(path), int(sample_rate_hz),
                               {**sdr_tuning.tuning_attrs(tuning), "gain_requested_db": gain_db,
                                "purpose": "calibrate_wizard_hi", "target_ra_hours": ra_hours, "target_dec_deg": dec_deg,
-                               "tracking": "sidereal_on_confirmed"})
+                               "tracking": "sidereal_on_confirmed", "mount_device": device})
             paths.append(path)
             err = await _hold_sample(f"after capture {i}")
             _progress(f"capture {i} done; target held, error {err:.4f} deg")
         end_ra, end_dec = hold[-1]["ra_hours"], hold[-1]["dec_deg"]
-        return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg,
+        return {"commanded_ra_hours": ra_hours, "commanded_dec_deg": dec_deg, "mount_device": device,
                "mount_ra_hours": mount_ra, "mount_dec_deg": mount_dec, "gain_db": gain_db,
                "pre_goto_ra_hours": start_ra, "pre_goto_dec_deg": start_dec, "slew_distance_deg": slew_deg,
                "arrival_error_deg": arrival_error_deg, "arrival_tolerance_deg": ARRIVAL_TOLERANCE_DEG,
@@ -544,7 +544,7 @@ def cmd_capture_hi(args) -> int:
             _main_device_check_or_raise()
             capture = asyncio.run(asyncio.wait_for(_capture_n_at(
                 cand["ra_hours"], cand["dec_deg"], cfg.gain_db, cfg.n_captures, cfg.capture_seconds,
-                cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir), timeout))
+                cfg.hi_settle_seconds, cfg.sample_rate_hz, cfg.center_frequency_hz, cap_dir, device=args.device), timeout))
     except RuntimeError as exc:
         # The step is left at READY_HI_*: the operator sees why and can retry (files that were written are kept).
         _record_interruption(session_dir, label, exc, cap_dir)
@@ -751,6 +751,8 @@ def build_parser() -> argparse.ArgumentParser:
     ch = sub.add_parser("capture-hi")
     ch.add_argument("--session-dir", required=True)
     ch.add_argument("--label", required=True, choices=list(HI_KINDS))
+    ch.add_argument("--device", default="LX200 OnStep",
+                    help="INDI mount device (the web passes the mount selected in its header: LX200 OnStep or Telescope Simulator)")
     ch.add_argument("--simulate", default=None,
                     help="offline-testing only: HEALTHY|CLIPPED|THERMAL_DRIFT|RFI_CONTAMINATED - skips the real GOTO/altitude "
                          "re-check entirely; never used for a real HI ALTO/HI BAJO measurement")
