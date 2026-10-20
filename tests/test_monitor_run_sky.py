@@ -55,3 +55,23 @@ def test_monitor_has_the_panel_and_the_map_draws_states_and_the_red_x():
     common = (ROOT / "console" / "common.js").read_text()
     assert 'id="run-sky"' in html and "initRunSky()" in app and '"/api/observe/sky"' in app
     assert 'p.state === "done"' in common and '"#ff2d2d"' in common
+
+
+def test_a_just_launched_campaign_replaces_the_previous_one_before_its_first_capture(tmp_path, monkeypatch):
+    # 2026-10-15: for the first ~60 s (first GOTO + settle) the map still showed the previous, completed campaign.
+    monkeypatch.setattr(ops, "sky_layer_now", lambda *a, **k: {})
+    ops._RUN_SKY_CACHE.clear()
+    rt, mosaic = _campaign(tmp_path, ["planned", "planned"], running=False)
+    new = mosaic / "NEW-CAMPAIGN"; new.mkdir()
+    (new / "mosaic.csv").write_text((mosaic / "ALMITA-OBSERVE-TEST" / "mosaic.csv").read_text())
+    (new / "observation_resolved.json").write_text(json.dumps({"grid_session_dir": str(new)}))
+    (rt / "current_session.json").write_text(json.dumps({"state": "COMPLETED", "started_utc": "2026-10-15T19:34:46+00:00",
+        "session_root": "data/mosaic/ALMITA-OBSERVE-TEST/data/iq/ALMITA-OBSERVE-RUN"}))
+    (rt / "observation_runtime.json").write_text(json.dumps({"orchestrator_state": "RUNNING",
+        "resolved_plan_path": str(new / "observation_resolved.json"), "started_utc": "2026-10-15T20:55:46+00:00"}))
+    r = ops.observe_sky_progress(rt, mosaic)
+    assert r["campaign_id"] == "NEW-CAMPAIGN" and r["running"]
+    # once the old run is the newer record (or the orchestrator is not running it), nothing changes
+    (rt / "observation_runtime.json").write_text(json.dumps({"orchestrator_state": "COMPLETED",
+        "resolved_plan_path": str(new / "observation_resolved.json"), "started_utc": "2026-10-15T20:55:46+00:00"}))
+    assert ops.observe_sky_progress(rt, mosaic)["campaign_id"] == "ALMITA-OBSERVE-TEST"

@@ -137,7 +137,9 @@
     } finally {
       btn.dataset.busy = "";
       btn.removeAttribute("aria-busy");
-      btn.textContent = label;
+      // Put the label back only if fn left it alone: a handler that re-renders its button (STATUS LNA: "SWITCH LNA OFF"
+      // -> "SWITCH LNA ON") must keep its new label, not get the pre-click one back.
+      if (busyText ? btn.textContent === busyText : btn.textContent === label) btn.textContent = label;
       btn.disabled = btn.dataset.holdDisabled === "1";
     }
   };
@@ -156,7 +158,8 @@
       if (stopped) return;
       if (document.hidden && o.hiddenIntervalMs === null) return;      // hidden tab: no polling; visibilitychange resumes it
       const base = document.hidden ? o.hiddenIntervalMs : o.intervalMs;
-      timer = setTimeout(tick, failures ? Math.min(base * Math.pow(2, failures), o.maxBackoffMs) : base);
+      // backoff never polls FASTER than the normal interval (a 60 s poller used to retry every 30 s while failing)
+      timer = setTimeout(tick, failures ? Math.max(base, Math.min(base * Math.pow(2, failures), o.maxBackoffMs)) : base);
     }
     async function tick() {
       if (inflight || stopped) return;
@@ -182,12 +185,101 @@
     };
   };
 
+  // ------------------------------------------------------------------ DAY / NIGHT theme (operator 2026-10-18: outdoors in sunlight the dark UI cannot be read)
+  // One attribute on <html>: data-theme="day" | "night" (styles.css :root = NIGHT, :root[data-theme="day"] = DAY). Chosen per
+  // BROWSER (localStorage, never the server), default NIGHT. Each page's <head> applies it before first paint; this applies it
+  // again for a page whose head has no such script. Every storage access is wrapped: a blocked/private storage just means NIGHT.
+  // Charts drawn in JS read the colours through U.cssVar and redraw on the "almita-theme" event - no request, no timer.
+  U.THEME_KEY = "almita-theme";
+  U.THEME_EVENT = "almita-theme";
+  function readStoredTheme() {
+    try { return window.localStorage.getItem(U.THEME_KEY) === "day" ? "day" : "night"; } catch (e) { return "night"; }
+  }
+  function writeStoredTheme(theme) {
+    try { window.localStorage.setItem(U.THEME_KEY, theme); } catch (e) { /* storage blocked: the choice lasts for this page only */ }
+  }
+  U.theme = () => (document.documentElement.getAttribute("data-theme") === "day" ? "day" : "night");
+  U.isDay = () => U.theme() === "day";
+  // a CSS custom property of the CURRENT theme (e.g. U.cssVar("--text")); fallback when unreadable
+  U.cssVar = function (name, fallback) {
+    try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fallback || ""; } catch (e) { return fallback || ""; }
+  };
+  // the same token with an alpha (tokens are #rgb / #rrggbb; anything else is returned as it is)
+  U.cssRgba = function (name, alpha, fallback) {
+    const v = U.cssVar(name, fallback);
+    let m = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(v);
+    if (m) m = [m[0], m[1] + m[1], m[2] + m[2], m[3] + m[3]]; else m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+    if (!m) return v;
+    return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
+  };
+  // "var(--x)" -> its current value (canvas cannot use var()); any other colour unchanged
+  U.resolveColor = function (c) {
+    const m = /^var\((--[\w-]+)(?:\s*,\s*([^)]+))?\)$/.exec(String(c || "").trim());
+    return m ? U.cssVar(m[1], m[2] || "") : c;
+  };
+  // DATA colours (series, sky-map points/areas) keep their hue in DAY; only the ones that would vanish on white get a darker
+  // shade of the same hue. NIGHT returns the colour unchanged.
+  const DAY_DATA_COLORS = {
+    "#5cc8e6": "#007ea8", "#9b8cf2": "#5b3fd0", "#5ec98d": "#11804a", "#e6b85c": "#a86400", "#65b7d8": "#00507a",
+    "#39ff14": "#1a9a00", "#e5484d": "#c8102e", "#ff2d2d": "#e00000", "#ffffff": "#111111", "#e6edf1": "#05080a",
+    "#55c985": "#00692c", "#e36b6b": "#b3001b", "#c98500": "#a86a00",
+  };
+  U.dataColor = function (c) {
+    const r = U.resolveColor(c);
+    return U.isDay() ? (DAY_DATA_COLORS[String(r).toLowerCase()] || r) : r;
+  };
+  U.onThemeChange = function (fn) { window.addEventListener(U.THEME_EVENT, () => { try { fn(U.theme()); } catch (e) { console.error("theme redraw failed (isolated):", e); } }); };
+  function markThemeButtons(root, t) {
+    for (const b of root.querySelectorAll(".theme-btn")) {
+      const on = b.dataset.theme === t;
+      b.classList.toggle("active", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
+  U.setTheme = function (theme, opts) {
+    const t = theme === "day" ? "day" : "night";
+    const changed = U.theme() !== t || !document.documentElement.hasAttribute("data-theme");
+    document.documentElement.setAttribute("data-theme", t);
+    if (!(opts && opts.store === false)) writeStoredTheme(t);
+    markThemeButtons(document, t);
+    if (changed) window.dispatchEvent(new CustomEvent(U.THEME_EVENT, { detail: { theme: t } }));
+    return t;
+  };
+  U.setTheme(readStoredTheme(), { store: false });
+  // another tab changed it: follow (the storage event carries it; nothing is polled)
+  window.addEventListener("storage", (ev) => { try { if (ev.key === U.THEME_KEY) U.setTheme(readStoredTheme(), { store: false }); } catch (e) { /* ignore */ } });
+  // DÍA | NOCHE, two buttons beside the mount buttons in every page header (never a combo box)
+  const THEME_CHOICES = [{ theme: "day", label: "DÍA", title: "Tema de día: claro, alto contraste para sol directo" },
+                         { theme: "night", label: "NOCHE", title: "Tema de noche: oscuro" }];
+  U.themeToggle = function (nav) {
+    if (!nav || document.getElementById("theme-toggle")) return null;
+    const box = document.createElement("span");
+    box.id = "theme-toggle"; box.className = "theme-toggle";
+    box.setAttribute("role", "group"); box.setAttribute("aria-label", "Tema de la pantalla");
+    for (const c of THEME_CHOICES) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "theme-btn"; b.textContent = c.label; b.dataset.theme = c.theme; b.title = c.title;
+      b.addEventListener("click", () => U.setTheme(c.theme));
+      box.appendChild(b);
+    }
+    nav.appendChild(box);
+    markThemeButtons(box, U.theme());                 // the header may not be in the document yet: mark its own buttons
+    return box;
+  };
+  // every sky view / HI4PI legend drawn by this file redraws itself with the new colours
+  U.onThemeChange(() => {
+    for (const c of document.querySelectorAll("canvas")) {
+      if (c.__skyArgs && c.isConnected) U.drawSkyView(c, c.__skyArgs[0], c.__skyArgs[1]);
+      if (c.__legendArgs && c.isConnected) U.drawHi4piLegend(c, c.__legendArgs[0], c.__legendArgs[1]);
+    }
+  });
+
   // ------------------------------------------------------------------ shared page chrome (header, health strip, footer)
   // Operator's order (2026-10-15): STATUS PIPELINE LOBE ALIGN CALIBRATE OBSERVE MONITOR REDUCE SCIENCE.
   const NAV = [
     { key: "STATUS", href: "/status.html" }, { key: "PIPELINE", href: "/pipeline.html" }, { key: "LOBE", href: "/lobe.html" },
     { key: "ALIGN", href: "/align.html" }, { key: "CALIBRATE", href: "/calibrate.html" }, { key: "OBSERVE", href: "/observe.html" },
     { key: "MONITOR", href: "/" }, { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" },
+    { key: "DESKTOP", href: "/vnc/", newTab: true },   // the Pi's desktop (noVNC) through this port and login - vnc_proxy.py
   ];
   function consoleBase() { return ""; }  // MONITOR is served by this same origin (single web port)
   U.consoleBase = consoleBase;
@@ -212,6 +304,7 @@
       const a = document.createElement("a");
       a.className = "obs-nav-link" + (it.key === section ? " active" : "");
       a.href = it.href;
+      if (it.newTab) { a.target = "_blank"; a.rel = "noopener"; }
       a.textContent = it.key;
       if (it.key === section) a.setAttribute("aria-current", "page");
       nav.appendChild(a);
@@ -245,7 +338,7 @@
         if (!r.ok) text = "PARADA NO CONFIRMADA — the request failed: " + U.errorText(r.error) + "\n\nCheck the mount NOW (Ekos / hand controller).";
         else {
           const d = r.data.data;
-          text = d.summary + (d.confirmed ? "" : "\n\nCHECK THE MOUNT NOW (Ekos / hand controller).")
+          text = (d.device ? "Mount: " + d.device + "\n" : "") + d.summary + (d.confirmed ? "" : "\n\nCHECK THE MOUNT NOW (Ekos / hand controller).")
             + (d.signalled.length ? "\n\nStop sent to: " + d.signalled.join(", ") : "\n\nNo running observation or movement job.")
             + (d.notes.length ? "\n" + d.notes.join("\n") : "") + "\n\n" + d.limits;
         }
@@ -253,8 +346,69 @@
       b.disabled = false; b.textContent = label;
       window.alert(text);
     });
+    U.mountDeviceToggle(nav);
+    U.themeToggle(nav);
     nav.appendChild(b);
     return b;
+  };
+
+  // MOUNT: which INDI mount every page drives - the real LX200 OnStep (default) or INDI's Telescope Simulator. ONE value on
+  // the server for all pages and for STOP MOUNT; the server refuses to switch while anything uses the mount. Chosen with
+  // buttons (operator, 2026-10-17). With the simulator selected every page shows a banner: nothing real moves.
+  const MOUNT_CHOICES = [{ device: "LX200 OnStep", label: "LX200" }, { device: "Telescope Simulator", label: "SIMULATOR" }];
+  U.MOUNT_SIMULATOR = "Telescope Simulator";
+  U.mountDeviceToggle = function (nav) {
+    if (!nav || document.getElementById("mount-device")) return null;
+    const box = document.createElement("span");
+    box.id = "mount-device"; box.className = "mount-device";
+    box.setAttribute("role", "group"); box.setAttribute("aria-label", "Mount device");
+    let current = null;
+    const buttons = MOUNT_CHOICES.map((c) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "mount-device-btn"; b.textContent = c.label; b.dataset.device = c.device; b.title = "Mount: " + c.device;
+      b.addEventListener("click", () => choose(c.device));
+      box.appendChild(b);
+      return b;
+    });
+    function render(device) {
+      current = device;
+      for (const b of buttons) {
+        const on = b.dataset.device === device;
+        b.classList.toggle("active", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      const sim = device === U.MOUNT_SIMULATOR;
+      document.body.classList.toggle("mount-simulated", sim);
+      let banner = document.getElementById("mount-sim-banner");
+      if (sim && !banner) {
+        banner = document.createElement("div");
+        banner.id = "mount-sim-banner"; banner.className = "mount-sim-banner"; banner.setAttribute("role", "status");
+        banner.textContent = "MOUNT: TELESCOPE SIMULATOR — nothing real moves; captures and results are NOT sky data. SYNC is blocked.";
+        const top = nav.closest(".topbar") || document.getElementById("almita-header");
+        if (top) top.after(banner); else document.body.prepend(banner);
+      }
+      if (!sim && banner) banner.remove();
+    }
+    async function refresh() {
+      const r = await U.api("/api/mount/device", { timeoutMs: 8000 });
+      if (r.ok) render(r.data.data.device);
+    }
+    async function choose(device) {
+      if (device === current) return;
+      const why = device === U.MOUNT_SIMULATOR
+        ? "Every page (ALIGN, LOBE, CALIBRATE, OBSERVE, STOP MOUNT) will drive INDI's Telescope Simulator: nothing real moves and nothing captured is sky data."
+        : "Every page (ALIGN, LOBE, CALIBRATE, OBSERVE, STOP MOUNT) will drive the REAL mount again.";
+      if (!window.confirm(`Switch the mount to ${device}?\n\n${why}`)) return;
+      buttons.forEach((b) => { b.disabled = true; });
+      const r = await U.api("/api/mount/device", { method: "POST", body: { device }, timeoutMs: 15000 });
+      buttons.forEach((b) => { b.disabled = false; });
+      if (!r.ok) { window.alert("Mount NOT switched: " + U.errorText(r.error)); await refresh(); return; }
+      render(r.data.data.device);
+    }
+    nav.appendChild(box);
+    refresh();
+    // another tab may have switched it: read it again when this tab comes back (no extra poller - the header keeps one)
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+    return box;
   };
 
   function chip(label, value, klass) {
@@ -406,8 +560,9 @@
     return p;
   };
   U.jobPanel = function (container, badge, opts) {
-    const o = Object.assign({ onEnd: null, onChange: null, onError: null, stopLabel: "STOP THIS JOB" }, opts || {});
+    const o = Object.assign({ onEnd: null, onChange: null, onError: null, stopLabel: "STOP THIS JOB", afterLog: null }, opts || {});
     const st = { jobId: null, poller: null, last: null };
+    const afterLogHome = o.afterLog ? o.afterLog.parentNode : null;   // where it goes back to when the panel is cleared
     const fail = (err) => { if (o.onError) o.onError(err); };
     const NEAR_BOTTOM_PX = 24; // slack (~1-2 lines) so "at the bottom" survives sub-pixel rounding
     function render(j) {
@@ -462,6 +617,7 @@
       } else {
         logPre.scrollTop = logOldScrollTop;               // operator scrolled up to read history: leave them exactly there
       }
+      if (o.afterLog) container.appendChild(o.afterLog);  // the page's own node (e.g. ALIGN's live reading): moved, never rebuilt here
       if (j.artifacts && j.artifacts.length) {
         const list = mk("div", "job-artifacts"), imgs = mk("div", "thumbs");
         list.append(mk("div", "muted", `artifacts in ${j.output_dir} (${j.artifacts.length})`));
@@ -499,11 +655,38 @@
       st.attach(r.data.data.job_id);
       return true;
     };
-    st.recover = async function (stage) {           // after a reload: the backend, not this page, remembers the latest job of this stage
+    st.recover = async function (stage, opts) {     // after a reload: the backend, not this page, remembers the latest job of this stage
       const r = await U.api("/api/ops/jobs", { timeoutMs: 15000 });
       if (!r.ok) return;
       const row = (r.data.data || []).find((x) => x.stage === stage);
-      if (row) st.attach(row.job_id);
+      // runningOnly: a reload re-adopts only a job that is still RUNNING (to see and STOP it); a finished one is not
+      // brought back, so the page starts clean (ALIGN, operator 2026-10-17)
+      if (row && (!(opts && opts.runningOnly) || row.state === "RUNNING")) st.attach(row.job_id);
+    };
+    // Clean stop (SIGINT) of this panel's job if it is RUNNING, then wait until the server reports it ended.
+    // Resolves true when nothing is left running, false (with onError) when the stop failed or it did not end in time.
+    st.stopAndWait = async function (timeoutMs) {
+      const j = st.last;
+      if (!j || j.state !== "RUNNING") return true;
+      const s = await U.api(`/api/ops/stop/${j.job_id}`, { method: "POST", body: { confirm: true }, timeoutMs: 20000 });
+      if (!s.ok) { fail(s.error); return false; }
+      const end = Date.now() + (timeoutMs || 60000);
+      while (Date.now() < end) {
+        const r = await U.api(`/api/ops/job/${j.job_id}?tail=200`, { timeoutMs: 15000 });
+        if (r.ok) { render(r.data.data); if (r.data.data.state !== "RUNNING") { if (st.poller) st.poller.stop(); return true; } }
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+      fail({ message: `job ${j.job_id} did not end within ${Math.round((timeoutMs || 60000) / 1000)} s of its stop - check it before planning again` });
+      return false;
+    };
+    // Forget the shown job (its files stay on the server): the panel is empty again, as on a fresh page.
+    st.clear = function () {
+      if (st.poller) st.poller.stop();
+      st.jobId = null; st.last = null;
+      container.textContent = "";
+      if (o.afterLog && afterLogHome) afterLogHome.appendChild(o.afterLog);
+      if (badge) U.setBadge(badge, "—");
+      if (o.onChange) o.onChange(null);
     };
     return st;
   };
@@ -601,6 +784,7 @@
     // the projection is linear on screen, so only the centre and the scale change and every layer follows (MONITOR).
     const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null, dotScale: 1, ringFirst: true,
                               zoomToPoints: false, zoomMargin: 0.3 }, opts || {});
+    canvas.__skyArgs = [data, opts];                    // the DÍA/NOCHE switch redraws it with the same data (no request)
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
     const dpr = window.devicePixelRatio || 1;
@@ -619,8 +803,9 @@
         cx = w / 2 + S * (cx - (x0 + x1) / 2); cy = h / 2 + S * (cy - (y0 + y1) / 2); R *= S;
       }
     }
-    // this app is fixed dark (console/styles.css sets color-scheme:dark with no light variant): match its own palette, not the OS theme.
-    const fg = "#e6edf1", muted = "rgba(145,162,173,0.75)", ringBg = "#121a20";
+    // the page's own theme (DÍA / NOCHE, styles.css tokens), never the OS theme
+    const fg = U.cssVar("--text", "#e6edf1"), muted = U.cssRgba("--muted", 0.75, "#91a2ad"), ringBg = U.cssVar("--panel", "#121a20");
+    const okColor = U.cssVar("--ok", "#55c985"), D = U.dataColor;
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = ringBg; ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, 2 * Math.PI); ctx.fill();
     const rFor = (altDeg) => R * (1 - Math.max(0, Math.min(90, altDeg)) / 90);
@@ -660,9 +845,9 @@
     }
     ctx.fillStyle = fg; ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 2 * Math.PI); ctx.fill();          // zenith
     if (U.finite(o.minAlt) && o.minAlt > 0) {
-      ctx.save(); ctx.strokeStyle = "#55c985"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+      ctx.save(); ctx.strokeStyle = okColor; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
       ctx.beginPath(); ctx.arc(cx, cy, rFor(o.minAlt), 0, 2 * Math.PI); ctx.stroke(); ctx.restore();
-      ctx.font = "10px ui-monospace,monospace"; ctx.fillStyle = "#55c985"; ctx.fillText(`min ${o.minAlt}°`, cx - rFor(o.minAlt) * 0.71 - 4, cy + rFor(o.minAlt) * 0.71 + 12);
+      ctx.font = "10px ui-monospace,monospace"; ctx.fillStyle = okColor; ctx.fillText(`min ${o.minAlt}°`, cx - rFor(o.minAlt) * 0.71 - 4, cy + rFor(o.minAlt) * 0.71 + 12);
     }
     ctx.font = "bold 12px ui-monospace,monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     for (const [label, az] of [["N", 0], ["E", 90], ["S", 180], ["O", 270]]) {
@@ -673,14 +858,15 @@
     // Sun (context in both modes, small marker)
     if (data.sun) {
       const [x, y] = toXY(data.sun.az_deg, data.sun.alt_deg);
-      ctx.fillStyle = data.sun.above_horizon ? "#e6b85c" : "rgba(230,184,92,0.35)";
+      ctx.fillStyle = data.sun.above_horizon ? D("#e6b85c") : (U.isDay() ? "rgba(168,100,0,0.35)" : "rgba(230,184,92,0.35)");
       ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
       ctx.strokeStyle = ringBg; ctx.lineWidth = 1; ctx.stroke();
     }
     // areas: outline circles only, clickable when onPick is set (HI A/B/C)
     canvas.__hitAreas = [];
     const colors = Object.assign({ A: "#5cc8e6", B: "#9b8cf2", C: "#5ec98d", SUN: "#e6b85c" }, o.colors || {});
-    const warnColor = "#e5484d";
+    for (const k of Object.keys(colors)) colors[k] = D(colors[k]);      // same hues; DAY darkens the ones that vanish on white
+    const warnColor = D("#e5484d");
     if (o.path && o.path.length > 1) {                                   // visiting order, drawn under the areas
       ctx.save(); ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5; ctx.strokeStyle = muted; ctx.beginPath();
       o.path.forEach(([az, alt], i) => { const [x, y] = toXY(az, alt); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
@@ -694,7 +880,7 @@
         ctx.beginPath(); ctx.arc(x, y, dot, 0, 2 * Math.PI);
         // MONITOR's running campaign passes p.state: done green, failed orange, pending white; the current point is
         // drawn after the loop as a large red X. OBSERVE passes below_min instead.
-        ctx.fillStyle = p.state === "done" ? "#39ff14" : p.state === "failed" ? "#e6b85c" : p.below_min ? "#e5484d" : "#ffffff";
+        ctx.fillStyle = D(p.state === "done" ? "#39ff14" : p.state === "failed" ? "#e6b85c" : p.below_min ? "#e5484d" : "#ffffff");
         if (p.state !== "current") ctx.fill();
       }
       for (const p of o.points) {
@@ -703,7 +889,7 @@
         ctx.save(); ctx.lineCap = "round";
         ctx.strokeStyle = ringBg; ctx.lineWidth = 2.75;                                     // dark halo so it reads on any colour
         ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
-        ctx.strokeStyle = "#ff2d2d"; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = D("#ff2d2d"); ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
         ctx.restore();
       }
@@ -744,6 +930,7 @@
 
   // Horizontal colour-scale legend for the HI4PI overlay: real cm^-2 values at both ends, drawn on its own canvas.
   U.drawHi4piLegend = function (canvas, valueRange, unit) {
+    canvas.__legendArgs = [valueRange, unit];           // redrawn by the DÍA/NOCHE switch
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 300, cssH = canvas.clientHeight || 34;
     const dpr = window.devicePixelRatio || 1;
@@ -757,8 +944,8 @@
       ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.fillRect(barX + x, barY, 1, barH);
     }
-    ctx.strokeStyle = "rgba(145,162,173,0.6)"; ctx.strokeRect(barX, barY, barW, barH);
-    ctx.font = "10px ui-monospace,monospace"; ctx.fillStyle = "#e6edf1"; ctx.textBaseline = "top";
+    ctx.strokeStyle = U.cssRgba("--muted", 0.6, "#91a2ad"); ctx.strokeRect(barX, barY, barW, barH);
+    ctx.font = "10px ui-monospace,monospace"; ctx.fillStyle = U.cssVar("--text", "#e6edf1"); ctx.textBaseline = "top";
     const fmt = (v) => (v * 1e20).toExponential(1).replace("e+", "e");
     ctx.textAlign = "left"; ctx.fillText(fmt(valueRange[0]), barX, barY + barH + 3);
     ctx.textAlign = "right"; ctx.fillText(fmt(valueRange[1]), barX + barW, barY + barH + 3);

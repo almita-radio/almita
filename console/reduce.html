@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Reduce</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Reduce</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
 <body>
   <header id="almita-header"><h1>REDUCE</h1></header>
 
   <main id="app">
-    <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.06em">
+    <div class="banner" style="background:var(--inset);color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.06em">
       LEVEL 0 (RAW HDF5) → LEVEL 1 (REDUCED SPECTRA) · reduce_engine / almita_reduce.py (frozen) + reduce_single_capture.py ·
       offline, filesystem only · calibration_level is always RELATIVE or UNCALIBRATED — never Kelvin/dBm/Jy/Tsys
     </div>
@@ -14,13 +14,13 @@
     <section class="panel" id="input-panel" aria-labelledby="h-input">
       <header><h2 id="h-input">1 · CHOOSE INPUT</h2></header>
       <div class="obs-actions">
-        <button type="button" class="mode-btn active" id="mode-capture" data-mode="capture">SINGLE HDF5 CAPTURE</button>
-        <button type="button" class="mode-btn" id="mode-campaign" data-mode="campaign">CAMPAIGN / SESSION</button>
+        <button type="button" class="mode-btn" id="mode-capture" data-mode="capture">SINGLE HDF5 CAPTURE</button>
+        <button type="button" class="mode-btn active" id="mode-campaign" data-mode="campaign">CAMPAIGN / SESSION</button>
         <button type="button" id="btn-refresh-inputs">REFRESH LIST</button>
       </div>
-      <div class="obs-row" id="row-capture"><label for="in-capture">CAPTURE (data/mosaic or data/calibration)</label>
+      <div class="obs-row" id="row-capture" hidden><label for="in-capture">CAPTURE (data/mosaic or data/calibration)</label>
         <select id="in-capture"><option value="">(choose)</option></select></div>
-      <div class="obs-row" id="row-campaign" hidden><label for="in-campaign">CAMPAIGN (with at least one usable HDF5 capture)</label>
+      <div class="obs-row" id="row-campaign"><label for="in-campaign">CAMPAIGN (with at least one usable HDF5 capture)</label>
         <select id="in-campaign"><option value="">(choose)</option></select></div>
       <details id="campaign-no-data-details" hidden>
         <summary>Campaigns with 0 usable captures (<span id="campaign-no-data-count">0</span>) - diagnostic only, hidden from the list above; nothing on disk was deleted or changed</summary>
@@ -105,7 +105,7 @@
         <tbody></tbody></table></div>
       <div id="spectrum-view" hidden>
         <h3>SPECTRUM — point <span id="spectrum-point-label"></span></h3>
-        <canvas id="spectrum-canvas" width="900" height="260" style="width:100%;background:#0d1317"></canvas>
+        <canvas id="spectrum-canvas" width="900" height="260" style="width:100%;background:var(--inset)"></canvas>
         <div class="obs-summary" id="spectrum-detail"></div>
       </div>
       <div class="obs-summary" id="results-hi-caveat" style="color:var(--warn)"></div>

@@ -75,7 +75,7 @@
     // forward through the real wall-clock schedule of a run (not just an instant), so it needs to know how many
     // points per ring AND how long each capture takes to know when each point would actually be captured.
     const q = `mode=${alignMode}&ring_radii=${radii.join(",")}&ring_points=${points}&min_elevation=${$("al-min-elevation").value || 20}&beam_fwhm=${$("al-beam-fwhm").value || 20}&capture_time=${$("al-capture-time").value || 20}`;
-    const r = await U.api(`/api/ops/align/sky?${q}`, { timeoutMs: 20000 });
+    const r = await U.api(`/api/ops/align/sky?${q}`, { timeoutMs: 60000 });
     if (!r.ok) { $("al-sky-note").textContent = "sky view unavailable: " + U.errorText(r.error); return; }
     alignSky = r.data.data;
     if (alignArea && !(alignSky.areas || []).some((a) => a.label === alignArea)) alignArea = null;
@@ -237,7 +237,9 @@
   }
   $("al-confirm").addEventListener("input", updateButtons);
   setInterval(updateButtons, 1000);
-  setInterval(() => { if (!P.align_plan.last || P.align_plan.last.state !== "RUNNING") refreshAlignSky(); }, 30000);
+  // only while the tab is visible (a forgotten background tab kept the server busy for hours, 2026-10-15)
+  setInterval(() => { if (!document.hidden && (!P.align_plan.last || P.align_plan.last.state !== "RUNNING")) refreshAlignSky(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAlignSky(); });
   loadAlignDefaults().then(() => setAlignMode("hi"));
 
   // ------------------------------------------------------------------ choices (real directories) and reload recovery

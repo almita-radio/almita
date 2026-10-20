@@ -11,7 +11,7 @@
 
   const showError = (err) => U.showError($("error-banner"), err);
 
-  let mode = "capture";              // "capture" | "campaign"
+  let mode = "campaign";             // "capture" | "campaign" - opens on the whole session (operator 2026-10-17)
   let selectedInput = "";            // capture path, or campaign_dir path
   let selectedProfile = "";          // "" = none (UNCALIBRATED)
   let lastMetadata = null;
@@ -55,6 +55,36 @@
     $("results-panel").hidden = true;
   }
 
+  // One group per campaign / calibration session, newest first (the server's order): date, name and - for OBSERVE - the
+  // grid's size in the group label; the point (or the calibration reference) and its time in each option. A bare path
+  // list was easy to get lost in (operator 2026-10-17). The option value is still the exact path.
+  function captureGroupLabel(c) {
+    const when = c.campaign_started_utc ? U.utc(c.campaign_started_utc).slice(0, 16) + " UTC" : "date unknown";
+    if (c.kind === "OBSERVE") {
+      const g = c.grid;
+      const size = g ? ` · grid ${g.rows}×${g.cols} · ${U.fixed(g.footprint_width_deg, 1)}°×${U.fixed(g.footprint_height_deg, 1)}°` : " · grid unknown";
+      return `${when} · ${c.campaign}${size}`;
+    }
+    if (c.kind === "CALIBRATION") return `${when} · ${c.campaign} · CALIBRATION`;
+    return c.campaign_dir || "other";
+  }
+  function renderCaptureOptions(sel, rows) {
+    const groups = new Map();
+    for (const c of rows) {
+      const key = c.campaign_dir || c.path;
+      if (!groups.has(key)) {
+        const og = document.createElement("optgroup");
+        og.label = captureGroupLabel(c);
+        groups.set(key, og);
+        sel.appendChild(og);
+      }
+      const text = `${c.item || c.name} · ${c.captured_utc ? U.utcTime(c.captured_utc) : "?"} · ${U.bytes(c.size_bytes)}`;
+      const opt = new Option(text, c.path);
+      opt.title = c.path;
+      groups.get(key).appendChild(opt);
+    }
+  }
+
   // ------------------------------------------------------------------ 1) input discovery + selection
   async function loadInputs() {
     $("input-note").textContent = "discovering captures and classifying campaigns… the very first load after "
@@ -67,7 +97,7 @@
     ]);
     const capSel = $("in-capture"); capSel.textContent = "";
     capSel.appendChild(new Option("(choose)", ""));
-    if (capRes.ok) for (const c of capRes.data.data) capSel.appendChild(new Option(`${c.path} (${U.bytes(c.size_bytes)})`, c.path));
+    if (capRes.ok) renderCaptureOptions(capSel, capRes.data.data);
 
     const campSel = $("in-campaign"); campSel.textContent = "";
     campSel.appendChild(new Option("(choose)", ""));
@@ -78,7 +108,11 @@
       // Newest first is already how the server orders them; COMPLETA before PARCIAL only as a tie-break within
       // that order would hide recency, so keep server order (mtime-descending) - just label each option clearly.
       for (const c of usableCampaigns) {
-        const label = `${c.completeness} · ${c.points_usable}/${c.points_expected == null ? "?" : c.points_expected} usable · ${c.session_label} · ${c.name}`;
+        // one line per session: when, what, how big, how much is usable (operator 2026-10-17)
+        const when = c.started_utc ? U.utc(c.started_utc).slice(0, 16) + " UTC" : c.session_label;
+        const g = c.grid;
+        const size = g ? ` · grid ${g.rows}×${g.cols} · ${U.fixed(g.footprint_width_deg, 1)}°×${U.fixed(g.footprint_height_deg, 1)}°` : " · grid unknown";
+        const label = `${when} · ${c.observation_name || c.name}${size} · ${c.points_usable}/${c.points_expected == null ? "?" : c.points_expected} usable · ${c.completeness}`;
         campSel.appendChild(new Option(label, c.campaign_dir));
       }
     }
@@ -129,6 +163,7 @@
   $("in-capture").addEventListener("change", () => { selectedInput = $("in-capture").value; onInputChanged(); });
   $("in-campaign").addEventListener("change", () => { selectedInput = $("in-campaign").value; onInputChanged(); });
   $("btn-refresh-inputs").addEventListener("click", U.guard($("btn-refresh-inputs"), loadInputs, "…"));
+  setMode("campaign");
 
   // ------------------------------------------------------------------ 2) metadata preview
   function metaCard(label, value, warn) {
@@ -293,9 +328,9 @@
   function setBanner(banner, status, text) {
     const ok = status === "COMPATIBLE";
     banner.hidden = false; banner.textContent = text;
-    banner.style.background = ok ? "#122a1e" : (status === "UNKNOWN" ? "" : "#2a1414");
+    banner.style.background = ok ? "var(--ok-bg)" : (status === "UNKNOWN" ? "" : "var(--fail-bg)");
     banner.style.color = ok ? "var(--ok)" : (status === "UNKNOWN" ? "var(--warn)" : "var(--error)");
-    banner.style.borderColor = ok ? "#1e5c3d" : (status === "UNKNOWN" ? "" : "#7a2a2a");
+    banner.style.borderColor = ok ? "var(--ok-line)" : (status === "UNKNOWN" ? "" : "var(--fail-line)");
   }
 
   async function refreshCompatibility(mySeq) {
@@ -328,7 +363,7 @@
       detail.textContent = c.reason;
     } catch (err) {
       if (mySeq !== selectionSeq) return;
-      banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "#2a1414"; banner.style.color = "var(--error)";
+      banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "var(--fail-bg)"; banner.style.color = "var(--error)";
       detail.textContent = msg(err);
     }
   }
@@ -371,7 +406,7 @@
       $("campaign-calibration-confirm-row").hidden = d.all_compatible;
     } catch (err) {
       if (mySeq !== selectionSeq || forInput !== selectedInput || forProfile !== selectedProfile) return;   // stale
-      banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "#2a1414"; banner.style.color = "var(--error)";
+      banner.hidden = false; banner.textContent = "CHECK FAILED"; banner.style.background = "var(--fail-bg)"; banner.style.color = "var(--error)";
       detail.textContent = msg(err);
       lastCalibrationPreview = null;
     }
@@ -602,7 +637,10 @@
     } catch (err) { showError(`spectrum view failed: ${msg(err)}`); }
   }
 
+  let lastSpectrumArrays = null;
+  U.onThemeChange(() => { if (lastSpectrumArrays && !$("spectrum-canvas").closest("[hidden]")) drawSpectrum(lastSpectrumArrays); });   // DÍA/NOCHE redraw, no request
   function drawSpectrum(arrays) {
+    lastSpectrumArrays = arrays;
     const canvas = $("spectrum-canvas");
     const dpr = window.devicePixelRatio || 1;
     const cssW = canvas.clientWidth || 900, cssH = 260;
@@ -611,12 +649,12 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
     const freq = arrays.frequency_hz, val = arrays.relative_intensity || [], mask = arrays.mask;
-    if (!freq || !freq.length) { ctx.fillStyle = "#91a2ad"; ctx.fillText("no data", 10, 20); return; }
+    if (!freq || !freq.length) { ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.fillText("no data", 10, 20); return; }
     const finiteVals = val.filter((v) => Number.isFinite(v));
     if (finiteVals.length === 0) {
       // Every relative_intensity bin is null (fully masked/unavailable) - never draw a flat/fabricated line
       // through null values; say so plainly instead.
-      ctx.fillStyle = "#91a2ad"; ctx.font = "13px ui-monospace,monospace";
+      ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.font = "13px ui-monospace,monospace";
       ctx.fillText("no relative intensity values to plot for this point (array is entirely null/masked)", 12, cssH / 2);
       return;
     }
@@ -624,18 +662,18 @@
     const pad = 24;
     const x = (i) => pad + (i / (freq.length - 1)) * (cssW - 2 * pad);
     const y = (v) => cssH - pad - ((v - vlo) / Math.max(vhi - vlo, 1e-30)) * (cssH - 2 * pad);
-    ctx.strokeStyle = "#2b3942"; ctx.strokeRect(pad, pad, cssW - 2 * pad, cssH - 2 * pad);
-    ctx.beginPath(); ctx.strokeStyle = "#65b7d8"; ctx.lineWidth = 1;
+    ctx.strokeStyle = U.cssVar("--line", "#2b3942"); ctx.strokeRect(pad, pad, cssW - 2 * pad, cssH - 2 * pad);
+    ctx.beginPath(); ctx.strokeStyle = U.cssVar("--accent", "#65b7d8"); ctx.lineWidth = 1;
     for (let i = 0; i < freq.length; i++) {
       const px = x(i), py = Number.isFinite(val[i]) ? y(val[i]) : y(vlo);
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.stroke();
     if (mask) {
-      ctx.fillStyle = "rgba(230,107,107,0.15)";
+      ctx.fillStyle = U.isDay() ? U.cssRgba("--error", 0.15) : "rgba(230,107,107,0.15)";
       for (let i = 0; i < mask.length; i++) if (mask[i] !== 0) ctx.fillRect(x(i) - 1, pad, 2, cssH - 2 * pad);
     }
-    ctx.fillStyle = "#91a2ad"; ctx.font = "10px ui-monospace,monospace";
+    ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.font = "10px ui-monospace,monospace";
     ctx.fillText(U.mhz(freq[0]), pad, cssH - 6);
     ctx.textAlign = "right"; ctx.fillText(U.mhz(freq[freq.length - 1]), cssW - pad, cssH - 6); ctx.textAlign = "left";
     ctx.fillText(`${vhi.toFixed(3)}`, pad + 2, pad + 10);

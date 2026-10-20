@@ -233,7 +233,10 @@
       "RECOMMENDED MASK: DRAFT ONLY (not computed for a single simulated run - needs multiple captures under the same config)";
   }
 
+  let lastBandpass = null;
+  U.onThemeChange(() => { if (lastBandpass) drawBandpass(lastBandpass); });   // DÍA/NOCHE: same data, new colours (the sky previews redraw themselves)
   function drawBandpass(pointCapture) {
+    lastBandpass = pointCapture;
     // NOTE: almita_calibrate.py run's per_capture summary does not include
     // the full normalized_bandpass array (only scalar usable_band_fraction) -
     // this draws the histogram (which IS available) as a real-data proxy
@@ -242,20 +245,20 @@
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const hist = ((pointCapture.sample_statistics || {}).histogram || []).map((v) => (U.finite(v) ? v : 0));
-    ctx.fillStyle = "#91a2ad";
+    ctx.fillStyle = U.cssVar("--muted", "#91a2ad");
     ctx.font = "10px monospace";
     if (!hist.length || !hist.some((v) => v > 0)) {      // empty / all-zero / NaN histogram: an explicit empty state, not a blank or broken chart
       ctx.fillText("No histogram data yet", 6, 12);
       return;
     }
     const max = Math.max(...hist, 1);
-    ctx.fillStyle = "#65b7d8";
+    ctx.fillStyle = U.cssVar("--accent", "#65b7d8");
     const barWidth = canvas.width / hist.length;
     hist.forEach((v, i) => {
       const h = (v / max) * (canvas.height - 10);
       ctx.fillRect(i * barWidth, canvas.height - h, Math.max(1, barWidth - 0.5), h);
     });
-    ctx.fillStyle = "#91a2ad";
+    ctx.fillStyle = U.cssVar("--muted", "#91a2ad");
     ctx.fillText("ADC code histogram (raw sample statistics) — not the RF bandpass shape", 6, 12);
   }
 
@@ -626,7 +629,7 @@
         const opBanner = $w("wz-observe-profile-banner"), opPath = $w("wz-observe-profile-path"), opDetail = $w("wz-observe-profile-detail");
         if (op && op.status === "READY") {
           opBanner.textContent = "READY — use this exact path in OBSERVE's calibration profile field";
-          opBanner.style.background = "#122a1e"; opBanner.style.color = "var(--ok)"; opBanner.style.borderColor = "#1e5c3d";
+          opBanner.style.background = "var(--ok-bg)"; opBanner.style.color = "var(--ok)"; opBanner.style.borderColor = "var(--ok-line)";
           opPath.textContent = "";
           const code = document.createElement("code"); code.textContent = op.profile_path_for_observe; code.style.userSelect = "all";
           opPath.append("PATH: ", code);
@@ -636,7 +639,7 @@
             + ((r.caveats || []).length ? ` · caveats: ${r.caveats.join(" | ")}` : "");
         } else if (op && op.status === "UNAVAILABLE") {
           opBanner.textContent = "NO USABLE PROFILE";
-          opBanner.style.background = "#2a1414"; opBanner.style.color = "var(--error)"; opBanner.style.borderColor = "#7a2a2a";
+          opBanner.style.background = "var(--fail-bg)"; opBanner.style.color = "var(--error)"; opBanner.style.borderColor = "var(--fail-line)";
           opPath.textContent = "";
           opDetail.textContent = op.reason || "unknown reason";
         } else {

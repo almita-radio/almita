@@ -477,7 +477,9 @@
     $("f-gain").value = d.main.gain_db;
     $("f-min-alt").value = d.grid.min_altitude_deg;
     $("f-rfi-gain").value = d.rfi_ref.gain_db;
+    if (typeof d.rfi_ref.enabled === "boolean") $("f-rfi-enabled").checked = d.rfi_ref.enabled;
     if (typeof d.rfi_ref.bias_tee === "boolean") $("f-rfi-bias-tee").checked = d.rfi_ref.bias_tee;
+    updateRfiBiasTeeAvailability();
     await suggestNewestProfile();
   }
 

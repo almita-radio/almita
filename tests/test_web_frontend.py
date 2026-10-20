@@ -276,14 +276,15 @@ out.err500 = $("error-banner").textContent;
     assert "unexpected error (KeyError)" in out["err500"] and "[request r500]" in out["err500"]
 
 
-def _observe_rfi_bias_tee_run(tmp_path, server_bias_tee):
+def _observe_rfi_bias_tee_run(tmp_path, server_bias_tee, server_enabled=True):
     routes = OBSERVE_ROUTES + r"""
 window.__routes["GET /api/observe/defaults"] = { body: { main: { center_frequency_hz: 1420405752, sample_rate: 2400000, gain_db: 40.2, bias_tee: true },
-  grid: { min_altitude_deg: 10 }, rfi_ref: { serial: "00000002", gain_db: 25, bias_tee: SERVER_BIAS_TEE } } };
-""".replace("SERVER_BIAS_TEE", "true" if server_bias_tee else "false")
+  grid: { min_altitude_deg: 10 }, rfi_ref: { enabled: SERVER_ENABLED, serial: "00000002", gain_db: 25, bias_tee: SERVER_BIAS_TEE } } };
+""".replace("SERVER_BIAS_TEE", "true" if server_bias_tee else "false").replace("SERVER_ENABLED", "true" if server_enabled else "false")
     driver = r"""
 await until(() => window.__count("GET /api/observe/defaults") > 0, 3000); await sleep(100);
 out.checked = $("f-rfi-bias-tee").checked;
+out.enabled = $("f-rfi-enabled").checked; out.bias_tee_disabled = $("f-rfi-bias-tee").disabled;
 $("observe-form").requestSubmit(); await until(() => !$("plan-result").hidden, 3000);
 $("btn-replan").click(); $("f-gain").value = 42.1; $("observe-form").requestSubmit(); await until(() => !$("plan-result").hidden, 3000);
 out.posted = window.__calls.filter((c) => c.key === "POST /api/observe/plan").map((c) => c.body.rfi_ref);
@@ -304,6 +305,21 @@ def test_observe_rfi_ref_bias_tee_follows_server_default_and_survives_replan(tmp
 def test_observe_rfi_ref_bias_tee_checkbox_is_driven_by_the_server_not_the_static_html(tmp_path):
     out = _observe_rfi_bias_tee_run(tmp_path, False)
     assert out["checked"] is False and all(r["bias_tee"] is False for r in out["posted"])
+
+
+def test_observe_rfi_ref_enabled_follows_the_server_default_off(tmp_path):
+    """2026-10-17: the RFI_REF V3 became MAIN and there is no second dongle - the server's default is RFI_REF OFF, the form
+    starts unchecked (BIAS-T greyed out) and the plan is sent with RFI_REF disabled."""
+    out = _observe_rfi_bias_tee_run(tmp_path, True, server_enabled=False)
+    assert out["enabled"] is False and out["bias_tee_disabled"] is True
+    assert len(out["posted"]) == 2 and all(r["enabled"] is False for r in out["posted"])
+
+
+def test_observe_rfi_ref_enabled_is_unchecked_in_the_static_html():
+    """Before /api/observe/defaults answers (or when it cannot), the form must not start with RFI_REF enabled."""
+    html = (ROOT / "console" / "observe.html").read_text()
+    tag = next(line for line in html.splitlines() if 'id="f-rfi-enabled"' in line)
+    assert " checked" not in tag
 
 
 def test_observe_page_start_timeout_is_not_reported_as_not_started(tmp_path):
@@ -502,6 +518,75 @@ out.afterExplicitChange = { stale: $("real-plan-stale").hidden, runDisabled: $("
     assert "PLAN OBSOLETE" in out["afterExplicitChange"]["staleText"]                        # ...but picking a different area does invalidate it
 
 
+def test_align_running_shows_the_live_reading_under_the_job_log(tmp_path):
+    """2026-10-18 (operator): while a real alignment runs, each point's reading appears right under the job's log -
+    read from alignment_live.json in the job's own output_dir; Sun relative to the centre point, in dB."""
+    routes = REAL_ALIGN_ROUTES + r"""
+window.__routes["GET /api/ops/jobs"] = { body: { data: [ { job_id: "run-0", stage: "align", state: "RUNNING" } ] } };
+window.__jobs["run-0"] = { job_id: "run-0", stage: "align", state: "RUNNING", verdict: "RUNNING", exit_code: null, elapsed_s: 30, params: {}, facts: {},
+  output_dir: "data/alignment/WEB-SUN-X", started_utc: new Date().toISOString(), log_tail: "LIVE point 002/4 ..." };
+window.__routes["GET /api/ops/job/run-0"] = () => ({ body: { data: window.__jobs["run-0"] } });
+window.__fileUrls = [];
+window.__routes["GET /api/ops/file"] = (_, url) => { window.__fileUrls.push(url); return { body: { reference: "sun", planned_points: 4, display_only: true,
+  planned: [{ index: 1, east_deg: 0, north_deg: 0 }, { index: 2, east_deg: 2, north_deg: 0 }, { index: 3, east_deg: -1, north_deg: 1.7 }, { index: 4, east_deg: -1, north_deg: -1.7 }],
+  points: [{ index: 1, status: "VALID", east_deg: 0, north_deg: 0, power_db: -9.0, hi_excess_pct: 20, utc: "2026-10-18T16:00:00+00:00" },
+           { index: 2, status: "VALID", east_deg: 2, north_deg: 0, power_db: -11.5, hi_excess_pct: 18, utc: "2026-10-18T16:00:30+00:00" }] } }; };
+"""
+    driver = r"""
+await until(() => $("real-job-align").textContent.includes("RUNNING") && $("real-live-big") && $("real-live-big").textContent.includes("point 2/4"), 6000);
+const panel = $("real-job-align"), log = panel.querySelector(".job-log"), live = $("real-live");
+out.inPanelAfterLog = live.parentNode === panel && !!(log.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING);
+out.big = $("real-live-big").textContent; out.hidden = live.hidden;
+out.url = window.__fileUrls[0];
+out.trendDots = $("real-live-trend").querySelectorAll("circle[r='4'],circle[r='6']").length;
+out.mapPoints = $("real-live-map").querySelectorAll("circle[r='6']").length;
+""".strip()
+    out = run_page(tmp_path, "align", routes, driver, budget=30000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["inPanelAfterLog"] is True and out["hidden"] is False
+    assert "point 2/4" in out["big"] and "−2.50 dB vs centre" in out["big"]
+    assert "path=" + "data%2Falignment%2FWEB-SUN-X%2Falignment_live.json" in out["url"]
+    assert out["trendDots"] == 2 and out["mapPoints"] == 4                   # 2 measured on the trend; all 4 planned on the map
+
+
+def test_align_reload_starts_clean_and_plan_stops_a_running_alignment_first(tmp_path):
+    """2026-10-17 (operator): a reload re-adopts only a RUNNING alignment (finished ones are not brought back, the form
+    starts clean, PLAN says why it is disabled), and PLAN stops a running PLAN/RUN (confirmed, clean stop, waited for)
+    before planning again."""
+    routes = REAL_ALIGN_ROUTES + r"""
+window.__routes["GET /api/ops/jobs"] = { body: { data: [
+  { job_id: "run-0", stage: "align", state: "RUNNING" }, { job_id: "plan-0", stage: "align_plan", state: "EXITED" } ] } };
+window.__jobs["run-0"] = { job_id: "run-0", stage: "align", state: "RUNNING", verdict: "RUNNING", exit_code: null, elapsed_s: 30, params: {}, facts: {},
+  output_dir: "data/align/RUN-0", started_utc: new Date().toISOString(), log_tail: "moving" };
+window.__jobs["plan-0"] = { job_id: "plan-0", stage: "align_plan", state: "EXITED", verdict: "PASS", exit_code: 0, elapsed_s: 1, params: {}, facts: {},
+  output_dir: "data/align/PLAN-0", started_utc: new Date().toISOString(), ended_utc: new Date().toISOString(), log_tail: "" };
+window.__routes["GET /api/ops/job/run-0"] = () => ({ body: { data: window.__jobs["run-0"] } });
+window.__routes["GET /api/ops/job/plan-0"] = () => ({ body: { data: window.__jobs["plan-0"] } });
+window.__routes["POST /api/ops/stop/run-0"] = () => { window.__jobs["run-0"] = { ...window.__jobs["run-0"], state: "EXITED", verdict: "STOPPED", exit_code: -2 };
+  return { body: { data: {} } }; };
+"""
+    driver = (_PICK_AREA_JS + r"""
+await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3 && $("real-job-align").textContent.includes("RUNNING"), 5000);
+out.reload = { planPanel: $("real-job-align_plan").textContent, runShown: $("real-job-align").textContent.includes("run-0"),
+               planReason: document.querySelector('.reason[data-for="real-plan"]').textContent, planDisabled: $("real-plan").disabled };
+pick("A");
+$("real-plan").click();
+await until(() => $("real-job-align_plan").textContent.includes("plan-1") && $("real-job-align_plan").textContent.includes("PASS"), 8000);
+out.confirm = window.__confirmText;
+out.order = window.__calls.map((c) => c.key).filter((k) => k.startsWith("POST "));
+out.runPanelAfter = $("real-job-align").textContent;
+""").strip()
+    out = run_page(tmp_path, "align", routes, driver, budget=40000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    assert out["reload"]["planPanel"] == "" and out["reload"]["runShown"] is True            # finished PLAN not re-adopted, RUNNING one is
+    assert out["reload"]["planDisabled"] is True and "pick area A, B, C or MANUAL" in out["reload"]["planReason"]
+    assert "still running (run-0)" in out["confirm"] and "Stop it" in out["confirm"]
+    assert out["order"] == ["POST /api/ops/stop/run-0", "POST /api/ops/start/align_plan"]   # stopped first, then planned
+    assert out["runPanelAfter"] == ""                                                         # the previous RUN is cleared
+
+
 def test_align_real_run_sends_the_approved_plan_centre_not_a_live_recompute(tmp_path):
     driver = (_PICK_AREA_JS + r"""
 await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3, 5000);
@@ -549,6 +634,7 @@ window.__routes["POST /api/ops/start/align"] = (body) => {
     driver = (_PICK_AREA_JS + r"""
 await until(() => document.querySelectorAll("#real-hi-areas button").length >= 3, 5000);
 out.syncDefault = $("real-sync").checked;
+$("real-sync").checked = true;
 $("real-max-sync").value = "0.5";
 $("real-confirm").value = "MOVE"; $("real-confirm").dispatchEvent(new Event("input"));
 pick("A");
@@ -564,7 +650,7 @@ out.offsetText = $("real-offset").textContent;
     out = run_page(tmp_path, "align", routes, driver, budget=40000)
     assert "driver_error" not in out, out.get("driver_error")
     assert out["errors"] == []
-    assert out["syncDefault"] is True
+    assert out["syncDefault"] is False      # unticked until SYNC is validated on the real mount (2026-10-15)
     assert out["sentParams"]["sync"] is True and out["sentParams"]["max_sync_offset_deg"] == 0.5
     assert "ΔRA (east) +0.812°" in out["offsetText"] and "ΔDec -0.500°" in out["offsetText"]
     assert "confidence 0.710 (threshold 0.65)" in out["offsetText"]
@@ -1090,7 +1176,7 @@ window.__routes["GET /api/system/health"] = () => ({ body: HEALTH });
 """
     out2 = run_page(tmp_path / "s", "status", routes2, driver.replace('$("run-summary").textContent.length', "0"), budget=1_900_000) if (tmp_path / "s").mkdir() is None else None
     assert out2["errors"] == [] and abs(out2["m2"]["nodes"] - out2["m1"]["nodes"]) <= 3 and out2["m1"]["timers"] == out2["m2"]["timers"]
-    assert 10 <= out2["rate_rest"] <= 14                                          # status page: one poller at 5 s = 12/min, nothing else
+    assert 10 <= out2["rate_rest"] <= 19                                          # status page: health at 5 s (12/min) + temperatures 1 h at 20 s (3/min) + 6 h at 60 s (1/min) + LNA at 5 min
 
 
 def test_field_console_left_open_for_30_minutes_keeps_two_timers_and_a_stable_dom(tmp_path):
@@ -1595,3 +1681,147 @@ out.manual = { status: $("f-ql-cal-status").textContent, selected: $("f-ql-cal-s
     assert "valid server profile · COMPATIBLE" in a["status"]
     assert out["manual"]["status"].startswith("REJECTED: this looks like a path on the browser's computer")
     assert out["manual"]["selected"] == "" and out["manual"]["readOnly"] is False
+
+
+def test_header_mount_buttons_show_switch_and_warn_with_the_simulator(tmp_path):
+    """2026-10-17 (operator): every page header chooses the mount with two buttons (not a combo); the server holds the one
+    choice. With the simulator selected the page says so in a banner; a refused switch (409) is shown and not assumed."""
+    routes = r"""
+window.__mount = "Telescope Simulator";
+window.__routes["GET /api/mount/device"] = () => ({ body: { ok: true, data: { device: window.__mount, simulator: window.__mount === "Telescope Simulator" } } });
+window.__routes["POST /api/mount/device"] = (b) => {
+  if (window.__refuse) return { status: 409, body: { error: "blocked: cannot switch the mount now: mount is in use by align X" } };
+  window.__mount = b.device; return { body: { ok: true, data: { device: b.device, simulator: b.device === "Telescope Simulator" } } }; };
+window.alert = (t) => { window.__alertText = t; };
+"""
+    driver = r"""
+await until(() => window.__count("GET /api/mount/device") > 0 && document.querySelector("#mount-device .active"), 3000);
+const btns = () => [...document.querySelectorAll("#mount-device button")];
+out.kinds = btns().map((b) => b.tagName + ":" + b.textContent);
+out.select = document.querySelectorAll("#almita-header select").length;
+out.active1 = document.querySelector("#mount-device .active").textContent;
+out.banner1 = ($("mount-sim-banner") || {}).textContent || null;
+btns().find((b) => b.textContent === "LX200").click();
+await until(() => window.__count("POST /api/mount/device") === 1 && document.querySelector("#mount-device .active").textContent === "LX200", 3000);
+out.posted = window.__calls.filter((c) => c.key === "POST /api/mount/device").map((c) => c.body);
+out.confirm = window.__confirmText;
+out.active2 = document.querySelector("#mount-device .active").textContent;
+out.banner2 = !!$("mount-sim-banner");
+window.__refuse = true;
+btns().find((b) => b.textContent === "SIMULATOR").click();
+await until(() => window.__alertText, 3000);
+out.alert = window.__alertText;
+out.active3 = document.querySelector("#mount-device .active").textContent;
+""".strip()
+    out = run_page(tmp_path, "align", routes, driver, budget=12000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["kinds"] == ["BUTTON:LX200", "BUTTON:SIMULATOR"] and out["select"] == 0
+    assert out["active1"] == "SIMULATOR" and "TELESCOPE SIMULATOR" in out["banner1"] and "NOT sky data" in out["banner1"]
+    assert out["posted"] == [{"device": "LX200 OnStep"}] and "REAL mount" in out["confirm"]
+    assert out["active2"] == "LX200" and out["banner2"] is False
+    assert "Mount NOT switched" in out["alert"] and "mount is in use" in out["alert"] and out["active3"] == "LX200"
+
+
+def test_reduce_single_capture_list_is_grouped_by_campaign_with_date_and_grid_size(tmp_path):
+    """2026-10-17 (operator): the bare path list was easy to get lost in. Each campaign / calibration session is a group
+    labelled with its date, name and (OBSERVE) grid size; each option names the point or reference and its time."""
+    obs = "data/mosaic/ALMITA-OBSERVE-20261017-07:36:37/data/iq/S/ALMITA-OBSERVE_0009.h5"
+    cal = "data/calibration/WIZARD-20261013-193915-787403/captures/AMBIENT_50R/capture_003.h5"
+    routes = r"""
+window.__routes["GET /api/ops/reduce/captures"] = { body: { ok: true, data: [
+  { path: "%(obs)s", name: "ALMITA-OBSERVE_0009.h5", size_bytes: 6081740, kind: "OBSERVE", campaign: "ALMITA-OBSERVE",
+    campaign_dir: "data/mosaic/ALMITA-OBSERVE-20261017-07:36:37", campaign_started_utc: "2026-10-17T07:36:37.076Z",
+    grid: { rows: 3, cols: 3, point_count: 9, footprint_width_deg: 5, footprint_height_deg: 5, spacing_deg: 2.5 },
+    item: "point 0009", captured_utc: "2026-10-17T07:41:39+00:00" },
+  { path: "%(cal)s", name: "capture_003.h5", size_bytes: 2411724, kind: "CALIBRATION", campaign: "WIZARD-20261013-193915-787403",
+    campaign_dir: "data/calibration/WIZARD-20261013-193915-787403", campaign_started_utc: "2026-10-13T19:39:15+00:00", grid: null,
+    item: "AMBIENT_50R / capture_003", captured_utc: "2026-10-13T19:45:02+00:00" } ] } };
+window.__routes["GET /api/ops/reduce/campaigns"] = { body: { ok: true, data: { campaigns: [], no_data: [] } } };
+window.__routes["GET /api/ops/campaigns"] = { body: { ok: true, data: { profiles: [] } } };
+""" % {"obs": obs, "cal": cal}
+    driver = r"""
+await until(() => document.querySelectorAll("#in-capture optgroup").length === 2, 4000);
+out.groups = [...document.querySelectorAll("#in-capture optgroup")].map((g) => ({ label: g.label, options: [...g.children].map((o) => [o.textContent, o.value]) }));
+""".strip()
+    out = run_page(tmp_path, "reduce", routes, driver, budget=10000)
+    assert "driver_error" not in out, out.get("driver_error")
+    g1, g2 = out["groups"]
+    assert g1["label"] == "2026-10-17 07:36 UTC · ALMITA-OBSERVE · grid 3×3 · 5.0°×5.0°"
+    assert g1["options"] == [["point 0009 · 07:41:39 UTC · 5.8 MiB", obs]]
+    assert g2["label"] == "2026-10-13 19:39 UTC · WIZARD-20261013-193915-787403 · CALIBRATION"
+    assert g2["options"][0][0].startswith("AMBIENT_50R / capture_003 · 19:45:02 UTC") and g2["options"][0][1] == cal
+
+
+def test_reduce_opens_on_whole_sessions_one_line_each(tmp_path):
+    """2026-10-17 (operator): REDUCE is about the whole session - it opens in CAMPAIGN / SESSION mode and each session
+    is one line: start, name, grid size, usable points, completeness."""
+    routes = r"""
+window.__routes["GET /api/ops/reduce/captures"] = { body: { ok: true, data: [] } };
+window.__routes["GET /api/ops/reduce/campaigns"] = { body: { ok: true, data: { campaigns: [
+  { campaign_dir: "data/mosaic/ALMITA-OBSERVE-20261017-07:36:37", name: "ALMITA-OBSERVE-20261017-07:36:37", observation_name: "ALMITA-OBSERVE",
+    started_utc: "2026-10-17T07:36:37.076Z", session_label: "x", grid: { rows: 3, cols: 3, footprint_width_deg: 5, footprint_height_deg: 5 },
+    points_usable: 9, points_expected: 9, completeness: "COMPLETA" } ], no_data: [] } } };
+window.__routes["GET /api/ops/campaigns"] = { body: { ok: true, data: { profiles: [] } } };
+"""
+    driver = r"""
+await until(() => $("in-campaign").options.length === 2, 4000);
+out.campaignActive = $("mode-campaign").classList.contains("active");
+out.captureRowHidden = $("row-capture").hidden; out.campaignRowHidden = $("row-campaign").hidden;
+out.label = $("in-campaign").options[1].textContent;
+""".strip()
+    out = run_page(tmp_path, "reduce", routes, driver, budget=10000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["campaignActive"] is True and out["captureRowHidden"] is True and out["campaignRowHidden"] is False
+    assert out["label"] == "2026-10-17 07:36 UTC · ALMITA-OBSERVE · grid 3×3 · 5.0°×5.0° · 9/9 usable · COMPLETA"
+
+
+def test_status_shows_each_sensor_its_state_and_since_when_it_is_stable(tmp_path):
+    """2026-10-17 (operator): STATUS charts the DS18B20 sensors and says which one settled and since when."""
+    routes = r"""
+const now = Date.now(), iso = (ms) => new Date(ms).toISOString();
+const pts = (base, slope) => Array.from({ length: 60 }, (_, i) => [iso(now - (59 - i) * 60e3), base + slope * i]);
+window.__routes["GET /api/system/temperatures"] = { body: { ok: true, data: { generated_utc: iso(now), hours: 6, interval_s: 60,
+  series: { sdr: pts(30, 0), lna: pts(25, 0.1), load: [] },
+  status: { sdr: { state: "STABLE", stable_since: iso(now - 40 * 60e3), last_c: 30, last_utc: iso(now), change_last_window_c: 0.0, sensor_id: "28-aaa" },
+            lna: { state: "CHANGING", stable_since: null, last_c: 30.9, last_utc: iso(now), change_last_window_c: 1.0, sensor_id: "28-bbb" },
+            load: { state: "NO_DATA", stable_since: null, last_c: null, last_utc: null, change_last_window_c: null, sensor_id: "28-ccc", last_error: "No such file" } } } } };
+"""
+    driver = r"""
+await until(() => $("tbl-temps").rows.length === 3, 4000);
+out.rows = [...$("tbl-temps").rows].map((r) => [...r.cells].map((c) => c.textContent));
+out.badge = $("temp-badge").textContent;
+out.charts = ["temp-chart", "temp-chart-6h"].map((id) => !!$(id));
+out.tempCalls = window.__calls.filter((c) => c.key === "GET /api/system/temperatures").length;
+""".strip()
+    out = run_page(tmp_path, "status", routes, driver, budget=8000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["errors"] == []
+    sdr, lna, load = out["rows"]
+    assert sdr[0] == "SDR" and sdr[1].startswith("30.00 °C") and sdr[3].startswith("STABLE since ")
+    assert lna[2] == "+1.00 °C" and lna[3] == "CHANGING"
+    assert load[3].startswith("NO DATA") and load[4] == "28-ccc"
+    assert out["badge"] == "CHANGING"
+    assert out["charts"] == [True, True] and out["tempCalls"] >= 2      # last hour + last 6 h, each with its own request
+
+
+def test_status_lna_button_switches_off_and_says_the_acquisition_switches_it_back_on(tmp_path):
+    routes = r"""
+window.__lna = { state: "on", since_utc: "2026-10-17T09:42:16+00:00", source: "rtl_tcp startup (-T)", service_has_T: true };
+window.__routes["GET /api/sdr/lna"] = () => ({ body: { ok: true, data: window.__lna } });
+window.__routes["POST /api/sdr/lna"] = (b) => { window.__lna = { state: b.on ? "on" : "off", since_utc: "2026-10-17T10:00:00+00:00", source: "client command", service_has_T: true };
+  return { body: { ok: true, data: window.__lna } }; };
+"""
+    driver = r"""
+await until(() => $("btn-lna").textContent === "SWITCH LNA OFF", 4000);
+out.before = [$("lna-badge").textContent, $("btn-lna").disabled];
+$("btn-lna").click();
+await until(() => $("btn-lna").textContent.startsWith("SWITCH LNA ON"), 4000);
+out.posted = window.__calls.filter((c) => c.key === "POST /api/sdr/lna").map((c) => c.body);
+out.confirm = window.__confirmText;
+out.after = [$("lna-badge").textContent, $("lna-detail").textContent];
+""".strip()
+    out = run_page(tmp_path, "status", routes, driver, budget=8000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["before"] == ["ON", False]
+    assert out["posted"] == [{"on": False, "confirm": True}] and "switches it back on by itself" in out["confirm"]
+    assert out["after"][0] == "OFF" and "will not be thermally settled" in out["after"][1]

@@ -535,7 +535,10 @@
     el.title = board.color_units || "";
   }
 
+  let lastPointSpectrum = null;
+  U.onThemeChange(() => { if (lastPointSpectrum) drawPointSpectrum(...lastPointSpectrum); });   // DÍA/NOCHE redraw, no request (map A stays black like the B/C images)
   function drawPointSpectrum(arrays, window_m_s) {
+    lastPointSpectrum = [arrays, window_m_s];
     const canvas = $("point-spectrum-canvas");
     const dpr = window.devicePixelRatio || 1;
     const cssW = canvas.clientWidth || 900, cssH = 240;
@@ -544,9 +547,9 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
     const vel = arrays.velocity_lsrk_m_s, val = arrays.relative_intensity;
-    if (!vel || !vel.length) { ctx.fillStyle = "#91a2ad"; ctx.fillText("no LSRK velocity axis for this point", 10, 20); return; }
+    if (!vel || !vel.length) { ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.fillText("no LSRK velocity axis for this point", 10, 20); return; }
     const finite = val.filter((v) => Number.isFinite(v));
-    if (!finite.length) { ctx.fillStyle = "#91a2ad"; ctx.fillText("no finite values", 10, 20); return; }
+    if (!finite.length) { ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.fillText("no finite values", 10, 20); return; }
     const vlo = Math.min(...finite), vhi = Math.max(...finite);
     const xlo = Math.min(...vel), xhi = Math.max(...vel);
     const pad = 26;
@@ -554,17 +557,17 @@
     const y = (v) => cssH - pad - ((v - vlo) / Math.max(vhi - vlo, 1e-30)) * (cssH - 2 * pad);
     // shade the integration window actually used
     const [wlo, whi] = window_m_s;
-    ctx.fillStyle = "rgba(101,183,216,0.15)";
+    ctx.fillStyle = U.cssRgba("--accent", 0.15, "#65b7d8");
     ctx.fillRect(x(Math.max(wlo, xlo)), pad, x(Math.min(whi, xhi)) - x(Math.max(wlo, xlo)), cssH - 2 * pad);
-    ctx.strokeStyle = "#2b3942"; ctx.strokeRect(pad, pad, cssW - 2 * pad, cssH - 2 * pad);
-    ctx.beginPath(); ctx.strokeStyle = "#65b7d8"; ctx.lineWidth = 1;
+    ctx.strokeStyle = U.cssVar("--line", "#2b3942"); ctx.strokeRect(pad, pad, cssW - 2 * pad, cssH - 2 * pad);
+    ctx.beginPath(); ctx.strokeStyle = U.cssVar("--accent", "#65b7d8"); ctx.lineWidth = 1;
     for (let i = 0; i < vel.length; i++) {
       const px = x(vel[i]), py = Number.isFinite(val[i]) ? y(val[i]) : null;
       if (py == null) continue;
       if (i === 0 || !Number.isFinite(val[i - 1])) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.stroke();
-    ctx.fillStyle = "#91a2ad"; ctx.font = "10px ui-monospace,monospace";
+    ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.font = "10px ui-monospace,monospace";
     ctx.fillText(`${(xlo / 1000).toFixed(1)} km/s`, pad, cssH - 6);
     ctx.textAlign = "right"; ctx.fillText(`${(xhi / 1000).toFixed(1)} km/s`, cssW - pad, cssH - 6); ctx.textAlign = "left";
     ctx.fillText("shaded = integration window used for the maps", pad, pad + 10);

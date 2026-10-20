@@ -258,8 +258,158 @@
     // showed PLAN OBSOLETE immediately on PASS - reproduced live on real HI-mode PLANs, never on solar (solar's
     // selectedCenter() is always null regardless of selectedArea, so this had no effect there). runJob's own
     // onChange below never touched selectedArea - this now matches that same, correct pattern.
-    const planJob = U.jobPanel($("real-job-align_plan"), null, { onError: realErr, onChange: () => updateReal(), stopLabel: "STOP ALIGNMENT PLAN" });
-    const runJob = U.jobPanel($("real-job-align"), $("real-badge"), { onError: realErr, onChange: () => updateReal(), stopLabel: "STOP ALIGNMENT" });
+    // A refused PLAN/RUN (e.g. "min_elevation must be between ...") is also shown right under its own button: the
+    // banner alone sits at the top of the page, out of sight of the operator at the buttons (2026-10-15).
+    const inlineErr = (id) => (e) => {
+      realErr(e);
+      const el = $(id); if (!el) return;
+      el.hidden = !e; el.textContent = e ? "REFUSED: " + U.errorText(e) : "";
+    };
+    const planJob = U.jobPanel($("real-job-align_plan"), null, { onError: inlineErr("real-plan-error"), onChange: () => updateReal(), stopLabel: "STOP ALIGNMENT PLAN" });
+    const liveBox = $("real-live");                        // kept by reference: jobPanel moves it under the job log
+    const lv = (id) => liveBox.querySelector("#" + id);
+    const runJob = U.jobPanel($("real-job-align"), $("real-badge"), { onError: inlineErr("real-run-error"), onChange: (j) => { updateReal(); refreshLive(j); },
+                                                                     stopLabel: "STOP ALIGNMENT", afterLog: liveBox });
+
+    // ---------------- LIVE READING: alignment.py's alignment_live.json, one quick reading per point as it is captured
+    // (display only - the offset comes from the full analysis). Sun: band power vs the centre point, in dB. HI: the
+    // HI-window excess over the side bands, in % points vs the centre point. Meant for a person watching: is the reading changing where it should?
+    const SVGNS = "http://www.w3.org/2000/svg";
+    const RAMP_NIGHT = ["#2a5468", "#2f7396", "#3f93bb", "#62b3d9", "#9ad6f2"];   // one hue, dark -> light = low -> high
+    const RAMP_DAY = ["#0b2f42", "#134f73", "#1d6fa0", "#3a8fc4", "#7fb9dd"];     // DÍA: same hue and direction, darker so the top end shows on white
+    const ramp = () => (U.isDay() ? RAMP_DAY : RAMP_NIGHT);
+    let lastLive = null;
+    let liveFinal = null;
+    function svg(tag, attrs, parent, text) {
+      const el = document.createElementNS(SVGNS, tag);
+      for (const k of Object.keys(attrs || {})) el.setAttribute(k, attrs[k]);
+      if (text !== undefined) el.textContent = text;
+      if (parent) parent.appendChild(el);
+      return el;
+    }
+    function rampColor(t) {
+      const RAMP = ramp();
+      t = Math.max(0, Math.min(1, t)) * (RAMP.length - 1);
+      const i = Math.min(RAMP.length - 2, Math.floor(t)), f = t - i;
+      const a = RAMP[i].match(/\w\w/g).map((h) => parseInt(h, 16)), b = RAMP[i + 1].match(/\w\w/g).map((h) => parseInt(h, 16));
+      return "rgb(" + a.map((v, k) => Math.round(v + (b[k] - v) * f)).join(",") + ")";
+    }
+    const fmt = (v, d) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d);
+    const ringOf = (p) => Math.hypot(p.east_deg, p.north_deg);
+    function liveValues(live) {
+      const sun = live.reference === "sun";
+      const pts = (live.points || []).filter((p) => p.power_db != null);
+      const centre = pts.find((p) => p.index === 1) || pts[0];
+      // both relative to the centre point: the absolute HI excess also carries the receiver's bandpass shape
+      const val = (p) => sun ? p.power_db - centre.power_db
+        : (p.hi_excess_pct == null || centre.hi_excess_pct == null ? null : p.hi_excess_pct - centre.hi_excess_pct);
+      const rows = pts.filter((p) => val(p) != null && isFinite(val(p))).map((p) => ({ ...p, v: val(p) }));
+      return { sun, rows, unit: sun ? "dB vs centre" : "% HI vs centre", digits: sun ? 2 : 1 };
+    }
+    U.onThemeChange(() => { if (lastLive && !liveBox.hidden) renderLive(lastLive); });   // DÍA/NOCHE: the ramp is computed, so redraw (no request)
+    function renderLive(live) {
+      lastLive = live;
+      const box = liveBox; box.hidden = false;
+      const planned = live.planned || [], all = live.points || [];
+      const { sun, rows, unit, digits } = liveValues(live);
+      const n = live.planned_points || planned.length;
+      const last = all[all.length - 1];
+      lv("real-live-sub").textContent = `${sun ? "SUN · total band power" : "HI · line window vs side bands"} · ${all.length}/${n} points`;
+      const lastRow = last && rows.find((r) => r.index === last.index);
+      if (!last) lv("real-live-big").textContent = "waiting for the first capture…";
+      else if (!lastRow) lv("real-live-big").textContent = `point ${last.index}/${n}: ${last.status}${last.error ? " — " + last.error : ""}`;
+      else lv("real-live-big").textContent = `point ${last.index}/${n}   ${fmt(lastRow.v, digits)} ${unit}`;
+      lv("real-live-where").textContent = last ? `latest: ring ${ringOf(last).toFixed(1)}° · E ${fmt(last.east_deg, 2)}° N ${fmt(last.north_deg, 2)}° from the centre · ${U.utc(last.utc)}` : "";
+      const best = rows.reduce((a, b) => (!a || b.v > a.v ? b : a), null);
+      lv("real-live-best").textContent = best && rows.length > 1
+        ? `highest so far: point ${best.index} ${fmt(best.v, digits)} ${unit} at E ${fmt(best.east_deg, 2)}° N ${fmt(best.north_deg, 2)}° (ring ${ringOf(best).toFixed(1)}°)` +
+          (sun ? (best.index === 1 ? " — the centre is still the strongest" : " — stronger than the centre") : "")
+        : "";
+      drawTrend(rows, n, planned, unit, digits, last && last.index);
+      drawMap(rows, planned, all, last && last.index, digits, unit);
+    }
+    function drawTrend(rows, n, planned, unit, digits, lastIdx) {
+      const el = lv("real-live-trend"); el.textContent = "";
+      const W = 460, H = 200, L = 44, R = 10, T = 18, B = 26;
+      const vals = rows.map((r) => r.v).concat([0]);
+      let lo = Math.min(...vals), hi = Math.max(...vals);
+      if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+      const raw = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((st) => st >= raw);   // round tick values
+      lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+      const x = (i) => L + (n > 1 ? (i - 1) / (n - 1) : 0.5) * (W - L - R);
+      const y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+      for (let v = lo; v <= hi + step / 2; v += step) {    // recessive grid + y labels
+        svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-width": 1 }, el);
+        svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", class: "live-axis" }, el, (Math.abs(v) < step / 2 ? 0 : v).toFixed(step < 1 ? 1 : 0));
+      }
+      svg("line", { x1: L, x2: W - R, y1: y(0), y2: y(0), stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "3 3" }, el);
+      let prevRing = null;                                 // ring boundaries from the planned pattern
+      for (const p of planned) {
+        const ring = Math.round(ringOf(p) * 100) / 100;
+        if (p.index > 1 && ring !== prevRing) {
+          const xb = x(p.index - 0.5);
+          svg("line", { x1: xb, x2: xb, y1: T - 4, y2: H - B, stroke: "var(--line)", "stroke-width": 1 }, el);
+          svg("text", { x: xb + 4, y: T - 6, class: "live-axis" }, el, `ring ${ring.toFixed(1)}°`);
+        }
+        prevRing = ring;
+      }
+      svg("text", { x: L, y: H - 6, class: "live-axis" }, el, "point 1 (centre)");
+      svg("text", { x: W - R, y: H - 6, "text-anchor": "end", class: "live-axis" }, el, `point ${n}`);
+      if (rows.length > 1) svg("path", { d: rows.map((r, i) => `${i ? "L" : "M"}${x(r.index).toFixed(1)},${y(r.v).toFixed(1)}`).join(""),
+                                        fill: "none", stroke: "var(--accent)", "stroke-width": 2, "stroke-linejoin": "round", opacity: 0.55 }, el);
+      for (const r of rows) {
+        const isLast = r.index === lastIdx;
+        svg("circle", { cx: x(r.index), cy: y(r.v), r: isLast ? 6 : 4, fill: "var(--accent)", stroke: isLast ? "var(--text)" : "var(--panel)", "stroke-width": 2 }, el);
+        const hit = svg("circle", { cx: x(r.index), cy: y(r.v), r: 11, fill: "transparent" }, el);
+        svg("title", {}, hit, `point ${r.index}: ${fmt(r.v, digits)} ${unit}\nring ${ringOf(r).toFixed(1)}° · E ${fmt(r.east_deg, 2)}° N ${fmt(r.north_deg, 2)}°\npower ${r.power_db.toFixed(2)} dB` +
+                                (r.hi_excess_pct != null ? ` · HI ${fmt(r.hi_excess_pct, 1)} %` : "") + (r.clipping_fraction != null ? ` · clipping ${(r.clipping_fraction * 100).toFixed(3)} %` : ""));
+      }
+      lv("real-live-trend-cap").textContent = `reading per point (${unit}) in capture order; dashed line = 0`;
+    }
+    function drawMap(rows, planned, all, lastIdx, digits, unit) {
+      const el = lv("real-live-map"); el.textContent = "";
+      const S = 240, C = S / 2, M = 18;
+      const maxR = Math.max(0.1, ...planned.map(ringOf), ...all.map(ringOf));
+      const k = (C - M) / maxR;
+      const px = (p) => C - p.east_deg * k, py = (p) => C - p.north_deg * k;   // E left, N up (sky as seen from below)
+      svg("line", { x1: M, x2: S - M, y1: C, y2: C, stroke: "var(--line)" }, el);
+      svg("line", { x1: C, x2: C, y1: M, y2: S - M, stroke: "var(--line)" }, el);
+      svg("text", { x: C, y: 12, "text-anchor": "middle", class: "live-axis" }, el, "N");
+      svg("text", { x: 6, y: C + 4, class: "live-axis" }, el, "E");
+      svg("text", { x: S - 6, y: C + 4, "text-anchor": "end", class: "live-axis" }, el, "W");
+      const byIdx = new Map(rows.map((r) => [r.index, r]));
+      const failed = new Set(all.filter((p) => !byIdx.has(p.index)).map((p) => p.index));
+      const vs = rows.map((r) => r.v), lo = Math.min(...vs), hi = Math.max(...vs);
+      for (const p of planned.length ? planned : all) {
+        const r = byIdx.get(p.index);
+        const c = svg("circle", { cx: px(p), cy: py(p), r: 6,
+          fill: r ? rampColor(hi > lo ? (r.v - lo) / (hi - lo) : 0.5) : "none",
+          stroke: failed.has(p.index) ? "var(--error)" : r ? "var(--panel)" : "var(--muted)", "stroke-width": r ? 2 : 1, opacity: r || failed.has(p.index) ? 1 : 0.6 }, el);
+        if (p.index === lastIdx) svg("circle", { cx: px(p), cy: py(p), r: 9.5, fill: "none", stroke: "var(--text)", "stroke-width": 2 }, el);
+        const hit = svg("circle", { cx: px(p), cy: py(p), r: 11, fill: "transparent" }, el);
+        svg("title", {}, hit, r ? `point ${p.index}: ${fmt(r.v, digits)} ${unit}` : failed.has(p.index) ? `point ${p.index}: failed` : `point ${p.index}: not yet`);
+        void c;
+      }
+      if (rows.length) {                                   // colour legend: low -> high, with the real values
+        const g = svg("defs", {}, el), lg = svg("linearGradient", { id: "live-ramp" }, g);
+        const RAMP = ramp();
+        RAMP.forEach((col, i) => svg("stop", { offset: `${(i / (RAMP.length - 1)) * 100}%`, "stop-color": col }, lg));
+        svg("rect", { x: 40, y: S + 4, width: S - 80, height: 8, rx: 4, fill: "url(#live-ramp)" }, el);
+        svg("text", { x: 36, y: S + 12, "text-anchor": "end", class: "live-axis" }, el, lo.toFixed(digits));
+        svg("text", { x: S - 36, y: S + 12, class: "live-axis" }, el, hi.toFixed(digits));
+      }
+    }
+    async function refreshLive(j) {
+      const box = liveBox;
+      if (!j || j.stage !== "align" || !j.output_dir) { box.hidden = true; liveFinal = null; return; }
+      if (j.state !== "RUNNING" && liveFinal === j.job_id) return;     // a finished run: read once, then leave it
+      const r = await U.api("/api/ops/file?path=" + encodeURIComponent(j.output_dir + "/alignment_live.json"), { timeoutMs: 8000 });
+      if (r.ok && r.data && Array.isArray(r.data.points)) renderLive(r.data);
+      else if (j.state === "RUNNING") { box.hidden = false; lv("real-live-big").textContent = "waiting for the first capture…"; }
+      else box.hidden = true;                              // an older run without a live file
+      if (j.state !== "RUNNING") liveFinal = j.job_id;
+    }
     let mode = "hi";              // "hi" | "solar" - the operator's explicit choice; never switched automatically
     let selectedArea = null;      // HI only: "A" | "B" | "C" (the operator's pick); solar always uses the Sun itself
     let sky = null;               // last real /api/ops/align/sky response
@@ -269,6 +419,8 @@
     // can never drift from what almita_web_ops.py's build_command() actually enforces server-side when RUN is
     // submitted (the real, authoritative check - this page's own countdown is display-only).
     let planValiditySeconds = null;
+    let sunPlanValiditySeconds = null;   // a solar PLAN lasts longer: RUN recomputes the Sun and re-checks altitude/meridian
+    function validityFor(params) { return params && params.reference === "sun" && sunPlanValiditySeconds != null ? sunPlanValiditySeconds : planValiditySeconds; }
     // {mode, selectedArea} exactly as they were at the moment the operator clicked PLAN (set synchronously in the
     // click handler below, so there is no race window - JS is single-threaded and nothing else writes mode/
     // selectedArea except an operator click). Used only to decide identity ("is the candidate I approved still the
@@ -285,6 +437,7 @@
       const d = r.data.data;
       durationModel = d.duration_model;
       planValiditySeconds = d.plan_validity_seconds;
+      sunPlanValiditySeconds = d.sun_plan_validity_seconds ?? null;
       $("real-ring-radii").value = d.ring_radii_deg.join(",");
       $("real-ring-points").value = d.ring_points;
       $("real-capture-time").value = d.capture_time_s;
@@ -306,7 +459,18 @@
     $("real-mode-hi").addEventListener("click", () => setMode("hi"));
     $("real-mode-solar").addEventListener("click", () => setMode("solar"));
 
+    // One sky request at a time, and only the latest one counts: the HI ranking takes ~15 s on the Pi and the
+    // server computes them one by one, so every keystroke in a field queued another one and the page sat on
+    // "Loading sky view…" past its 60 s timeout (2026-10-15). A refresh asked for meanwhile runs once, after.
+    let skyInFlight = false, skyAgain = false, skyDebounce = null;
+    function refreshSkySoon() { clearTimeout(skyDebounce); skyDebounce = setTimeout(refreshSky, 1200); }
     async function refreshSky() {
+      if (skyInFlight) { skyAgain = true; return; }
+      skyInFlight = true;
+      try { await fetchSky(); } finally { skyInFlight = false; }
+      if (skyAgain) { skyAgain = false; refreshSky(); }
+    }
+    async function fetchSky() {
       const rc = ringConfig();
       const radii = rc.valid ? rc.radii : [5.0, 2.0, 0.6];
       const points = rc.valid ? rc.points : 16;
@@ -314,7 +478,9 @@
       // forward through the real wall-clock schedule of a run (not just an instant), so it needs to know how many
       // points per ring AND how long each capture takes to know when each point would actually be captured.
       const q = `mode=${mode}&ring_radii=${radii.join(",")}&ring_points=${points}&min_elevation=${$("real-min-elevation").value || 20}&beam_fwhm=${$("real-beam-fwhm").value || 20}&capture_time=${$("real-capture-time").value || 20}`;
-      const r = await U.api(`/api/ops/align/sky?${q}`, { timeoutMs: 20000 });
+      // 60 s: the HI ranking took ~21 s on 2026-10-15 with a capture + QUICKLOOK running, past the old 20 s - no
+      // areas arrived, none could be picked, and PLAN stayed disabled.
+      const r = await U.api(`/api/ops/align/sky?${q}`, { timeoutMs: 60000 });
       if (!r.ok) { $("real-sky-note").textContent = "sky view unavailable: " + U.errorText(r.error); return; }
       sky = r.data.data;
       if (selectedArea && !(sky.areas || []).some((a) => a.label === selectedArea)) selectedArea = null;
@@ -414,7 +580,9 @@
       // periodic refreshSky() below - which only recomputes A/B/C's live coordinates, not what's selected - can
       // never invalidate an approved PLAN on its own; only an explicit operator change does.
       const paramsMatch = exited && U.paramsEqual(p.params, comparisonParams());
-      const stale = exited && !paramsMatch;
+      // Only a PLAN requested from this page load can go OBSOLETE: one recovered from an earlier visit (hours old,
+      // no area picked yet) showed the PLAN OBSOLETE box on every page open (2026-10-15); it is simply not shown.
+      const stale = exited && !paramsMatch && planApprovedFor.mode !== null;
       // PLAN_VALIDITY_SECONDS countdown - DISPLAY ONLY. The server independently re-derives and enforces the
       // SAME deadline, from the SAME server-recorded p.ended_utc (when that PLAN job's real subprocess
       // exited), the moment RUN is actually submitted - see almita_web_ops.py build_command()'s "align" stage.
@@ -422,10 +590,11 @@
       // guess almita_web_ops.py's own PLAN_VALIDITY_SECONDS. Timed from ended_utc, never from when the operator
       // happened to click PLAN or load this page, and never reset by refreshSky()'s periodic redraw below,
       // which never touches planJob at all.
-      const passedFresh = exited && paramsMatch && p.verdict === "PASS" && p.ended_utc && planValiditySeconds != null;
+      const validityS = exited ? validityFor(p.params) : null;
+      const passedFresh = exited && paramsMatch && p.verdict === "PASS" && p.ended_utc && validityS != null;
       const ageS = passedFresh ? (Date.now() - Date.parse(p.ended_utc)) / 1000 : null;
-      const expired = passedFresh && ageS > planValiditySeconds;
-      const remainingS = passedFresh ? Math.max(0, planValiditySeconds - ageS) : null;
+      const expired = passedFresh && ageS > validityS;
+      const remainingS = passedFresh ? Math.max(0, validityS - ageS) : null;
       const planned = exited && p.verdict === "PASS" && paramsMatch && !expired;
       const running = r && r.state === "RUNNING";
       const rc = ringConfig();
@@ -436,10 +605,11 @@
       U.setEnabled($("real-plan"), rc.valid && areaOk && sunOk,
         !rc.valid ? "fix the ring radii / points above" : !areaOk ? "pick area A, B, C or MANUAL above" : "the Sun is below the horizon right now");
       U.setEnabled($("real-run"), !!planned && $("real-confirm").value === "MOVE" && !running,
-        running ? "an alignment is running" : expired ? `the PLAN's ${planValiditySeconds}s validity window has passed - PLAN again`
+        running ? "an alignment is running" : expired ? `the PLAN's ${validityS}s validity window has passed - PLAN again`
           : stale ? "the PLAN is obsolete (parameters or the selected area changed) - PLAN again"
           : !planned ? "run the real PLAN first (it must PASS)" : "type MOVE (uppercase) to allow movement");
       U.renderRingPatternTotal(rc, $("real-pattern-total"));
+      if (!n) $("real-duration-estimate").textContent = "";     // never leave an estimate for a ring pattern that is no longer valid
       if (n) {
         const secs = estimateDuration(n);
         $("real-duration-estimate").textContent = secs ? `estimated duration: ~${Math.round(secs / 60)} min (${Math.round(secs)} s) for ${n} positions — movement+settle+capture and both analysis passes; ` +
@@ -470,12 +640,12 @@
         if (passedFresh && expired) {
           validityBox.hidden = false;
           validityBox.style.color = "var(--warn,#e6b85c)";
-          validityBox.textContent = `PLAN EXPIRED — more than ${planValiditySeconds}s have passed since it finished with PASS ` +
+          validityBox.textContent = `PLAN EXPIRED — more than ${validityS}s have passed since it finished with PASS ` +
             `(${U.utc(p.ended_utc)}). RUN is disabled: PLAN again before RUN.`;
         } else if (passedFresh) {
           validityBox.hidden = false;
           validityBox.style.color = "";
-          const expiresUtc = U.utc(new Date(Date.parse(p.ended_utc) + planValiditySeconds * 1000).toISOString());
+          const expiresUtc = U.utc(new Date(Date.parse(p.ended_utc) + validityS * 1000).toISOString());
           validityBox.textContent = `PLAN valid for ${Math.ceil(remainingS)}s more (finished ${U.utc(p.ended_utc)}; expires ${expiresUtc}). ` +
             "If RUN starts before then, it is allowed to finish even if this window elapses during the run.";
         } else {
@@ -484,11 +654,11 @@
       }
     }
     $("real-confirm").addEventListener("input", updateReal);
-    $("real-ring-radii").addEventListener("input", () => { refreshSky(); updateReal(); });
-    $("real-ring-points").addEventListener("input", () => { refreshSky(); updateReal(); });
-    $("real-capture-time").addEventListener("input", () => { refreshSky(); updateReal(); });
-    $("real-min-elevation").addEventListener("input", () => { refreshSky(); updateReal(); });
-    $("real-beam-fwhm").addEventListener("input", () => { refreshSky(); updateReal(); });
+    $("real-ring-radii").addEventListener("input", () => { refreshSkySoon(); updateReal(); });
+    $("real-ring-points").addEventListener("input", () => { refreshSkySoon(); updateReal(); });
+    $("real-capture-time").addEventListener("input", () => { refreshSkySoon(); updateReal(); });
+    $("real-min-elevation").addEventListener("input", () => { refreshSkySoon(); updateReal(); });
+    $("real-beam-fwhm").addEventListener("input", () => { refreshSkySoon(); updateReal(); });
 
     U.poller(async () => {
       if (mode !== "solar") return true;
@@ -530,11 +700,22 @@
         mode === "hi" && selectedArea && selectedArea !== "MANUAL" && p.params && p.params.center_ra_hours != null;
       return buildParams(frozen ? { ra_hours: p.params.center_ra_hours, dec_deg: p.params.center_dec_deg } : selectedCenter());
     }
-    $("real-plan").addEventListener("click", U.guard($("real-plan"), () => {
+    // PLAN always starts over (operator 2026-10-17): a PLAN or RUN still running is stopped first (clean SIGINT, after a
+    // confirmation) and waited for; the previous PLAN/RUN shown here is cleared. Their files stay on the server.
+    $("real-plan").addEventListener("click", U.guard($("real-plan"), async () => {
       const rc = ringConfig();
       if (!rc.valid || (mode === "hi" && !selectedArea) || (mode === "solar" && !(sky && sky.sun.above_horizon))) return undefined;
-      planApprovedFor = { mode, selectedArea };   // record identity synchronously, at click time - see declaration above
-      return planJob.start("align_plan", planParams());
+      const params = planParams();
+      const busy = [planJob, runJob].filter((jp) => jp.last && jp.last.state === "RUNNING");
+      if (busy.length) {
+        const ids = busy.map((jp) => jp.last.job_id).join(", ");
+        if (!confirm(`An alignment job is still running (${ids}).\n\nStop it (clean stop, SIGINT) and PLAN again?\n\nIt does NOT brake the mount: `
+                     + "a GOTO already in progress may finish. To halt the mount at once use STOP MOUNT, Ekos or the hand controller.")) return undefined;
+        for (const jp of busy) { if (!(await jp.stopAndWait(90000))) return undefined; }
+      }
+      runJob.clear(); planJob.clear();
+      planApprovedFor = { mode, selectedArea };   // record identity at click time - see declaration above
+      return planJob.start("align_plan", params);
     }, "PLANNING…"));
     $("real-run").addEventListener("click", U.guard($("real-run"), () => {
       const j = planJob.last, f = j && j.facts, pc = f && f.pattern_config;
@@ -546,8 +727,9 @@
       // "align" stage re-derives and enforces this same deadline from its own job record before ever starting
       // alignment.py, regardless of what this check decides): catches an expired PLAN immediately, with a clear
       // message, instead of letting the click reach the server just to be refused there a moment later.
-      if (j.ended_utc && planValiditySeconds != null && (Date.now() - Date.parse(j.ended_utc)) / 1000 > planValiditySeconds) {
-        alert(`This PLAN's ${planValiditySeconds}s validity window has passed - PLAN again before RUN.`);
+      const jValidityS = validityFor(j.params);
+      if (j.ended_utc && jValidityS != null && (Date.now() - Date.parse(j.ended_utc)) / 1000 > jValidityS) {
+        alert(`This PLAN's ${jValidityS}s validity window has passed - PLAN again before RUN.`);
         return undefined;
       }
       const ok = confirm(`REAL ALIGNMENT (${mode.toUpperCase()}): the mount will slew and capture MAIN across ${pc ? pc.total_positions : "?"} positions ` +
@@ -566,9 +748,13 @@
       return runJob.start("align", { ...j.params, approved_plan_dir: j.output_dir, sync: $("real-sync").checked,
                                      max_sync_offset_deg: Number($("real-max-sync").value) }, $("real-confirm").value);
     }, "STARTING…"));
-    planJob.recover("align_plan"); runJob.recover("align");
+    // a reload starts clean: only a job still RUNNING is re-adopted (to see and STOP it); finished ones stay on the server
+    planJob.recover("align_plan", { runningOnly: true }); runJob.recover("align", { runningOnly: true });
     loadDefaults().then(() => { setMode("hi"); });
-    setInterval(() => { if (!planJob.last || planJob.last.state !== "RUNNING") refreshSky(); }, 30000);
+    // only while the tab is visible: a forgotten background ALIGN tab kept the server computing the ~20 s HI
+    // ranking every 30 s for hours (2026-10-15); coming back to the tab refreshes at once.
+    setInterval(() => { if (!document.hidden && (!planJob.last || planJob.last.state !== "RUNNING")) refreshSky(); }, 30000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshSky(); });
     setInterval(updateReal, 1000);
   }
 })();

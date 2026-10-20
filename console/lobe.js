@@ -58,7 +58,7 @@
     const s = status.sun, m = status.mount || {}, fwhm = status.params.expected_fwhm;
     const areas = [];
     if (U.finite(m.alt_deg)) areas.push({ label: "MOUNT", az_deg: m.az_deg, alt_deg: m.alt_deg, radius_deg: fwhm / 2 });
-    U.drawSkyView($("lobe-sky"), { sun: s, areas }, { colors: { MOUNT: "#65b7d8" } });
+    U.drawSkyView($("lobe-sky"), { sun: s, areas }, { colors: { MOUNT: "var(--accent)" } });
     U.setBadge($("sun-badge"), s.above_horizon ? "SUN UP" : "SUN DOWN");
     kv($("sky-kv"), [
       ["SUN", `az ${s.az_deg.toFixed(1)}° alt ${s.alt_deg.toFixed(1)}° · RA ${s.ra_hours.toFixed(4)} h Dec ${s.dec_deg.toFixed(3)}°`],
@@ -117,7 +117,7 @@
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const fg = "#e6edf1", muted = "rgba(145,162,173,0.75)", line = "#2b3942";
+    const fg = U.cssVar("--text", "#e6edf1"), muted = U.cssRgba("--muted", 0.75, "#91a2ad"), line = U.cssVar("--line", "#2b3942");
     const rows = (data.samples || []).filter((r) => U.finite(r.elapsed_s) && U.finite(r.power_lin));
     ctx.font = "11px ui-monospace,monospace"; ctx.fillStyle = muted;
     if (!rows.length) { ctx.fillText("waiting for samples…", 20, 30); return; }
@@ -136,7 +136,7 @@
     const stepMin = tMax > 7200 ? 20 : tMax > 2400 ? 10 : tMax > 600 ? 5 : 1;
     for (let m = 0; m * 60 <= tMax; m += stepMin) {
       const y = Y(m * 60);
-      ctx.strokeStyle = "rgba(43,57,66,0.6)"; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(w - R, y); ctx.stroke();
+      ctx.strokeStyle = U.cssRgba("--line", 0.6, "#2b3942"); ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(w - R, y); ctx.stroke();
       const near = rows.reduce((b, r) => (Math.abs(r.elapsed_s - m * 60) < Math.abs(b.elapsed_s - m * 60) ? r : b), rows[0]);
       const off = Math.abs(near.elapsed_s - m * 60) < 30 && U.finite(near.offset_deg) ? ` ${near.offset_deg >= 0 ? "+" : ""}${near.offset_deg.toFixed(1)}°` : "";
       ctx.fillStyle = muted; ctx.fillText(`${m} min${off}`, L - 6, y);
@@ -149,14 +149,14 @@
     if (f && U.finite(f.fwhm_deg)) {
       const model = (x) => f.background_b0 + f.background_slope_per_deg * x + f.amplitude_lin * Math.exp(-4 * Math.LN2 * (x - f.x0_deg) ** 2 / f.fwhm_deg ** 2);
       const bg = (x) => f.background_b0 + f.background_slope_per_deg * x;
-      for (const [fn, col, dash] of [[bg, "rgba(145,162,173,0.8)", [4, 4]], [model, "#e6b85c", []]]) {
+      for (const [fn, col, dash] of [[bg, U.cssRgba("--muted", 0.8, "#91a2ad"), [4, 4]], [model, U.cssVar("--warn", "#e6b85c"), []]]) {
         ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash(dash); ctx.beginPath();
         rows.filter((r) => U.finite(r.offset_deg)).forEach((r, i) => { const x = X(fn(r.offset_deg)), y = Y(r.elapsed_s); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
         ctx.stroke(); ctx.setLineDash([]);
       }
     }
     for (const r of rows) {
-      ctx.fillStyle = r.status === "VALID" ? "#65b7d8" : "#e36b6b";
+      ctx.fillStyle = r.status === "VALID" ? U.cssVar("--accent", "#65b7d8") : U.cssVar("--error", "#e36b6b");
       ctx.beginPath(); ctx.arc(X(r.power_lin), Y(r.elapsed_s), r.status === "VALID" ? 2 : 3.5, 0, 2 * Math.PI); ctx.fill();
     }
   }
@@ -182,7 +182,7 @@
     const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
-    const muted = "rgba(145,162,173,0.75)";
+    const muted = U.cssRgba("--muted", 0.75, "#91a2ad");
     ctx.font = "11px ui-monospace,monospace"; ctx.fillStyle = muted;
     if (!s) { ctx.fillText("no spectrum yet (runs before this version did not keep one)", 20, 30); $("spec-out").textContent = "No spectrum yet."; return; }
     const ys = specMode === "power" ? s.db : s.excess_db, xs = s.freq_mhz, use = s.usable;
@@ -191,20 +191,20 @@
     let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || 0.1; lo -= pad; hi += pad;
     const X = (f) => L + (w - L - R) * (f - xs[0]) / (xs[xs.length - 1] - xs[0]);
     const Y = (v) => T + (h - T - B) * (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo));
-    ctx.fillStyle = "rgba(43,57,66,0.35)";                                   // DC and band edges: outside the usable band
+    ctx.fillStyle = U.cssRgba("--line", 0.35, "#2b3942");                                   // DC and band edges: outside the usable band
     for (let i = 0; i < xs.length; i++) if (!use[i]) ctx.fillRect(X(xs[i]) - 1, T, 2.5, h - T - B);
-    ctx.strokeStyle = "#2b3942"; ctx.strokeRect(L, T, w - L - R, h - T - B);
+    ctx.strokeStyle = U.cssVar("--line", "#2b3942"); ctx.strokeRect(L, T, w - L - R, h - T - B);
     ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = muted;
     for (let f = Math.ceil(xs[0] * 4) / 4; f <= xs[xs.length - 1]; f += 0.25) { ctx.fillText(f.toFixed(2), X(f), h - B + 6); }
     ctx.textAlign = "right"; ctx.textBaseline = "middle";
     for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4; ctx.fillText(v.toFixed(2), L - 4, Y(v)); }
     const hiLine = 1420.405752;                                             // HI rest frequency
-    ctx.strokeStyle = "rgba(101,183,216,0.5)"; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(X(hiLine), T); ctx.lineTo(X(hiLine), h - B); ctx.stroke(); ctx.setLineDash([]);
-    ctx.strokeStyle = "#e6edf1"; ctx.lineWidth = 1; ctx.beginPath();
+    ctx.strokeStyle = U.cssRgba("--accent", 0.5, "#65b7d8"); ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(X(hiLine), T); ctx.lineTo(X(hiLine), h - B); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = U.cssVar("--text", "#e6edf1"); ctx.lineWidth = 1; ctx.beginPath();
     xs.forEach((f, i) => { const x = X(f), y = Y(ys[i]); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke();
     const pk = s.peak, py = Y(ys[xs.indexOf(pk.freq_mhz)] ?? hi);
-    ctx.strokeStyle = "#e6b85c"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X(pk.freq_mhz), py, 6, 0, 2 * Math.PI); ctx.stroke();
-    ctx.fillStyle = "#e6b85c"; ctx.textAlign = X(pk.freq_mhz) > w * 0.7 ? "right" : "left"; ctx.textBaseline = "bottom";
+    ctx.strokeStyle = U.cssVar("--warn", "#e6b85c"); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X(pk.freq_mhz), py, 6, 0, 2 * Math.PI); ctx.stroke();
+    ctx.fillStyle = U.cssVar("--warn", "#e6b85c"); ctx.textAlign = X(pk.freq_mhz) > w * 0.7 ? "right" : "left"; ctx.textBaseline = "bottom";
     ctx.fillText(`peak ${pk.freq_mhz.toFixed(4)} MHz  +${pk.excess_db.toFixed(2)} dB`, X(pk.freq_mhz) + (ctx.textAlign === "left" ? 9 : -9), py - 4);
     $("spec-out").textContent = `sample #${s.sample_index}${s.utc ? " · " + whenText(s.utc) : ""}${U.finite(s.offset_deg) ? ` · Sun offset ${s.offset_deg.toFixed(2)}°` : ""} · ` +
       `strongest narrow peak ${pk.freq_mhz.toFixed(4)} MHz, ${pk.offset_khz >= 0 ? "+" : ""}${pk.offset_khz.toFixed(0)} kHz from the centre, +${pk.excess_db.toFixed(2)} dB over its local median ` +
@@ -240,4 +240,5 @@
   U.poller(refreshStatus, { intervalMs: 15000 }).start();
   U.poller(refreshLive, { intervalMs: 5000 }).start();
   window.addEventListener("resize", () => refreshLive());
+  U.onThemeChange(() => { if (lastData) { drawPlot(lastData); drawSpectrum(lastData); } });   // DÍA/NOCHE: redraw, no request (the sky view redraws itself)
 })();

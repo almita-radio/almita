@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Calibrate</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Calibrate</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
 <body>
   <header id="almita-header"><h1>CALIBRATE</h1></header>
 
@@ -124,7 +124,7 @@
           <div class="obs-summary" id="wz-draft-profile-note"></div>
 
           <h3>HI ALTO vs HI BAJO CONTRAST <span class="muted">(a separate, RELATIVE sky-position result — not used to build the profile above)</span></h3>
-          <div class="banner" id="wz-contrast-banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700"></div>
+          <div class="banner" id="wz-contrast-banner" style="background:var(--inset);color:var(--accent);border-color:var(--line);font-weight:700"></div>
           <div class="obs-summary" id="wz-contrast-detail"></div>
         </div>
 
@@ -143,7 +143,7 @@
       <div id="real-job-calibrate"></div>
     </section>
 
-    <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.08em">
+    <div class="banner" style="background:var(--inset);color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.08em">
       LEVEL: OPERATIONAL_RELATIVE &nbsp;·&nbsp; ABSOLUTE RF CALIBRATION: UNAVAILABLE — no Kelvin, no dBm, no noise figure is measured here.
     </div>
 
@@ -188,7 +188,7 @@
 
     <section id="bandpass-panel" class="panel" hidden>
       <header><h2>BANDPASS</h2></header>
-      <canvas id="bandpass-canvas" width="900" height="220" style="width:100%;background:#0d1317"></canvas>
+      <canvas id="bandpass-canvas" width="900" height="220" style="width:100%;background:var(--inset)"></canvas>
       <div id="bandpass-notes" class="obs-summary"></div>
     </section>
 
@@ -212,7 +212,7 @@
       <header><h2>REPLAY</h2></header>
       <div class="obs-row"><label for="replay-session-dir">SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/calibration/CAL-..."></div>
       <div class="obs-actions"><button type="button" id="btn-replay">REPLAY SESSION</button></div>
-      <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
+      <div class="banner" style="background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)">HARDWARE: NOT USED</div>
       <pre id="replay-summary" class="obs-summary"></pre>
     </section>
 

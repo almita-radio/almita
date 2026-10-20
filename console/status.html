@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Status</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Status</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
 <body>
   <header id="almita-header"><h1>STATUS</h1></header>
   <div id="error-banner" class="banner connection" hidden></div>
@@ -10,6 +10,17 @@
       <header><h2 id="h-op">OPERATIONAL READINESS</h2><span id="op-badge" class="badge">—</span></header>
       <div id="op-reasons" class="obs-summary">Loading…</div>
       <div class="obs-actions"><button id="btn-refresh" type="button">REFRESH NOW</button><span id="updated" class="muted">—</span></div>
+    </section>
+    <section class="panel" aria-labelledby="h-lna">
+      <header><h2 id="h-lna">MAIN LNA POWER <span class="muted">(Bias-T · every acquisition switches it on by itself before capturing)</span></h2><span id="lna-badge" class="badge">—</span></header>
+      <div id="lna-detail" class="obs-summary">Loading…</div>
+      <div class="obs-actions"><button id="btn-lna" type="button" disabled>…</button></div>
+    </section>
+    <section class="panel" aria-labelledby="h-temp">
+      <header><h2 id="h-temp">TEMPERATURES <span class="muted">(last hour, refreshed every 20 s · below: last 6 h · one sample a minute · STABLE = moved ≤ 0.2 °C in 10 min)</span></h2><span id="temp-badge" class="badge">—</span></header>
+      <div class="temp-chart-wrap"><canvas id="temp-chart" height="260" aria-label="temperature of each sensor over the last hour"></canvas><div id="temp-tip" class="temp-tip" hidden></div></div>
+      <div class="temp-chart-wrap"><canvas id="temp-chart-6h" class="temp-chart" height="260" aria-label="temperature of each sensor over the last 6 hours"></canvas><div id="temp-tip-6h" class="temp-tip" hidden></div></div>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>SENSOR</th><th>LAST</th><th>CHANGE 10 MIN</th><th>STATE</th><th>1-WIRE ID</th></tr></thead><tbody id="tbl-temps"></tbody></table></div>
     </section>
     <section class="panel" aria-labelledby="h-svc">
       <header><h2 id="h-svc">SERVICES <span class="muted">(are the processes up?)</span></h2></header>

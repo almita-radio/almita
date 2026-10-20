@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Align</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Align</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
 <body>
   <header id="almita-header"><h1>ALIGN</h1></header>
 
@@ -28,10 +28,12 @@
       <div class="obs-row"><label for="real-capture-time">CAPTURE TIME PER POSITION (s - suggested, editable, same for every position)</label><input type="number" id="real-capture-time" min="0.5" max="120" step="any"></div>
       <div class="obs-row"><label for="real-beam-fwhm">BEAM FWHM (deg - suggested, editable)</label><input type="number" id="real-beam-fwhm" min="1" max="60" step="any"></div>
       <div class="obs-summary" id="real-beam-note"></div>
-      <div class="obs-row"><label for="real-min-elevation">MIN ELEVATION (deg - suggested, editable)</label><input type="number" id="real-min-elevation" min="5" max="89" step="any"></div>
+      <div class="obs-row"><label for="real-min-elevation">MIN ELEVATION (deg - suggested, editable)</label><input type="number" id="real-min-elevation" min="1" max="89" step="any"></div>
       <div class="obs-summary" id="real-pattern-total"></div>
       <div class="obs-summary" id="real-duration-estimate"></div>
       <div class="obs-actions"><button type="button" id="real-preflight">REAL PREFLIGHT</button><button type="button" id="real-plan">PLAN (real, moves nothing)</button></div>
+      <div class="reason" data-for="real-plan" role="status"></div>
+      <div id="real-plan-error" class="obs-summary" hidden style="color:var(--error)"></div>
       <div id="real-preflight-out" class="obs-summary" hidden></div>
       <div id="real-plan-stale" class="obs-summary" hidden style="color:var(--warn,#e6b85c)"></div>
       <div id="real-plan-validity" class="obs-summary" hidden></div>
@@ -40,13 +42,25 @@
         <div class="obs-summary" id="real-preview-temporal" hidden></div>
         <div class="twrap"><table id="real-preview-table" class="status-table"><thead><tr><th>idx</th><th>ring</th><th>RA (h)</th><th>Dec (deg)</th><th>sep. from center (deg)</th><th>est. capture time (UTC)</th><th>alt at capture (min)</th></tr></thead><tbody></tbody></table></div>
       </div>
-      <div class="obs-row"><label><input type="checkbox" id="real-sync" checked> SYNC THE MOUNT AT THE END — only if confidence ≥ <b id="real-sync-threshold">0.65</b> and the offset ≤ MAX SYNC OFFSET (otherwise the offset is only shown)</label></div>
+      <div class="obs-row"><label><input type="checkbox" id="real-sync"> SYNC THE MOUNT AT THE END — only if confidence ≥ <b id="real-sync-threshold">0.65</b> and the offset ≤ MAX SYNC OFFSET (otherwise the offset is only shown)</label></div>
       <div class="obs-row"><label for="real-max-sync">MAX SYNC OFFSET (deg — a larger estimate is never synced)</label><input type="number" id="real-max-sync" min="0.1" max="10" step="0.1" value="5"></div>
       <div class="obs-row"><label for="real-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="real-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
       <div class="obs-actions"><button type="button" id="real-run">RUN REAL ALIGNMENT</button></div>
+      <div id="real-run-error" class="obs-summary" hidden style="color:var(--error)"></div>
       <div class="reason" data-for="real-run" role="status"></div>
       <div id="real-offset" class="align-offset" role="status" hidden></div>
       <div id="real-job-align_plan"></div><div id="real-job-align"></div>
+      <div id="real-live" class="align-live" hidden>
+        <div class="align-live-head"><b>LIVE READING</b> <span class="muted" id="real-live-sub"></span></div>
+        <div class="align-live-big" id="real-live-big" aria-live="polite"></div>
+        <div class="obs-summary" id="real-live-where"></div>
+        <div class="obs-summary" id="real-live-best"></div>
+        <div class="align-live-charts">
+          <figure><svg id="real-live-trend" viewBox="0 0 460 200" role="img" aria-label="reading per point"></svg><figcaption id="real-live-trend-cap"></figcaption></figure>
+          <figure><svg id="real-live-map" viewBox="0 0 240 262" role="img" aria-label="reading on the pattern"></svg><figcaption>pattern as seen on the sky (N up, E left) · hollow = still to come · white ring = latest</figcaption></figure>
+        </div>
+        <div class="muted align-live-note">Display only: a quick reading of each capture as it arrives (128 FFT blocks spread over the capture). The offset and SYNC decision come from the full analysis at the end, never from this.</div>
+      </div>
     </section>
 
     <section class="panel compact">
@@ -86,7 +100,7 @@
 
     <section id="result-panel" class="panel" hidden>
       <header><h2>RESULT</h2><span id="result-badge" class="badge">—</span></header>
-      <div id="simulation-flag" class="banner" style="background:#2a2410;color:#e6b85c;border-color:#5c4d1e" hidden>SIMULATION - not hardware data</div>
+      <div id="simulation-flag" class="banner" style="background:var(--warn-bg);color:var(--warn);border-color:var(--sim-bg)" hidden>SIMULATION - not hardware data</div>
       <pre id="result-summary" class="obs-summary"></pre>
       <div class="sync-section">
         <h3>SYNC</h3>
@@ -102,7 +116,7 @@
       <header><h2>HI REPLAY</h2></header>
       <div class="obs-row"><label for="replay-session-dir">SESSION DIR</label><input type="text" id="replay-session-dir" placeholder="data/alignment/HI-..."></div>
       <div class="obs-actions"><button type="button" id="btn-replay">REPLAY SESSION</button></div>
-      <div class="banner" style="background:#122a1e;color:#55c985;border-color:#1e5c3d">HARDWARE: NOT USED</div>
+      <div class="banner" style="background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)">HARDWARE: NOT USED</div>
       <pre id="replay-summary" class="obs-summary"></pre>
     </section>
 

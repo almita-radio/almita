@@ -26,13 +26,14 @@ def sandboxed(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _make_plan(tmp_path, plan_id="plan-fixture-001", *, ended_utc=None, result_status="PASS", write_job=True):
+def _make_plan(tmp_path, plan_id="plan-fixture-001", *, ended_utc=None, result_status="PASS", write_job=True,
+               reference="hi"):
     """A synthetic, already-finished align_plan job: its real-shaped alignment_result.json artifact plus (by
     default) the job.json record build_command() looks up for its server-recorded completion time."""
     plan_dir_rel = f"data/alignment/{plan_id}"
     plan_dir = tmp_path / plan_dir_rel
     plan_dir.mkdir(parents=True)
-    (plan_dir / "alignment_result.json").write_text(json.dumps({"result_status": result_status, "reference": "hi"}))
+    (plan_dir / "alignment_result.json").write_text(json.dumps({"result_status": result_status, "reference": reference}))
     if write_job:
         job_dir = ops.OPS_DIR / plan_id
         job_dir.mkdir(parents=True)
@@ -88,3 +89,15 @@ def test_deadline_is_timed_from_the_plan_jobs_own_ended_utc_not_the_request(sand
     plan_rel2 = _make_plan(sandboxed, "plan-boundary-02", ended_utc=_utc(-181))
     with pytest.raises(ValueError, match=r"180s validity window"):
         ops.build_command("align", {"reference": "hi", "approved_plan_dir": plan_rel2}, "run-7")
+
+
+def test_solar_plan_lasts_600s_hi_stays_180s(sandboxed):
+    # operator 2026-10-15: 180 s kept expiring on the roof; RUN recomputes the Sun and re-checks altitude/meridian.
+    plan_rel = _make_plan(sandboxed, "plan-sun-01", ended_utc=_utc(-590), reference="sun")
+    argv, _ = ops.build_command("align", {"reference": "sun", "approved_plan_dir": plan_rel}, "run-sun-1")
+    assert "--approved-plan" in argv
+    plan_rel = _make_plan(sandboxed, "plan-sun-02", ended_utc=_utc(-610), reference="sun")
+    with pytest.raises(ValueError, match=r"600s validity window"):
+        ops.build_command("align", {"reference": "sun", "approved_plan_dir": plan_rel}, "run-sun-2")
+    assert ops.align_defaults()["sun_plan_validity_seconds"] == 600
+    assert ops.align_defaults()["plan_validity_seconds"] == 180

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Pipeline</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Pipeline</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
 <body>
   <header id="almita-header"><h1>PIPELINE</h1></header>
   <div id="error-banner" class="banner connection" hidden></div>
@@ -45,7 +45,7 @@
         <div class="obs-summary" id="al-preview-temporal" hidden></div>
         <div class="twrap"><table id="al-preview-table" class="status-table"><thead><tr><th>idx</th><th>ring</th><th>RA (h)</th><th>Dec (deg)</th><th>sep. from center (deg)</th><th>est. capture time (UTC)</th><th>alt at capture (min)</th></tr></thead><tbody></tbody></table></div>
       </div>
-      <div class="obs-row"><label><input type="checkbox" id="al-sync" checked> SYNC THE MOUNT AT THE END — only if confidence ≥ the threshold and the offset ≤ MAX SYNC OFFSET (otherwise the offset is only shown)</label></div>
+      <div class="obs-row"><label><input type="checkbox" id="al-sync"> SYNC THE MOUNT AT THE END — only if confidence ≥ the threshold and the offset ≤ MAX SYNC OFFSET (otherwise the offset is only shown)</label></div>
       <div class="obs-row"><label for="al-max-sync">MAX SYNC OFFSET (deg — a larger estimate is never synced)</label><input type="number" id="al-max-sync" min="0.1" max="10" step="0.1" value="5"></div>
       <div class="obs-row"><label for="al-confirm">TYPE MOVE TO ALLOW THE MOUNT TO SLEW</label><input type="text" id="al-confirm" autocomplete="off" placeholder="MOVE" maxlength="8"></div>
       <div class="obs-actions"><button id="btn-align-run" type="button">RUN REAL ALIGNMENT</button><span id="align-reason" class="muted"></span></div>

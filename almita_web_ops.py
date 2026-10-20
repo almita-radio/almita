@@ -25,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -42,7 +43,7 @@ SERVE_SUFFIXES = {".png": "image/png", ".json": "application/json", ".csv": "tex
                   ".svg": "image/svg+xml", ".pdf": "application/pdf"}
 MAX_SERVE_BYTES = 25 * 1024 * 1024
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
-DEVICE = "LX200 OnStep"
+import mount_device       # which INDI mount the web drives (LX200 OnStep by default, or the Telescope Simulator)
 # How long a real ALIGN PLAN (align_plan) stays approved for RUN, counted from when that PLAN's own job
 # finished with a real PASS (job.json's server-recorded ended_utc - never the browser's clock or anything it
 # reports). The web UI shows a countdown from the same number (served via align_defaults()) and disables RUN
@@ -52,6 +53,13 @@ DEVICE = "LX200 OnStep"
 # this (they only redraw candidate coordinates; see console/align.js's planApprovedFor/comparisonParams()), and
 # a RUN that started within the window is left to finish even if the window elapses during the real run.
 PLAN_VALIDITY_SECONDS = 180
+# Solar PLAN: RUN recomputes the Sun from the real clock and re-checks its altitude and OnStep's meridian limit
+# before moving, so the approval can last longer (operator 2026-10-15: 180 s kept expiring on the roof).
+SUN_PLAN_VALIDITY_SECONDS = 600
+
+
+def plan_validity_seconds(reference: Optional[str]) -> int:
+    return SUN_PLAN_VALIDITY_SECONDS if reference == "sun" else PLAN_VALIDITY_SECONDS
 
 
 class OpsBlocked(Exception):
@@ -100,9 +108,14 @@ def _within(path: Path, root: Path) -> bool:
 
 
 # ------------------------------------------------------------------ real read-only mount read (getProperties only)
-def read_mount(host: str = "localhost", port: int = 7624, timeout: float = 3.0) -> Dict[str, Any]:
-    """Real, read-only: sends ONLY <getProperties> to the INDI server and parses the mount's answers. Never writes a property."""
-    out: Dict[str, Any] = {"read_utc": _utc()}
+def read_mount(host: str = "localhost", port: int = 7624, timeout: float = 3.0, device: Optional[str] = None) -> Dict[str, Any]:
+    """Real, read-only: sends ONLY <getProperties> to the INDI server and parses the mount's answers. Never writes a property.
+    `device` defaults to the mount selected in the web (mount_device.current())."""
+    device = device or mount_device.current()
+    simulated = mount_device.is_simulator(device)
+    out: Dict[str, Any] = {"read_utc": _utc(), "device": device, "simulator": simulated}
+    # the simulator never publishes OnStep's own "OnStep Status": do not wait the whole timeout for it
+    wanted = {"EQUATORIAL_EOD_COORD", "TELESCOPE_TRACK_STATE", "TELESCOPE_PARK"} | (set() if simulated else {"OnStep Status"})
     try:
         s = socket.create_connection((host, port), 2.0)
     except OSError as exc:
@@ -111,9 +124,9 @@ def read_mount(host: str = "localhost", port: int = 7624, timeout: float = 3.0) 
     try:
         s.settimeout(0.4)
         for name in ("CONNECTION", "EQUATORIAL_EOD_COORD", "TELESCOPE_TRACK_STATE", "TELESCOPE_TRACK_MODE", "TELESCOPE_PARK", "TELESCOPE_PIER_SIDE", "OnStep Status", "TIME_UTC"):
-            s.sendall(f'<getProperties version="1.7" device="{DEVICE}" name="{name}"/>'.encode())
+            s.sendall(f'<getProperties version="1.7" device="{device}" name="{name}"/>'.encode())
         buf, end = "", time.monotonic() + timeout
-        while time.monotonic() < end and not {"EQUATORIAL_EOD_COORD", "OnStep Status", "TELESCOPE_TRACK_STATE", "TELESCOPE_PARK"} <= set(props):
+        while time.monotonic() < end and not wanted <= set(props):
             try:
                 d = s.recv(65536)
             except socket.timeout:
@@ -126,7 +139,7 @@ def read_mount(host: str = "localhost", port: int = 7624, timeout: float = 3.0) 
                     r = ET.fromstring(m.group(0))
                 except ET.ParseError:
                     continue
-                if r.attrib.get("device") == DEVICE:
+                if r.attrib.get("device") == device:
                     props[r.attrib.get("name")] = {"state": r.attrib.get("state"), "el": {c.attrib.get("name"): (c.text or "").strip() for c in r}}
             buf = buf[-2000:] if len(buf) > 2000 else buf
     finally:
@@ -198,6 +211,11 @@ def mount_idle_problems(m: Dict[str, Any]) -> List[str]:
     p = []
     if m.get("connected") is False: p.append("mount not connected")
     if m.get("eod_state") not in ("Idle", "Ok"): p.append(f"mount coordinates state {m.get('eod_state')}")
+    if m.get("simulator"):
+        # INDI's Telescope Simulator has no "OnStep Status" (activity text, latched error): the rest/movement signal
+        # left is EQUATORIAL_EOD_COORD's state above (Busy while it slews) and the park switch.
+        if m.get("parked"): p.append("mount is parked")
+        return p
     state = m.get("mount_state")
     if state not in _MOUNT_REST_STATES:
         p.append(f"mount state {state!r} is not a known rest state (expected Idle or Tracking) - real movement, "
@@ -391,12 +409,17 @@ def preflight() -> Dict[str, Any]:
         checks.append(_check(f"service {name}", "PASS" if svc["state"] == "UP" else "WARNING", f"{svc['state']}: {svc['detail']}", "services"))
     deps = h["dependencies"]
     checks.append(_check("INDI server", "PASS" if deps["indi"]["state"] == "UP" else "BLOCK", deps["indi"]["detail"], "hardware"))
-    mount = read_mount() if deps["indi"]["state"] == "UP" else {"error": "INDI server not listening"}
+    device = mount_device.current()
+    mount = read_mount(device=device) if deps["indi"]["state"] == "UP" else {"error": "INDI server not listening", "device": device,
+                                                                             "simulator": mount_device.is_simulator(device)}
+    if mount_device.is_simulator(device):
+        checks.append(_check("mount device", "WARNING", f"{device} selected - nothing real moves; captures are NOT sky data "
+                             "(switch back to LX200 OnStep in the page header)", "hardware"))
     if mount.get("error"):
-        checks.append(_check("mount (LX200 OnStep)", "BLOCK", mount["error"], "hardware"))
+        checks.append(_check(f"mount ({device})", "BLOCK", mount["error"], "hardware"))
     else:
         probs = mount_idle_problems(mount)
-        checks.append(_check("mount (LX200 OnStep)", "BLOCK" if probs else "PASS",
+        checks.append(_check(f"mount ({device})", "BLOCK" if probs else "PASS",
                              (f"RA {mount['ra_h']:.5f} h  Dec {mount['dec_deg']:.4f} deg  tracking={mount['tracking']}  park={'PARKED' if mount['parked'] else 'unparked'}  "
                               f"state={mount['mount_state']}  error={mount['onstep_error']}") + (f"  PROBLEMS: {probs}" if probs else ""), "hardware"))
     sdr = deps["main_sdr"]
@@ -418,8 +441,18 @@ def preflight() -> Dict[str, Any]:
         checks.append(_check("system clock", "PASS" if synced else "WARNING", f"NTPSynchronized={td.get('NTPSynchronized', 'unknown')} (timezone {td.get('Timezone', '?')})", "clock"))
     except Exception as exc:  # noqa: BLE001
         checks.append(_check("system clock", "WARNING", f"timedatectl unavailable: {exc}", "clock"))
-    checks.append(onstep_clock_check())
+    checks.append(onstep_clock_check() if not mount_device.is_simulator(device) else
+                  _check("OnStep clock (measured)", "PASS", f"not applicable: {device} selected (it follows the host clock)", "clock"))
     checks.append(main_rtl_tcp_tuning_check())
+    try:
+        lna = lna_power_state()
+        if lna["state"] == "off":
+            checks.append(_check("MAIN LNA (Bias-T)", "WARNING", f"OFF since {lna['since_utc']} - the acquisition switches it on, "
+                                 "but the LNA will not be thermally settled: switch it on from STATUS and wait for STABLE", "hardware"))
+        else:
+            checks.append(_check("MAIN LNA (Bias-T)", "PASS", f"{lna['state']} since {lna['since_utc']} ({lna['source']})", "hardware"))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_check("MAIN LNA (Bias-T)", "WARNING", f"state unreadable: {exc}", "hardware"))
     checks.append(main_sdr_device_handle_check())
     try:
         cfg = json.loads((ROOT / "observer_config.json").read_text())
@@ -665,11 +698,14 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         ref = str(p.get("reference", "auto"))
         if ref not in ("auto", "sun", "hi"):
             raise ValueError("reference must be auto, sun or hi")
+        if stage == "align" and p.get("sync") is True and mount_device.is_simulator():
+            raise ValueError(f"SYNC is not allowed with the {mount_device.SIMULATOR}: an offset measured on a simulated "
+                             "mount says nothing about the real one - RUN without SYNC, or select LX200 OnStep")
         out = f"data/alignment/WEB{'PLAN' if stage == 'align_plan' else ''}-{ref.upper()}-{stamp}"
-        argv = [PY, "alignment.py", "--reference", ref, "--no-sync", "--output-dir", out]
+        argv = [PY, "alignment.py", "--reference", ref, "--no-sync", "--output-dir", out, "--device", mount_device.current()]
         if stage == "align_plan":
             argv.append("--dry-run")
-        for key, flag, lo, hi in (("gain", "--gain", 0, 50), ("capture_time", "--capture-time", 0.5, 120), ("min_elevation", "--min-elevation", 5, 89),
+        for key, flag, lo, hi in (("gain", "--gain", 0, 50), ("capture_time", "--capture-time", 0.5, 120), ("min_elevation", "--min-elevation", 1, 89),
                                   ("settle", "--settle", 0, 60), ("beam_fwhm", "--beam-fwhm", 1, 60)):
             v = _float(p, key, lo, hi)
             if v is not None:
@@ -719,8 +755,9 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             if not ended:
                 raise ValueError("no server record of when that PLAN finished (its job record is missing) - PLAN again before RUN")
             age_s = (datetime.now(timezone.utc) - datetime.fromisoformat(ended)).total_seconds()
-            if age_s > PLAN_VALIDITY_SECONDS:
-                raise ValueError(f"the approved PLAN passed {age_s:.0f}s ago, past its {PLAN_VALIDITY_SECONDS}s validity window "
+            validity_s = plan_validity_seconds(plan_res.get("reference"))
+            if age_s > validity_s:
+                raise ValueError(f"the approved PLAN passed {age_s:.0f}s ago, past its {validity_s}s validity window "
                                   "(timed on the server from when that PLAN's own job finished, not the browser's clock) - PLAN again before RUN")
             argv += ["--approved-plan", str(approved.relative_to(ROOT))]
             meta["approved_plan_dir"] = plan_rel
@@ -769,7 +806,7 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
                    "--gain", str(gain), "--clipping-threshold", str(ct), "--stability-threshold", str(st),
                    "--rfi-threshold", str(rt), "--min-elevation", str(me), "--beam-fwhm", str(bf),
                    "--significance-threshold", str(sig)]
-            return argv, {"action": action}
+            return argv, {"action": action, "mount_device": mount_device.current()}
         session_dir = _path_in(p, "session_dir", SERVE_ROOTS["calibration"])
         meta = {"action": action, "output_dir": str(session_dir.relative_to(ROOT))}
         rel = str(session_dir.relative_to(ROOT))
@@ -816,8 +853,9 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             raise ValueError("label must be HI_ALTO or HI_BAJO")
         session_dir = _path_in(p, "session_dir", SERVE_ROOTS["calibration"])
         rel = str(session_dir.relative_to(ROOT))
-        return [PY, "calibrate_reference_wizard.py", "capture-hi", "--session-dir", rel, "--label", label], \
-              {"action": "capture_hi", "label": label, "output_dir": rel}
+        return [PY, "calibrate_reference_wizard.py", "capture-hi", "--session-dir", rel, "--label", label,
+                "--device", mount_device.current()], \
+              {"action": "capture_hi", "label": label, "output_dir": rel, "mount_device": mount_device.current()}
     if stage == "observe_gain_pilot_plan":
         raw = p.get("resolved_plan_path")
         if not isinstance(raw, str) or not raw:
@@ -840,7 +878,7 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         beam_fwhm = p.get("beam_fwhm")
         if beam_fwhm not in (None, ""):
             argv += ["--beam-fwhm", str(_float(p, "beam_fwhm", 1, 90))]
-        return argv, {"resolved_plan_path": str(rp.relative_to(ROOT))}
+        return argv, {"resolved_plan_path": str(rp.relative_to(ROOT)), "mount_device": mount_device.current()}
     if stage == "observe_gain_pilot_capture":
         action = str(p.get("action", ""))
         cmd_map = {"capture_high": "capture-high", "capture_low": "capture-low", "verify_gain": "verify-gain", "final_check": "final-check"}
@@ -848,7 +886,8 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             raise ValueError(f"action must be one of {sorted(cmd_map)}")
         session_dir = _path_in(p, "session_dir", SERVE_ROOTS["mosaic"])
         rel = str(session_dir.relative_to(ROOT))
-        return [PY, "observation_gain_pilot.py", cmd_map[action], "--session-dir", rel], {"action": action, "output_dir": rel}
+        return [PY, "observation_gain_pilot.py", cmd_map[action], "--session-dir", rel, "--device", mount_device.current()], \
+            {"action": action, "output_dir": rel, "mount_device": mount_device.current()}
     if stage == "observe_gain_pilot_admin":
         action = str(p.get("action", ""))
         session_dir = _path_in(p, "session_dir", SERVE_ROOTS["mosaic"])
@@ -1012,14 +1051,14 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         if not al["ok"]:
             raise ValueError(f"LOBE needs a valid real solar ALIGN first: {al['detail']}")
         out = f"data/lobe/WEB-LOBE-{mode.upper()}-{stamp}"
-        argv = [PY, "lobe_transit.py", "--mode", mode, "--output-dir", out]
+        argv = [PY, "lobe_transit.py", "--mode", mode, "--output-dir", out, "--device", mount_device.current()]
         for key, flag, lo, hi in (("expected_fwhm", "--expected-fwhm", 1, 90), ("half_range_fwhm", "--half-range-fwhm", 0.5, 4),
                                   ("every", "--every", 1, 60), ("capture_seconds", "--capture-seconds", 0.2, 10),
                                   ("scan_step", "--scan-step", 0.2, 10), ("gain", "--gain", 0, 50), ("min_elevation", "--min-elevation", 5, 80)):
             v = _float(p, key, lo, hi)
             if v is not None:
                 argv += [flag, str(v)]
-        return argv, {"output_dir": out, "mode": mode, "alignment": al}
+        return argv, {"output_dir": out, "mode": mode, "alignment": al, "mount_device": mount_device.current()}
     raise ValueError(f"unknown stage {stage!r}")
 
 
@@ -1069,6 +1108,23 @@ def list_jobs(limit: int = 30) -> List[Dict[str, Any]]:
     for n, j in loaded[:limit]:
         rows.append({"job_id": n, "stage": j["stage"], "state": _state(j), "started_utc": j.get("started_utc"), "ended_utc": j.get("ended_utc"), "exit_code": j.get("exit_code"),
                      "verdict": classify(j)["verdict"]})
+    return rows
+
+
+def running_jobs() -> List[Dict[str, Any]]:
+    """Every RUNNING job, from job.json and the runner's pid only - no classify(), no log parsing, no limit.
+    STOP MOUNT uses it before the abort: list_jobs() took ~5 s on the Pi (classify parses each job's log), and the
+    mount kept slewing all that time (2026-10-18, real LX200: ~16 deg more at the max rate before the abort went out)."""
+    if not OPS_DIR.is_dir():
+        return []
+    rows = []
+    for d in OPS_DIR.iterdir():
+        try:
+            j = _load(d.name)
+        except (OSError, ValueError):
+            continue
+        if _state(j) == "RUNNING":
+            rows.append({"job_id": d.name, "stage": j.get("stage"), "state": "RUNNING"})
     return rows
 
 
@@ -1155,6 +1211,8 @@ def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> 
     spec = STAGES[stage]
     job_id = f"{stage.upper()}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     argv, meta = build_command(stage, params, job_id)
+    if spec["physical"] or "mount" in spec["resources"]:
+        meta.setdefault("mount_device", mount_device.current())     # every job that can touch the mount says which one
     if stage in WIZARD_STAGES and meta.get("output_dir") and meta.get("action") != "status":
         running = _running_wizard_job_on(meta["output_dir"])
         if running:
@@ -1222,9 +1280,59 @@ def stop(job_id: str) -> Dict[str, Any]:
     return {"job_id": job_id, "requested": "SIGINT sent to the runner; the command decides when it stops (a real slew may finish its current step)", "utc": _utc()}
 
 
+# ------------------------------------------------------------------ MAIN LNA POWER (Bias-T) from STATUS (operator 2026-10-17)
+def lna_power_state() -> Dict[str, Any]:
+    import sdr_tuning
+    st = sdr_tuning.main_bias_tee_state()
+    return {**st, "service_has_T": sdr_tuning.main_service_has_bias_tee_flag(),
+            "auto_on": "every MAIN acquisition switches it on before capturing (when rtl_tcp runs with -T)"}
+
+
+def set_lna_power(on: bool) -> Dict[str, Any]:
+    """Switch MAIN's LNA (Bias-T) by hand. Refused while anything holds MAIN: rtl_tcp serves one client, and switching
+    the LNA under a running acquisition would change its data."""
+    import observation_orchestrator
+    import sdr_tuning
+    from almita_web_common import get_sdr_resource_status
+    held = busy_reason(("sdr",))
+    if held:
+        raise OpsBlocked(f"cannot switch the LNA now: {held}")
+    held = observation_orchestrator.active_campaign_reason(observation_orchestrator.get_status().get("orchestrator") or {})
+    if held:
+        raise OpsBlocked(f"cannot switch the LNA now: an observation is active - {held}")
+    res = get_sdr_resource_status()
+    if res.status.value != "FREE":
+        raise OpsBlocked(f"cannot switch the LNA now: MAIN SDR is {res.status.value}: {res.detail}")
+    try:
+        sdr_tuning.set_main_bias_tee(bool(on))
+    except sdr_tuning.TuningIncoherent as exc:
+        raise OpsBlocked(str(exc)) from exc
+    except OSError as exc:
+        raise OpsBlocked(f"rtl_tcp not reachable: {exc}") from exc
+    return lna_power_state()
+
+
+# ------------------------------------------------------------------ MOUNT DEVICE (LX200 OnStep / Telescope Simulator)
+def set_mount_device(name: str) -> Dict[str, Any]:
+    """Switch the mount every page drives. Refused while anything holds or could move the mount (a web job on the mount,
+    or a live observation): switching then would leave that process on one mount while STOP MOUNT aims at the other."""
+    if name not in mount_device.CHOICES:
+        raise ValueError(f"device must be one of {list(mount_device.CHOICES)}")
+    if name == mount_device.current():
+        return mount_device.describe()
+    held = busy_reason(("mount",))
+    if held:
+        raise OpsBlocked(f"cannot switch the mount now: {held} - wait for it to end or STOP it first")
+    import observation_orchestrator
+    held = observation_orchestrator.active_campaign_reason(observation_orchestrator.get_status().get("orchestrator") or {})
+    if held:
+        raise OpsBlocked(f"cannot switch the mount now: an observation is active - {held}")
+    return mount_device.set_device(name)
+
+
 # ------------------------------------------------------------------ STOP MOUNT (independent of any job's own closing)
 def stop_mount(*, runtime_dir: Optional[str] = None, host: str = "localhost", port: int = 7624,
-               device: str = "LX200 OnStep") -> Dict[str, Any]:
+               device: Optional[str] = None) -> Dict[str, Any]:
     """The web's PARAR MONTURA: (1) send the clean stop (SIGINT) to everything that could move the mount again -
     the running observation and every running physical job - WITHOUT waiting for them, then (2) stop the mount
     itself over this server's own INDI connection and read it back (mount_stop.py).
@@ -1237,6 +1345,7 @@ def stop_mount(*, runtime_dir: Optional[str] = None, host: str = "localhost", po
     import mount_stop
     from indi_telescope_control import INDITelescopeControl
 
+    device = device or mount_device.current()
     signalled: List[str] = []
     notes: List[str] = []
     try:                                                   # 1a. the observation (exact PID the orchestrator launched)
@@ -1248,7 +1357,7 @@ def stop_mount(*, runtime_dir: Optional[str] = None, host: str = "localhost", po
     except Exception as exc:  # noqa: BLE001 - never let this keep the mount from being stopped
         notes.append(f"observation not signalled: {type(exc).__name__}: {exc}")
     try:                                                   # 1b. physical web jobs (ALIGN, wizard move, gain pilot)
-        for job in list_jobs(limit=40):
+        for job in running_jobs():
             if job.get("state") == "RUNNING" and STAGES.get(job.get("stage"), {}).get("physical"):
                 try:
                     stop(job["job_id"])
@@ -1273,7 +1382,7 @@ def stop_mount(*, runtime_dir: Optional[str] = None, host: str = "localhost", po
             except Exception:  # noqa: BLE001
                 pass
     report = _asyncio.run(_run())
-    return {"utc": _utc(), "signalled": signalled, "notes": notes, "mount_stop": report,
+    return {"utc": _utc(), "device": device, "signalled": signalled, "notes": notes, "mount_stop": report,
             "confirmed": bool(report.get("confirmed")), "summary": mount_stop.summary_line(report),
             "limits": "software stop over INDI - not a physical brake. If the mount is still moving use Ekos, the hand "
                       "controller or its power."}
@@ -1740,14 +1849,65 @@ def reduce_list_captures(limit: int = 80) -> List[Dict[str, Any]]:
     point captures under data/mosaic and CALIBRATE session captures under data/calibration. Never a synthetic
     listing: every row is a file that genuinely exists right now."""
     rows: List[Dict[str, Any]] = []
-    for root, glob_pat in ((SERVE_ROOTS["mosaic"], "*/data/iq/*.h5"), (SERVE_ROOTS["calibration"], "*/captures/**/*.h5")):
+    # capture.py writes <campaign>/data/iq/<session>/<name>.h5: "*/data/iq/*.h5" matched none of them (2406 real OBSERVE
+    # captures invisible, 2026-10-17); ** covers that and any flat layout.
+    for root, glob_pat in ((SERVE_ROOTS["mosaic"], "*/data/iq/**/*.h5"), (SERVE_ROOTS["calibration"], "*/captures/**/*.h5")):
         if not root.is_dir():
             continue
         for f in root.glob(glob_pat):
             if f.is_file() and not f.name.endswith(".part"):
                 rows.append({"path": str(f.relative_to(ROOT)), "name": f.name, "mtime": f.stat().st_mtime,
                             "size_bytes": f.stat().st_size})
-    return sorted(rows, key=lambda r: -r["mtime"])[:limit]
+    rows = sorted(rows, key=lambda r: -r["mtime"])[:limit]
+    contexts: Dict[Path, Dict[str, Any]] = {}
+    for r in rows:
+        r.update(_capture_context(ROOT / r["path"], contexts))
+    return rows
+
+
+def _observe_campaign_info(camp: Path) -> Dict[str, Any]:
+    """An OBSERVE campaign's name, start and grid size, from its own observation_resolved.json (the date falls back to
+    the <name>-<YYYYMMDD>-<HH:MM:SS> directory suffix; anything missing is None)."""
+    info: Dict[str, Any] = {"observation_name": camp.name, "started_utc": None, "grid": None}
+    try:
+        plan = json.loads((camp / "observation_resolved.json").read_text())
+        info["observation_name"] = plan.get("observation_name") or camp.name
+        info["started_utc"] = plan.get("planning_timestamp_utc")
+        res = plan.get("resolved") or {}
+        if res.get("rows") and res.get("cols"):
+            info["grid"] = {k: res.get(k) for k in ("rows", "cols", "point_count", "footprint_width_deg", "footprint_height_deg", "spacing_deg")}
+    except (OSError, ValueError, AttributeError):
+        pass
+    m = _CAMPAIGN_DIR_TS_RE.search(camp.name)
+    if not info["started_utc"] and m:
+        info["started_utc"] = datetime.strptime(m.group(1), "%Y%m%d-%H:%M:%S").replace(tzinfo=timezone.utc).isoformat()
+    return info
+
+
+def _capture_context(f: Path, cache: Dict[Path, Dict[str, Any]]) -> Dict[str, Any]:
+    """Where a listed capture comes from, for the operator (operator 2026-10-17: a bare path list is easy to get lost
+    in): the campaign/session it belongs to, when that started, the OBSERVE grid's size, and which point or reference
+    the file is. Read from the campaign's own files (observation_resolved.json), once per campaign; missing -> None."""
+    out: Dict[str, Any] = {"captured_utc": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds")}
+    if _within(f, SERVE_ROOTS["mosaic"]):
+        camp = SERVE_ROOTS["mosaic"] / f.relative_to(SERVE_ROOTS["mosaic"]).parts[0]
+        if camp not in cache:
+            info = _observe_campaign_info(camp)
+            cache[camp] = {"kind": "OBSERVE", "campaign": info["observation_name"], "campaign_dir": str(camp.relative_to(ROOT)),
+                           "campaign_started_utc": info["started_utc"], "grid": info["grid"]}
+        point = re.search(r"_(\d+)\.h5$", f.name)
+        return {**out, **cache[camp], "item": f"point {point.group(1)}" if point else f.stem}
+    if _within(f, SERVE_ROOTS["calibration"]):
+        rel = f.relative_to(SERVE_ROOTS["calibration"]).parts
+        session = SERVE_ROOTS["calibration"] / rel[0]
+        if session not in cache:
+            m = re.search(r"(\d{8})-(\d{6})", session.name)
+            started = (datetime.strptime("".join(m.groups()), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).isoformat() if m else None)
+            cache[session] = {"kind": "CALIBRATION", "campaign": session.name, "campaign_dir": str(session.relative_to(ROOT)),
+                              "campaign_started_utc": started, "grid": None}
+        inner = rel[2:] if len(rel) > 2 and rel[1] == "captures" else rel[1:]
+        return {**out, **cache[session], "item": " / ".join(Path(*inner).with_suffix("").parts)}
+    return {**out, "kind": None, "campaign": None, "campaign_dir": None, "campaign_started_utc": None, "grid": None, "item": f.stem}
 
 
 _CAMPAIGN_DIR_TS_RE = re.compile(r"(\d{8}-\d{2}:\d{2}:\d{2})$")
@@ -1948,6 +2108,7 @@ def reduce_list_campaigns(limit: int = 60, scan_budget: int = 200) -> Dict[str, 
             row = {"campaign_dir": str(p.relative_to(ROOT)), "name": p.name, "session_label": _campaign_session_label(p, None),
                   "points_usable": 0, "points_expected": None, "points_total": None, "points_deferred": None,
                   "completeness": "ERROR", "error": str(exc), "mtime": p.stat().st_mtime}
+        row.update(_observe_campaign_info(p))          # name, start, grid size: one line per session (operator 2026-10-17)
         (usable_rows if row["points_usable"] else no_data_rows).append(row)
     _save_campaign_readiness_cache(cache)
     return {"campaigns": usable_rows[:limit], "no_data": no_data_rows[:limit],
@@ -2116,6 +2277,7 @@ def align_defaults() -> Dict[str, Any]:
             # hardcoded number of its own) - the SAME PLAN_VALIDITY_SECONDS start()/build_command() enforces
             # server-side for the "align" stage, so the displayed countdown and the real deadline can never drift.
             "plan_validity_seconds": PLAN_VALIDITY_SECONDS,
+            "sun_plan_validity_seconds": SUN_PLAN_VALIDITY_SECONDS,
             "beam_fwhm_deg": beam_fwhm, "beam_fwhm_source": beam_source,
             "confidence_threshold": alignment.DEFAULT_CONFIDENCE_THRESHOLD,
             "max_sync_offset_deg": alignment.DEFAULT_MAX_SYNC_OFFSET_DEG,
@@ -2138,8 +2300,32 @@ def align_defaults() -> Dict[str, Any]:
                          "capture time - not independently re-measured at other durations."}}
 
 
+_ALIGN_SKY_CACHE: Dict[Any, Tuple[float, Dict[str, Any]]] = {}
+_ALIGN_SKY_LOCK = threading.Lock()
+ALIGN_SKY_CACHE_SECONDS = 60.0
+
+
 def align_sky(mode: str, ring_radii_deg: List[float], ring_points: int, min_elevation_deg: float, beam_fwhm_deg: float,
-             capture_time_s: float, top_n: int = 3) -> Dict[str, Any]:
+              capture_time_s: float, top_n: int = 3) -> Dict[str, Any]:
+    """_align_sky_compute(), reused for ALIGN_SKY_CACHE_SECONDS per parameter set and computed one at a time: the HI
+    ranking takes ~20 s on the Pi, and repeated page refreshes each started another one in parallel until the web
+    server stalled (2026-10-15, 30 requests in 4 min, load 6.4)."""
+    key = (mode, tuple(float(r) for r in ring_radii_deg), int(ring_points), float(min_elevation_deg),
+           float(beam_fwhm_deg), float(capture_time_s), int(top_n))
+    with _ALIGN_SKY_LOCK:
+        hit = _ALIGN_SKY_CACHE.get(key)
+        if hit and time.monotonic() - hit[0] < ALIGN_SKY_CACHE_SECONDS:
+            return hit[1]
+        result = _align_sky_compute(mode, ring_radii_deg, ring_points, min_elevation_deg, beam_fwhm_deg,
+                                    capture_time_s, top_n)
+        if len(_ALIGN_SKY_CACHE) > 16:
+            _ALIGN_SKY_CACHE.clear()
+        _ALIGN_SKY_CACHE[key] = (time.monotonic(), result)
+        return result
+
+
+def _align_sky_compute(mode: str, ring_radii_deg: List[float], ring_points: int, min_elevation_deg: float,
+                       beam_fwhm_deg: float, capture_time_s: float, top_n: int = 3) -> Dict[str, Any]:
     """Real-time (system clock, NTP-checked elsewhere), read-only Alt/Az sky computation - no hardware, no mount
     read. mode='solar': the Sun's current real position and ONE scan area centred on it (never A/B/C, never uses
     the HI map to decide). mode='hi': a continuous Alt/Az raster of the REAL HI4PI column-density map (hi4pi_map.py;
@@ -2480,6 +2666,25 @@ def lobe_samples(rel_dir: str) -> Dict[str, Any]:
 _RUN_SKY_CACHE: Dict[str, Any] = {}
 
 
+def _starting_campaign(runtime_dir: Path, cur: Dict[str, Any]) -> Optional[str]:
+    """The campaign the orchestrator has just launched, from its own sidecar - only while that launch is newer than
+    what current_session.json describes and the orchestrator still says it is running it."""
+    rt = _read_json(runtime_dir / "observation_runtime.json") or {}
+    if rt.get("orchestrator_state") not in ("READY", "RUNNING") or not rt.get("resolved_plan_path") or not rt.get("started_utc"):
+        return None
+    try:
+        started = datetime.fromisoformat(rt["started_utc"])
+        cur_started = datetime.fromisoformat(cur["started_utc"]) if cur.get("started_utc") else None
+    except ValueError:
+        return None
+    if cur_started is not None and cur_started >= started:
+        return None
+    plan = _read_json(Path(rt["resolved_plan_path"]) if Path(rt["resolved_plan_path"]).is_absolute()
+                      else ROOT / rt["resolved_plan_path"]) or {}
+    grid_dir = plan.get("grid_session_dir")
+    return Path(grid_dir).name if grid_dir else None
+
+
 def observe_sky_progress(runtime_dir: Optional[Path] = None, mosaic_root: Optional[Path] = None) -> Dict[str, Any]:
     """The current (or last) OBSERVE campaign on ALIGN's sky map: every point where it is NOW, with its state -
     captured, the one being captured, failed, pending - plus the Sun and the HI4PI layer. Positions are recomputed
@@ -2492,6 +2697,11 @@ def observe_sky_progress(runtime_dir: Optional[Path] = None, mosaic_root: Option
     last = _read_json(runtime_dir / "last_session.json") or {}
     campaign = session_identity.from_session_root(cur.get("session_root")).get("campaign_id") or last.get("campaign_id")
     running = cur.get("state") in ("RUNNING", "STARTING", "PAUSED") and bool(cur.get("session_root"))
+    starting = _starting_campaign(runtime_dir, cur)
+    if starting and starting != campaign and not running:
+        # Launched, but capture.py announces only when its first capture starts (after the first GOTO + settle):
+        # until then current_session.json still holds the PREVIOUS run, which the map showed (2026-10-15).
+        campaign, running, cur = starting, True, {"state": "STARTING"}
     if not campaign or not (mosaic_root / campaign / "mosaic.csv").is_file():
         return {"available": False, "reason": "no OBSERVE campaign on record"}
     camp = mosaic_root / campaign

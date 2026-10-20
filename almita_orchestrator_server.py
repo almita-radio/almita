@@ -49,6 +49,8 @@ import almita_web_auth
 import almita_web_calibrate
 import almita_web_ops
 import almita_web_system
+import mount_device
+import vnc_proxy
 
 MAX_BODY_BYTES = 1_000_000
 CLIENT_SOCKET_TIMEOUT_SECONDS = 60  # a stalled client must not pin a request thread forever (handler compute time is not affected)
@@ -205,7 +207,9 @@ def _observe_defaults() -> Dict[str, Any]:
         # Antenna B has an in-line LNA powered through SDR 00000002's Bias-T (operator confirmation 2026-10-08): the
         # form starts with RFI_REF Bias-T ON - the same default as the spec schema (observation_spec, BL-041). OFF stays
         # available: the form's checkbox, or an explicit `bias_tee: false` in a YAML spec.
-        "rfi_ref": {"serial": "00000002", "gain_db": 25.0, "bias_tee": True},
+        # RFI_REF starts DISABLED (operator, 2026-10-17): the V3 that was RFI_REF is now MAIN (EEPROM serial rewritten to
+        # 00000001) and there is no second dongle. Enabling it stays possible from the form, until further notice.
+        "rfi_ref": {"enabled": False, "serial": "00000002", "gain_db": 25.0, "bias_tee": True},
         "observer": config.get("observer", {}),
     }
 
@@ -277,6 +281,28 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             return False
         return True
 
+    def _handle_vnc(self, path: str) -> None:
+        """DESKTOP (noVNC on localhost:6080) through this port and this login - see vnc_proxy.py. Already authenticated
+        by _gate(); the websocket handshake must also be same-origin."""
+        try:
+            if vnc_proxy.is_websocket(self):
+                if not self._same_origin():
+                    _log("WARN", f"req={self._request_id} {self.address_string()} refused cross-origin DESKTOP websocket")
+                    return _error_response(self, 403, "cross-origin request refused")
+                _log("INFO", f"req={self._request_id} {self.address_string()} DESKTOP session opened")
+                vnc_proxy.proxy_websocket(self)
+                _log("INFO", f"req={self._request_id} DESKTOP session closed")
+                return None
+            if path in (vnc_proxy.PREFIX, vnc_proxy.PREFIX + "/"):
+                self.send_response(302)
+                self.send_header("Location", vnc_proxy.ENTRY)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            return vnc_proxy.proxy_http(self, head_only=self._head_only)
+        except OSError as exc:
+            return self._fail(exc, 502, f"DESKTOP unavailable: noVNC not reachable on {vnc_proxy.UPSTREAM[0]}:{vnc_proxy.UPSTREAM[1]} ({type(exc).__name__})")
+
     def _same_origin(self) -> bool:
         origin = self.headers.get("Origin")
         if origin:
@@ -306,12 +332,20 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         self._head_only = self.command == "HEAD"
         if not self._gate():
             return
+        if vnc_proxy.handles(path):
+            return self._handle_vnc(path)
         try:
             if path == "/healthz":
                 return _json_response(self, 200, almita_web_system.liveness())
             if path == "/api/system/health":
                 return _json_response(self, 200, {"ok": True, "status": "OK", "message": "read-only; service, dependency and operational layers are separate",
                                                    "data": almita_web_system.cached_health()})
+            if path == "/api/system/temperatures":
+                import temperature_logger
+                hours = float((parse_qs(urlsplit(self.path).query).get("hours") or ["6"])[0])
+                if not (0 < hours <= 72):
+                    raise ValueError("hours must be > 0 and <= 72")
+                return _json_response(self, 200, {"ok": True, "data": temperature_logger.summary(hours)})
             if path == "/api/system/version":
                 return _json_response(self, 200, {"ok": True, "status": "OK", "data": almita_web_system.version_info()})
             if path == "/api/observe/defaults":
@@ -330,6 +364,10 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.list_jobs()})
             if path == "/api/ops/mount":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.read_mount()})
+            if path == "/api/mount/device":
+                return _json_response(self, 200, {"ok": True, "data": mount_device.describe()})
+            if path == "/api/sdr/lna":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.lna_power_state()})
             if path == "/api/ops/campaigns":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.campaigns()})
             if path == "/api/ops/reduce/captures":
@@ -479,6 +517,16 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 body = _read_json_body(self)
                 _log("INFO", f"req={self._request_id} OPS START {ops_start.group('stage')} params={json.dumps(body.get('params') or {})[:200]}")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.start(ops_start.group("stage"), body.get("params") or {}, confirm=body.get("confirm"))})
+            if path == "/api/mount/device":
+                body = _read_json_body(self)
+                _log("WARNING", f"req={self._request_id} MOUNT DEVICE -> {str(body.get('device'))[:40]!r} requested")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_mount_device(str(body.get("device", "")))})
+            if path == "/api/sdr/lna":
+                body = _read_json_body(self)
+                if body.get("confirm") is not True or not isinstance(body.get("on"), bool):
+                    raise ValueError("send {on: true|false, confirm: true}")
+                _log("WARNING", f"req={self._request_id} MAIN LNA (Bias-T) -> {'ON' if body['on'] else 'OFF'} requested")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_lna_power(body["on"])})
             if path == "/api/mount/stop":
                 if _read_json_body(self).get("confirm") is not True:
                     raise ValueError("confirm: true is required - STOP MOUNT does not proceed implicitly")
@@ -617,7 +665,7 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         # Backend is the authority on conflicts: run_observation holds an flock and refuses (409) when a run is already active.
         _log("INFO", f"req={self._request_id} START requested plan={resolved_plan_path}")
         try:
-            result = observation_orchestrator.run_observation(resolved_plan_path, yes=True)
+            result = observation_orchestrator.run_observation(resolved_plan_path, yes=True, device_name=mount_device.current())
         except FileNotFoundError:
             return _error_response(self, 404, "resolved plan not found — plan again")
         _json_response(self, 200, result)

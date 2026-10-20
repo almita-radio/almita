@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ALMITA Science</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"></head>
+  <title>ALMITA Science</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
 <body>
   <header id="almita-header"><h1>SCIENCE</h1></header>
 
   <main id="app">
-    <div class="banner" style="background:#0d1317;color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.06em">
+    <div class="banner" style="background:var(--inset);color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.06em">
       LEVEL 1 (REDUCE) → LEVEL 2 (SCIENCE HEATMAPS) · science_engine (frozen) + science_web_bridge.py ·
       offline, filesystem only · relative_intensity_dimensionless only — never Kelvin/Jy/N_HI/absolute flux
     </div>
@@ -115,70 +115,31 @@
         <figure class="board-panel" id="panel-a">
           <figcaption id="caption-a">A — MEASURED (no spatial interpolation)</figcaption>
           <div class="board-row">
-            <canvas id="board-canvas-a" width="440" height="440"></canvas>
+            <canvas id="board-canvas-a" width="440" height="440" title="Measured cells only: click one to see its own spectrum below"></canvas>
             <div class="board-legend" id="legend-a"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
-          <div class="obs-summary">Click a real cell to inspect its own measurement and spectrum. This is the
-            ONLY panel where a click opens a spectrum — a new pixel in B/C was never observed.</div>
-          <details><summary>¿Qué muestra esta imagen?</summary>
-            <p>Esta imagen contiene únicamente las lecturas reales del mosaico: una celda por posición
-            observada por el instrumento, dibujada donde esa posición queda en el cielo con la misma proyección
-            que B y C (en un campo amplio las celdas se ven deformadas, no cuadradas). Cada color representa la medición real de esa posición — no hay
-            ningún valor estimado, promediado o inventado entre celdas. Una celda sin color no fue medida.</p></details>
         </figure>
         <figure class="board-panel" id="panel-b">
           <figcaption id="caption-b">B — INTERPOLATED</figcaption>
           <div class="board-row">
-            <img id="img-map-b" alt="map B (interpolated)">
+            <img id="img-map-b" alt="map B (interpolated)" title="Interpolated estimate, not measurements (not clickable). Hatched = backed by one real point only">
             <div class="board-legend" id="legend-b"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
-          <div class="obs-summary hatch-note"><span class="hatch-swatch" aria-hidden="true"></span> Hatched / dimmed
-            border: pixels backed by only ONE real point within the support radius — mostly the outer rim of the
-            field, where nothing beyond the edge corroborates the value.</div>
-          <div class="obs-summary">Not clickable — every pixel here (real position or not) is a smoothed
-            estimate, never a stand-in for an individual measurement. See the LEAVE-ONE-OUT CHECK above: a
-            multi-pixel bump/dip here is not automatically a verified detection.</div>
-          <details><summary>¿Qué muestra esta imagen?</summary>
-            <p>Esta imagen interpola espacialmente entre las lecturas reales para mostrar una grilla más densa
-            que la original, usando un promedio ponderado por distancia (con un desvanecimiento suave tipo
-            gaussiano) entre las mediciones cercanas. Los píxeles nuevos, ubicados entre las posiciones
-            realmente observadas, son ESTIMACIONES matemáticas, no mediciones nuevas: interpolar no puede
-            recuperar detalle físico que el instrumento no llegó a medir, solo ofrece una lectura visual más
-            continua de los mismos datos reales. Las zonas atenuadas/rayadas están respaldadas por UN SOLO
-            punto real cercano (sin una segunda medición que lo confirme): un bulto o hueco allí puede ser
-            solo el ruido propio de esa medición, no una estructura espacial real — ver el panel de
-            "densidad de cobertura" más abajo. La validación cruzada "deja uno fuera" (arriba, en el resumen)
-            comprueba directamente si este método logra predecir un punto real a partir de sus vecinos.</p></details>
         </figure>
         <figure class="board-panel" id="panel-c">
           <figcaption id="caption-c">C — INTERPOLATED, finer raster</figcaption>
           <div class="board-row">
-            <img id="img-map-c" alt="map C (interpolated, finer raster)">
+            <img id="img-map-c" alt="map C (interpolated, finer raster)" title="Same estimate as B on a finer raster (not clickable). Hatched = backed by one real point only">
             <div class="board-legend" id="legend-c"><div class="legend-gradient"></div>
               <div class="legend-labels"><span class="legend-max"></span><span class="legend-mid"></span><span class="legend-min"></span></div></div>
           </div>
-          <div class="obs-summary hatch-note"><span class="hatch-swatch" aria-hidden="true"></span> Hatched / dimmed:
-            same meaning as in B — one real point only (a finer raster adds no measurement).</div>
-          <div class="obs-summary">Not clickable — same reason as B. Uses the IDENTICAL smoothing kernel and
-            support radius as B; the only difference is a denser raster.</div>
-          <details><summary>¿Qué muestra esta imagen?</summary>
-            <p>Esta versión usa una grilla aún más densa que el panel central, pero el MISMO kernel de suavizado
-            y el mismo radio de soporte — la única diferencia con B es cuántos píxeles se dibujan sobre el
-            mismo campo estimado (una versión anterior usaba además un suavizado más fuerte en C, lo que
-            mezclaba dos cambios a la vez; se retiró tras comprobar, con validación cruzada "deja uno fuera"
-            sobre datos reales, que no mejoraba la predicción). Sigue sin haber mediciones nuevas: todos los
-            valores fuera de las celdas reales de A son estimaciones de interpolación, nunca observaciones del
-            instrumento, y no existe un espectro real para ningún píxel de esta imagen. El mismo radio de
-            soporte espacial que en B determina qué puntos pueden influir en cada píxel, así que las mismas
-            zonas atenuadas/rayadas (respaldadas por un solo punto real) aparecen aquí también — una grilla
-            más fina no agrega mediciones nuevas que las corroboren.</p></details>
         </figure>
       </div>
       <div id="cell-detail" class="obs-summary">select a real cell in panel A above</div>
       <div id="point-spectrum-view" hidden>
-        <canvas id="point-spectrum-canvas" width="900" height="240" style="width:100%;background:#0d1317"></canvas>
+        <canvas id="point-spectrum-canvas" width="900" height="240" style="width:100%;background:var(--inset)"></canvas>
       </div>
 
       <h3>SECONDARY DIAGNOSTICS</h3>
@@ -212,7 +173,7 @@
     .board-panel details summary{cursor:pointer;color:var(--accent, #65b7d8)}
     .board-panel details p{color:var(--muted);line-height:1.5;margin:6px 0 0}
     .board-row{display:flex;gap:8px;align-items:stretch}
-    .board-row canvas,.board-row img{width:100%;aspect-ratio:1/1;background:#0d1317;border:1px solid var(--line);object-fit:contain}
+    .board-row canvas,.board-row img{width:100%;aspect-ratio:1/1;background:var(--inset);border:1px solid var(--line);object-fit:contain}
     #board-canvas-a{cursor:crosshair}
     .board-legend{display:flex;gap:4px;width:34px;flex:0 0 34px}
     .legend-gradient{width:14px;border:1px solid var(--line);border-radius:2px}

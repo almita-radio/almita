@@ -60,6 +60,16 @@ def test_web_payload_rfi_ref_disabled_still_records_bias_tee_choice():
     assert spec["rfi_ref"]["bias_tee"] is True
 
 
+def test_observe_defaults_start_with_rfi_ref_disabled():
+    """2026-10-17 (operator, until further notice): the V3 that was RFI_REF is now MAIN, so the form starts with RFI_REF
+    OFF - and that default validates through the same schema a PLAN uses."""
+    import almita_orchestrator_server as srv
+    d = srv._observe_defaults()
+    assert d["rfi_ref"]["enabled"] is False
+    payload = _web_payload(rfi_ref_enabled=d["rfi_ref"]["enabled"], bias_tee=d["rfi_ref"]["bias_tee"])
+    assert sp.validate_spec_dict(payload)["rfi_ref"]["enabled"] is False
+
+
 def test_observe_defaults_enable_rfi_ref_bias_tee_for_antenna_b_lna():
     """Operator confirmation 2026-10-08: antenna B's LNA is powered by RFI_REF's Bias-T, so the web form's
     effective default is ON - and it validates through the same schema a PLAN uses."""

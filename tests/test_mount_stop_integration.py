@@ -202,7 +202,7 @@ def test_near_the_pole_the_ra_check_is_advisory(indi):
 def test_web_stop_mount_stops_a_tracking_mount_and_reports_the_readback(indi, tmp_path, monkeypatch):
     import almita_web_ops as ops
     server = indi("--start-tracking", "--slew-seconds", "1")
-    monkeypatch.setattr(ops, "list_jobs", lambda limit=40: [])            # never the operator's real job list
+    monkeypatch.setattr(ops, "running_jobs", lambda: [])                   # never the operator's real job list
     result = ops.stop_mount(runtime_dir=str(tmp_path / "runtime"), host="127.0.0.1", port=server.port, device="Telescope Simulator")
     assert result["confirmed"] is True and result["summary"].startswith("MOUNT STOP CONFIRMED")
     assert result["signalled"] == [] and "not a physical brake" in result["limits"]
@@ -216,10 +216,41 @@ def test_web_stop_mount_signals_running_physical_jobs_and_only_those(indi, tmp_p
             {"job_id": "REDUCE-1", "stage": "reduce", "state": "RUNNING"},             # moves nothing: left alone
             {"job_id": "ALIGN-0", "stage": "align", "state": "EXITED"}]
     stopped = []
-    monkeypatch.setattr(ops, "list_jobs", lambda limit=40: jobs)
+    monkeypatch.setattr(ops, "running_jobs", lambda: jobs)
     monkeypatch.setattr(ops, "stop", lambda job_id: stopped.append(job_id))
     result = ops.stop_mount(runtime_dir=str(tmp_path / "runtime"), host="127.0.0.1", port=server.port, device="Telescope Simulator")
     assert stopped == ["ALIGN-1"] and result["signalled"] == ["job ALIGN-1"] and result["confirmed"] is True
+
+
+def test_running_jobs_reads_job_json_only_and_sees_past_the_newest_40(tmp_path, monkeypatch):
+    import json
+    import time
+    import almita_web_ops as ops
+    monkeypatch.setattr(ops, "OPS_DIR", tmp_path)
+    now = time.time()
+    for i in range(45):                                                   # 45 finished jobs, newer than the running one
+        (tmp_path / f"REDUCE-{i}").mkdir()
+        (tmp_path / f"REDUCE-{i}" / "job.json").write_text(json.dumps({"stage": "reduce", "exit_code": 0, "started_epoch": now - i}))
+    (tmp_path / "ALIGN-old").mkdir()                                      # runner pid not written yet -> RUNNING
+    (tmp_path / "ALIGN-old" / "job.json").write_text(json.dumps({"stage": "align", "runner_pid": None, "started_epoch": now - 5}))
+    (tmp_path / "broken").mkdir()
+    (tmp_path / "broken" / "job.json").write_text("{not json")
+    monkeypatch.setattr(ops, "classify", lambda j: (_ for _ in ()).throw(AssertionError("classify must not run")))
+    assert ops.running_jobs() == [{"job_id": "ALIGN-old", "stage": "align", "state": "RUNNING"}]
+
+
+def test_web_stop_mount_never_classifies_jobs_before_the_abort(indi, tmp_path, monkeypatch):
+    """Real LX200, 2026-10-18: list_jobs() (classify parses every job log) cost ~5 s before the abort went out."""
+    import almita_web_ops as ops
+    server = indi("--slew-seconds", "1")
+    boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("STOP MOUNT must not classify or list jobs"))
+    monkeypatch.setattr(ops, "classify", boom)
+    monkeypatch.setattr(ops, "list_jobs", boom)
+    monkeypatch.setattr(ops, "running_jobs", lambda: [{"job_id": "ALIGN-1", "stage": "align", "state": "RUNNING"}])
+    stopped = []
+    monkeypatch.setattr(ops, "stop", lambda job_id: stopped.append(job_id))
+    result = ops.stop_mount(runtime_dir=str(tmp_path / "runtime"), host="127.0.0.1", port=server.port, device="Telescope Simulator")
+    assert stopped == ["ALIGN-1"] and result["notes"] == [] and result["confirmed"] is True
 
 
 def test_web_stop_mount_without_indi_is_parada_no_confirmada(tmp_path, monkeypatch):
@@ -228,7 +259,7 @@ def test_web_stop_mount_without_indi_is_parada_no_confirmada(tmp_path, monkeypat
     with socket.socket() as probe:                                        # a port nobody listens on
         probe.bind(("127.0.0.1", 0))
         dead_port = probe.getsockname()[1]
-    monkeypatch.setattr(ops, "list_jobs", lambda limit=40: [])
+    monkeypatch.setattr(ops, "running_jobs", lambda: [])
     result = ops.stop_mount(runtime_dir=str(tmp_path / "runtime"), host="127.0.0.1", port=dead_port, device="Telescope Simulator")
     assert result["confirmed"] is False and result["summary"].startswith("PARADA NO CONFIRMADA")
 

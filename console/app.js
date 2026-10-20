@@ -623,11 +623,15 @@ function initRunSky(){
     badge.textContent=r.running?"RUNNING":String(r.state||"LAST RUN");badge.className="badge "+(r.running?"status-running":"status-idle");
     AlmitaUI.drawSkyView(canvas,{sun:r.sun,hi4pi_grid:r.hi4pi_grid||null,areas:[]},{points:r.points,minAlt:r.min_altitude_deg,dotScale:4,ringFirst:false,zoomToPoints:true,zoomMargin:0.5});
     const range=r.hi4pi_grid&&r.hi4pi_grid.value_range_1e20cm2;legend.hidden=!range;if(range)AlmitaUI.drawHi4piLegend(legend,range);
+    lastSky=r;
     const c=r.counts||{},cur=(r.points||[]).find(p=>p.state==="current");
     note.textContent=`${r.campaign_id} · ${c.done||0}/${r.total} captured`+(c.failed?` · ${c.failed} failed`:"")
       +(cur?` · capturing point ${cur.point_id} (az ${cur.az_deg.toFixed(0)}° alt ${cur.alt_deg.toFixed(0)}°, red X)`:"")
-      +` · green captured · white pending`+(c.failed?" · orange failed":"")+` · zoomed on the campaign · positions now (${String(r.computed_utc||"").slice(11,16)} UTC)`;
+      +` · green captured · ${AlmitaUI.isDay&&AlmitaUI.isDay()?"black":"white"} pending`+(c.failed?" · orange failed":"")+` · zoomed on the campaign · positions now (${String(r.computed_utc||"").slice(11,16)} UTC)`;
   }
+  let lastSky=null;
+  // DIA/NOCHE: the map and its legend redraw themselves (common.js); only the note's "white/black pending" follows here - no request
+  if(AlmitaUI.onThemeChange)AlmitaUI.onThemeChange(()=>{if(lastSky&&note.textContent)note.textContent=note.textContent.replace(/ · (white|black) pending/,` · ${AlmitaUI.isDay()?"black":"white"} pending`)});
   refresh();setInterval(()=>{if(!document.hidden)refresh()},10000);
 }
 
