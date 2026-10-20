@@ -120,7 +120,18 @@ def _write_plots(output: Path, document: dict[str, Any], arrays: dict[str, np.nd
     axis.axvline(HI_REST_HZ / 1e6, color="tab:green", linestyle="--", linewidth=1,
                  label="HI rest frequency (marker only)")
     _draw_masks(axis, frequency_hz, dc, spur)
-    axis.set_ylim(-SPECTRUM_Y_FIXED_RANGE_DB, SPECTRUM_Y_FIXED_RANGE_DB)
+    # Fixed +/-5 dB while the spectrum fits it; when it does not (e.g. a calibration profile far below the live
+    # signal: +9..+27 dB on 2026-10-15, an empty plot) the axis follows the data and says so (operator 2026-10-15).
+    try:
+        robust = _robust_limits(relative_db, valid)
+    except QuicklookError:
+        robust = None
+    if robust is None or (robust[0] >= -SPECTRUM_Y_FIXED_RANGE_DB and robust[1] <= SPECTRUM_Y_FIXED_RANGE_DB):
+        axis.set_ylim(-SPECTRUM_Y_FIXED_RANGE_DB, SPECTRUM_Y_FIXED_RANGE_DB)
+    else:
+        axis.set_ylim(*robust)
+        axis.text(0.01, 0.97, f"AUTO SCALE: spectrum outside the fixed ±{SPECTRUM_Y_FIXED_RANGE_DB:g} dB",
+                  transform=axis.transAxes, fontsize=8, color="tab:red", va="top")
     axis.set(xlabel="Frequency (MHz)", ylabel="Relative PSD (dB)", title=TITLE)
     axis.text(0.01, 0.01, metadata_line, transform=axis.transAxes, fontsize=8)
     axis.grid(True, alpha=0.3)

@@ -180,7 +180,37 @@ def test_spectrum_fixed_and_fractional_excess_robust_ylim_calls(monkeypatch, tmp
     _, arrays = generate_quicklook(SOURCE, PROFILE, tmp_path / "ylim_check")
 
     expected_fractional = _robust_limits(arrays["fractional_excess"], arrays["valid_mask"])
+    # fixed +/-5 dB while the spectrum fits it, otherwise the data's own robust range (operator 2026-10-15)
+    lo, hi = _robust_limits(arrays["relative_psd_db"], arrays["valid_mask"])
+    fits = lo >= -SPECTRUM_Y_FIXED_RANGE_DB and hi <= SPECTRUM_Y_FIXED_RANGE_DB
+    expected_spectrum = (-SPECTRUM_Y_FIXED_RANGE_DB, SPECTRUM_Y_FIXED_RANGE_DB) if fits else (lo, hi)
     assert calls == [
-        (-SPECTRUM_Y_FIXED_RANGE_DB, SPECTRUM_Y_FIXED_RANGE_DB),
+        pytest.approx(expected_spectrum),
         pytest.approx(expected_fractional),
     ]
+
+
+def test_spectrum_axis_follows_the_data_when_it_leaves_the_fixed_range(monkeypatch, tmp_path):
+    # 2026-10-15: a profile ~22 dB below the live signal put the whole spectrum at +9..+27 dB - an empty plot.
+    import quicklook_spectrum as qs
+    from matplotlib.axes import Axes
+    calls = []
+    original_set_ylim = Axes.set_ylim
+
+    def recording_set_ylim(self, *args, **kwargs):
+        if len(args) == 2:
+            calls.append(args)
+        return original_set_ylim(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "set_ylim", recording_set_ylim)
+    original = qs._write_plots
+
+    def shifted(output, document, arrays, capture_metadata):
+        arrays = dict(arrays, relative_psd_db=arrays["relative_psd_db"] + 20.0)
+        return original(output, document, arrays, capture_metadata)
+
+    monkeypatch.setattr(qs, "_write_plots", shifted)
+    _, arrays = generate_quicklook(SOURCE, PROFILE, tmp_path / "auto_ylim")
+    expected = _robust_limits(arrays["relative_psd_db"] + 20.0, arrays["valid_mask"])
+    assert calls[0] == pytest.approx(expected)
+    assert calls[0][0] > SPECTRUM_Y_FIXED_RANGE_DB

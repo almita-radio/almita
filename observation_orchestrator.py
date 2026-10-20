@@ -42,6 +42,10 @@ DEFAULT_RUNTIME_DIR = str(Path(__file__).resolve().parent / "data" / "runtime")
 RUNTIME_FILENAME = "observation_runtime.json"
 SESSION_ANNOUNCE_TIMEOUT_SEC = 60.0
 SESSION_ANNOUNCE_POLL_SEC = 1.0
+# capture.py announces its session_root only when the first capture starts (after the first GOTO + settle), which
+# can exceed SESSION_ANNOUNCE_TIMEOUT_SEC (63 s on 2026-10-15: QUICKLOOK never started). RUN is called inside a web
+# request, so it does not wait longer itself: a detached waiter keeps waiting and starts QUICKLOOK then.
+DEFERRED_QUICKLOOK_TIMEOUT_SEC = 900.0
 STOP_WAIT_TIMEOUT_SEC = 120.0
 STOP_POLL_SEC = 1.0
 
@@ -240,7 +244,7 @@ def active_campaign_reason(orchestrator: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _capture_args(plan: Dict[str, Any], runtime_dir: str) -> List[str]:
+def _capture_args(plan: Dict[str, Any], runtime_dir: str, device_name: Optional[str] = None) -> List[str]:
     args = [
         sys.executable, str(Path(__file__).resolve().parent / "capture.py"),
         "--csv", plan["mosaic_csv_path"],
@@ -253,6 +257,9 @@ def _capture_args(plan: Dict[str, Any], runtime_dir: str) -> List[str]:
         "--min-altitude", str(plan["requested"]["grid"]["min_altitude_deg"]),
         "--runtime-dir", runtime_dir,
     ]
+    if device_name:
+        # without it capture.py takes the session observer_config.json's hardware.telescope (the real mount)
+        args += ["--device", device_name]
     if plan["rfi_ref"]["enabled"]:
         args += [
             "--rfi-ref-enabled",
@@ -327,7 +334,7 @@ def _run_observation_locked(resolved_plan_path: str, *, yes: bool, runtime_dir: 
     # mistaken for the one we're about to launch.
     launch_utc = datetime.now(timezone.utc)
     with capture_log.open("wb") as handle:
-        capture_proc = _popen_detached(_capture_args(plan, runtime_dir), handle)
+        capture_proc = _popen_detached(_capture_args(plan, runtime_dir, device_name), handle)
     # Read identity immediately after Popen() returns: the kernel assigns
     # starttime at fork(), before exec() — safe to read right away, and
     # this is the value STOP will later verify against to rule out PID
@@ -345,25 +352,62 @@ def _run_observation_locked(resolved_plan_path: str, *, yes: bool, runtime_dir: 
     announced = _wait_for_session_announcement(runtime_dir, timeout=SESSION_ANNOUNCE_TIMEOUT_SEC,
                                                 after_utc=launch_utc)
     if announced is None:
+        if plan["quicklook"]["enabled"] and _capture_ownership_matches(_read_runtime(runtime_dir) or {}):
+            with (log_dir / "orchestrator_quicklook.log").open("wb") as handle:
+                _popen_detached([sys.executable, str(Path(__file__).resolve()), "--deferred-quicklook",
+                                 str(resolved_plan_path), "--runtime-dir", runtime_dir,
+                                 "--after-utc", launch_utc.isoformat()], handle)
+            _write_runtime(runtime_dir, note="capture.py has not announced its session yet (first GOTO/settle); "
+                                             "quicklook_live.py starts as soon as it does (MAIN unaffected)")
+            return _read_runtime(runtime_dir)
         _write_runtime(runtime_dir, orchestrator_state="DEGRADED",
                         note="capture.py did not announce current_session.json in time; "
                              "quicklook_live.py was not started if enabled (MAIN unaffected)")
         return _read_runtime(runtime_dir)
 
     _write_runtime(runtime_dir, session_id=announced.get("session_id"))
-
     if plan["quicklook"]["enabled"]:
-        quicklook_output_dir = str(log_dir / "quicklook")
-        quicklook_log = log_dir / "orchestrator_quicklook.log"
-        with quicklook_log.open("wb") as handle:
-            quicklook_proc = _popen_detached(
-                _quicklook_args(plan, announced["session_root"], quicklook_output_dir, runtime_dir), handle,
-            )
-        _write_runtime(runtime_dir, quicklook_pid=quicklook_proc.pid,
-                        quicklook_start_time=_proc_stat_start_time(quicklook_proc.pid),
-                        quicklook_log=str(quicklook_log), quicklook_cmd_needle="quicklook_live.py")
-
+        _start_quicklook(plan, announced, runtime_dir)
     return _read_runtime(runtime_dir)
+
+
+def _start_quicklook(plan: Dict[str, Any], announced: Dict[str, Any], runtime_dir: str) -> None:
+    log_dir = Path(plan["grid_session_dir"])
+    quicklook_log = log_dir / "orchestrator_quicklook.log"
+    with quicklook_log.open("ab") as handle:
+        quicklook_proc = _popen_detached(
+            _quicklook_args(plan, announced["session_root"], str(log_dir / "quicklook"), runtime_dir), handle,
+        )
+    _write_runtime(runtime_dir, quicklook_pid=quicklook_proc.pid,
+                    quicklook_start_time=_proc_stat_start_time(quicklook_proc.pid),
+                    quicklook_log=str(quicklook_log), quicklook_cmd_needle="quicklook_live.py")
+
+
+def deferred_quicklook(resolved_plan_path: str, runtime_dir: str, after_utc: datetime,
+                       timeout: float = DEFERRED_QUICKLOOK_TIMEOUT_SEC) -> bool:
+    """Detached waiter left by RUN when capture.py had not announced within SESSION_ANNOUNCE_TIMEOUT_SEC: keeps
+    waiting (only while the SAME capture.py this run launched is alive) and starts quicklook_live.py for exactly
+    the session it announces. Returns True when QUICKLOOK was started."""
+    plan = _load_resolved_plan(resolved_plan_path)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        runtime = _read_runtime(runtime_dir) or {}
+        if runtime.get("resolved_plan_path") != str(resolved_plan_path) or not _capture_ownership_matches(runtime):
+            print("deferred QUICKLOOK: capture.py of this run is gone or another run started - not started", flush=True)
+            return False
+        announced = _wait_for_session_announcement(runtime_dir, timeout=SESSION_ANNOUNCE_POLL_SEC * 5,
+                                                    after_utc=after_utc)
+        if announced is not None:
+            _write_runtime(runtime_dir, session_id=announced.get("session_id"))
+            _start_quicklook(plan, announced, runtime_dir)
+            _write_runtime(runtime_dir, note="quicklook_live.py started after capture.py's late announcement")
+            print(f"deferred QUICKLOOK: started for session {announced.get('session_id')}", flush=True)
+            return True
+    _write_runtime(runtime_dir, orchestrator_state="DEGRADED",
+                    note="capture.py did not announce current_session.json in time; "
+                         "quicklook_live.py was not started if enabled (MAIN unaffected)")
+    print("deferred QUICKLOOK: no announcement in time - not started", flush=True)
+    return False
 
 
 def _popen_detached(args: List[str], log_handle) -> subprocess.Popen:
@@ -572,3 +616,13 @@ def generate_final_report(session_dir: str) -> Dict[str, Any]:
     ]
     (session_path / "final_report.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
     return report
+
+
+if __name__ == "__main__":
+    import argparse
+    _p = argparse.ArgumentParser(description="observation_orchestrator internal entry points")
+    _p.add_argument("--deferred-quicklook", required=True, metavar="RESOLVED_PLAN")
+    _p.add_argument("--runtime-dir", default=DEFAULT_RUNTIME_DIR)
+    _p.add_argument("--after-utc", required=True)
+    _a = _p.parse_args()
+    sys.exit(0 if deferred_quicklook(_a.deferred_quicklook, _a.runtime_dir, datetime.fromisoformat(_a.after_utc)) else 1)

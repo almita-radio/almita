@@ -732,3 +732,40 @@ def test_pid_alive_is_false_for_an_exited_but_unreaped_child(tmp_path):
         live.wait()
         done.wait()
     assert orch._pid_alive(done.pid) is False                 # reaped: no such process
+
+
+# --------------------------------------------------------------- late announcement: deferred QUICKLOOK
+# 2026-10-15 via_lactea: the first GOTO + settle took 63 s, past the 60 s wait, and QUICKLOOK never started.
+
+def test_announce_timeout_with_live_capture_leaves_a_deferred_quicklook_waiter(tmp_path, monkeypatch):
+    path, plan = _fixture_resolved_plan(tmp_path, quicklook_enabled=True)
+    popen_calls, runtime_dir = _patch_common(monkeypatch, tmp_path, preflight_overall="PASS")
+    monkeypatch.setattr(orch, "_wait_for_session_announcement", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_capture_ownership_matches", lambda runtime: True)
+    result = orch.run_observation(path, yes=True, runtime_dir=runtime_dir)
+    assert len(popen_calls) == 2
+    assert "--deferred-quicklook" in popen_calls[1] and str(path) in popen_calls[1]
+    assert result["orchestrator_state"] == "RUNNING"
+
+
+def test_deferred_quicklook_starts_quicklook_on_the_late_announcement(tmp_path, monkeypatch):
+    path, plan = _fixture_resolved_plan(tmp_path, quicklook_enabled=True)
+    popen_calls, runtime_dir = _patch_common(monkeypatch, tmp_path)
+    orch._write_runtime(runtime_dir, orchestrator_state="RUNNING", resolved_plan_path=str(path), capture_pid=1)
+    monkeypatch.setattr(orch, "_capture_ownership_matches", lambda runtime: True)
+    monkeypatch.setattr(orch, "_wait_for_session_announcement",
+                        lambda *a, **k: {"session_id": "SID-LATE", "session_root": "/late"})
+    assert orch.deferred_quicklook(str(path), runtime_dir, datetime.now(timezone.utc), timeout=5)
+    assert len(popen_calls) == 1 and any("quicklook_live.py" in a for a in popen_calls[0])
+    assert "/late" in popen_calls[0]
+    state = runtime_state.read_json_safe(orch._runtime_path(runtime_dir))
+    assert state["session_id"] == "SID-LATE" and state["quicklook_pid"]
+
+
+def test_deferred_quicklook_gives_up_when_its_capture_is_gone(tmp_path, monkeypatch):
+    path, plan = _fixture_resolved_plan(tmp_path, quicklook_enabled=True)
+    popen_calls, runtime_dir = _patch_common(monkeypatch, tmp_path)
+    orch._write_runtime(runtime_dir, orchestrator_state="RUNNING", resolved_plan_path=str(path), capture_pid=1)
+    monkeypatch.setattr(orch, "_capture_ownership_matches", lambda runtime: False)
+    assert not orch.deferred_quicklook(str(path), runtime_dir, datetime.now(timezone.utc), timeout=5)
+    assert popen_calls == []
