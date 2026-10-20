@@ -231,10 +231,44 @@ def build_calibration_profile(
     return load_calibration_profile(stem)
 
 
-def load_calibration_profile(path: str | Path) -> dict[str, Any]:
+class CalibrationProfileInvalidated(ValueError):
+    """The operator invalidated this profile (an INVALIDATED marker sits next to it): nothing may load it again."""
+
+
+def _profile_stem(path: str | Path) -> Path:
     stem = Path(path)
-    if stem.suffix in (".json", ".npz"):
-        stem = stem.with_suffix("")
+    return stem.with_suffix("") if stem.suffix in (".json", ".npz") else stem
+
+
+def invalidation_marker(path: str | Path) -> Path:
+    """<stem>.INVALIDATED.json next to the profile. It is not itself a profile (no .npz, no profile keys)."""
+    return Path(f"{_profile_stem(path)}.INVALIDATED.json")
+
+
+def invalidate_calibration_profile(path: str | Path, reason: str, by: str = "operator") -> Path:
+    """Mark a profile as wrong without moving or editing it (2026-10-17: a wizard "50 ohm" reference taken with the
+    antenna still connected). The files stay where every record that used them points; loading them is refused."""
+    stem = _profile_stem(path)
+    if not stem.with_suffix(".json").is_file():
+        raise FileNotFoundError(f"no calibration profile at {stem}.json")
+    if not reason or not reason.strip():
+        raise ValueError("a reason is required")
+    marker = invalidation_marker(stem)
+    marker.write_text(json.dumps({"profile": str(stem), "reason": reason.strip(), "by": by,
+                                  "invalidated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}, indent=1))
+    return marker
+
+
+def load_calibration_profile(path: str | Path) -> dict[str, Any]:
+    stem = _profile_stem(path)
+    marker = invalidation_marker(stem)
+    if marker.is_file():
+        try:
+            info = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            info = {}
+        raise CalibrationProfileInvalidated(
+            f"profile INVALIDATED {info.get('invalidated_utc', '')} by {info.get('by', '?')}: {info.get('reason', 'no reason recorded')}")
     metadata = json.loads(stem.with_suffix(".json").read_text())
     arrays = dict(np.load(stem.with_suffix(".npz"), allow_pickle=False))
     if metadata.get("absolute_calibration") is not False:
