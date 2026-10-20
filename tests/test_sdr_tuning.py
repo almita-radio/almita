@@ -11,6 +11,7 @@ import asyncio
 import io
 import json
 import re
+import struct
 import subprocess
 import tokenize
 from pathlib import Path
@@ -301,3 +302,94 @@ def test_tune_without_a_socket_says_the_agc_command_was_not_sent():
     sdr = _FakeSDR(_acking(source))
     rec = asyncio.run(sdr_tuning.tune_explicitly(sdr, 1420405752, 2400000, 40.2, ack_source=source))
     assert rec["rtl_agc"].startswith("not sent")
+
+
+# ------------------------------------------------------------------ MAIN Bias-T (LNA power), 2026-10-17
+class _BiasJournal:
+    """A MAIN-unit acknowledgement source: rtl_tcp's lines appear as the fake socket receives commands."""
+    unit = sdr_tuning.MAIN_RTL_TCP_UNIT
+    describe = "fake journal"
+
+    def __init__(self):
+        self.out = []
+
+    def mark(self):
+        self.out = []
+
+    def lines(self):
+        return list(self.out)
+
+
+class _BiasSock:
+    def __init__(self, journal, bias_reply=None):
+        self.journal, self.bias_reply = journal, bias_reply
+
+    def sendall(self, data):
+        cmd, value = struct.unpack(">BI", data)
+        if cmd == sdr_tuning.RTL_AGC_COMMAND:
+            self.journal.out.append(f"set agc mode {value}")
+        if cmd == sdr_tuning.BIAS_TEE_COMMAND:
+            self.journal.out.append(f"set bias tee {value if self.bias_reply is None else self.bias_reply}")
+
+
+class _BiasSdr:
+    mode = "network"
+
+    def __init__(self, journal, **kw):
+        self.journal, self.socket = journal, _BiasSock(journal, **kw)
+
+    async def configure(self, center_freq, sample_rate, gain):
+        self.journal.out += [f"set freq {center_freq}", f"set sample rate {sample_rate}", f"set gain {int(round(gain * 10))}"]
+
+
+def _patch_bias(monkeypatch, has_t, state="off"):
+    monkeypatch.setattr(sdr_tuning, "main_service_has_bias_tee_flag", lambda unit=None: has_t)
+    monkeypatch.setattr(sdr_tuning, "main_bias_tee_state", lambda unit=None: {"state": state, "since_utc": "t", "source": "client command"})
+
+
+def test_a_main_acquisition_switches_the_lna_back_on_and_records_it(monkeypatch):
+    _patch_bias(monkeypatch, True, "off")
+    j = _BiasJournal()
+    rec = asyncio.run(sdr_tuning.tune_explicitly(_BiasSdr(j), 1420405752, 2400000, 40.2, ack_source=j, ack_timeout=0.3))
+    assert "set bias tee 1" in j.out
+    assert rec["bias_tee"] == "on: command sent; acknowledged 1" and rec["bias_tee_was_off_before"] is True
+    attrs = sdr_tuning.tuning_attrs(rec)
+    assert attrs["bias_tee"].startswith("on") and attrs["bias_tee_was_off_before"] is True
+
+
+def test_without_T_the_lna_is_never_switched_on_from_an_acquisition(monkeypatch):
+    """rtl_tcp run without -T (a 50 ohm load straight on the SDR) must stay without Bias-T."""
+    _patch_bias(monkeypatch, False)
+    j = _BiasJournal()
+    rec = asyncio.run(sdr_tuning.tune_explicitly(_BiasSdr(j), 1420405752, 2400000, 40.2, ack_source=j, ack_timeout=0.3))
+    assert not any(line.startswith("set bias tee") for line in j.out) and rec["bias_tee"].startswith("not sent")
+    with pytest.raises(sdr_tuning.TuningIncoherent, match="without -T"):
+        sdr_tuning.set_main_bias_tee(True)
+
+
+def test_an_acquisition_whose_lna_did_not_come_on_takes_no_capture(monkeypatch):
+    _patch_bias(monkeypatch, True)
+    j = _BiasJournal()
+    with pytest.raises(sdr_tuning.TuningIncoherent, match="Bias-T 0"):
+        asyncio.run(sdr_tuning.tune_explicitly(_BiasSdr(j, bias_reply=0), 1420405752, 2400000, 40.2, ack_source=j, ack_timeout=0.3))
+
+
+def test_rfi_ref_and_other_servers_keep_their_own_bias_tee(monkeypatch):
+    _patch_bias(monkeypatch, True)
+    j = _BiasJournal(); j.unit = "rtl_tcp_rfi_ref"
+    rec = asyncio.run(sdr_tuning.tune_explicitly(_BiasSdr(j), 1420405752, 2400000, 40.2, ack_source=j, ack_timeout=0.3))
+    assert not any(line.startswith("set bias tee") for line in j.out) and rec["bias_tee"].startswith("not managed")
+
+
+def test_bias_tee_state_follows_rtl_tcp_own_lines():
+    class R:
+        def __init__(self, journal): self.journal = journal
+        def __call__(self, cmd, **kw):
+            class P: pass
+            p = P()
+            p.stdout = "Sat 2026-10-17 09:42:16 UTC\n" if "ActiveEnterTimestamp" in cmd else self.journal
+            return p
+    j = ("2026-10-17T09:42:16+0000 h stdbuf[1]: activated bias-T on GPIO PIN 0\n"
+         "2026-10-17T10:00:00+0000 h stdbuf[1]: set bias tee 0\n")
+    assert sdr_tuning.main_bias_tee_state(run=R(j)) == {"state": "off", "since_utc": "2026-10-17T10:00:00+0000", "source": "client command"}
+    assert sdr_tuning.main_bias_tee_state(run=R(j.splitlines()[0]))["state"] == "on"

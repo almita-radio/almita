@@ -41,8 +41,11 @@ _ACK_PATTERNS = {
     "sample_rate_hz": re.compile(r"\bset sample rate (\d+)\b"),
     "gain_tenths_db": re.compile(r"\bset gain (\d+)\b"),
     "rtl_agc_mode": re.compile(r"\bset agc mode (\d+)\b"),
+    "bias_tee": re.compile(r"\bset bias tee (\d+)\b"),
 }
 RTL_AGC_COMMAND = 0x08        # rtl_tcp: RTL2832 digital AGC on/off. rtl_tcp keeps what the previous client set (BL-076)
+BIAS_TEE_COMMAND = 0x0E       # rtl_tcp: Bias-T (MAIN's LNA power) on/off; kept until a client changes it or rtl_tcp restarts
+_BIAS_STARTUP = re.compile(r"activated bias-T on GPIO")
 _PLL_NOT_LOCKED = re.compile(r"PLL not locked")
 # librtlsdr failures rtl_tcp prints right AFTER its "set freq/sample rate/gain" lines when the dongle cannot be driven
 # (e.g. -4 = LIBUSB_ERROR_NO_DEVICE: the USB device re-enumerated under a running rtl_tcp). rtl_tcp prints the "set"
@@ -167,6 +170,18 @@ async def tune_explicitly(sdr: Any, center_frequency_hz: float, sample_rate_hz: 
     if sock is not None and getattr(sdr, "mode", "network") == "network":
         await asyncio.get_event_loop().run_in_executor(None, sock.sendall, struct.pack(">BI", RTL_AGC_COMMAND, 0))
         agc_sent = True
+    # MAIN's LNA may have been switched off from STATUS while idle (operator 2026-10-17): every MAIN acquisition switches
+    # it back on - but only when MAIN's rtl_tcp service is configured WITH -T. Run without -T (e.g. a 50 ohm load
+    # straight on the SDR, calibration_engine.reference_wizard.bias_t_load_refusal) it is never switched on from here.
+    bias = {"bias_tee": "not managed (not MAIN's rtl_tcp)"}
+    if sock is not None and getattr(sdr, "mode", "network") == "network" and getattr(source, "unit", None) == MAIN_RTL_TCP_UNIT:
+        if main_service_has_bias_tee_flag(source.unit) is True:
+            before = main_bias_tee_state(source.unit)
+            await asyncio.get_event_loop().run_in_executor(None, sock.sendall, struct.pack(">BI", BIAS_TEE_COMMAND, 1))
+            bias = {"bias_tee": "on: command sent", "bias_tee_was_off_before": before.get("state") == "off",
+                    "bias_tee_state_before": before}
+        else:
+            bias = {"bias_tee": "not sent: MAIN rtl_tcp service runs without -T (left as the operator configured it)"}
 
     record = await verify_acknowledged(source, requested, operating=operating, ack_timeout=ack_timeout, sleep=sleep)
     record["rtl_agc"] = ("off: command sent" if agc_sent else "not sent (no rtl_tcp socket)")
@@ -175,7 +190,72 @@ async def tune_explicitly(sdr: Any, center_frequency_hz: float, sample_rate_hz: 
         if ack == 1:
             raise TuningIncoherent(f"rtl_tcp acknowledged RTL AGC mode 1 after it was switched off ({source.describe}) - NO capture taken")
         record["rtl_agc"] += "; acknowledged mode 0" if ack == 0 else "; no acknowledgement line seen"
+    record.update(bias)
+    if record["bias_tee"] == "on: command sent":
+        ack = parse_acks(source.lines()).get("bias_tee")
+        if ack == 0:
+            raise TuningIncoherent(f"rtl_tcp acknowledged Bias-T 0 after it was switched on ({source.describe}) - NO capture taken")
+        record["bias_tee"] += "; acknowledged 1" if ack == 1 else "; no acknowledgement line seen"
     return record
+
+
+# ------------------------------------------------------------------ MAIN Bias-T (LNA power): state and manual switch
+def main_service_has_bias_tee_flag(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = subprocess.run) -> Optional[bool]:
+    """Whether MAIN's rtl_tcp unit is configured with -T. None when it cannot be read."""
+    try:
+        out = run(["systemctl", "show", "-p", "ExecStart", "--value", unit], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if "rtl_tcp" not in out:
+        return None
+    return " -T" in f" {out} ".replace(";", " ")
+
+
+def main_bias_tee_state(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = subprocess.run) -> Dict[str, Any]:
+    """MAIN's Bias-T as rtl_tcp itself last reported it since the running service started: "activated bias-T on GPIO"
+    at startup (-T) or "set bias tee N" from a client. rtl_tcp has no readback: this is what it was told and
+    acknowledged, not a measured voltage. state: on / off / unknown."""
+    out: Dict[str, Any] = {"state": "unknown", "since_utc": None, "source": None}
+    try:
+        started = run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit], capture_output=True,
+                      text=True, timeout=10).stdout.strip()
+        if not started:
+            return {**out, "source": f"{unit} is not running"}
+        lines = run(["journalctl", "-u", unit, "--since", started, "-o", "short-iso", "--no-pager"], capture_output=True,
+                    text=True, timeout=15).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return out
+    for line in lines:
+        m = _ACK_PATTERNS["bias_tee"].search(line)
+        if _BIAS_STARTUP.search(line):
+            out = {"state": "on", "since_utc": line.split()[0], "source": "rtl_tcp startup (-T)"}
+        elif m:
+            out = {"state": "on" if int(m.group(1)) else "off", "since_utc": line.split()[0], "source": "client command"}
+    return out
+
+
+def set_main_bias_tee(on: bool, host: str = "127.0.0.1", port: int = 1234, unit: str = MAIN_RTL_TCP_UNIT,
+                      ack_timeout: float = ACK_TIMEOUT_SECONDS) -> Dict[str, Any]:
+    """Switch MAIN's Bias-T over a short rtl_tcp connection and wait for rtl_tcp's own acknowledgement. The caller
+    makes sure no acquisition holds MAIN (rtl_tcp serves one client at a time)."""
+    import socket as _socket
+    if on and main_service_has_bias_tee_flag(unit) is False:
+        raise TuningIncoherent(f"{unit} runs without -T: Bias-T is not switched on from here (left as configured)")
+    source = JournalAckSource(unit)
+    source.mark()
+    with _socket.create_connection((host, port), timeout=5) as s:
+        s.recv(12)
+        s.sendall(struct.pack(">BI", BIAS_TEE_COMMAND, 1 if on else 0))
+        deadline = time.monotonic() + ack_timeout
+        ack = None
+        while time.monotonic() < deadline:
+            ack = parse_acks(source.lines()).get("bias_tee")
+            if ack == (1 if on else 0):
+                break
+            time.sleep(0.2)
+    if ack != (1 if on else 0):
+        raise TuningIncoherent(f"rtl_tcp did not acknowledge Bias-T {'on' if on else 'off'} within {ack_timeout:g} s ({source.describe})")
+    return main_bias_tee_state(unit)
 
 
 async def verify_acknowledged(source: Any, requested: Dict[str, Any], *, operating: Optional[Dict[str, Any]] = None,
@@ -267,4 +347,6 @@ def tuning_attrs(record: Dict[str, Any]) -> Dict[str, Any]:
         "tuning_pll_not_locked_count": record["pll_not_locked_count"],
         "tuned_utc": record["tuned_utc"],
         "rtl_agc": record.get("rtl_agc", "not recorded"),
+        "bias_tee": record.get("bias_tee", "not recorded"),
+        "bias_tee_was_off_before": bool(record.get("bias_tee_was_off_before", False)),
     }
