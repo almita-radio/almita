@@ -163,7 +163,9 @@
     U.setEnabled($("btn-sel-clear"), n > 0, "nothing selected");
   }
   $("sel-page").addEventListener("change", () => {
-    for (const box of document.querySelectorAll('#tbl-sessions input[type="checkbox"]')) if (box.checked !== $("sel-page").checked) { box.checked = $("sel-page").checked; box.dispatchEvent(new Event("change")); }
+    // read the wanted state once: each box's change handler re-renders (and so resets) this checkbox
+    const want = $("sel-page").checked;
+    for (const box of document.querySelectorAll('#tbl-sessions input[type="checkbox"]')) if (box.checked !== want) { box.checked = want; box.dispatchEvent(new Event("change")); }
     renderSelection();
   });
   $("btn-sel-all").addEventListener("click", U.guard($("btn-sel-all"), async () => {
