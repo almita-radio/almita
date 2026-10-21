@@ -63,6 +63,21 @@
       </div>
     </section>
 
+    <section class="panel" id="sun-sync-panel" aria-labelledby="h-sun-sync">
+      <header><h2 id="h-sun-sync">SUN SYNC <span class="muted">(approximate alignment by hand)</span></h2><span id="sun-sync-badge" class="badge">—</span></header>
+      <div class="obs-summary">Point the antenna at the Sun by hand (shadow method), lock the clutches, then CHECK and SYNC: the mount is told
+        it points at the Sun's catalogue position (EOD) at that instant. No GOTO is sent; tracking is switched ON after the SYNC.
+        Refused with the simulator, while any job or observation runs, if the mount is busy, or if the mount believes it is more
+        than <span id="sun-sync-max">10</span>° away (far more likely a pier-side flip than a pointing error). Evidence saved in data/alignment/MANUAL-SUN-SYNC-*.json.</div>
+      <dl class="kv" id="sun-sync-kv"></dl>
+      <div class="obs-actions">
+        <button type="button" id="btn-sun-check">CHECK</button>
+        <button type="button" id="btn-sun-sync" class="danger-action">SYNC ON THE SUN NOW</button>
+      </div>
+      <div class="reason" data-for="btn-sun-sync" role="status"></div>
+      <div class="obs-summary" id="sun-sync-result"></div>
+    </section>
+
     <section class="panel compact">
       <header><h2>STATUS</h2></header>
       <dl class="kv">

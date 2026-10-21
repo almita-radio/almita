@@ -235,6 +235,45 @@
 
   $("mode-solar").addEventListener("click", () => setMode("solar"));
   $("mode-hi").addEventListener("click", () => setMode("hi"));
+  // ---- SUN SYNC: the operator pointed the antenna at the Sun by hand; the backend script re-checks every guard itself
+  function sunKv(d) {
+    const dl = $("sun-sync-kv"); dl.textContent = "";
+    const m = d.mount || {}, s = d.sun_eod || {}, f = (x, n) => (x == null ? "—" : Number(x).toFixed(n));
+    const rows = [["CHECKED (UTC)", d.utc], ["MOUNT", d.device], ["MOUNT BELIEVES RA / DEC", `${f(m.ra_h, 4)} h / ${f(m.dec_deg, 3)}°`],
+      ["PIER SIDE", (m.pier || []).join(", ") || "—"], ["TRACKING", m.tracking || "—"], ["SUN NOW (EOD) RA / DEC", `${f(s.ra_h, 4)} h / ${f(s.dec_deg, 3)}°`],
+      ["SEPARATION", d.separation_deg == null ? "unreadable" : `${f(d.separation_deg, 2)}°`]];
+    for (const [k, v] of rows) { const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = v == null ? "—" : String(v); dl.append(dt, dd); }
+  }
+  async function sunCheck() {
+    $("sun-sync-result").textContent = "";
+    let d;
+    try { d = await getJSON("/api/align/sun_sync"); } catch (err) { showError(msg(err)); U.setEnabled($("btn-sun-sync"), false, "CHECK failed"); return; }
+    $("sun-sync-max").textContent = d.max_sep_deg;
+    sunKv(d);
+    const why = (d.blocked || []).slice();
+    if (d.separation_deg == null) why.push("mount coordinates unreadable");
+    else if (d.separation_deg > d.max_sep_deg) why.push(`separation ${d.separation_deg.toFixed(2)}° > ${d.max_sep_deg}° - check the pier side`);
+    U.setBadge($("sun-sync-badge"), why.length ? "BLOCKED" : "READY");
+    U.setEnabled($("btn-sun-sync"), !why.length, why.join("; "));
+  }
+  async function sunSync() {
+    if (!window.confirm("SYNC the mount on the Sun now?\n\nOnly if the antenna is pointed at the Sun by hand and the clutches are locked. " +
+                        "The mount's position is overwritten (SYNC) and tracking is switched ON.")) return;
+    let r;
+    try { r = await postJSON("/api/align/sun_sync", { confirm: true }, 120000); } catch (err) { showError(msg(err)); return; }
+    U.setEnabled($("btn-sun-sync"), false, "done: CHECK again before another SYNC");
+    if (r.refused) { U.setBadge($("sun-sync-badge"), "REFUSED"); $("sun-sync-result").textContent = "REFUSED: " + r.refused; return; }
+    U.setBadge($("sun-sync-badge"), r.ok ? "SYNCED" : "FAILED");
+    const post = r.post || {}, rb = r.readback || {};
+    $("sun-sync-result").textContent = `${r.ok ? "SYNC sent and accepted" : "SYNC FAILED"} · tracking ON: ${r.tracking_on_ok} · ` +
+      `mount now reads ${rb.ra_h == null ? "—" : Number(rb.ra_h).toFixed(4)} h / ${rb.dec_deg == null ? "—" : Number(rb.dec_deg).toFixed(3)}° · ` +
+      `separation from the Sun ${post.separation_deg == null ? "—" : Number(post.separation_deg).toFixed(3)}° · saved ${r.saved}`;
+    if (r.post) sunKv(r.post);
+  }
+  U.setEnabled($("btn-sun-sync"), false, "CHECK first");
+  $("btn-sun-check").addEventListener("click", U.guard($("btn-sun-check"), sunCheck, "CHECKING…"));
+  $("btn-sun-sync").addEventListener("click", U.guard($("btn-sun-sync"), sunSync, "SYNCING…"));
+
   $("btn-plan").addEventListener("click", U.guard($("btn-plan"), doPlan, "PLANNING…"));
   $("btn-preflight").addEventListener("click", U.guard($("btn-preflight"), doPreflight, "CHECKING…"));
   $("btn-run-sim").addEventListener("click", U.guard($("btn-run-sim"), doRunSimulation, "STARTING…"));

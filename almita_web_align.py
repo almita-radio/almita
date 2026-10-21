@@ -9,6 +9,7 @@ as JSON.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
@@ -179,3 +180,37 @@ def sync_apply(mode: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # blocks both modes unconditionally; apply() re-checks independently
     # rather than trusting that prepare() was actually called first.
     return sync_prepare(mode, body)
+
+
+# ------------------------------------------------------------------ SUN SYNC (approximate alignment by hand)
+# The operator points the antenna at the Sun by hand and presses the button: SYNC to the Sun's catalogue position (EOD)
+# at that instant. Runs scripts/mount/manual_sun_sync.py as its OWN process: a SYNC claims the mount lock until the
+# process exits, and this server must never hold it. The script re-checks every guard itself at the instant of the
+# SYNC (simulator, web jobs, an active observation, pipeline processes, the mount lock, separation <= max_sep_deg).
+SUN_SYNC_SCRIPT = Path(__file__).resolve().parent / "scripts" / "mount" / "manual_sun_sync.py"
+SUN_SYNC_MAX_SEP_DEG = 10.0
+
+
+def _sun_sync_run(args, timeout: float) -> Dict[str, Any]:
+    import json
+    import subprocess
+    import sys
+    run = subprocess.run([sys.executable, str(SUN_SYNC_SCRIPT), *args], cwd=str(SUN_SYNC_SCRIPT.parents[2]),
+                         capture_output=True, text=True, timeout=timeout)
+    lines = [ln for ln in run.stdout.splitlines() if ln.strip().startswith("{")]
+    if not lines:
+        raise RuntimeError(f"sun sync script failed (exit {run.returncode}): {(run.stderr or run.stdout).strip()[-400:]}")
+    return json.loads(lines[-1])
+
+
+def sun_sync_check() -> Dict[str, Any]:
+    """Read only: where the mount believes it points, the Sun now, the separation and what would block a SYNC."""
+    out = _sun_sync_run(["show", "--json"], timeout=30)
+    out["max_sep_deg"] = SUN_SYNC_MAX_SEP_DEG
+    return out
+
+
+def sun_sync_apply(confirm: Any) -> Dict[str, Any]:
+    if confirm is not True:
+        raise ValueError("confirm: true is required - SUN SYNC does not proceed implicitly")
+    return _sun_sync_run(["sync", "--yes", "--json", "--max-sep-deg", str(SUN_SYNC_MAX_SEP_DEG)], timeout=90)

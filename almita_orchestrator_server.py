@@ -362,6 +362,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, status)
             if path == "/api/align/status":
                 return _json_response(self, 200, almita_web_align.get_status())
+            if path == "/api/align/sun_sync":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_align.sun_sync_check()})
             if path == "/api/calibrate/status":
                 return _json_response(self, 200, almita_web_calibrate.get_status())
             if path == "/api/ops/jobs":
@@ -544,6 +546,12 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                     raise ValueError("send {on: true|false, confirm: true}")
                 _log("WARNING", f"req={self._request_id} MAIN LNA (Bias-T) -> {'ON' if body['on'] else 'OFF'} requested")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_lna_power(body["on"])})
+            if path == "/api/align/sun_sync":
+                confirm = _read_json_body(self).get("confirm")
+                _log("WARNING", f"req={self._request_id} SUN SYNC requested")
+                result = almita_web_align.sun_sync_apply(confirm)
+                _log("WARNING", f"req={self._request_id} SUN SYNC result: ok={result.get('ok')} refused={result.get('refused')!r} saved={result.get('saved')}")
+                return _json_response(self, 200, {"ok": True, "data": result})
             if path == "/api/mount/stop":
                 if _read_json_body(self).get("confirm") is not True:
                     raise ValueError("confirm: true is required - STOP MOUNT does not proceed implicitly")

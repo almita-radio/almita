@@ -7,7 +7,9 @@ clutches locked again) - operator, 2026-10-18, after two solar ALIGNs saw no Sun
                 separation is above --max-sep-deg (a large one is far more likely a pier-side flip than a pointing
                 error). Sends the same INDITelescopeControl.sync() ALIGN uses, then tracking ON (--no-track skips it),
                 reads back, and saves the evidence to data/alignment/MANUAL-SUN-SYNC-<utc>.json. No GOTO is sent.
-`power`         passive 30 s read of MAIN over rtl_tcp (no command sent): rms and relative dB, for a hand ON/OFF."""
+`power`         passive 30 s read of MAIN over rtl_tcp (no command sent): rms and relative dB, for a hand ON/OFF.
+`--json`        (show/sync) one JSON object on the last line, refusals included: ALIGN's SUN SYNC button runs this
+                script as its own process, because a SYNC claims the mount lock until the process exits."""
 import argparse
 import asyncio
 import json
@@ -44,29 +46,41 @@ def state():
     return out
 
 
-async def do_sync(args):
-    if mount_device.is_simulator(mount_device.current()):
-        sys.exit("REFUSED: the simulator is selected")
-    jobs = almita_web_ops.running_jobs()
-    if jobs:
-        sys.exit(f"REFUSED: web job(s) running: {[j.get('job_id') for j in jobs]}")
+class Refused(Exception):
+    pass
+
+
+def guards(device):
+    """Every reason a SYNC must not go out now (empty = allowed). The pipeline check is SESSIONS' own: web jobs,
+    an active observation AND pipeline processes (running_jobs() alone does not see an OBSERVE)."""
+    import session_deletion
+    reasons = []
+    if mount_device.is_simulator(device):
+        reasons.append("the simulator is selected")
+    reasons += session_deletion.default_busy_probe()
     if mount_lock.holder():
-        sys.exit(f"REFUSED: mount lock held by {mount_lock.holder()}")
+        reasons.append(f"mount lock held by {mount_lock.holder()}")
+    return reasons
+
+
+async def do_sync(max_sep_deg=10.0, track=True):
     pre = state()
-    print(json.dumps(pre, indent=1))
+    blocked = guards(pre["device"])
+    if blocked:
+        raise Refused("; ".join(blocked))
     if pre.get("separation_deg") is None:
-        sys.exit("REFUSED: mount coordinates unreadable")
-    if pre["separation_deg"] > args.max_sep_deg:
-        sys.exit(f"REFUSED: separation {pre['separation_deg']:.2f} deg > {args.max_sep_deg} deg - check the pier side")
+        raise Refused("mount coordinates unreadable: " + str(pre["mount"].get("error") or "no RA/Dec"))
+    if pre["separation_deg"] > max_sep_deg:
+        raise Refused(f"separation {pre['separation_deg']:.2f} deg > {max_sep_deg} deg - check the pier side")
     tel = INDITelescopeControl("localhost", 7624, pre["device"], False)
     if not await tel.connect():
-        sys.exit("REFUSED: INDI connect failed")
+        raise Refused("INDI connect failed")
     try:
         sun = sun_eod(Time.now())                      # the Sun at the instant of the SYNC, not of `pre`
         sent = {"utc": Time.now().utc.isot, "ra_h": float(sun.ra.hour), "dec_deg": float(sun.dec.deg)}
         ok = bool(await tel.sync(sent["ra_h"], sent["dec_deg"]))
         tracking = None
-        if ok and not args.no_track:
+        if ok and track:
             tracking = bool(await tel.set_tracking(True))
         ra, dec = await tel.get_coordinates(force_refresh=True)
     finally:
@@ -77,8 +91,8 @@ async def do_sync(args):
               "method": "operator pointed by hand (shadow), clutches locked, then SYNC on the Sun EOD"}
     path = ROOT / "data" / "alignment" / f"MANUAL-SUN-SYNC-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"
     path.write_text(json.dumps(record, indent=1))
-    print(json.dumps({k: record[k] for k in ("sync_sent", "sync_ok", "tracking_on_ok", "readback")}, indent=1))
-    print("post separation from the Sun (deg):", post.get("separation_deg"), "| saved", path)
+    record["saved"] = str(path.relative_to(ROOT))
+    return record
 
 
 def power(seconds):
@@ -104,19 +118,32 @@ def power(seconds):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("show")
+    sh = sub.add_parser("show"); sh.add_argument("--json", action="store_true")
     s = sub.add_parser("sync"); s.add_argument("--yes", action="store_true"); s.add_argument("--max-sep-deg", type=float, default=10.0)
-    s.add_argument("--no-track", action="store_true")
+    s.add_argument("--no-track", action="store_true"); s.add_argument("--json", action="store_true")
     pw = sub.add_parser("power"); pw.add_argument("--seconds", type=int, default=30)
     a = ap.parse_args()
     if a.cmd == "show":
-        print(json.dumps(state(), indent=1))
+        out = state()
+        out["blocked"] = guards(out["device"])
+        print(json.dumps(out) if a.json else json.dumps(out, indent=1))
     elif a.cmd == "power":
         power(a.seconds)
     elif not a.yes:
         sys.exit("sync needs --yes")
     else:
-        asyncio.run(do_sync(a))
+        try:
+            record = asyncio.run(do_sync(a.max_sep_deg, not a.no_track))
+        except Refused as exc:
+            if a.json:
+                print(json.dumps({"ok": False, "refused": str(exc)}))
+                return
+            sys.exit(f"REFUSED: {exc}")
+        if a.json:
+            print(json.dumps({"ok": bool(record["sync_ok"]), **record}))
+        else:
+            print(json.dumps({k: record[k] for k in ("sync_sent", "sync_ok", "tracking_on_ok", "readback")}, indent=1))
+            print("post separation from the Sun (deg):", record["post"].get("separation_deg"), "| saved", record["saved"])
 
 
 if __name__ == "__main__":
