@@ -51,7 +51,7 @@
   const chileShort = (s) => (s ? s.replace(/:\d\d \(UTC/, " (UTC") : DASH);
 
   // ------------------------------------------------------------------ CATALOG
-  const FILTERS = ["q", "state", "condition", "kind", "reduce", "science", "tag", "archived", "discarded", "sort", "order"];
+  const FILTERS = ["q", "state", "condition", "kind", "calibration", "reduce", "science", "tag", "archived", "discarded", "sort", "order"];
   let page = 1, pages = 1, current = null, allSessions = [];
   // ------------------------------------------------------------------ SELECTION + DELETION (BL-093)
   // Ticking boxes never deletes anything: DELETE … opens a preview computed by the server, and only its red button

@@ -133,6 +133,9 @@ def test_listing_filters_sort_and_pages(tree):
     assert [s["campaign_id"] for s in sc.list_sessions({"kind": "TEST"}, roots)["sessions"]] == [fx.T]
     assert [s["campaign_id"] for s in sc.list_sessions({"condition": "SIMULATOR"}, roots)["sessions"]] == [fx.B]
     assert [s["campaign_id"] for s in sc.list_sessions({"reduce": "COMPLETED"}, roots)["sessions"]] == [fx.A]
+    invalid = sc.list_sessions({"calibration": "INVALIDATED"}, roots)["sessions"]
+    assert fx.B in [s["campaign_id"] for s in invalid] and fx.A not in [s["campaign_id"] for s in invalid]
+    assert all(s["calibration"]["state"] == "INVALIDATED" for s in invalid)
     newest = sc.list_sessions({"sort": "started"}, roots)["sessions"]
     assert newest[0]["campaign_id"] == fx.E and newest[-1]["campaign_id"] in (fx.D, fx.T)
     p1 = sc.list_sessions({"per_page": "5", "page": "1"}, roots)

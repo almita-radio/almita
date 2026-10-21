@@ -717,6 +717,7 @@ def list_sessions(params: Dict[str, str], roots: Optional[Roots] = None) -> Dict
     for key, getter in (("state", lambda r: (r.get("capture") or {}).get("state")),
                         ("condition", lambda r: (r.get("condition") or {}).get("value")),
                         ("kind", lambda r: r.get("kind")),
+                        ("calibration", lambda r: (r.get("calibration") or {}).get("state")),
                         ("reduce", lambda r: (r.get("reduce") or {}).get("state")),
                         ("science", lambda r: (r.get("science") or {}).get("state"))):
         want = params.get(key)
