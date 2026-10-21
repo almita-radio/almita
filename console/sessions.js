@@ -158,7 +158,6 @@
     const onPage = pageIds.filter((id) => selected.has(id)).length;
     $("sel-page").checked = pageIds.length > 0 && onPage === pageIds.length;
     $("sel-page").indeterminate = onPage > 0 && onPage < pageIds.length;
-    U.setEnabled($("btn-del-products"), n > 0, "select sessions first");
     U.setEnabled($("btn-del-sessions"), n > 0, "select sessions first");
     U.setEnabled($("btn-sel-clear"), n > 0, "nothing selected");
   }
@@ -183,15 +182,13 @@
     renderSelection();
   });
 
-  function categories() { return [["cat-quicklook", "QUICKLOOK"], ["cat-reduce", "REDUCE"], ["cat-science", "SCIENCE"]].filter(([id]) => $(id).checked).map(([, c]) => c); }
+  // one deletion from the page: whole sessions (the server's "products" mode stays, unused here)
   async function preview(mode) {
-    const body = { ids: [...selected.keys()], mode, categories: mode === "products" ? categories() : null };
-    if (mode === "products" && !body.categories.length) { showError("tick at least one product category"); return; }
+    const body = { ids: [...selected.keys()], mode, categories: null };
     try { lastPreview = await post("/api/sessions/delete/preview", body, 120000); showError(""); }
     catch (err) { showError(err); return; }
     renderPreview(lastPreview);
   }
-  $("btn-del-products").addEventListener("click", U.guard($("btn-del-products"), () => preview("products"), "PREVIEWING…"));
   $("btn-del-sessions").addEventListener("click", U.guard($("btn-del-sessions"), () => preview("sessions"), "PREVIEWING…"));
 
   function renderPreview(p) {
