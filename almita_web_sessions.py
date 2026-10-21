@@ -5,6 +5,7 @@ write only under data/sessions/: reindex (catalog_index.json), annotate (annotat
 (exports/<id>-<utc>/ and its .zip). Nothing here imports the hardware layers."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import session_catalog as catalog
@@ -17,6 +18,23 @@ POST_ROUTES = ("/api/sessions/reindex", "/api/sessions/annotate", "/api/sessions
 EXPORT_FILE_ROUTE = "/api/sessions/export_file"
 ROOTS: Optional[catalog.Roots] = None        # None = the real data/ tree; tests point it at a temporary one
 BUSY_PROBE = None                            # None = session_deletion.default_busy_probe; tests replace it
+
+
+def _mount_readback(h5: Optional[Path]) -> Dict[str, Any]:
+    """Where the mount really was during the capture (capture.py's mount_capture_* attributes), not the plan's target.
+    Attributes only: the IQ samples are never read. None when there is no capture file or the attribute is absent."""
+    out: Dict[str, Any] = {"mount_ra_hours": None, "mount_dec_deg": None}
+    if h5 is None:
+        return out
+    try:
+        import h5py
+        with h5py.File(h5, "r") as f:
+            ra, dec = f.attrs.get("mount_capture_ra_hours"), f.attrs.get("mount_capture_dec_deg")
+        if ra is not None and dec is not None:
+            out.update(mount_ra_hours=float(ra), mount_dec_deg=float(dec))
+    except (ImportError, OSError, ValueError, TypeError):
+        pass
+    return out
 
 
 def _one(q: Dict[str, Any], key: str, default: str = "") -> str:
@@ -35,7 +53,12 @@ def handle_get(path: str, query: Dict[str, Any], roots: Optional[catalog.Roots] 
     if path == "/api/sessions/detail":
         return catalog.session_detail(sid, roots)
     if path == "/api/sessions/points":
-        return catalog.session_points(sid, roots)
+        # the sky map needs where the mount really was: read here, not in the catalog (which never loads h5py)
+        d = catalog.session_points(sid, roots)
+        camp = catalog._campaign_dir(sid, roots or catalog.default_roots())
+        for p in d["points"]:
+            p.update(_mount_readback(catalog._h5_for_point(camp, p)))
+        return d
     if path == "/api/sessions/point":
         return catalog.point_detail(sid, _one(query, "point"), roots)
     if path == "/api/sessions/capture_attributes":

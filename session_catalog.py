@@ -906,19 +906,23 @@ def session_points(campaign_id: str, roots: Optional[Roots] = None) -> Dict[str,
     roots = roots or default_roots()
     camp = _campaign_dir(campaign_id, roots)
     rows, state = _mosaic_rows(camp)
-    keep = ("point_id", "scan_order", "grid_row", "grid_col", "ra", "dec", "capture_status", "start_time", "end_time",
+    keep = ("point_id", "point_number", "scan_order", "grid_row", "grid_col", "ra", "dec", "capture_status", "start_time", "end_time",
             "data_filename", "altitude_deg_at_goto", "azimuth_deg_at_goto", "visibility_deferred", "error_message")
     points = [{k: r.get(k) for k in keep} for r in rows]
     return {"state": state, "points": points}
 
 
-def _h5_for_point(camp: Path, point_id: str) -> Optional[Path]:
-    try:
-        n = int(point_id)
-    except (TypeError, ValueError):
-        return None
+def _h5_for_point(camp: Path, row: Dict[str, Any]) -> Optional[Path]:
+    """The capture file of one mosaic.csv row. Files are numbered in capture order (point_number), not by point_id:
+    on the reversed rows of a serpentine scan the two differ, so the row's own data_filename decides."""
+    stem = Path(str(row.get("data_filename") or "")).stem
+    if not stem:
+        try:
+            stem = f"*_{int(row.get('point_number')):04d}"
+        except (TypeError, ValueError):
+            return None
     for d in _iq_dirs(camp):
-        for f in sorted(d.glob(f"*_{n:04d}.h5")):
+        for f in sorted(d.glob(f"{stem}.h5")):
             return f
     return None
 
@@ -932,7 +936,7 @@ def point_detail(campaign_id: str, point_id: str, roots: Optional[Roots] = None)
     row = next((r for r in rows if str(r.get("point_id")) == str(point_id)), None)
     if row is None:
         raise FileNotFoundError("unknown point")
-    h5 = _h5_for_point(camp, point_id)
+    h5 = _h5_for_point(camp, row)
     qp = camp / "quicklook" / "points" / str(point_id)
     products = sorted(_rel(p, roots) for p in qp.rglob("*") if p.is_file())[:50] if qp.is_dir() else []
     index = load_index(roots)

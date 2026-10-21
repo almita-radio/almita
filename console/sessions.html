@@ -111,9 +111,9 @@
             <div id="ses-stack-scale" class="spectral-stack-scale" hidden></div>
           </div>
         </section>
-        <h3 class="ses-h3">POINTS <span class="muted">(click a cell or a row · colour = capture status from mosaic.csv)</span></h3>
+        <h3 class="ses-h3">POINTS <span class="muted">(sky map: where the mount really was during each capture (HDF5 readback), a thin line to the planned target, hollow = no readback · click a point or a row · colour = capture status from mosaic.csv)</span></h3>
         <div class="ses-split">
-          <canvas id="points-grid" class="ses-grid" aria-label="grid of points by row and column"></canvas>
+          <canvas id="points-grid" class="ses-grid" aria-label="sky map of the points: mount readback RA/Dec"></canvas>
           <div class="twrap ses-points"><table class="status-table"><thead><tr><th>#</th><th>ROW·COL</th><th>STATUS</th><th>START (UTC)</th><th>ALT</th></tr></thead><tbody id="tbl-points"></tbody></table></div>
         </div>
         <div id="point-detail" hidden>

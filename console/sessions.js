@@ -440,31 +440,55 @@
     drawGrid();
   }
 
+  // Sky map: each point where the MOUNT really was during its capture (HDF5 mount_capture_*), a thin line to the
+  // plan's target; a point with no readback is drawn hollow at its target. RA grows to the left (sky as seen).
   function drawGrid(selected) {
     const c = $("points-grid");
-    const rows = Math.max(1, ...points.map((p) => Number(p.grid_row) + 1 || 1)), cols = Math.max(1, ...points.map((p) => Number(p.grid_col) + 1 || 1));
-    const dpr = window.devicePixelRatio || 1, w = Math.min(320, c.parentElement.clientWidth || 320);
-    const cell = Math.max(6, Math.floor(Math.min(w / cols, 360 / rows)));
-    const cw = cols * cell, ch = rows * cell;
+    const sky = points.map((p) => {
+      const tra = Number(p.ra), tdec = Number(p.dec), real = p.mount_ra_hours != null && p.mount_dec_deg != null;
+      return { p, real, ra: real ? Number(p.mount_ra_hours) : tra, dec: real ? Number(p.mount_dec_deg) : tdec, tra, tdec };
+    }).filter((s) => Number.isFinite(s.ra) && Number.isFinite(s.dec));
+    const dpr = window.devicePixelRatio || 1, w = Math.max(220, Math.min(360, c.parentElement.clientWidth || 320));
+    const all = sky.flatMap((s) => [[s.ra, s.dec], [s.tra, s.tdec]]).filter(([a, d]) => Number.isFinite(a) && Number.isFinite(d));
+    // RA centre by circular mean, so a field across 0h stays in one piece
+    const ang = all.map(([a]) => (a / 24) * 2 * Math.PI);
+    const ra0 = all.length ? ((Math.atan2(ang.reduce((s, x) => s + Math.sin(x), 0), ang.reduce((s, x) => s + Math.cos(x), 0)) / (2 * Math.PI)) * 24 + 24) % 24 : 0;
+    const dra = (a) => ((((a - ra0) % 24) + 36) % 24) - 12;                    // hours from the centre, -12..12
+    const decs = all.map(([, d]) => d), dec0 = all.length ? (Math.min(...decs) + Math.max(...decs)) / 2 : 0;
+    const k = Math.cos((dec0 * Math.PI) / 180);
+    const xs = all.map(([a]) => -dra(a) * 15 * k), ys = decs;                  // degrees on the sky, east to the left
+    const pad = 22, x0 = Math.min(...xs, 0) - 1, x1 = Math.max(...xs, 0) + 1, y0 = Math.min(...ys, dec0) - 1, y1 = Math.max(...ys, dec0) + 1;
+    const scale = Math.min((w - 2 * pad) / (x1 - x0), (360 - 2 * pad) / (y1 - y0));
+    const cw = w, ch = Math.max(160, Math.round((y1 - y0) * scale + 2 * pad));
+    const X = (a, d) => pad + (-dra(a) * 15 * k - x0) * scale + ((cw - 2 * pad) - (x1 - x0) * scale) / 2;
+    const Y = (d) => pad + (y1 - d) * scale;
     c.style.width = cw + "px"; c.style.height = ch + "px";
     c.width = Math.round(cw * dpr); c.height = Math.round(ch * dpr);
     const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = U.cssVar("--inset", "#111"); ctx.fillRect(0, 0, cw, ch);
-    for (const p of points) {
-      const r = Number(p.grid_row), k = Number(p.grid_col);
-      if (!Number.isFinite(r) || !Number.isFinite(k)) continue;
-      ctx.fillStyle = U.cssVar(STATUS_COLOR[p.capture_status] || "--warn", "#888");
-      ctx.fillRect(k * cell + 1, r * cell + 1, cell - 2, cell - 2);
-      if (String(p.point_id) === String(selected)) { ctx.strokeStyle = U.cssVar("--accent", "#65b7d8"); ctx.lineWidth = 2; ctx.strokeRect(k * cell + 1, r * cell + 1, cell - 2, cell - 2); }
+    ctx.font = "10px monospace"; ctx.fillStyle = U.cssVar("--muted", "#888"); ctx.strokeStyle = U.cssVar("--line", "#333"); ctx.lineWidth = 1;
+    for (const d of [y0, y1]) ctx.fillText(`${d.toFixed(0)}°`, 2, Y(d) + (d === y1 ? 10 : -2));
+    ctx.fillText(`RA ${(ra0).toFixed(2)} h · Dec ${dec0.toFixed(1)}° · E ←`, 2, ch - 4);
+    const r = Math.max(3, Math.min(7, scale * 0.8));
+    const pos = [];
+    for (const s of sky) {
+      const x = X(s.ra, s.dec), y = Y(s.dec), col = U.cssVar(STATUS_COLOR[s.p.capture_status] || "--warn", "#888");
+      if (s.real && Number.isFinite(s.tra) && Number.isFinite(s.tdec)) {
+        ctx.strokeStyle = U.cssVar("--muted", "#888"); ctx.beginPath(); ctx.moveTo(X(s.tra, s.tdec), Y(s.tdec)); ctx.lineTo(x, y); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI);
+      if (s.real) { ctx.fillStyle = col; ctx.fill(); } else { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke(); ctx.lineWidth = 1; }
+      if (String(s.p.point_id) === String(selected)) { ctx.strokeStyle = U.cssVar("--accent", "#65b7d8"); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 2 * Math.PI); ctx.stroke(); ctx.lineWidth = 1; }
+      pos.push({ id: s.p.point_id, x, y });
     }
-    gridGeom = { cell };
+    gridGeom = { pos, r };
   }
   $("points-grid").addEventListener("click", (e) => {
     if (!gridGeom) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const k = Math.floor((e.clientX - rect.left) / gridGeom.cell), r = Math.floor((e.clientY - rect.top) / gridGeom.cell);
-    const p = points.find((q) => Number(q.grid_row) === r && Number(q.grid_col) === k);
-    if (p) openPoint(p.point_id);
+    const rect = e.currentTarget.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    let best = null, bd = Infinity;
+    for (const q of gridGeom.pos) { const d = Math.hypot(q.x - mx, q.y - my); if (d < bd) { bd = d; best = q; } }
+    if (best && bd <= gridGeom.r + 6) openPoint(best.id);
   });
 
   let currentPoint = null;

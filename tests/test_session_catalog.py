@@ -292,3 +292,14 @@ def test_an_unreadable_annotations_file_is_never_overwritten(tree):
     with pytest.raises(ValueError, match="unreadable"):
         sc.annotate(fx.A, {"favorite": True}, roots)
     assert (roots.store / "annotations.json").read_text() == "{broken"
+
+
+def test_a_point_finds_its_capture_by_data_filename_not_by_point_id(tmp_path):
+    # serpentine scan: point 10 was captured 6th, so its file is _0006 (capture order), not _0010
+    iqd = tmp_path / "data" / "iq" / "S"
+    iqd.mkdir(parents=True)
+    for n in (6, 10):
+        (iqd / f"ALMITA-OBSERVE_{n:04d}.h5").write_bytes(b"x")
+    found = sc._h5_for_point(tmp_path, {"point_id": "10", "point_number": "6", "data_filename": "ALMITA-OBSERVE_0006.dat"})
+    assert found is not None and found.name == "ALMITA-OBSERVE_0006.h5"
+    assert sc._h5_for_point(tmp_path, {"point_id": "10", "point_number": "6"}).name == "ALMITA-OBSERVE_0006.h5"
