@@ -98,6 +98,8 @@ $("btn-del-sessions").click();
 await until(() => !$("delete-panel").hidden, 4000);
 out.previewBody = window.__calls.find((c) => c.key === "POST /api/sessions/delete/preview").body;
 out.label = $("btn-del-confirm").textContent;
+out.cards = $("delete-cards").textContent;
+out.table = $("tbl-delete").textContent;
 out.blockedRow = [...document.querySelectorAll("#tbl-delete tr")].some((tr) => tr.classList.contains("row-warn"));
 $("btn-del-cancel").click(); await sleep(100);
 out.hiddenAfterCancel = $("delete-panel").hidden;
@@ -120,13 +122,17 @@ def test_sessions_selection_preview_cancel_and_one_confirmation(tmp_path):
     ids = [s["campaign_id"] for s in listing["selection"]]
     preview = {"token": "a" * 64, "mode": "sessions", "categories": [], "ids": ids, "deletable": 5, "files": 40,
                "space": {"recoverable_bytes": 123456, "kept_alive_by_outside_hard_links": 0, "kept_alive_bytes": 0, "estimate_note": "estimate"},
+               "breakdown": {"IQ_RAW": {"files": 6, "bytes_on_disk": 9000, "recoverable_bytes": 9000, "partial_files": 2},
+                             "CAPTURE_OTHER": {"files": 30, "bytes_on_disk": 100, "recoverable_bytes": 100, "partial_files": 0},
+                             "PRODUCTS": {"files": 4, "bytes_on_disk": 50, "recoverable_bytes": 50, "partial_files": 0}},
                "blocked": [{"campaign_id": ids[0], "why": "PRESERVED: x"}], "busy": [], "kept_resources": [{"path": fx.PROFILE_A, "why": "calibration profile"}],
                "confirm_label": "DELETE 5 SESSIONS — IRREVERSIBLE",
                "sessions": [{"campaign_id": i, "name": i, "started_chile": None, "capture_state": "COMPLETED", "files": 8,
-                             "space": {"recoverable_bytes": 1000}, "items": [], "kept": [], "warnings": [], "blocked": "PRESERVED: x" if n == 0 else None}
+                             "space": {"recoverable_bytes": 1000}, "items": [], "kept": [], "warnings": [], "blocked": "PRESERVED: x" if n == 0 else None,
+                             "iq": [{"path": f"data/iq/OUT-{n}", "where": "outside the campaign (data/iq)", "files": 2, "partial_files": 1, "bytes_on_disk": 4096}]}
                             for n, i in enumerate(ids)]}
     result = {"batch_id": "DEL-1", "audit_dir": "data/sessions/deletions/DEL-1", "bytes_removed_estimate": 123456, "free_bytes_change_observed": 120000,
-              "catalog_sessions_after": 1, "sessions": [{"campaign_id": i, "status": "DELETED", "files_removed": 8, "bytes_removed_estimate": 1000,
+              "catalog_sessions_after": 1, "capture_index": {"index": "data/IQ/session.csv", "rows_removed": 4}, "sessions": [{"campaign_id": i, "status": "DELETED", "files_removed": 8, "bytes_removed_estimate": 1000,
                                                          "error_count": 0, "errors": [], "blocked": None} for i in ids[1:]]}
     js = (f"window.__routes['GET /api/sessions/list'] = {{ body: {{ ok: true, data: {json.dumps(listing)} }} }};\n"
           f"window.__routes['POST /api/sessions/delete/preview'] = {{ body: {{ ok: true, data: {json.dumps(preview)} }} }};\n"
@@ -142,3 +148,6 @@ def test_sessions_selection_preview_cancel_and_one_confirmation(tmp_path):
     assert out["hiddenAfterCancel"] and out["executeAfterCancel"] == 0
     assert out["executeBody"]["token"] == "a" * 64 and out["executeBody"]["confirm"] == "DELETE"
     assert "free space change observed" in out["result"] and "DEL-1" in out["result"]
+    assert "RAW IQ6 files" in out["cards"] and "(2 interrupted)" in out["cards"] and "OTHER CAPTURE FILES30 files" in out["cards"]
+    assert "raw IQ outside the campaign (data/iq): data/iq/OUT-1 (2 files, 1 interrupted" in out["table"]
+    assert "data/IQ/session.csv: 4 row(s) removed" in out["result"]

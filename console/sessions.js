@@ -201,13 +201,17 @@
       card("SESSIONS THAT WILL CHANGE", `${p.deletable} of ${p.ids.length}`), card("BLOCKED", p.blocked.length, p.blocked.length ? "status-warning" : null),
       card("FILES TO REMOVE", p.files), card("RECOVERABLE (ESTIMATE)", U.bytes(p.space.recoverable_bytes)),
       card("KEPT ALIVE BY HARD LINKS OUTSIDE", `${p.space.kept_alive_by_outside_hard_links} file(s), ${U.bytes(p.space.kept_alive_bytes)}`));
+    // each file counted once, in the first class that holds it: the three cards add up to FILES / RECOVERABLE
+    const bd = p.breakdown, cls = (c) => `${c.files} files · ${U.bytes(c.recoverable_bytes)}` + (c.partial_files ? ` (${c.partial_files} interrupted)` : "");
+    cards.append(card("RAW IQ", cls(bd.IQ_RAW)), card("OTHER CAPTURE FILES", cls(bd.CAPTURE_OTHER)), card("PRODUCTS", cls(bd.PRODUCTS)));
     $("delete-note").textContent = [p.busy.length ? "PIPELINE ACTIVE — every session is blocked: " + p.busy.join("; ") : "",
       p.mode === "products" ? "Captures, plans, logs, notes and manual analyses stay. A product goes only when it can be regenerated now (its profile loads and the captures are there); its parameters (config/provenance/manifest) are kept in the audit record." :
-        "Each session's campaign directory and the REDUCE/SCIENCE runs that belong only to it go. Calibration profiles, manual analyses, ambiguous runs, exports and the temperature log stay.",
+        "Each session's campaign directory (with its raw IQ), its raw IQ outside the campaign when ownership is proven (data/iq), and the REDUCE/SCIENCE runs that belong only to it go. Shared, ambiguous or protected IQ, calibration profiles, manual analyses, ambiguous runs, exports and the temperature log stay.",
       "Space: " + p.space.estimate_note + ".", "Nothing goes to a trash: the space is freed for real."].filter(Boolean).join("\n");
     const tb = clear($("tbl-delete"));
     for (const r of p.sessions) {
-      const goes = r.items.map((i) => `${i.kind} ${i.path} (${i.files} files, ${U.bytes(i.bytes_on_disk)})`).join("\n") || "—";
+      const goes = [...r.items.map((i) => `${i.kind} ${i.path} (${i.files} files, ${U.bytes(i.bytes_on_disk)})`),
+        ...r.iq.map((g) => `  raw IQ ${g.where}: ${g.path} (${g.files} files${g.partial_files ? `, ${g.partial_files} interrupted` : ""}, ${U.bytes(g.bytes_on_disk)})`)].join("\n") || "—";
       const stays = [r.blocked ? "BLOCKED: " + r.blocked : "", ...r.kept.map((k) => `${k.kind} ${k.path}: ${k.why}`), ...r.warnings.map((w) => "WARNING: " + w)].filter(Boolean).join("\n") || "—";
       tb.append(el("tr", { class: r.blocked ? "row-warn" : null },
         el("td", {}, el("div", { class: "ses-name", text: r.name || r.campaign_id }), el("div", { class: "muted ses-id", text: r.campaign_id })),
@@ -235,7 +239,8 @@
     U.setBadge($("delete-badge"), r.sessions.some((s) => s.status === "PARTIAL") ? "PARTIAL" : "DONE");
     out.append(el("h3", { class: "ses-h3", text: `RESULT · batch ${r.batch_id} · audit ${r.audit_dir}` }),
       el("div", { class: "obs-summary", text: `Removed (estimate from the preview's blocks): ${U.bytes(r.bytes_removed_estimate)} · free space change observed on the card: ` +
-        (r.free_bytes_change_observed === null ? "unknown" : U.bytes(r.free_bytes_change_observed)) + ` · catalog now: ${r.catalog_sessions_after} sessions` }));
+        (r.free_bytes_change_observed === null ? "unknown" : U.bytes(r.free_bytes_change_observed)) + ` · catalog now: ${r.catalog_sessions_after} sessions` +
+        (r.capture_index ? ` · ${r.capture_index.index}: ${r.capture_index.rows_removed} row(s) removed` + (r.capture_index.untouched ? ` (NOT UPDATED: ${r.capture_index.untouched})` : "") : "") }));
     const body = el("tbody");
     for (const s of r.sessions) body.append(el("tr", { class: s.status === "PARTIAL" ? "row-warn" : null }, el("td", { text: s.campaign_id }), el("td", {}, badge(s.status)),
       el("td", { text: String(s.files_removed) }), el("td", { text: U.bytes(s.bytes_removed_estimate) }),

@@ -30,6 +30,15 @@ Estudio hecho el 2026-10-21 en solo lectura sobre el `data/` del Pi (55 campaña
 | `orchestrator_capture.log` | 32/55 | la línea `Mount  LX200 OnStep` / `Mount  Telescope Simulator` | la campaña del 2026-10-17 07:02 tiene log pero ninguna captura: la pausó la regla de seguridad de la montura (estado NO_CAPTURE) |
 | `quicklook/` | las que capturaron | PNG guardados, `session_waterfall_state.json` (fuente del stack 3D), `points/<n>/` | vistas anteriores a BL-063/BL-067 conservan su aspecto viejo |
 | `observer_config.json`, `rfi_ref/`, `gain_pilot_state.json` | algunas | contexto | `observer_config` → `hardware.sdr_device` es una etiqueta fija (ver decisión 4) |
+| `gain_pilot_captures/*.h5` | 7/55 | IQ crudos del piloto de ganancia (`observation_gain_pilot.py`) | son capturas: el borrado las cuenta como IQ |
+
+**Dónde escribe `capture.py` los IQ.** En `<base_dir>/data/iq/<session_name>-<UTC>/`, donde `base_dir` es la carpeta
+del CSV del plan (o la carpeta de arriba si esa se llama `data`). OBSERVE deja el plan en `data/mosaic/<campaign_id>/`,
+así que sus IQ quedan **dentro** de la campaña. Con un plan en `data/` del repo, los IQ caerían en `data/iq/`, **fuera**
+de cualquier campaña. `data/IQ/session.csv` **no** tiene IQ: es el índice de control de `session_manager.py`, con una
+fila por sesión de captura (`session_id`, `csv_plan_path`, estado). Las capturas de ALIGN (`data/alignment/`), del
+banco (`data/bench/`) y de los asistentes de calibración (`data/calibration/*/captures/`) no pertenecen a ninguna
+sesión. Estado al 2026-10-21: `data/iq/` vacío y los 31 `session_identity.json` apuntan dentro de su campaña.
 
 `observation_runtime.json` no se usa: queda en RUNNING por diseño (BL-016).
 
@@ -89,13 +98,27 @@ botón rojo, rotulado por el servidor («DELETE 4 SESSIONS — IRREVERSIBLE»), 
 previa y `confirm: "DELETE"`. CANCEL no envía nada. No hay papelera: el espacio se libera de verdad.
 
 **Qué pertenece a una sesión** (asociaciones del catálogo, nunca rutas leídas de un manifiesto y recorridas):
-- la carpeta `data/mosaic/<campaign_id>/`;
+- la carpeta `data/mosaic/<campaign_id>/`, con sus IQ crudos (`data/iq/<sesión>/`, `gain_pilot_captures/`), incluidos
+  los `.h5.part` de puntos interrumpidos;
+- las carpetas de IQ fuera de la campaña, en `data/iq/<carpeta>/`, **solo con pertenencia demostrada**: su
+  `session_identity.json` se lee, su `session_root` es esa misma carpeta, su `session_id` lo reclama esta campaña y
+  ninguna otra (`capture_timing_<id>.csv` o una fila de `data/IQ/session.csv` con el plan en ella), y ningún archivo
+  de otra campaña cita la carpeta. Sus `.h5.part` van con ella;
 - las REDUCE vinculadas con evidencia cuyos puntos leen **solo** esa campaña (se revisan todos los puntos);
 - las SCIENCE WEB con vínculo LINKED a una de esas REDUCE.
 
 **Nunca se borra en este flujo:** perfiles de calibración (compartidos), análisis manuales (pueden tener trabajo
 único), SCIENCE con vínculo INCONSISTENT o PENDING, la REDUCE de una SCIENCE que se queda, el registro de
 temperaturas, los exportes y `data/sessions/`.
+
+**IQ que se conservan y se informan.** Una carpeta de `data/iq/` vinculada a la sesión (por `session_id` o porque un
+archivo de la campaña cita su ruta) se queda, con su motivo, cuando: no tiene `session_identity.json` legible;
+su `session_root` apunta a otra carpeta; nadie reclama su `session_id`; la reclaman o citan varias campañas
+(compartida); está vinculada a una sesión preservada; o es un enlace simbólico. Un `.h5.part` suelto sin identidad es
+ambiguo y se queda. Si el `session_id` de un IQ **dentro** de la campaña lo reclama además otra campaña, la sesión
+entera queda bloqueada. Una REDUCE de otra sesión que lea IQ propios de fuera de la campaña también bloquea la sesión
+(cuentan como sus capturas). **DELETE PRODUCTS nunca borra IQ:** un `.h5` que apareciera dentro de `quicklook/` cuenta
+como IQ y deja esa QUICKLOOK fuera del lote.
 
 **Productos regenerables.** QUICKLOOK y REDUCE solo se borran si se pueden regenerar ahora: las capturas están y su
 perfil se puede cargar (existen `.json` y `.npz` y no hay marcador INVALIDATED). SCIENCE, mientras exista su REDUCE.
@@ -111,7 +134,15 @@ sesiones con V4 tienen el perfil INVALIDATED, así que sus QUICKLOOK y REDUCE **
   (`PRESERVED_CAMPAIGNS`), sin forma de quitar la protección desde la página o la API.
 - Una sesión cuyas capturas lee una REDUCE de otra sesión no se puede borrar completa.
 - Toda ruta se calcula en el servidor, debe estar dentro de `data/mosaic`, `data/reduced` o `data/science`, sin
-  ningún enlace simbólico en el camino. Los enlaces que hay dentro se borran como enlaces, nunca su destino.
+  ningún enlace simbólico en el camino. `data/iq` se admite **solo** para carpetas de IQ crudos fuera de la campaña,
+  con las mismas reglas; ninguna otra clase de elemento puede apuntar ahí, ni un IQ a otra raíz. Los enlaces que hay
+  dentro se borran como enlaces, nunca su destino.
+
+**Vista previa por clase.** Tres totales separados, en el lote y por sesión: **IQ crudos** (`.h5`/`.hdf5` y sus
+`.part`/`.tmp` en las zonas de captura, con cuántos son interrumpidos), **otros archivos de captura** (plan, logs,
+identidad, tiempos, `session.csv`…) y **productos** (QUICKLOOK, REDUCE, SCIENCE). Cada inodo cuenta una sola vez, en la
+primera clase que lo contiene (IQ, luego captura, luego productos); las tres clases suman lo mismo que el total. Cada
+sesión lista además dónde están sus IQ: cada carpeta, «inside the campaign» u «outside the campaign (data/iq)».
 
 **Espacio.** Bloques reales de cada inodo único del lote. Un archivo con enlaces duros fuera del lote no libera nada
 y se informa aparte. Es una estimación: el resultado muestra además el cambio real del espacio libre (`statvfs`)
@@ -129,5 +160,9 @@ no entre esa revisión y el borrado.
 BLOCKED. El registro queda en `data/sessions/deletions.jsonl` (una línea por lote) y en
 `data/sessions/deletions/<lote>/` (`batch.json` y los parámetros guardados). Una sesión borrada completa sale de
 `annotations.json` y queda registrada en `deleted_sessions.json` (nombre, fecha, lote), sin aparecer como fantasma en el
-catálogo. Una sesión borrada en parte conserva sus notas. Las copias de `data/sessions/backups/` guardan notas, no
+catálogo. Una sesión borrada en parte conserva sus notas.
+Tras una sesión borrada completa (DELETED), sus filas salen de `data/IQ/session.csv` (las que tienen el plan dentro de
+su carpeta). Antes se copia el índice a `deletions/<lote>/capture_index_session.csv.before`, y las demás líneas se
+escriben tal cual. Si una línea no se puede leer sola, el índice no se toca y el resultado lo dice. Del IQ de fuera
+de la campaña se guardan su `session_identity.json` y `session.csv` en el registro del lote. Las copias de `data/sessions/backups/` guardan notas, no
 capturas: no sirven para recuperar nada de lo borrado.

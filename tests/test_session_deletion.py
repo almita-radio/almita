@@ -2,6 +2,7 @@
 survive byte for byte, not only what goes."""
 import json
 import os
+import shutil
 import threading
 from pathlib import Path
 
@@ -168,7 +169,6 @@ def test_invalid_requests_and_symbolic_links_are_refused(tree, tmp_path_factory)
     pl = sd.plan(["LINKED-20261019-00:00:00"], "sessions", None, roots, IDLE)
     assert pl["deletable"] == 0 and "symbolic link" in pl["blocked"][0]["why"]
     ql = base / "data" / "mosaic" / fx.A / "quicklook"
-    import shutil
     shutil.rmtree(ql)
     os.symlink(elsewhere, ql)
     pq = sd.plan([fx.A], "products", ["QUICKLOOK"], roots, IDLE)
@@ -259,3 +259,140 @@ def test_select_all_filtered_returns_every_match_beyond_the_page(tree):
     sims = sc.list_sessions({"condition": "SIMULATOR", "ids": "1"}, roots)["selection"]
     assert [s["campaign_id"] for s in sims] == [fx.B] and sims[0]["bytes_on_disk"] > 0
     assert "selection" not in sc.list_sessions({}, roots)
+
+
+# ------------------------------------------------------------------ raw IQ (inside and outside the campaign)
+SID_B, SID_T, SID_P = "20261017_073111", "20261013_174725", "20261002_014508"      # capture_timing ids made by the fixture
+
+
+def _outside_iq(base, name, sid=None, h5=("ALMITA-OBSERVE_0001.h5",), part=(), root=None):
+    """A raw IQ directory in data/iq/ (where capture.py writes when the plan CSV sits in data/)."""
+    d = base / "data" / "iq" / name
+    if sid is not None:
+        fx._w(d / "session_identity.json", {"schema_version": 1, "session_id": sid, "session_root": root or f"data/iq/{name}"})
+    for n in h5:
+        fx._w(d / n, b"OUTSIDE-IQ-" * 200)
+    for n in part:
+        fx._w(d / n, b"INTERRUPTED-" * 50)
+    fx._w(d / "session.csv", "point_id,status,source_hdf5\n1,SUCCESS,ALMITA-OBSERVE_0001.h5\n")
+    return d
+
+
+def _capture_index(base, rows):
+    text = "session_id,session_name,csv_plan_path,status\n" + "".join(f"{sid},ALMITA-OBSERVE,data/mosaic/{cid}/mosaic.csv,completed\n" for sid, cid in rows)
+    return fx._w(base / "data" / "IQ" / "session.csv", text)
+
+
+def _iq_files(base):
+    """Every raw IQ file (finished or interrupted) of the captures, with its content hash."""
+    snap = fx.snapshot(base)
+    return {k: v for k, v in snap.items() if sd.IQ_FILE_RE.search(k) and k.startswith(("data/mosaic/", "data/iq/"))}
+
+
+def test_whole_session_takes_its_raw_iq_inside_and_outside_the_campaign_partials_included(tree):
+    base, roots, _ = tree
+    camp = base / "data" / "mosaic" / fx.B
+    inside = camp / "data" / "iq" / (fx.B + "x")
+    fx._w(inside / "ALMITA-OBSERVE_0003.h5.part", b"INTERRUPTED-" * 50)              # the point the operator stopped
+    fx._w(camp / "gain_pilot_captures" / "high_00.h5", b"PILOT-" * 100)
+    os.link(inside / "ALMITA-OBSERVE_0001.h5", camp / "quicklook" / "same_inode.bin")  # one inode in two classes
+    out_dir = _outside_iq(base, "ALMITA-OBSERVE-20261017-07:32:00", SID_B, part=("ALMITA-OBSERVE_0003.h5.part",))
+    index = _capture_index(base, [(SID_P, P), (SID_B, fx.B), (SID_T, fx.T)])
+    before_lines = index.read_text().splitlines(keepends=True)
+    sc.build_index(roots)
+    keep = _keep_snapshot(base, f"data/mosaic/{fx.B}", "data/iq/ALMITA-OBSERVE-20261017-07:32:00", "data/IQ/session.csv")
+    plan = sd.plan([fx.B], "sessions", None, roots, IDLE)
+    row = _row(plan, fx.B)
+    assert [i["kind"] for i in row["items"]] == ["CAMPAIGN", "IQ"] and row["items"][1]["path"] == "data/iq/ALMITA-OBSERVE-20261017-07:32:00"
+    where = {g["path"]: g for g in row["iq"]}
+    assert where[f"data/mosaic/{fx.B}/data/iq/{fx.B}x"]["files"] == 3 and where[f"data/mosaic/{fx.B}/data/iq/{fx.B}x"]["partial_files"] == 1
+    assert where[f"data/mosaic/{fx.B}/gain_pilot_captures"]["where"] == "inside the campaign"
+    outside = where["data/iq/ALMITA-OBSERVE-20261017-07:32:00"]
+    assert (outside["where"], outside["files"], outside["partial_files"]) == ("outside the campaign (data/iq)", 2, 1)
+    bd = plan["breakdown"]
+    assert bd["IQ_RAW"]["files"] == 6 and bd["IQ_RAW"]["partial_files"] == 2                # 2 + 1 part + pilot + 1 + 1 part
+    assert bd["CAPTURE_OTHER"]["files"] > 0 and bd["PRODUCTS"]["files"] == 4                # the shared inode counts once, as IQ
+    assert sum(c["files"] for c in bd.values()) == plan["space"]["unique_files"]
+    assert sum(c["recoverable_bytes"] for c in bd.values()) == plan["space"]["recoverable_bytes"]
+    out = sd.execute([fx.B], "sessions", None, plan["token"], roots, IDLE)
+    assert out["sessions"][0]["status"] == "DELETED" and not camp.exists() and not out_dir.exists()
+    assert (base / "data" / "iq").is_dir()                                                  # the root itself stays
+    assert out["capture_index"]["rows_removed"] == 1
+    assert index.read_text().splitlines(keepends=True) == [l for l in before_lines if f"/{fx.B}/" not in l]   # others byte for byte
+    assert (base / out["capture_index"]["backup"]).read_text().splitlines(keepends=True) == before_lines
+    assert any(p.name == "session_identity.json" for p in (base / out["audit_dir"]).rglob("*"))
+    assert _keep_snapshot(base, f"data/mosaic/{fx.B}", "data/iq/ALMITA-OBSERVE-20261017-07:32:00", "data/IQ/session.csv") == keep
+
+
+def test_products_mode_keeps_every_raw_iq_inside_and_outside(tree):
+    base, roots, p = tree
+    fx._w(p["a"] / "data" / "iq" / (fx.A + "x") / "ALMITA-OBSERVE_0004.h5.part", b"INTERRUPTED-" * 50)
+    _outside_iq(base, "ALMITA-OBSERVE-20261018-21:28:00", "20261018_212705")
+    fx._w(p["a"] / "quicklook" / "stray_capture.h5", b"MISPLACED-IQ-" * 50)              # a capture where products live
+    _capture_index(base, [("20261018_212705", fx.A)])
+    sc.build_index(roots)
+    iq = _iq_files(base)
+    plan = sd.plan([fx.A], "products", ["QUICKLOOK", "REDUCE", "SCIENCE"], roots, IDLE)
+    row = _row(plan, fx.A)
+    assert plan["breakdown"]["IQ_RAW"]["files"] == 0 and all(i["iq_files"] == 0 and i["kind"] != "IQ" for i in row["items"])
+    assert any(k["path"] == f"data/mosaic/{fx.A}/quicklook" and "capture files" in k["why"] for k in row["kept"])
+    index = (base / "data" / "IQ" / "session.csv").read_bytes()
+    out = sd.execute([fx.A], "products", ["QUICKLOOK", "REDUCE", "SCIENCE"], plan["token"], roots, IDLE)
+    assert out["sessions"][0]["status"] == "DELETED" and out["capture_index"] is None
+    assert _iq_files(base) == iq and (base / "data" / "IQ" / "session.csv").read_bytes() == index
+
+
+def test_shared_ambiguous_protected_and_linked_outside_iq_stay(tree, tmp_path_factory):
+    base, roots, _ = tree
+    iq = base / "data" / "iq"
+    _outside_iq(base, "SHARED", SID_B)                                         # B's id, but T's log cites it too
+    _outside_iq(base, "NO-IDENTITY")                                           # cited by B, no session_identity.json
+    _outside_iq(base, "WRONG-ROOT", SID_B, root="data/iq/SOMEWHERE-ELSE")      # identity names another directory
+    _outside_iq(base, "UNCLAIMED", "20990101_000000")                          # nobody's capture id
+    _outside_iq(base, "PROTECTED", SID_B)                                      # cited by the preserved campaign
+    _outside_iq(base, "PARTIAL-ONLY", h5=(), part=("ALMITA-OBSERVE_0001.h5.part",))   # interrupted, no identity
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    (elsewhere / "victim.h5").write_bytes(b"never deleted")
+    os.symlink(elsewhere, iq / "LINKED")
+    fx._w(base / "data" / "mosaic" / fx.B / "capture_paths.log",
+          "".join(f"wrote data/iq/{n}/ALMITA-OBSERVE_0001.h5\n" for n in ("NO-IDENTITY", "UNCLAIMED", "PARTIAL-ONLY", "LINKED")))
+    fx._w(base / "data" / "mosaic" / fx.T / "notes.log", "reused data/iq/SHARED/ALMITA-OBSERVE_0001.h5\n")
+    fx._w(base / "data" / "mosaic" / P / "orchestrator_capture.log", "copy kept at data/iq/PROTECTED\n")
+    sc.build_index(roots)
+    keep = _keep_snapshot(base, f"data/mosaic/{fx.B}")
+    plan = sd.plan([fx.B], "sessions", None, roots, IDLE)
+    row = _row(plan, fx.B)
+    assert [i["kind"] for i in row["items"]] == ["CAMPAIGN"]
+    why = {k["path"]: k["why"] for k in row["kept"] if k["kind"] == "IQ"}
+    assert why["data/iq/SHARED"].startswith("shared") and fx.T in why["data/iq/SHARED"]
+    assert why["data/iq/NO-IDENTITY"].startswith("session_identity.json") and "ownership not proven" in why["data/iq/NO-IDENTITY"]
+    assert "another session_root" in why["data/iq/WRONG-ROOT"] and "no campaign claims" in why["data/iq/UNCLAIMED"]
+    assert why["data/iq/PROTECTED"].startswith("PRESERVED") and "ownership not proven" in why["data/iq/PARTIAL-ONLY"]
+    assert "symbolic link" in why["data/iq/LINKED"]
+    out = sd.execute([fx.B], "sessions", None, plan["token"], roots, IDLE)
+    assert out["sessions"][0]["status"] == "DELETED"
+    assert _keep_snapshot(base, f"data/mosaic/{fx.B}") == keep and (elsewhere / "victim.h5").read_bytes() == b"never deleted"
+    assert sd.plan([P], "sessions", None, roots, IDLE)["deletable"] == 0
+
+
+def test_outside_iq_read_by_another_sessions_reduce_or_claimed_twice_blocks_the_session(tree):
+    base, roots, _ = tree
+    _outside_iq(base, "B-OUTSIDE", SID_B)
+    run = fx._reduce(base, "ALMITA-OBSERVE", "REDUCE-20261019-000000-000010", fx.T, points=(1,))
+    fx._w(run / "points" / "2" / "master_spectrum.json", {"capture_refs": [{"source_path": "data/iq/B-OUTSIDE/ALMITA-OBSERVE_0001.h5"}]})
+    sc.build_index(roots)
+    assert _row(sd.plan([fx.B], "sessions", None, roots, IDLE), fx.B)["blocked"].startswith("its captures are inputs of REDUCE runs of other sessions")
+    shutil.rmtree(run)
+    fx._w(base / "data" / "mosaic" / fx.T / f"capture_timing_{SID_B}.csv", "point_id\n1\n")   # T claims B's capture session too
+    sc.build_index(roots)
+    b = _row(sd.plan([fx.B], "sessions", None, roots, IDLE), fx.B)
+    assert b["blocked"] and "also claimed by" in b["blocked"] and (base / "data" / "iq" / "B-OUTSIDE").is_dir()
+
+
+def test_iq_root_is_admitted_only_for_raw_iq_directories(tree):
+    base, roots, _ = tree
+    d = _outside_iq(base, "ANY", SID_B)
+    assert sd._validate_target(d, roots, "IQ") is None
+    assert "outside data/mosaic" in sd._validate_target(d, roots, "CAMPAIGN")
+    assert sd._validate_target(base / "data" / "mosaic" / fx.B, roots, "IQ") == "outside data/iq"
+    assert "outside data/iq" in sd._validate_target(base / "data" / "IQ", roots, "IQ")
