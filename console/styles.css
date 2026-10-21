@@ -238,7 +238,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 /* DÍA|NOCHE made the wide header's navigation row longer than some screens (1220-1360 px): it wraps onto a second line
    there instead of pushing STOP MOUNT off the right edge; on a single line the row keeps its 2rem height. */
 @media(min-width:1220px){.topbar{grid-template-rows:2.4rem minmax(2rem,auto) 1fr}.topbar>.obs-nav{flex-wrap:wrap;row-gap:6px}}
-@media(max-width:1219px){.topbar{justify-content:flex-start}}   /* narrower: logo, then title, then the rest, all from the left */
+@media(max-width:1219px){.topbar{justify-content:flex-start}.topbar .obs-nav{flex-wrap:wrap;row-gap:6px}}   /* narrower: logo, then title, then the rest, all from the left; the
+   navigation wraps too (with SESSIONS it no longer fits one line at 1024 px) */
 @media(max-width:900px){.topbar::before{margin-bottom:8px;max-width:100%}}   /* stacked phone header: logo on its own line */
 .mount-stop{margin-left:6px;padding:3px 10px;border:0;cursor:pointer;font:700 11px/1.6 monospace;letter-spacing:.1em;align-self:center}   /* STOP MOUNT, in every page header */
 .mount-device{display:inline-flex;margin-left:6px;align-self:center;border:1px solid var(--line)}   /* LX200 | SIMULATOR, in every page header */
@@ -274,3 +275,52 @@ body.mount-simulated .mount-device-btn.active{background:var(--warn);color:var(-
 .align-live-charts figcaption{font-size:10px;color:var(--muted);letter-spacing:.04em;margin-top:2px}
 .live-axis{font:10px ui-monospace,monospace;fill:var(--muted)}
 .align-live-note{font-size:10px;margin-top:6px}
+
+/* SESSIONS (BL-079..BL-090): catalog + viewer of stored observations; same panels, tables, badges and theme tokens */
+body:has(#session-panel) #error-banner{overflow-wrap:anywhere}   /* long request URLs in errors wrap instead of widening the page */
+.ses-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px 12px;padding:11px}
+.ses-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ses-field label{font-size:10px;color:var(--muted);letter-spacing:.06em}
+.ses-field input[type=text],.ses-field select,.ses-field textarea{background:var(--inset);border:1px solid var(--line);color:var(--text);padding:5px 8px;font-family:ui-monospace,monospace;width:100%;box-sizing:border-box}
+.ses-check{flex-direction:row;align-items:center;gap:6px}
+.ses-checks{display:flex;flex-wrap:wrap;gap:8px 18px;padding:4px 0}
+.ses-check label{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.ses-wide{grid-column:1/-1}
+.ses-form{display:grid;gap:8px;padding:11px}
+.ses-pad{padding:11px}
+.ses-info{align-self:center;font-size:11px;overflow-wrap:anywhere}
+.ses-table td{white-space:nowrap}
+.ses-table td:nth-child(2){white-space:normal;min-width:180px}
+.ses-name{font-weight:700;color:var(--heading)}
+.ses-id{font-size:10px;overflow-wrap:anywhere;white-space:normal}
+.ses-open{padding:5px 10px;font-size:11px}
+.status-table tr.ses-current td{background:var(--inset)}
+.ses-click{cursor:pointer}
+.ses-click:hover td,.ses-click:focus td{background:var(--inset)}
+.ses-tabs{flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.ses-tabs .mode-btn{padding:7px 11px;font-size:11px}
+.ses-section{padding-bottom:6px}
+.ses-h3{font-size:11px;letter-spacing:.1em;color:var(--muted);margin:14px 11px 6px}
+.ses-details{margin:6px 11px}
+.ses-details summary{cursor:pointer;color:var(--muted);font-size:11px;letter-spacing:.04em}
+.ses-details pre{max-height:360px;overflow:auto}
+.ses-thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;padding:11px}
+.ses-thumb{display:block;background:var(--panel);border:1px solid var(--line);padding:6px;text-decoration:none;color:var(--muted);font-size:10px;letter-spacing:.06em;text-align:center;overflow-wrap:anywhere}
+.ses-thumb img{display:block;width:100%;height:130px;object-fit:contain;background:var(--inset);margin-bottom:4px}
+.ses-missing{color:var(--error);padding:20px 6px}
+.ses-pair{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.ses-pair .ses-thumb img{height:300px}
+.ses-stack{margin:0 11px;min-width:0}
+.ses-stack .spectral-stack-viewport{flex:none;height:420px;min-height:0}
+.ses-section a,.ses-thumb span{color:var(--accent)}
+.ses-split{display:flex;gap:12px;padding:0 11px 11px;align-items:flex-start;flex-wrap:wrap}
+.ses-grid{border:1px solid var(--line);cursor:pointer;flex:0 0 auto;max-width:100%}
+.ses-points{flex:1 1 320px;min-width:0;max-height:360px}
+.ses-plot{width:calc(100% - 22px);height:260px;display:block;margin:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--inset)}
+#ses-temp-chart{width:100%;display:block}
+#point-detail textarea,#sec-organize textarea{resize:vertical}
+.status-not_run,.status-manual,.status-indoor,.status-not_loaded{color:var(--muted)}
+.status-stored,.status-linked,.status-open_sky,.status-ok{color:var(--ok)}
+.status-incomplete,.status-no_capture,.status-interrupted,.status-pending,.status-simulator,.status-deferred,.status-capturing{color:var(--warn)}
+.status-missing,.status-invalidated,.status-inconsistent,.status-unreadable{color:var(--error)}
+@media(max-width:700px){.ses-split{flex-direction:column}.ses-points{flex-basis:auto;width:100%}}

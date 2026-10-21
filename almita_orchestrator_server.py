@@ -48,6 +48,7 @@ import almita_web_align
 import almita_web_auth
 import almita_web_calibrate
 import almita_web_ops
+import almita_web_sessions
 import almita_web_system
 import mount_device
 import vnc_proxy
@@ -100,6 +101,9 @@ STATIC_FILES = {
     # per-point spectrum, downloads.
     "/science.html": "science.html",
     "/science.js": "science.js",
+    # SESSIONS: catalog + viewer of stored observations (BL-079..BL-090), read-only over the data
+    "/sessions.html": "sessions.html",
+    "/sessions.js": "sessions.js",
 }
 _STATIC_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")  # Fase 57: no path traversal via a session id
@@ -419,6 +423,10 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             calibrate_session = _CALIBRATE_SESSION_RE.match(path)
             if calibrate_session:
                 return self._calibrate_session(calibrate_session.group("id"))
+            if path in almita_web_sessions.GET_ROUTES:
+                return self._sessions_get(path)
+            if path == almita_web_sessions.EXPORT_FILE_ROUTE:
+                return self._sessions_export_file()
             if path in STATIC_FILES:
                 return self._serve_static(path)
             asset_match = _ASSET_PATH_RE.match(path)
@@ -502,6 +510,10 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             if path == "/mount_camera/config":
                 self._console_route = True
                 return self._mount_camera_set_config()
+            if path in almita_web_sessions.POST_ROUTES:
+                body = _read_json_body(self) if path != "/api/sessions/reindex" else {}
+                _log("INFO", f"req={self._request_id} SESSIONS {path.rsplit('/', 1)[-1]} id={str(body.get('id', ''))[:80]}")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_sessions.handle_post(path, body)})
             if path == "/api/observe/plan":
                 return self._handle_plan()
             if path == "/api/observe/estimate":
@@ -762,6 +774,37 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             return _json_response(self, 200, {"ok": True, "data": almita_web_ops.science_map_data(d, name)})
         except (ValueError, FileNotFoundError) as exc:
             return _error_response(self, 400, str(exc))
+
+    def _sessions_get(self, path: str) -> None:
+        """SESSIONS (read-only): ValueError -> 400, unknown session/point -> 404."""
+        try:
+            data = almita_web_sessions.handle_get(path, parse_qs(urlsplit(self.path).query))
+        except FileNotFoundError as exc:
+            return _error_response(self, 404, f"not found: {exc}")
+        except ValueError as exc:
+            return _error_response(self, 400, str(exc))
+        return _json_response(self, 200, {"ok": True, "data": data})
+
+    def _sessions_export_file(self) -> None:
+        """An exported report file (zip/md/json/figure) from data/sessions/exports only - see session_catalog.resolve_export."""
+        import session_catalog
+        rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]
+        try:
+            path, ctype = session_catalog.resolve_export(rel, almita_web_sessions.ROOTS)
+        except FileNotFoundError:
+            return _error_response(self, 404, "not found")
+        except ValueError as exc:
+            return _error_response(self, 400, str(exc))
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        if path.suffix == ".zip":
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+        self.send_header("Cache-Control", "no-store")
+        _common_headers(self)
+        self.end_headers()
+        _write_body(self, data)
 
     def _ops_file(self) -> None:
         rel = (parse_qs(urlsplit(self.path).query).get("path") or [""])[0]

@@ -182,7 +182,7 @@
       }
       if (this.message) {
         const text = { WAITING: "WAITING FOR DATA", LOADING: "LOADING…", STALE: "STALE — NO RECENT UPDATE",
-          ERROR: detail || "ERROR", COMPLETED: "", LIVE: "" }[state];
+          ERROR: detail || "ERROR", COMPLETED: "", LIVE: "", STORED: "" }[state];
         this.message.textContent = text || "";
         this.message.hidden = !text;
       }
@@ -384,6 +384,19 @@
     }
   }
 
+  // SESSIONS (BL-085): draw a session_waterfall_state.json read from a stored campaign, handed over by the caller. It
+  // never fetches the live runtime artifact and never changes what MONITOR shows (each page owns its own instance).
+  SpectralStack3D.prototype.showDocument = function (doc) {
+    if (!this.webglAvailable) return false;
+    const parsed = doc ? parseDocument(doc, doc.session_id) : null;
+    this._clearGeometry(); this.rows = [];
+    if (!parsed || !parsed.rows.length) { this._setState("ERROR", "no stored rows to draw"); return false; }
+    this.freq = parsed.freq; this.rows = parsed.rows;
+    this._buildGeometry(parsed.freq, parsed.rows);
+    this._setState("STORED");
+    return true;
+  };
+
   function syncPanelHeightToLeftColumn() {
     // Flexbox align-items:stretch alone proved unreliable here (the panel
     // ended up far taller than the antenna column at some viewport widths,
@@ -419,5 +432,5 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
 
-  window.AlmitaSpectralStack3D = { colormap, robustLimits, dataLimits, parseDocument, outlierRows };
+  window.AlmitaSpectralStack3D = { colormap, robustLimits, dataLimits, parseDocument, outlierRows, SpectralStack3D };
 })();

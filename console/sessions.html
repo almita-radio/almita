@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Sessions</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
+<body>
+  <header id="almita-header"><h1>SESSIONS</h1></header>
+  <div id="error-banner" class="banner connection" hidden></div>
+
+  <main id="app">
+    <div class="banner" style="background:var(--inset);color:var(--accent);border-color:var(--line);font-weight:700;letter-spacing:.06em">
+      STORED SESSIONS · read-only over the data · opening a session never runs REDUCE, SCIENCE or QUICKLOOK and never moves the mount ·
+      what is shown is what was stored
+    </div>
+
+    <section class="panel" aria-labelledby="h-catalog">
+      <header><h2 id="h-catalog">CATALOG <span class="muted" id="catalog-sub">(one row per OBSERVE campaign in data/mosaic)</span></h2><span id="catalog-badge" class="badge">—</span></header>
+      <div class="ses-filters">
+        <div class="ses-field"><label for="f-q">SEARCH (name, id, notes, tags)</label><input type="text" id="f-q" autocomplete="off" placeholder="via_lactea, 20261018…"></div>
+        <div class="ses-field"><label for="f-state">CAPTURE</label><select id="f-state"><option value="">any</option><option>COMPLETED</option><option>STOPPED</option><option>INCOMPLETE</option><option>NO_CAPTURE</option><option>NOT_RUN</option><option>FAILED</option><option>UNKNOWN</option></select></div>
+        <div class="ses-field"><label for="f-condition">CONDITION</label><select id="f-condition"><option value="">any</option><option>OPEN_SKY</option><option>INDOOR</option><option>SIMULATOR</option><option>UNKNOWN</option></select></div>
+        <div class="ses-field"><label for="f-kind">KIND</label><select id="f-kind"><option value="">any</option><option>OBSERVE</option><option>TEST</option></select></div>
+        <div class="ses-field"><label for="f-reduce">REDUCE</label><select id="f-reduce"><option value="">any</option><option>COMPLETED</option><option>PARTIAL</option><option>FAILED</option><option>NOT_RUN</option></select></div>
+        <div class="ses-field"><label for="f-science">SCIENCE</label><select id="f-science"><option value="">any</option><option>COMPLETED</option><option>FAILED</option><option>NOT_RUN</option></select></div>
+        <div class="ses-field"><label for="f-tag">TAG</label><select id="f-tag"><option value="">any</option></select></div>
+        <div class="ses-field"><label for="f-archived">ARCHIVED</label><select id="f-archived"><option value="0">hidden</option><option value="all">shown</option><option value="only">only archived</option></select></div>
+        <div class="ses-field"><label for="f-discarded">DISCARDED FOR ANALYSIS</label><select id="f-discarded"><option value="all">shown</option><option value="0">hidden</option><option value="only">only discarded</option></select></div>
+        <div class="ses-field"><label for="f-sort">SORT</label><select id="f-sort"><option value="started">start time</option><option value="name">name</option><option value="points">points captured</option><option value="size">size on disk</option></select></div>
+        <div class="ses-field"><label for="f-order">ORDER</label><select id="f-order"><option value="desc">newest / largest first</option><option value="asc">oldest / smallest first</option></select></div>
+        <div class="ses-field ses-check"><input type="checkbox" id="f-favorite"><label for="f-favorite">FAVOURITES ONLY</label></div>
+      </div>
+      <div class="obs-actions">
+        <button type="button" id="btn-refresh">REFRESH</button>
+        <button type="button" id="btn-reindex" title="Rebuild the catalog from the files on disk. Reads the data; writes only data/sessions/catalog_index.json">REBUILD INDEX</button>
+        <span id="catalog-info" class="muted ses-info">—</span>
+      </div>
+      <div class="table-wrap"><table class="status-table ses-table"><thead><tr>
+        <th></th><th>SESSION</th><th>STARTED (CHILE)</th><th>CAPTURE</th><th>POINTS</th><th>CALIBRATION</th><th>REDUCE</th><th>SCIENCE</th><th>RECEIVER</th><th>CONDITION</th><th>SIZE</th><th>TAGS</th>
+      </tr></thead><tbody id="tbl-sessions"><tr><td colspan="12">Loading…</td></tr></tbody></table></div>
+      <div class="obs-actions"><button type="button" id="btn-prev">‹ PREVIOUS</button><span id="pager" class="muted ses-info">—</span><button type="button" id="btn-next">NEXT ›</button></div>
+      <div class="obs-summary muted" id="size-method"></div>
+    </section>
+
+    <section class="panel" id="session-panel" hidden aria-labelledby="h-session">
+      <header><h2 id="h-session">SESSION</h2><span id="session-badge" class="badge">—</span></header>
+      <div class="obs-summary" id="session-ident"></div>
+      <div class="obs-actions ses-tabs" role="tablist" aria-label="session sections" id="session-tabs"></div>
+
+      <div class="ses-section" id="sec-summary" data-tab="SUMMARY">
+        <div class="cards" id="summary-cards"></div>
+        <h3 class="ses-h3">STAGES</h3>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>STAGE</th><th>STATE</th><th>DETAIL</th></tr></thead><tbody id="tbl-stages"></tbody></table></div>
+        <h3 class="ses-h3">NOTES</h3>
+        <div class="obs-summary" id="summary-notes">—</div>
+        <h3 class="ses-h3">INCIDENTS <span class="muted">(recorded in the session's own files)</span></h3>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>WHEN (UTC)</th><th>KIND</th><th>SOURCE</th><th>DETAIL</th></tr></thead><tbody id="tbl-incidents"></tbody></table></div>
+      </div>
+
+      <div class="ses-section" id="sec-observation" data-tab="OBSERVATION" hidden>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>PARAMETER</th><th>REQUESTED</th><th>EFFECTIVE (resolved plan)</th></tr></thead><tbody id="tbl-observation"></tbody></table></div>
+        <div class="obs-summary muted" id="observation-note"></div>
+        <details class="ses-details"><summary>observation_resolved.json · requested (as stored)</summary><pre class="obs-summary" id="observation-requested-raw"></pre></details>
+        <details class="ses-details"><summary>observation_resolved.json · effective (as stored)</summary><pre class="obs-summary" id="observation-effective-raw"></pre></details>
+      </div>
+
+      <div class="ses-section" id="sec-calibration" data-tab="CALIBRATION" hidden>
+        <dl class="kv" id="calibration-kv"></dl>
+        <div class="obs-summary" id="calibration-note"></div>
+      </div>
+
+      <div class="ses-section" id="sec-quicklook" data-tab="CAPTURES / QUICKLOOK" hidden>
+        <div class="obs-summary muted" id="quicklook-note"></div>
+        <div class="ses-thumbs" id="quicklook-thumbs"></div>
+        <section id="ses-stack-panel" class="spectral-stack-panel ses-stack">
+          <header>
+            <div><h2>SPECTRAL STACK 3D <span class="muted">(stored)</span></h2><span class="spectral-stack-subtitle">FREQUENCY × CAPTURE × POWER · from quicklook/session_waterfall_state.json</span></div>
+            <span class="obs-actions" style="padding:0"><button type="button" id="btn-stack">LOAD 3D STACK</button><span id="ses-stack-badge" class="badge">NOT LOADED</span></span>
+          </header>
+          <div id="ses-stack-viewport" class="spectral-stack-viewport">
+            <canvas id="ses-stack-canvas"></canvas>
+            <div id="ses-stack-tooltip" class="spectral-stack-tooltip" hidden></div>
+            <div id="ses-stack-message" class="spectral-stack-message">PRESS LOAD 3D STACK</div>
+            <button id="ses-stack-reset" class="spectral-stack-reset" type="button" hidden>RESET CAMERA</button>
+            <button id="ses-stack-range" class="spectral-stack-reset spectral-stack-range" type="button" hidden>FULL RANGE</button>
+            <div id="ses-stack-scale" class="spectral-stack-scale" hidden></div>
+          </div>
+        </section>
+        <h3 class="ses-h3">POINTS <span class="muted">(click a cell or a row · colour = capture status from mosaic.csv)</span></h3>
+        <div class="ses-split">
+          <canvas id="points-grid" class="ses-grid" aria-label="grid of points by row and column"></canvas>
+          <div class="twrap ses-points"><table class="status-table"><thead><tr><th>#</th><th>ROW·COL</th><th>STATUS</th><th>START (UTC)</th><th>ALT</th></tr></thead><tbody id="tbl-points"></tbody></table></div>
+        </div>
+        <div id="point-detail" hidden>
+          <h3 class="ses-h3" id="point-title">POINT</h3>
+          <dl class="kv" id="point-kv"></dl>
+          <div class="obs-actions"><button type="button" id="btn-attrs">READ CAPTURE ATTRIBUTES</button><span class="muted ses-info">reads the HDF5 attributes and shape only, never the IQ samples</span></div>
+          <pre class="obs-summary" id="point-attrs" hidden></pre>
+          <div class="obs-summary" id="point-products"></div>
+          <div class="obs-actions" id="point-reduce"></div>
+          <canvas id="point-spectrum" class="ses-plot" hidden aria-label="stored REDUCE spectrum of this point"></canvas>
+          <div class="obs-summary muted" id="point-spectrum-note"></div>
+        </div>
+      </div>
+
+      <div class="ses-section" id="sec-reduce" data-tab="REDUCE" hidden>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>RUN</th><th>STATUS</th><th>STARTED (UTC)</th><th>FRAME</th><th>PROFILE</th><th>POINTS</th><th>QUALITY</th><th>CODE</th><th>SCIENCE RUNS</th><th></th></tr></thead><tbody id="tbl-reduce"></tbody></table></div>
+        <div id="reduce-detail" hidden><h3 class="ses-h3" id="reduce-title">RUN</h3><dl class="kv" id="reduce-kv"></dl><pre class="obs-summary" id="reduce-qc"></pre></div>
+        <h3 class="ses-h3">COMPARE TWO REDUCE RUNS OF THIS SESSION</h3>
+        <div class="ses-filters">
+          <div class="ses-field"><label for="cr-a">RUN A</label><select id="cr-a"></select></div>
+          <div class="ses-field"><label for="cr-b">RUN B</label><select id="cr-b"></select></div>
+        </div>
+        <div class="obs-actions"><button type="button" id="btn-compare-runs">COMPARE RUNS</button></div>
+        <div id="compare-runs-out"></div>
+      </div>
+
+      <div class="ses-section" id="sec-science" data-tab="SCIENCE" hidden>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>RUN</th><th>ON REDUCE</th><th>STATUS</th><th>COMPLETENESS</th><th>LINK</th><th>CODE</th><th></th></tr></thead><tbody id="tbl-science"></tbody></table></div>
+        <div id="science-detail" hidden><h3 class="ses-h3" id="science-title">RUN</h3><div class="ses-thumbs" id="science-maps"></div><div class="obs-summary" id="science-notes"></div></div>
+        <h3 class="ses-h3">COMPARE TWO SCIENCE RUNS OF THIS SESSION</h3>
+        <div class="ses-filters">
+          <div class="ses-field"><label for="cs-a">RUN A</label><select id="cs-a"></select></div>
+          <div class="ses-field"><label for="cs-b">RUN B</label><select id="cs-b"></select></div>
+        </div>
+        <div class="obs-actions"><button type="button" id="btn-compare-sci">COMPARE RUNS</button></div>
+        <div id="compare-sci-out"></div>
+        <h3 class="ses-h3">PENDING ASSOCIATIONS <span class="muted">(analyses that name this session but carry no recorded link — confirm only what you know)</span></h3>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>RUN</th><th>WHY PENDING</th><th>CONFIRMED</th><th></th></tr></thead><tbody id="tbl-pending"></tbody></table></div>
+      </div>
+
+      <div class="ses-section" id="sec-instrument" data-tab="INSTRUMENT" hidden>
+        <dl class="kv" id="instrument-kv"></dl>
+        <div class="temp-chart-wrap"><canvas id="ses-temp-chart" height="260" aria-label="temperatures during the session"></canvas></div>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>SENSOR</th><th>FIRST</th><th>LAST</th><th>MIN</th><th>MAX</th><th>VALID / SAMPLES</th></tr></thead><tbody id="tbl-temps"></tbody></table></div>
+        <div class="obs-summary muted" id="temp-note"></div>
+      </div>
+
+      <div class="ses-section" id="sec-files" data-tab="FILES" hidden>
+        <div class="cards" id="files-cards"></div>
+        <div class="obs-summary muted" id="files-method"></div>
+        <div class="obs-summary" id="files-crumbs"></div>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>NAME</th><th>SIZE</th><th>MODIFIED (UTC)</th><th></th></tr></thead><tbody id="tbl-files"></tbody></table></div>
+        <h3 class="ses-h3">PRODUCTS (REDUCE / SCIENCE runs, outside the campaign directory)</h3>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>RUN</th><th>DIRECTORY</th><th>FILES</th><th>ON DISK</th></tr></thead><tbody id="tbl-products"></tbody></table></div>
+      </div>
+
+      <div class="ses-section" id="sec-organize" data-tab="ORGANIZE" hidden>
+        <div class="obs-summary muted">Saved apart from the captures (data/sessions/annotations.json). Rebuilding the index keeps all of it.</div>
+        <div class="ses-form">
+          <div class="obs-row"><label for="a-name">DESCRIPTIVE NAME</label><input type="text" id="a-name" maxlength="120"></div>
+          <div class="obs-row"><label for="a-tags">TAGS (comma separated)</label><input type="text" id="a-tags" maxlength="400"></div>
+          <div class="ses-field ses-wide"><label for="a-notes">NOTES</label><textarea id="a-notes" rows="5" maxlength="5000"></textarea></div>
+          <div class="ses-checks">
+            <span class="ses-check"><input type="checkbox" id="a-favorite"><label for="a-favorite">FAVOURITE</label></span>
+            <span class="ses-check"><input type="checkbox" id="a-reference"><label for="a-reference">REFERENCE SESSION</label></span>
+            <span class="ses-check"><input type="checkbox" id="a-archived"><label for="a-archived">ARCHIVED (catalog only; no file is moved)</label></span>
+          </div>
+          <div class="obs-row"><label for="a-condition">CONDITION (documented by you)</label><select id="a-condition"><option value="">— not documented —</option><option>OPEN_SKY</option><option>INDOOR</option><option>SIMULATOR</option><option>UNKNOWN</option></select></div>
+          <div class="obs-row"><label for="a-condition-note">CONDITION NOTE</label><input type="text" id="a-condition-note" maxlength="1000"></div>
+          <div class="obs-row"><label for="a-receiver">RECEIVER (documented by you)</label><input type="text" id="a-receiver" maxlength="80" placeholder="e.g. RTL-SDR Blog V3 (serial 00000001)"></div>
+          <div class="obs-row"><label for="a-receiver-note">RECEIVER NOTE</label><input type="text" id="a-receiver-note" maxlength="1000"></div>
+        </div>
+        <div class="obs-actions"><button type="button" id="btn-save">SAVE</button><span id="save-out" class="muted ses-info"></span></div>
+        <h3 class="ses-h3">DISCARD FOR ANALYSIS <span class="muted">(data kept; the reason is shown everywhere)</span></h3>
+        <div class="obs-summary" id="discard-state">—</div>
+        <div class="obs-row ses-pad"><label for="a-discard-reason">REASON</label><input type="text" id="a-discard-reason" maxlength="1000"></div>
+        <div class="obs-actions"><button type="button" id="btn-discard">DISCARD FOR ANALYSIS</button><button type="button" id="btn-undiscard">RESTORE FOR ANALYSIS</button></div>
+      </div>
+
+      <div class="ses-section" id="sec-export" data-tab="EXPORT" hidden>
+        <div class="obs-summary">A readable report (report.md), a structured manifest (manifest.json) and the stored figures, in one .zip under
+          data/sessions/exports/. No IQ, no credentials or authentication files. Nothing is published or uploaded: you decide who gets it.</div>
+        <div class="obs-actions"><button type="button" id="btn-export">EXPORT REPORT</button><span id="export-out" class="muted ses-info"></span></div>
+        <div class="table-wrap"><table class="status-table"><thead><tr><th>EXPORT</th><th>SIZE</th><th></th></tr></thead><tbody id="tbl-exports"></tbody></table></div>
+      </div>
+
+      <div class="ses-section" id="sec-compare" data-tab="COMPARE" hidden>
+        <div class="ses-filters"><div class="ses-field ses-wide"><label for="cmp-b">COMPARE WITH</label><select id="cmp-b"></select></div></div>
+        <div class="obs-actions"><button type="button" id="btn-compare">COMPARE SESSIONS</button></div>
+        <div id="compare-out"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
+  <script src="vendor/three/three.min.js"></script>
+  <script src="vendor/three/OrbitControls.js"></script>
+  <script src="spectral_stack_3d.js"></script>
+  <script src="sessions.js"></script>
+</body></html>

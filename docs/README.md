@@ -13,6 +13,7 @@
 | SCIENCE forensics field execution pack (operator commands: status/precheck/preflight/run/postcheck/analyze) | [FIELD RUNBOOK](SCIENCE_FORENSICS_FIELD_RUNBOOK.md), `scripts/science_forensics_field.py` |
 | SCIENCE forensics indoor bench (infrastructure checks with zero mount movement; not astronomy) | [INDOOR BENCH](SCIENCE_FORENSICS_INDOOR_BENCH.md), `scripts/science_forensics_bench.py` |
 | Web (single authenticated server :8088: console + API): architecture, operations, test report | [ARCHITECTURE](WEB_ARCHITECTURE.md), [OPERATIONS](WEB_OPERATIONS.md), [TEST REPORT](WEB_TEST_REPORT.md), [FREEZE](WEB_V1_FREEZE.md) |
+| SESSIONS (catalog and viewer of stored observations, BL-079..BL-093) | [FILE CONTRACTS](SESSIONS_FILE_CONTRACTS.md), [BACKLOG §2.5](BACKLOG.md) |
 
 ## Project overview
 [ALMITA_OVERVIEW](ALMITA_OVERVIEW.md) - the long-form project guide (hardware, observation workflow, grid generator, alignment,

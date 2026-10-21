@@ -34,6 +34,7 @@ Revert: `git revert <commit>`, copy back both unit files from the previous commi
 | Field Console (MONITOR) | `http://<host>:8088/` |
 | OBSERVE / ALIGN / CALIBRATE / PIPELINE / REDUCE / SCIENCE | `http://<host>:8088/observe.html`, `/align.html`, ... |
 | System status (services, dependencies, operational readiness) | `http://<host>:8088/status.html` |
+| SESSIONS: catalog + viewer of stored observations (read-only over the data; writes only `data/sessions/`) | `http://<host>:8088/sessions.html`, deep link `#id=<campaign_id>&tab=REDUCE` |
 | liveness / health / build | `/healthz`, `/api/system/health`, `/api/system/version`, `/version.json` (all on :8088, all authenticated) |
 
 ## Reading the status

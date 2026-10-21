@@ -1072,12 +1072,12 @@ def test_console_dt_labels_timestamps_as_utc_and_has_footer_and_status_link(tmp_
 def test_pages_do_not_overflow_horizontally(tmp_path, width):
     for name in ("common.js", "styles.css"):
         shutil.copyfile(CONSOLE / name, tmp_path / name)
-    for page in ("observe", "align", "calibrate", "status"):
+    for page in ("observe", "align", "calibrate", "status", "sessions"):
         shutil.copyfile(CONSOLE / f"{page}.html", tmp_path / f"{page}.html")
         shutil.copyfile(CONSOLE / f"{page}.js", tmp_path / f"{page}.js")
     harness = f"""<!doctype html><html><body style="margin:0"><pre id="__result"></pre>
 <script>
-const pages = ["observe", "align", "calibrate", "status"]; const out = {{}};
+const pages = ["observe", "align", "calibrate", "status", "sessions"]; const out = {{}};
 let pending = pages.length;
 for (const p of pages) {{
   const f = document.createElement("iframe"); f.style.cssText = "width:{width}px;height:900px;border:0"; f.src = p + ".html";

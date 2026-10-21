@@ -154,6 +154,261 @@ Todas necesitan al operador con la montura y la antena en posición. BL-026 a BL
 | BL-043 | — | **Hecho el 2026-10-15** (`5de9537`, desbloqueado por el operador para la salida a cielo abierto): PIPELINE tiene el mismo checkbox de SYNC y el máximo de offset que ALIGN; la regla de `alignment.py` (confianza ≥ umbral y offset ≤ máximo; PLAN nunca sincroniza) no cambió. Sección ALIGN de PIPELINE sin opción de SYNC: siempre usa `--no-sync`. Junto con esto, decidir si `alignment_engine` adopta la política de SYNC de `alignment.py` (BL-049). | autónomo | BL-026, para no exponer un SYNC sin probar. **No se habilita antes.** |
 | BL-050 | — | **Resuelto el 2026-10-15** (módulos descongelados por el operador): `configure()` exige ganancia explícita (`bc2d4db`); un solo lector DS18B20 con CRC (`bc2d4db`); identidad canónica = la campaña, con `session_identity.py` y `last_session.json` guardando `campaign_id` e `iq_session_dir` (`2207491`); lock de montura `mount_lock.py`: el primer movimiento de un proceso reclama la montura (flock), parar nunca lo necesita, la web rechaza un trabajo físico si otro proceso la tiene. Queda el README, que se resuelve con BL-035. Lo que queda de FIELD_RUNBOOK §14: identidad canónica de la sesión; lock del proceso INDI; `gain='auto'` como default en `sdr_capture.configure`; lectores DS18B20 duplicados; `README.md` desactualizado. | Los tres primeros tocan módulos congelados (`capture.py`, `indi_telescope_control.py`, `sdr_capture.py`): decisión del operador. El README conviene resolverlo con BL-035, porque es el único archivo que choca con `main`. Los lectores DS18B20 ya comparten el rango de plausibilidad; unirlos es limpieza sin efecto visible | — |
 
+### 2.5 Iniciativa GESTOR Y VISOR DE SESIONES (BL-079 a BL-093)
+
+Pedido del operador, 2026-10-21. Ninguna tarea de las etapas 1 a 3 necesita hardware: trabajan sobre archivos ya
+guardados.
+
+**Estado al 2026-10-21 (pasada nocturna, pedido del operador «desarrolla la cosa»):** etapas 1, 2 y 3 implementadas
+(BL-080 a BL-090) y con tests; **no desplegadas**: la página y las rutas nuevas necesitan reiniciar
+`almita-observe-api`, y no se reinició nada. Etapa 4 y BL-093 sin empezar. Sin hardware: ni capturas, ni montura, ni
+SDR. Archivos: `session_catalog.py`, `almita_web_sessions.py`, `console/sessions.html`, `console/sessions.js`, cambios
+aditivos en `almita_orchestrator_server.py` (rutas `/api/sessions/*`, dos archivos estáticos), `console/common.js`
+(SESSIONS en el menú), `console/spectral_stack_3d.js` (`showDocument`, clase exportada) y `console/styles.css`
+(bloque SESSIONS y el menú que baja de línea bajo 1220 px: con SESSIONS ya no cabía en una línea a 1024 px en ninguna
+página). Contratos y decisiones: [SESSIONS_FILE_CONTRACTS.md](SESSIONS_FILE_CONTRACTS.md).
+
+| nivel | estado |
+|---|---|
+| impl | sí: etapas 1 a 3 |
+| tests | sí: `tests/test_session_catalog.py` (14), `tests/test_sessions_web.py` (3), `tests/test_sessions_frontend.py` (1, Chromium), sobre fixtures en `tmp_path` (`tests/session_fixtures.py`). Además pasan, un archivo por proceso: `test_web_frontend.py` (57, con SESSIONS en la prueba de desborde), `test_web_hardening.py` (58, con SESSIONS en las guardias), `test_almita_console.py` (109), `test_orchestrator_web.py`, `test_lobe_web.py`, `test_web_theme.py`, `test_web_auth.py` y las guardias que recorren el repositorio. No se corrió la suite completa |
+| datos | sí, en solo lectura: indexar todo el `data/` real toma 0.6 a 0.9 s y 28 MB; con un servidor de prueba en localhost (índice y notas redirigidos al scratchpad, nada escrito en `data/`) se abrieron sesiones reales en todas las pestañas, se dibujó el stack 3D guardado de `ALMITA-OBSERVE-20261018-21:27:05`, el espectro REDUCE de un punto, las temperaturas, y se exportó un informe (10 figuras, 1.5 MB, sin IQ) |
+| hardware | — |
+| desplegado | **no**: falta reiniciar `almita-observe-api` sin trabajos activos (revisarlo en un paso aparte) |
+
+**Objetivo.** Una página SESIONES desde donde el operador administra las observaciones y abre toda su historia:
+parámetros, calibración, capturas, QUICKLOOK, stack 3D, corridas de REDUCE, productos de SCIENCE, temperaturas,
+incidencias y archivos. El visor recupera sesiones antiguas sin depender de la observación en curso y sin
+recalcular nada al abrirlas.
+
+#### Resumen
+
+| id | etapa | tarea | prioridad | quién | depende de | estado |
+|---|---|---|---|---|---|---|
+| BL-079 | todas | Paraguas de la iniciativa: reglas comunes y criterios mínimos | P2 | autónomo | — | criterios 1 a 8 cubiertos por tests; falta desplegar |
+| BL-080 | 1 | Estudio de los archivos reales y de sus contratos (antes de diseñar el índice) | P2 | autónomo; el operador revisa las decisiones | — | hecho ([SESSIONS_FILE_CONTRACTS.md](SESSIONS_FILE_CONTRACTS.md)); falta que el operador revise las decisiones 4, 5, 7 y 8 |
+| BL-081 | 1 | Catálogo: indexador de solo lectura, índice regenerable, tamaño en disco | P2 | autónomo | BL-080 | impl + tests + datos; sin desplegar |
+| BL-082 | 1 | Asociaciones con evidencia (perfil, REDUCE, SCIENCE, temperaturas) y «pendiente de asociar» | P2 | autónomo | BL-080, BL-081 | impl + tests + datos (16/16 REDUCE vinculadas, 2 SCIENCE pendientes); sin desplegar |
+| BL-083 | 1 | Página SESIONES: lista con búsqueda, filtros, orden y paginación | P2 | autónomo | BL-081 | impl + tests + vista con datos reales; sin desplegar |
+| BL-084 | 1 | Visor de una sesión: ocho secciones y estados distinguidos | P2 | autónomo | BL-081, BL-082 | impl + tests + vista con datos reales; sin desplegar |
+| BL-085 | 1 | QUICKLOOK y stack 3D históricos, aislados de la sesión en curso | P2 | autónomo | BL-084 | impl + tests + stack real dibujado; sin desplegar |
+| BL-086 | 1 | Juego de fixtures y tests del catálogo y las asociaciones | P2 | autónomo | BL-080 | hecho |
+| BL-087 | 2 | Anotaciones del operador: nombre, notas, etiquetas, favorito, referencia, descartada, archivada | P2 | autónomo | BL-081 | impl + tests; sin desplegar; sin respaldo de `annotations.json` (decisión 7) |
+| BL-088 | 2 | Informe exportable y manifiesto estructurado, sin IQ ni secretos | P2 | autónomo | BL-084, BL-087 | impl + tests + un exporte real (al scratchpad); sin desplegar |
+| BL-089 | 3 | Historial de corridas: varias REDUCE por sesión, varias SCIENCE por REDUCE, corrida preferida | P2 | autónomo; el operador elige la preferida | BL-082, BL-087 | impl + tests; sin desplegar |
+| BL-090 | 3 | Comparar dos sesiones o dos análisis de una sesión | P3 | autónomo | BL-089 | impl + tests + vista con datos reales: configuración, temperaturas, `config.json`, espectros de un mismo punto superpuestos (dos REDUCE) y mapas A/B/C guardados lado a lado; lo no registrado sale «NOT RECORDED», nunca «same»; sin desplegar |
+| BL-091 | 4 | Preparación y cierre de sesión: receptor, instancia de `rtl_tcp`, comprobaciones inicial y final | P2 | autónomo el registro; el operador hace los cambios físicos | BL-084; se vincula con BL-092 | abierto |
+| BL-092 | 4 | Comprobación de estabilidad de la cadena (por definir; hoy no existe) | P2 | operador + autónomo | BL-072 | abierto, sin diseño |
+| BL-093 | posterior | Administración de espacio: eliminar archivos con vista previa | P3 | operador | BL-087, BL-089 | fuera de la primera versión |
+
+#### BL-079 — Reglas comunes y criterios mínimos
+
+Valen para todas las tareas de la iniciativa:
+
+- **Solo lectura sobre lo guardado.** Indexar o abrir una sesión no mueve, renombra, reescribe ni borra nada en
+  `data/` ni en las carpetas preservadas. Las anotaciones del operador se guardan aparte de las capturas.
+- **Abrir no ejecuta.** Abrir una sesión no lanza REDUCE, SCIENCE, QUICKLOOK ni trabajos físicos, y no toca la
+  montura, los SDR, `rtl_tcp` ni INDI. Indexar tampoco accede a hardware.
+- **Lo guardado se muestra como fue guardado.** Si algo hay que reconstruir, es una acción explícita del operador,
+  nombra lo que se regenera, lo escribe aparte y conserva el original.
+- **Evidencia antes que inferencia.** Condición del cielo, receptor y vínculos científicos solo con evidencia
+  registrada; lo que sea deducción se rotula como deducción. La cercanía en el tiempo no basta para asociar.
+- **Cuatro estados distintos:** «no ejecutado», «fallido», «archivo faltante» y «metadato desconocido». Una sesión
+  incompleta se puede abrir.
+- **Memoria del Pi:** carga diferida, paginación y productos resumidos. Nunca cargar el IQ para navegar.
+- **Reutilizar** identidades, listados y dibujos existentes (tabla de abajo) en vez de crear otros paralelos.
+- **Web:** mismo puerto único 8088, misma autenticación y que siga funcionando a través de Funnel.
+- **Motores congelados** (REDUCE V1, SCIENCE V1, `capture.py`) no se modifican para construir el visor.
+- **Historia:** se conservan los datos originales y todas las versiones de resultados.
+
+Criterios mínimos de aceptación de la iniciativa (cada uno lo cierra la tarea indicada):
+
+1. Abrir una sesión antigua con sus parámetros y productos disponibles aunque haya otra sesión en curso (BL-084).
+2. Explorar su stack 3D sin cambiar el estado de la observación actual (BL-085).
+3. Navegar sesiones incompletas o con archivos faltantes (BL-084, BL-086).
+4. Mostrar y elegir entre varias reducciones y varias corridas de SCIENCE de una observación, sin mezclarlas
+   (BL-089).
+5. Nombres, notas y etiquetas sobreviven a reconstruir el índice (BL-087).
+6. Indexar varias veces no duplica sesiones ni modifica capturas (BL-081, BL-086).
+7. Exportar un informe trazable, sin secretos y sin IQ por defecto (BL-088).
+8. Catálogo y asociaciones probados con fixtures, sin hardware y sin escribir en los datos reales (BL-086).
+
+**Lo que ya existe y se reutiliza** (visto el 2026-10-21 leyendo el código y listando `data/`, sin modificar nada):
+
+| pieza | dónde | qué aporta | límite conocido |
+|---|---|---|---|
+| Identidad canónica | `session_identity.py` (BL-050, `2207491`) | `campaign_id` = carpeta `data/mosaic/<campaign_id>/`; `resolve()` la encuentra desde cualquiera de los tres identificadores | Corregido el 2026-10-21: las 31 campañas con carpeta de captura tienen `session_identity.json`; las otras 24 nunca capturaron (23 sin `data/iq/`, una con `data/iq/` vacío) |
+| Listados de campañas | `almita_web_ops.py`: `campaigns()`, `reduce_list_campaigns()`, `_campaign_session_label()`, caché de preparación de REDUCE | Etiqueta legible y preparación para REDUCE | Pensados para elegir entrada de REDUCE: tienen límites de cantidad y de escaneo (`limit`, `scan_budget`) |
+| Perfiles | `calibration_profile_catalog.py` (BL-002, BL-015, BL-067) y marcador `INVALIDATED` (2026-10-17) | Perfil, compatibilidad, interferencias marcadas, invalidación | — |
+| Stack 3D | `console/spectral_stack_3d.js` (BL-019, BL-061, BL-066) | Dibujo 3D con escala robusta y atípicas | Hoy lo alimenta MONITOR con la sesión en curso (ver decisión 9) |
+| Cascada | `quicklook_session_waterfall.py`, `quicklook/session_waterfall.json` por campaña | Cascada ya calculada | Las vistas viejas no tienen las correcciones de BL-063/BL-067 |
+| REDUCE | `data/reduced/<objetivo>/REDUCE-*/`: `config.json` (perfil, frame), `points/<n>/master_spectrum.json`, `logs/events.jsonl`, `qc/` | Parámetros, espectros por punto, eventos | La carpeta agrupa por **objetivo** (`via_lactea`), no por campaña (ver decisión 2) |
+| SCIENCE | `data/science/<objetivo>/SCIENCE_WEB-*/`: `provenance.json` (`input_reduce_session_dir`, `input_reduce_manifest_sha256`, `config_hash`, `git_commit`), `manifest.json`, `maps/` | Vínculo verificable con su REDUCE y versión de código | — |
+| Temperaturas | `temperature_logger.py` → `data/runtime/temperature/` | Registro continuo de SDR, LNA, cable y carga | Es externo a la sesión: hay que mostrar su origen y qué parte de la sesión cubre |
+| Parada | `stop_report.json` en la campaña (BL-057) | Cómo terminó una sesión detenida | Solo desde `3bfeb98` |
+
+**Decisiones técnicas.** Respondidas en BL-080 con evidencia: [SESSIONS_FILE_CONTRACTS.md §5](SESSIONS_FILE_CONTRACTS.md).
+Resueltas: 1 (los nombres están en UTC), 2, 3, 6, 9, 10 y 12 (REDUCE **sí** guarda `git_commit` en `provenance.json`:
+lo que decía abajo era incorrecto). Implementadas, pendientes de revisión del operador: 7 y 8. Abiertas para el
+operador: 4 (receptor) y 5 (condición de las sesiones viejas). 11: sin casos reales. Texto original del 2026-10-21:
+
+1. **Hora de los nombres.** `via_lactea-20261018-22:23:11` y `capture_timing_20261018_222343.csv` no dicen su zona
+   horaria. Averiguar de qué reloj vienen antes de mostrar «hora de Chile».
+2. **Vínculo REDUCE → campaña.** `config.json` de REDUCE guarda el perfil pero no la campaña; la referencia está
+   en cada `points/<n>/master_spectrum.json`. Ver si una reducción puede mezclar campañas y qué hacer si pasa.
+3. **Estado de la captura.** `observation_runtime.json` queda en RUNNING por diseño (BL-016). Decidir qué fuente
+   manda para «terminada / detenida / incompleta» (`stop_report.json`, `mosaic.csv`, `capture_timing_*.csv`, plan
+   en `grid_metadata.json`) y cómo se cuentan puntos logrados contra planificados.
+4. **Receptor.** El serial `00000001` fue del V4 hasta el 2026-10-17 y desde entonces es el V3 regrabado: el
+   serial solo no identifica el receptor. Hace falta un registro de cambios de la cadena con fecha, y lo que salga
+   de ahí se rotula «documentado por el operador», no «medido».
+5. **Condición (cielo abierto / interior / simulador).** Ninguna sesión vieja la registra de forma uniforme.
+   Fuentes posibles: el selector de montura LX200/SIM (desde 2026-10-17), el guard `INDOOR_MODE` del banco forense,
+   §4.0 de este backlog y la anotación del operador. Sin fuente: «desconocida».
+6. **Tamaño en disco.** Elegir el método (bloques reales en disco; enlaces duros contados una vez por inodo;
+   perfiles y referencias compartidas mostrados aparte y no sumados a cada sesión) y su costo en el Pi (caché por
+   fecha de modificación). La página tiene que decir cómo se calculó.
+7. **Dónde viven el índice y las anotaciones.** El índice es descartable y se regenera; las anotaciones no.
+   Definir ubicación (`data/` está fuera de Git), formato, respaldo, clave (`campaign_id`) y qué pasa con una
+   anotación cuya carpeta ya no existe (se conserva, marcada huérfana).
+8. **Qué cuenta como sesión.** Además de `data/mosaic/` hay `data/calibration/WIZARD-*`, `data/alignment/`,
+   `data/lobe/`, `data/bench/`, `data/hardware_tests/` y `/home/stellarmate/almita_preserve_20261002/` (fuera del
+   repositorio). Decidir cuáles son sesiones del catálogo, cuáles productos vinculados y cuáles quedan fuera en la
+   primera versión. Los restos de tests (`TEST-STOP-*` en `data/mosaic/`, los `SOLAR-*` de BL-055) se rotulan como
+   prueba; no se ocultan ni se borran.
+9. **Stack 3D histórico.** Ver si el dibujo actual acepta una fuente por campaña sin pasar por el estado global
+   de la sesión en curso (`current_session.json`, `last_session.json`, el visor en vivo de QUICKLOOK).
+10. **HDF5.** Si el visor necesita atributos de las capturas (ganancia, `rtl_agc` de BL-076, temperaturas por
+    punto), medir cuánto cuesta abrirlas en el Pi y leer solo atributos, nunca el IQ.
+11. **Campañas con varias carpetas IQ** (reanudaciones): cómo mostrarlas sin mezclarlas.
+12. **Reejecuciones.** Confirmar que REDUCE y SCIENCE ya crean una carpeta nueva por corrida (los IDs con fecha lo
+    sugieren) y que nada se sobrescribe. REDUCE no guarda la versión de código; SCIENCE sí (`git_commit`).
+
+#### Etapa 1 — Catálogo y visor histórico
+
+**BL-080 — Estudio de los archivos reales.** Recorrer en solo lectura cada familia de sesiones y de productos y
+escribir sus contratos reales: qué archivos hay, cuáles son obligatorios, qué campos llevan, desde qué fecha o
+commit existen y qué identificadores enlazan unos con otros. Responder las decisiones 1 a 12 con evidencia o
+dejarlas marcadas como no resueltas.
+*Acepta cuando:* hay un documento en `docs/` con el contrato de cada familia y la respuesta (o la falta de
+respuesta) a cada decisión, citando ejemplos reales; no se escribió nada en `data/`; el operador revisó las
+decisiones 4, 5, 7 y 8.
+
+**BL-081 — Catálogo.** Indexador de solo lectura que descubre las sesiones con la identidad canónica y produce un
+índice regenerable con: identidad, nombre descriptivo, fecha en hora de Chile, estado de captura, puntos
+logrados/planificados, estado de calibración, REDUCE y SCIENCE, receptor (si está documentado), condición, tamaño
+en disco y método de cálculo.
+*Acepta cuando:* indexar dos veces seguidas da el mismo índice, sin sesiones duplicadas; las capturas no cambian
+(foto de archivos, tamaños y fechas antes y después, en fixtures); una sesión que no se puede leer entera aparece
+igual, con lo que falta marcado; el indexador nunca abre el IQ.
+
+**BL-082 — Asociaciones.** Enlazar sesión ↔ perfil, sesión ↔ REDUCE, REDUCE ↔ SCIENCE y sesión ↔ registro de
+temperaturas, cada vínculo con su evidencia (archivo y campo). Lo ambiguo queda como «pendiente de asociar».
+*Acepta cuando:* cada vínculo mostrado nombra su evidencia; dos campañas cercanas en el tiempo sin referencia
+explícita no se asocian; una SCIENCE cuyo `input_reduce_manifest_sha256` no coincide con su REDUCE queda marcada
+como inconsistente, no asociada en silencio; las temperaturas externas muestran origen y qué parte de la sesión
+cubren.
+
+**BL-083 — Página SESIONES.** Página nueva en la consola, con búsqueda, filtros (estado, condición, receptor,
+etapas hechas, etiquetas cuando existan) y orden, paginada.
+*Acepta cuando:* con las 55 campañas actuales la página carga sin leer cada sesión entera; funciona en :8088 con
+la autenticación actual y a través de Funnel; abrirla no cambia nada en STATUS, MONITOR ni la sesión en curso.
+
+**BL-084 — Visor de una sesión.** Ocho secciones:
+
+1. **Resumen:** objetivo, notas, condiciones, duración, etapas e incidencias.
+2. **Observación:** parámetros pedidos y efectivos; frecuencia, muestreo, ganancia, integración, sitio, grilla,
+   giro, coordenadas y recorrido.
+3. **Calibración:** perfil usado, compatibilidad, referencias e invalidaciones.
+4. **Capturas / QUICKLOOK:** ver BL-085.
+5. **REDUCE:** parámetros, perfil, frame de velocidades, máscaras, incertidumbres, avisos, informes y espectros
+   guardados.
+6. **SCIENCE:** mapas A/B/C, cobertura, incertidumbre, validaciones y exportes disponibles. Un SCIENCE rechazado
+   (por ejemplo una grilla girada, BL-077) se muestra como rechazado, no como fallido.
+7. **Instrumento:** temperaturas e incidencias registradas en la sesión, con su origen si vienen de un registro
+   externo. Un punto sin temperatura del SDR (como en BL-069) es «metadato desconocido».
+8. **Archivos:** inventario, tamaños, ubicaciones y descarga de productos.
+
+*Acepta cuando:* se abre una sesión antigua mientras otra está en curso y ninguna de las dos cambia; cada sección
+distingue los cuatro estados de BL-079; una sesión con archivos borrados a propósito (fixture) se abre y dice qué
+falta; la descarga no ofrece archivos de autenticación ni de configuración con secretos.
+
+**BL-085 — QUICKLOOK y stack 3D históricos.** Espectros, cascada, mapas y stack 3D interactivo de una sesión
+guardada, con el dibujo existente. Elegir un punto muestra sus metadatos y qué productos tiene.
+*Acepta cuando:* explorar el stack 3D de una sesión antigua no cambia `current_session.json`, `last_session.json`
+ni lo que muestra MONITOR; los productos guardados se ven como se generaron (si son anteriores a BL-063/BL-067 se
+dice); regenerar una vista es una acción aparte, escribe en otra ubicación y conserva la original.
+
+**BL-086 — Fixtures y tests.** Fixtures pequeñas en `tests/`, armadas a partir de los contratos de BL-080: sesión
+completa, detenida, incompleta, con archivos faltantes, sin `session_identity.json`, con varias REDUCE y varias
+SCIENCE, con una SCIENCE de manifiesto distinto y una sesión de prueba (`TEST-STOP-*`).
+*Acepta cuando:* los tests trabajan en `tmp_path`, no leen ni escriben `data/` (misma regla que BL-009/BL-046) y
+no tocan hardware; cubren los criterios 3, 6 y 8 de BL-079.
+
+#### Etapa 2 — Organización e informe exportable
+
+**BL-087 — Anotaciones del operador.** Nombre descriptivo, notas y etiquetas editables; favorito y marca de
+referencia; «descartada para el análisis» con motivo (los datos se conservan); archivar y desarchivar en el
+catálogo, sin mover archivos. Todo se guarda aparte de las capturas (decisión 7).
+*Acepta cuando:* borrar y reconstruir el índice conserva todas las anotaciones; ninguna anotación cambia un archivo
+de captura ni de producto; una sesión descartada sigue abriéndose y muestra el motivo.
+
+**BL-088 — Informe exportable.** Un informe legible y un manifiesto estructurado con identidad, configuración,
+notas, resultados, figuras y avisos, para compartir evidencia con otro colaborador sin pasar toda la captura.
+*Acepta cuando:* por defecto no incluye IQ; nunca incluye credenciales, tokens ni archivos de autenticación (test
+que lo busca en la salida); cada resultado del informe nombra la corrida y el archivo de donde sale; generar el
+informe solo lo deja disponible para descargar: no lo publica ni lo sube a GitHub.
+
+#### Etapa 3 — Historial de análisis y comparación
+
+**BL-089 — Historial de corridas.** Una observación puede tener varias REDUCE y cada REDUCE varias SCIENCE. Cada
+corrida muestra identidad, entradas, parámetros, perfil, versión de código cuando exista y salidas. Se puede marcar
+una corrida como preferida sin borrar las otras (la marca es una anotación, BL-087). Volver a correr crea un
+resultado aparte.
+*Acepta cuando:* con una fixture de dos REDUCE y tres SCIENCE, cada SCIENCE aparece bajo su REDUCE y elegir una no
+mezcla mapas ni espectros de otra; cambiar la preferida no modifica ningún archivo de resultado; está confirmado
+(decisión 12) que una nueva corrida no sobrescribe la anterior.
+
+**BL-090 — Comparación.** Dos sesiones, o dos análisis de una misma sesión: configuración, temperaturas, espectros
+y mapas, con escalas y unidades compatibles.
+*Acepta cuando:* las diferencias que impiden comparar directo (frecuencia central, muestreo, ganancia, perfil,
+frame de velocidades, receptor, grilla o giro distintos) se señalan antes de mostrar la comparación; no se
+reescala en silencio.
+
+#### Etapa 4 — Preparación y cierre de sesión
+
+**BL-091 — Preparación y cierre.** Registrar por sesión: receptor e instancia de `rtl_tcp` (puerto, opción `-T`,
+hora de arranque), frecuencia, muestreo y ganancia; referencias de carga y perfil asociados; comprobaciones iniciales
+y finales (por ejemplo el rms después de arrancar `rtl_tcp`, que ya detectó un SDR mudo el 2026-10-16, y el AGC
+apagado de BL-076). Avisar cuando un reinicio o un cambio documentado de la cadena obliga a revisar la calibración
+(como el cambio de V4 a V3 del 2026-10-17, que invalidó los perfiles).
+*Acepta cuando:* el visor muestra la deriva y las diferencias medidas entre el inicio y el cierre **sin inventar
+umbrales de aceptación**; no se corrige ninguna captura por temperatura sin un modelo validado; abrir el gestor no
+reconecta, reinicia, sintoniza ni mueve nada. Los cambios físicos siguen necesitando la confirmación del operador.
+
+**BL-092 — Comprobación de estabilidad de la cadena (por definir).** No existe todavía. Se anota para que BL-091
+tenga dónde engancharse. Insumos conocidos: la raya móvil de MAIN que depende de las temperaturas del SDR y del
+LNA (BL-072), el Allan de potencia total del V3 (~0.1, sin ganancia por integración, 2026-10-17), el conector
+intermitente del LNA (2026-10-18) y la carga casera con el sensor reubicado (2026-10-17).
+*Acepta cuando:* el operador aprobó un procedimiento escrito (qué se mide, cuánto dura, con qué carga). Sus
+umbrales salen de mediciones, no se fijan de antemano.
+
+#### Posterior — Administración de espacio
+
+**BL-093 — Eliminar archivos.** Tres acciones distintas, que la interfaz no mezcla: **archivar en el catálogo**
+(BL-087), **descartar para el análisis** (BL-087) y **eliminar archivos** (esta tarea). La eliminación queda fuera
+de la primera versión.
+*Acepta cuando* (antes de implementar): hay un diseño aprobado por el operador con vista previa de los archivos
+afectados, sus dependencias (perfiles, REDUCE y SCIENCE que los usan), el espacio que se recupera y una
+confirmación explícita. Las sesiones preservadas (por ejemplo la de 400 puntos del 2026-10-02 y su perfil, BL-067,
+y `/home/stellarmate/almita_preserve_20261002/`, BL-042) y las referencias compartidas quedan protegidas.
+
+**Vínculos con otros pedidos:** BL-050 (identidad canónica), BL-016 (RUNNING por diseño), BL-002/BL-015/BL-067
+(perfiles), BL-019/BL-061/BL-066 (stack 3D), BL-063 (vista NATIVE GRID), BL-064 y BL-077 (mapas de SCIENCE),
+BL-020 (logs de REDUCE y SCIENCE), BL-037 (RFI REF: el visor no asocia lo que REDUCE no asocia), BL-055 y BL-042
+(restos de tests y carpetas preservadas), BL-069 (temperatura faltante), BL-072 y BL-076 (estabilidad y AGC),
+BL-040 (la web es alcanzable desde Internet: la descarga y el informe no pueden exponer secretos).
+
 ## 3. Orden propuesto
 
 Todo lo que se podía hacer sin hardware ni decisiones está hecho. Lo que sigue necesita al operador.
@@ -178,6 +433,9 @@ Dependencias que fijan el orden:
 - BL-031 antes de BL-037.
 - BL-053 antes de BL-035, para corregir las guías de hardware en el mismo PR.
 - BL-026 y BL-027 antes de BL-035.
+- Iniciativa SESIONES (§2.5): BL-080 antes que todo lo demás; BL-081 antes de BL-082 a BL-085 y de BL-087;
+  BL-087 antes de BL-088 y BL-089; BL-089 antes de BL-090; BL-072 antes de BL-092. BL-091 se vincula con BL-092 pero no lo espera.
+  No necesita hardware hasta la etapa 4.
 
 ## 4. Activación
 

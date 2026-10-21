@@ -423,7 +423,7 @@ def running_console(public):
 def test_every_local_reference_of_every_page_resolves(tmp_path):
     """Every page, MONITOR included, on the ONE unified server: each local href/src resolves there, and so does
     every link of the shared header nav (common.js NAV)."""
-    pages = ("index.html", "pipeline.html", "observe.html", "align.html", "calibrate.html", "reduce.html", "science.html", "status.html")
+    pages = ("index.html", "pipeline.html", "observe.html", "align.html", "calibrate.html", "reduce.html", "science.html", "status.html", "sessions.html")
     with running_console(_console_public(tmp_path)) as base:
         nav = re.findall(r'href: (?:consoleBase\(\) \+ )?"(/[^"]*)"', (CONSOLE / "common.js").read_text())
         assert {"/observe.html", "/calibrate.html", "/science.html", "/"} <= set(nav)
@@ -439,7 +439,7 @@ def test_every_local_reference_of_every_page_resolves(tmp_path):
                 if target == "/runtime":
                     continue
                 assert http_call(base, "GET", target)[0] == 200, (page, ref)
-        for asset in ("/observe.js", "/align.js", "/calibrate.js", "/status.js", "/common.js", "/styles.css"):
+        for asset in ("/observe.js", "/align.js", "/calibrate.js", "/status.js", "/sessions.js", "/common.js", "/styles.css"):
             assert http_call(base, "GET", asset)[0] == 200
 
 
@@ -499,7 +499,7 @@ def test_no_shell_eval_or_unsafe_dom_patterns_in_the_web_layer():
     for name in py:
         text = (ROOT / name).read_text()
         assert "shell=True" not in text and "os.system(" not in text and not re.search(r"\beval\(|\bexec\(", text), name
-    for f in ("common.js", "observe.js", "align.js", "calibrate.js", "status.js"):
+    for f in ("common.js", "observe.js", "align.js", "calibrate.js", "status.js", "sessions.js"):
         text = (CONSOLE / f).read_text()
         assert "innerHTML" not in text and "insertAdjacentHTML" not in text and "document.write" not in text and "eval(" not in text and "new Function" not in text, f
     lines = (CONSOLE / "app.js").read_text().splitlines()
@@ -516,7 +516,7 @@ def test_no_shell_eval_or_unsafe_dom_patterns_in_the_web_layer():
 
 
 def test_button_semantics_forms_have_labels_and_action_buttons_are_buttons():
-    for page in ("observe", "align", "calibrate", "status"):
+    for page in ("observe", "align", "calibrate", "status", "sessions"):
         html = (CONSOLE / f"{page}.html").read_text()
         assert not re.search(r"<div[^>]+onclick", html) and not re.search(r"<a[^>]+onclick", html)
         for m in re.finditer(r"<button(?![^>]*type=)[^>]*>", html):
