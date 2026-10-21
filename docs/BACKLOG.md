@@ -199,7 +199,7 @@ recalcular nada al abrirlas.
 | BL-090 | 3 | Comparar dos sesiones o dos análisis de una sesión | P3 | autónomo | BL-089 | impl + tests + vista con datos reales: configuración, temperaturas, `config.json`, espectros de un mismo punto superpuestos (dos REDUCE) y mapas A/B/C guardados lado a lado; lo no registrado sale «NOT RECORDED», nunca «same»; sin desplegar |
 | BL-091 | 4 | Preparación y cierre de sesión: receptor, instancia de `rtl_tcp`, comprobaciones inicial y final | P2 | autónomo el registro; el operador hace los cambios físicos | BL-084; se vincula con BL-092 | abierto |
 | BL-092 | 4 | Comprobación de estabilidad de la cadena (por definir; hoy no existe) | P2 | operador + autónomo | BL-072 | abierto, sin diseño |
-| BL-093 | posterior | Administración de espacio: eliminar archivos con vista previa | P3 | operador | BL-087, BL-089 | fuera de la primera versión |
+| BL-093 | posterior | Administración de espacio: eliminar archivos con vista previa | P3 | operador | BL-087, BL-089 | impl + tests (fixtures solamente) el 2026-10-21: selección múltiple, borrar productos regenerables o sesiones completas, vista previa con token, una confirmación, candado compartido con los arranques, auditoría ([SESSIONS_FILE_CONTRACTS.md §7](SESSIONS_FILE_CONTRACTS.md)). **Ninguna eliminación real todavía**: la primera la decide el operador |
 
 #### BL-079 — Reglas comunes y criterios mínimos
 

@@ -33,11 +33,41 @@
         <button type="button" id="btn-reindex" title="Rebuild the catalog from the files on disk. Reads the data; writes only data/sessions/catalog_index.json">REBUILD INDEX</button>
         <span id="catalog-info" class="muted ses-info">—</span>
       </div>
+      <div class="ses-selbar" aria-label="selection">
+        <span class="ses-check"><input type="checkbox" id="sel-page"><label for="sel-page">SELECT THIS PAGE</label></span>
+        <button type="button" id="btn-sel-all" class="mode-btn">SELECT ALL FILTERED</button>
+        <button type="button" id="btn-sel-clear" class="mode-btn">CLEAR SELECTION</button>
+        <span id="sel-count" class="ses-info" role="status">0 selected</span>
+      </div>
+      <div class="ses-selbar">
+        <span class="muted ses-info">PRODUCTS TO DELETE (captures, notes and plans stay):</span>
+        <span class="ses-check"><input type="checkbox" id="cat-quicklook" checked><label for="cat-quicklook">QUICKLOOK</label></span>
+        <span class="ses-check"><input type="checkbox" id="cat-reduce" checked><label for="cat-reduce">REDUCE</label></span>
+        <span class="ses-check"><input type="checkbox" id="cat-science" checked><label for="cat-science">SCIENCE</label></span>
+        <button type="button" id="btn-del-products" class="mode-btn">DELETE PRODUCTS… (preview)</button>
+        <button type="button" id="btn-del-sessions" class="mode-btn">DELETE SESSIONS… (preview)</button>
+      </div>
+      <div class="reason" data-for="btn-del-sessions" role="status"></div>
       <div class="table-wrap"><table class="status-table ses-table"><thead><tr>
-        <th></th><th>SESSION</th><th>STARTED (CHILE)</th><th>CAPTURE</th><th>POINTS</th><th>CALIBRATION</th><th>REDUCE</th><th>SCIENCE</th><th>RECEIVER</th><th>CONDITION</th><th>SIZE</th><th>TAGS</th>
+        <th>SEL · OPEN</th><th>SESSION</th><th>STARTED (CHILE)</th><th>CAPTURE</th><th>POINTS</th><th>CALIBRATION</th><th>REDUCE</th><th>SCIENCE</th><th>RECEIVER</th><th>CONDITION</th><th>SIZE</th><th>TAGS</th>
       </tr></thead><tbody id="tbl-sessions"><tr><td colspan="12">Loading…</td></tr></tbody></table></div>
       <div class="obs-actions"><button type="button" id="btn-prev">‹ PREVIOUS</button><span id="pager" class="muted ses-info">—</span><button type="button" id="btn-next">NEXT ›</button></div>
       <div class="obs-summary muted" id="size-method"></div>
+    </section>
+
+    <section class="panel ses-danger" id="delete-panel" hidden aria-labelledby="h-delete">
+      <header><h2 id="h-delete">DELETION PREVIEW <span class="muted">(nothing is deleted until you press the red button · CANCEL changes no file)</span></h2><span id="delete-badge" class="badge">—</span></header>
+      <div class="cards" id="delete-cards"></div>
+      <div class="obs-summary" id="delete-note"></div>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>SESSION</th><th>STARTED (CHILE)</th><th>STATE</th><th>FILES</th><th>RECOVERABLE</th><th>WHAT GOES</th><th>WHAT STAYS AND WHY</th></tr></thead><tbody id="tbl-delete"></tbody></table></div>
+      <h3 class="ses-h3">SHARED OR PROTECTED RESOURCES THAT STAY</h3>
+      <div class="table-wrap"><table class="status-table"><thead><tr><th>PATH</th><th>WHY IT STAYS</th></tr></thead><tbody id="tbl-delete-kept"></tbody></table></div>
+      <div class="obs-actions">
+        <button type="button" id="btn-del-confirm" class="danger-action">DELETE</button>
+        <button type="button" id="btn-del-cancel" class="mode-btn">CANCEL</button>
+      </div>
+      <div class="reason" data-for="btn-del-confirm" role="status"></div>
+      <div id="delete-result"></div>
     </section>
 
     <section class="panel" id="session-panel" hidden aria-labelledby="h-session">
@@ -179,6 +209,10 @@
         <div id="compare-out"></div>
       </div>
     </section>
+    <section class="panel ses-history" aria-labelledby="h-del-history">
+    <header><h2 id="h-del-history">DELETION HISTORY <span class="muted">(data/sessions/deletions.jsonl · newest first)</span></h2></header>
+    <div class="table-wrap"><table class="status-table"><thead><tr><th>BATCH</th><th>WHEN (UTC)</th><th>MODE</th><th>SESSIONS</th><th>REMOVED (ESTIMATE)</th><th>FREE SPACE CHANGE (OBSERVED)</th></tr></thead><tbody id="tbl-del-history"></tbody></table></div>
+  </section>
   </main>
 
   <footer id="almita-footer"></footer>

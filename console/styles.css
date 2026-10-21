@@ -323,4 +323,13 @@ body:has(#session-panel) #error-banner{overflow-wrap:anywhere}   /* long request
 .status-stored,.status-linked,.status-open_sky,.status-ok{color:var(--ok)}
 .status-incomplete,.status-no_capture,.status-interrupted,.status-pending,.status-simulator,.status-deferred,.status-capturing{color:var(--warn)}
 .status-missing,.status-invalidated,.status-inconsistent,.status-unreadable{color:var(--error)}
+.ses-selbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:4px 11px 8px}
+.ses-selbar .mode-btn{padding:6px 10px;font-size:11px}
+.ses-danger{border-color:var(--error-line)}
+.ses-danger .danger-action{background:var(--error)!important;color:var(--on-error)!important;padding:10px 18px;font:700 12px/1 monospace;letter-spacing:.08em;border:0;cursor:pointer}
+.ses-danger .danger-action:disabled{background:var(--disabled-bg)!important;color:var(--muted)!important}
+.ses-history{margin-top:10px}
+.ses-selcell{display:flex;align-items:center;gap:6px}
+.ses-table td:nth-child(11){white-space:normal;min-width:90px}
+.ses-why{font-size:11px;white-space:pre-line;max-width:520px;overflow-wrap:anywhere}
 @media(max-width:700px){.ses-split{flex-direction:column}.ses-points{flex-basis:auto;width:100%}}

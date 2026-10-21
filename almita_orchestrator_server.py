@@ -513,7 +513,12 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             if path in almita_web_sessions.POST_ROUTES:
                 body = _read_json_body(self) if path != "/api/sessions/reindex" else {}
                 _log("INFO", f"req={self._request_id} SESSIONS {path.rsplit('/', 1)[-1]} id={str(body.get('id', ''))[:80]}")
-                return _json_response(self, 200, {"ok": True, "data": almita_web_sessions.handle_post(path, body)})
+                import session_deletion
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": almita_web_sessions.handle_post(path, body)})
+                except (session_deletion.StalePreview, session_deletion.DeletionBlocked) as exc:
+                    _log("WARN", f"req={self._request_id} SESSIONS {path.rsplit('/', 1)[-1]} refused: {exc}")
+                    return _error_response(self, 409, str(exc))
             if path == "/api/observe/plan":
                 return self._handle_plan()
             if path == "/api/observe/estimate":
@@ -675,9 +680,14 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         # The browser's explicit START click + confirmation dialog IS the
         # deliberate operator GO; equivalent to the CLI's explicit --yes.
         # Backend is the authority on conflicts: run_observation holds an flock and refuses (409) when a run is already active.
+        # SESSIONS deletion lock (BL-093): no deletion between this start's checks and the observation becoming active.
+        import session_deletion
         _log("INFO", f"req={self._request_id} START requested plan={resolved_plan_path}")
         try:
-            result = observation_orchestrator.run_observation(resolved_plan_path, yes=True, device_name=mount_device.current())
+            with session_deletion.job_start_gate():
+                result = observation_orchestrator.run_observation(resolved_plan_path, yes=True, device_name=mount_device.current())
+        except session_deletion.DeletionBlocked as exc:
+            return _error_response(self, 409, f"blocked: {exc}")
         except FileNotFoundError:
             return _error_response(self, 404, "resolved plan not found — plan again")
         _json_response(self, 200, result)

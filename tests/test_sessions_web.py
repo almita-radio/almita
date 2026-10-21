@@ -80,3 +80,31 @@ def test_the_page_is_served_and_in_the_shared_navigation(web):
     assert _status(base + "/sessions.js")[0] == 200
     assert '{ key: "SESSIONS", href: "/sessions.html" }' in (CONSOLE / "common.js").read_text()
     assert "/sessions.html" in server_mod.STATIC_FILES
+
+
+def test_deletion_routes_preview_execute_and_refusals(web, monkeypatch):
+    base, root, _ = web
+    monkeypatch.setattr(almita_web_sessions, "BUSY_PROBE", lambda: [])
+    st, body = _post(base + "/api/sessions/delete/preview", {"ids": [fx.C], "mode": "sessions"})
+    assert st == 200 and body["data"]["deletable"] == 1 and "_internal" not in body["data"]
+    token = body["data"]["token"]
+    assert _post(base + "/api/sessions/delete/preview", {"ids": ["../../etc"], "mode": "sessions"})[0] == 400
+    assert _post(base + "/api/sessions/delete/execute", {"ids": [fx.C], "mode": "sessions", "token": token})[0] == 400   # no confirm
+    cross = _status(base + "/api/sessions/delete/execute", method="POST", headers={"Content-Type": "application/json", "Origin": "http://evil.example"},
+                    data=json.dumps({"ids": [fx.C], "mode": "sessions", "token": token, "confirm": "DELETE"}).encode())
+    assert cross[0] == 403 and (root / "data" / "mosaic" / fx.C).is_dir()
+    assert _post(base + "/api/sessions/delete/execute", {"ids": [fx.C], "mode": "sessions", "token": "b" * 64, "confirm": "DELETE"})[0] == 409
+    assert (root / "data" / "mosaic" / fx.C).is_dir()
+    st, body = _post(base + "/api/sessions/delete/execute", {"ids": [fx.C], "mode": "sessions", "token": token, "confirm": "DELETE"})
+    assert st == 200 and body["data"]["sessions"][0]["status"] == "DELETED" and not (root / "data" / "mosaic" / fx.C).exists()
+    assert _post(base + "/api/sessions/delete/execute", {"ids": [fx.C], "mode": "sessions", "token": token, "confirm": "DELETE"})[0] == 409  # repeat
+    st, body = _get(base + "/api/sessions/deletions")
+    assert st == 200 and body["data"]["batches"][0]["sessions"][0]["campaign_id"] == fx.C
+
+
+def test_a_job_start_is_refused_while_a_deletion_holds_the_lock(tmp_path):
+    import almita_web_ops as ops
+    import session_deletion as sd
+    with sd._flock(sc.Roots.under(tmp_path), timeout=1):
+        with pytest.raises(ops.OpsBlocked, match="deletion is in progress"):
+            ops.start("reduce", {})

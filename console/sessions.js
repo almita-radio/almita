@@ -53,6 +53,11 @@
   // ------------------------------------------------------------------ CATALOG
   const FILTERS = ["q", "state", "condition", "kind", "reduce", "science", "tag", "archived", "discarded", "sort", "order"];
   let page = 1, pages = 1, current = null, allSessions = [];
+  // ------------------------------------------------------------------ SELECTION + DELETION (BL-093)
+  // Ticking boxes never deletes anything: DELETE … opens a preview computed by the server, and only its red button
+  // (labelled by the server, e.g. "DELETE 4 SESSIONS — IRREVERSIBLE") sends the batch, with the preview's token.
+  const selected = new Map();           // campaign_id -> listed size (campaign + its runs), kept across pages and filters
+  let pageIds = [], lastPreview = null;
 
   function filterQuery() {
     const p = new URLSearchParams();
@@ -83,14 +88,20 @@
     for (const t of data.tags) tagSel.append(el("option", { value: t, text: t }));
     tagSel.value = data.tags.includes(keep) ? keep : "";
     const tb = clear($("tbl-sessions"));
+    pageIds = data.sessions.map((s) => s.campaign_id);
+    renderSelection();
     if (!data.sessions.length) { emptyRow(tb, 12, "No session matches these filters."); return; }
     for (const s of data.sessions) {
       const a = s.annotation || {};
       const marks = [a.favorite ? "★" : "", a.reference ? "REF" : "", a.archived ? "ARCHIVED" : "", a.discarded ? "DISCARDED" : ""].filter(Boolean).join(" ");
       const open = el("button", { type: "button", class: "mode-btn ses-open", text: "OPEN", "aria-label": "open " + s.campaign_id,
         on: { click: () => openSession(s.campaign_id) } });
+      const size = s.size || {}, campBytes = (size.campaign || {}).bytes_on_disk || 0, prodBytes = (size.products || {}).bytes_on_disk || 0;
+      const box = el("input", { type: "checkbox", "aria-label": "select " + s.campaign_id });
+      box.checked = selected.has(s.campaign_id);
+      box.addEventListener("change", () => { if (box.checked) selected.set(s.campaign_id, campBytes + prodBytes); else selected.delete(s.campaign_id); renderSelection(); });
       const tr = el("tr", { class: current === s.campaign_id ? "ses-current" : null },
-        el("td", {}, open),
+        el("td", {}, el("div", { class: "ses-selcell" }, box, open)),
         el("td", {}, el("div", { class: "ses-name", text: s.display_name || s.campaign_id }),
           el("div", { class: "muted ses-id", text: s.campaign_id + (marks ? " · " + marks : "") })),
         el("td", { text: chileShort(s.started_chile) }),
@@ -101,7 +112,7 @@
         el("td", {}, badge((s.science || {}).state), el("span", { class: "muted", text: (s.science || {}).runs && s.science.runs.length ? ` ×${s.science.runs.length}` : "" })),
         el("td", { text: receiverText(s.receiver) }),
         el("td", {}, badge((s.condition || {}).value)),
-        el("td", { text: U.bytes(((s.size || {}).campaign || {}).bytes_on_disk) }),
+        el("td", { text: U.bytes(campBytes) + (prodBytes ? ` + ${U.bytes(prodBytes)} runs` : "") }),
         el("td", { text: (a.tags || []).join(", ") || DASH }));
       tb.append(tr);
     }
@@ -138,6 +149,116 @@
       if (current) await openSession(current, currentTab);
     } catch (err) { showError(err); }
   }, "REBUILDING…"));
+
+  function renderSelection() {
+    const n = selected.size, off = [...selected.keys()].filter((id) => !pageIds.includes(id)).length;
+    const listed = [...selected.values()].reduce((a, b) => a + b, 0);
+    $("sel-count").textContent = n ? `${n} selected${off ? ` · ${off} of them NOT on this page` : ""} · listed size ${U.bytes(listed)} ` +
+      "(what can really be recovered is computed in the preview)" : "0 selected";
+    const onPage = pageIds.filter((id) => selected.has(id)).length;
+    $("sel-page").checked = pageIds.length > 0 && onPage === pageIds.length;
+    $("sel-page").indeterminate = onPage > 0 && onPage < pageIds.length;
+    U.setEnabled($("btn-del-products"), n > 0, "select sessions first");
+    U.setEnabled($("btn-del-sessions"), n > 0, "select sessions first");
+    U.setEnabled($("btn-sel-clear"), n > 0, "nothing selected");
+  }
+  $("sel-page").addEventListener("change", () => {
+    for (const box of document.querySelectorAll('#tbl-sessions input[type="checkbox"]')) if (box.checked !== $("sel-page").checked) { box.checked = $("sel-page").checked; box.dispatchEvent(new Event("change")); }
+    renderSelection();
+  });
+  $("btn-sel-all").addEventListener("click", U.guard($("btn-sel-all"), async () => {
+    try {
+      const q = new URLSearchParams(filterQuery()); q.set("ids", "1"); q.delete("page");
+      const d = await get("/api/sessions/list?" + q.toString(), 60000);
+      for (const s of d.selection) selected.set(s.campaign_id, s.bytes_on_disk);
+      renderSelection();
+      $("sel-count").textContent += ` · added all ${d.selection.length} filtered (${Math.max(0, d.selection.length - pageIds.length)} beyond this page)`;
+    } catch (err) { showError(err); }
+  }, "SELECTING…"));
+  $("btn-sel-clear").addEventListener("click", () => {
+    selected.clear();
+    for (const box of document.querySelectorAll('#tbl-sessions input[type="checkbox"]')) box.checked = false;
+    renderSelection();
+  });
+
+  function categories() { return [["cat-quicklook", "QUICKLOOK"], ["cat-reduce", "REDUCE"], ["cat-science", "SCIENCE"]].filter(([id]) => $(id).checked).map(([, c]) => c); }
+  async function preview(mode) {
+    const body = { ids: [...selected.keys()], mode, categories: mode === "products" ? categories() : null };
+    if (mode === "products" && !body.categories.length) { showError("tick at least one product category"); return; }
+    try { lastPreview = await post("/api/sessions/delete/preview", body, 120000); showError(""); }
+    catch (err) { showError(err); return; }
+    renderPreview(lastPreview);
+  }
+  $("btn-del-products").addEventListener("click", U.guard($("btn-del-products"), () => preview("products"), "PREVIEWING…"));
+  $("btn-del-sessions").addEventListener("click", U.guard($("btn-del-sessions"), () => preview("sessions"), "PREVIEWING…"));
+
+  function renderPreview(p) {
+    $("delete-panel").hidden = false;
+    clear($("delete-result"));
+    U.setBadge($("delete-badge"), p.deletable ? "PREVIEW" : "NOTHING TO DELETE");
+    const cards = clear($("delete-cards"));
+    cards.append(card("MODE", p.mode === "sessions" ? "WHOLE SESSIONS" : "PRODUCTS: " + p.categories.join(" + ")),
+      card("SESSIONS THAT WILL CHANGE", `${p.deletable} of ${p.ids.length}`), card("BLOCKED", p.blocked.length, p.blocked.length ? "status-warning" : null),
+      card("FILES TO REMOVE", p.files), card("RECOVERABLE (ESTIMATE)", U.bytes(p.space.recoverable_bytes)),
+      card("KEPT ALIVE BY HARD LINKS OUTSIDE", `${p.space.kept_alive_by_outside_hard_links} file(s), ${U.bytes(p.space.kept_alive_bytes)}`));
+    $("delete-note").textContent = [p.busy.length ? "PIPELINE ACTIVE — every session is blocked: " + p.busy.join("; ") : "",
+      p.mode === "products" ? "Captures, plans, logs, notes and manual analyses stay. A product goes only when it can be regenerated now (its profile loads and the captures are there); its parameters (config/provenance/manifest) are kept in the audit record." :
+        "Each session's campaign directory and the REDUCE/SCIENCE runs that belong only to it go. Calibration profiles, manual analyses, ambiguous runs, exports and the temperature log stay.",
+      "Space: " + p.space.estimate_note + ".", "Nothing goes to a trash: the space is freed for real."].filter(Boolean).join("\n");
+    const tb = clear($("tbl-delete"));
+    for (const r of p.sessions) {
+      const goes = r.items.map((i) => `${i.kind} ${i.path} (${i.files} files, ${U.bytes(i.bytes_on_disk)})`).join("\n") || "—";
+      const stays = [r.blocked ? "BLOCKED: " + r.blocked : "", ...r.kept.map((k) => `${k.kind} ${k.path}: ${k.why}`), ...r.warnings.map((w) => "WARNING: " + w)].filter(Boolean).join("\n") || "—";
+      tb.append(el("tr", { class: r.blocked ? "row-warn" : null },
+        el("td", {}, el("div", { class: "ses-name", text: r.name || r.campaign_id }), el("div", { class: "muted ses-id", text: r.campaign_id })),
+        el("td", { text: chileShort(r.started_chile) }), el("td", {}, badge(r.capture_state)), el("td", { text: String(r.files) }),
+        el("td", { text: U.bytes(r.space.recoverable_bytes) }), el("td", { class: "ses-why", text: goes }), el("td", { class: "ses-why", text: stays })));
+    }
+    const tk = clear($("tbl-delete-kept"));
+    if (!p.kept_resources.length) emptyRow(tk, 2, "None.");
+    for (const k of p.kept_resources) tk.append(el("tr", {}, el("td", { class: "ses-id", text: k.path }), el("td", { class: "ses-why", text: k.why })));
+    const btn = $("btn-del-confirm");
+    btn.textContent = p.confirm_label;
+    U.setEnabled(btn, p.deletable > 0 && !p.busy.length, p.busy.length ? "the pipeline is active" : "nothing in this selection can be deleted");
+    $("delete-panel").scrollIntoView({ block: "start" });
+  }
+  $("btn-del-cancel").addEventListener("click", () => { lastPreview = null; $("delete-panel").hidden = true; clear($("tbl-delete")); });
+  $("btn-del-confirm").addEventListener("click", U.guard($("btn-del-confirm"), async () => {
+    const p = lastPreview;
+    if (!p) return;
+    lastPreview = null;
+    U.setEnabled($("btn-del-confirm"), false, "sent: preview again for another batch");
+    const out = clear($("delete-result"));
+    let r;
+    try { r = await post("/api/sessions/delete/execute", { ids: p.ids, mode: p.mode, categories: p.mode === "products" ? p.categories : null, token: p.token, confirm: "DELETE" }, 600000); }
+    catch (err) { out.append(el("div", { class: "obs-summary status-error", text: "NOT DELETED: " + U.errorText(err) })); return; }
+    U.setBadge($("delete-badge"), r.sessions.some((s) => s.status === "PARTIAL") ? "PARTIAL" : "DONE");
+    out.append(el("h3", { class: "ses-h3", text: `RESULT · batch ${r.batch_id} · audit ${r.audit_dir}` }),
+      el("div", { class: "obs-summary", text: `Removed (estimate from the preview's blocks): ${U.bytes(r.bytes_removed_estimate)} · free space change observed on the card: ` +
+        (r.free_bytes_change_observed === null ? "unknown" : U.bytes(r.free_bytes_change_observed)) + ` · catalog now: ${r.catalog_sessions_after} sessions` }));
+    const body = el("tbody");
+    for (const s of r.sessions) body.append(el("tr", { class: s.status === "PARTIAL" ? "row-warn" : null }, el("td", { text: s.campaign_id }), el("td", {}, badge(s.status)),
+      el("td", { text: String(s.files_removed) }), el("td", { text: U.bytes(s.bytes_removed_estimate) }),
+      el("td", { class: "ses-why", text: s.blocked || (s.error_count ? `${s.error_count} error(s), these stayed:\n` + s.errors.map((e) => `${e.path}: ${e.error}`).join("\n") : "—") })));
+    out.append(el("div", { class: "table-wrap" }, el("table", { class: "status-table" }, el("thead", {}, el("tr", {}, el("th", { text: "SESSION" }), el("th", { text: "RESULT" }),
+      el("th", { text: "FILES REMOVED" }), el("th", { text: "REMOVED (ESTIMATE)" }), el("th", { text: "WHAT STAYED AND WHY" }))), body)));
+    for (const s of r.sessions) if (p.mode === "sessions" && s.status === "DELETED") selected.delete(s.campaign_id);
+    if (current && p.mode === "sessions" && r.sessions.some((s) => s.campaign_id === current && s.status === "DELETED")) { current = null; detail = null; $("session-panel").hidden = true; history.replaceState(null, "", "#"); }
+    else if (current) await openSession(current, currentTab);
+    await loadCatalog();
+    await loadHistory();
+  }, "DELETING…"));
+
+  async function loadHistory() {
+    const tb = clear($("tbl-del-history"));
+    let d;
+    try { d = await get("/api/sessions/deletions"); } catch (err) { emptyRow(tb, 6, "history unavailable"); return; }
+    if (!d.batches.length) { emptyRow(tb, 6, "No deletion yet."); return; }
+    for (const b of d.batches) tb.append(el("tr", {}, el("td", { class: "ses-id", text: b.batch_id }), el("td", { text: U.utc(b.utc) }),
+      el("td", { text: b.mode + (b.categories && b.categories.length ? " " + b.categories.join("+") : "") }),
+      el("td", { class: "ses-why", text: b.sessions.map((s) => `${s.campaign_id} ${s.status}${s.error_count ? ` (${s.error_count} errors)` : ""}`).join("\n") }),
+      el("td", { text: U.bytes(b.bytes_removed_estimate) }), el("td", { text: b.free_bytes_change_observed === null ? "unknown" : U.bytes(b.free_bytes_change_observed) })));
+  }
 
   // ------------------------------------------------------------------ SESSION VIEWER
   const TABS = ["SUMMARY", "OBSERVATION", "CALIBRATION", "CAPTURES / QUICKLOOK", "REDUCE", "SCIENCE", "INSTRUMENT", "FILES", "ORGANIZE", "EXPORT", "COMPARE"];
@@ -757,6 +878,7 @@
   window.addEventListener("resize", () => { if (points.length && !$("sec-quicklook").hidden) drawGrid(currentPoint); });
   (async () => {
     await loadCatalog();
+    loadHistory();
     const h = new URLSearchParams(location.hash.slice(1));
     if (h.get("id")) await openSession(h.get("id"), h.get("tab"));
   })();

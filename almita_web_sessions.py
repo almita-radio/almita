@@ -11,10 +11,12 @@ import session_catalog as catalog
 
 GET_ROUTES = ("/api/sessions/list", "/api/sessions/detail", "/api/sessions/points", "/api/sessions/point",
               "/api/sessions/capture_attributes", "/api/sessions/temperatures", "/api/sessions/files", "/api/sessions/pending",
-              "/api/sessions/exports", "/api/sessions/compare", "/api/sessions/compare_runs")
-POST_ROUTES = ("/api/sessions/reindex", "/api/sessions/annotate", "/api/sessions/export")
+              "/api/sessions/exports", "/api/sessions/compare", "/api/sessions/compare_runs", "/api/sessions/deletions")
+POST_ROUTES = ("/api/sessions/reindex", "/api/sessions/annotate", "/api/sessions/export", "/api/sessions/delete/preview",
+               "/api/sessions/delete/execute")
 EXPORT_FILE_ROUTE = "/api/sessions/export_file"
 ROOTS: Optional[catalog.Roots] = None        # None = the real data/ tree; tests point it at a temporary one
+BUSY_PROBE = None                            # None = session_deletion.default_busy_probe; tests replace it
 
 
 def _one(q: Dict[str, Any], key: str, default: str = "") -> str:
@@ -56,6 +58,9 @@ def handle_get(path: str, query: Dict[str, Any], roots: Optional[catalog.Roots] 
         return catalog.compare_sessions(_one(query, "a"), _one(query, "b"), roots)
     if path == "/api/sessions/compare_runs":
         return catalog.compare_runs(sid, _one(query, "a"), _one(query, "b"), roots)
+    if path == "/api/sessions/deletions":
+        import session_deletion
+        return {"batches": session_deletion.history(roots)}
     raise FileNotFoundError("not found")
 
 
@@ -67,6 +72,15 @@ def handle_post(path: str, body: Dict[str, Any], roots: Optional[catalog.Roots] 
                 "pending_associations": len(idx["pending_associations"])}
     if path == "/api/sessions/annotate":
         return {"annotation": catalog.annotate(str(body.get("id") or ""), body.get("patch") or {}, roots)}
+    if path in ("/api/sessions/delete/preview", "/api/sessions/delete/execute"):
+        # BL-093. Only ids, a mode and categories come from the browser: every path is computed by the server.
+        import session_deletion
+        args = (body.get("ids"), body.get("mode"), body.get("categories"))
+        if path.endswith("preview"):
+            return session_deletion.public_plan(session_deletion.plan(*args, roots=roots, busy_probe=BUSY_PROBE))
+        if body.get("confirm") != "DELETE":
+            raise ValueError('confirm: "DELETE" is required - deletion never proceeds implicitly')
+        return session_deletion.execute(*args, body.get("token"), roots=roots, busy_probe=BUSY_PROBE)
     if path == "/api/sessions/export":
         if body.get("include_iq"):
             raise ValueError("exporting IQ is not available: the report is meant to travel without the captures")

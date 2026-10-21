@@ -35,6 +35,7 @@ Revert: `git revert <commit>`, copy back both unit files from the previous commi
 | OBSERVE / ALIGN / CALIBRATE / PIPELINE / REDUCE / SCIENCE | `http://<host>:8088/observe.html`, `/align.html`, ... |
 | System status (services, dependencies, operational readiness) | `http://<host>:8088/status.html` |
 | SESSIONS: catalog + viewer of stored observations (read-only over the data; writes only `data/sessions/`) | `http://<host>:8088/sessions.html`, deep link `#id=<campaign_id>&tab=REDUCE` |
+| SESSIONS deletion (BL-093): preview, then one red button; refused while any pipeline job runs; audit in `data/sessions/deletions.jsonl` | same page, catalog panel |
 | liveness / health / build | `/healthz`, `/api/system/health`, `/api/system/version`, `/version.json` (all on :8088, all authenticated) |
 
 ## Reading the status

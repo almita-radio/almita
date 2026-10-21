@@ -83,3 +83,62 @@ def test_sessions_page_catalog_viewer_and_isolation_from_the_live_session(tmp_pa
     writes = [c for c in out["calls"] if not c.startswith("GET ")]
     assert writes == ["POST /api/sessions/annotate"], writes
     assert out["annotateBody"]["id"] == fx.A and out["annotateBody"]["patch"]["tags"] == ["V3", "night"]
+
+
+DELETE_DRIVER = r"""
+await until(() => document.querySelectorAll("#tbl-sessions input[type=checkbox]").length > 0, 6000);
+const boxes = [...document.querySelectorAll("#tbl-sessions input[type=checkbox]")];
+boxes[0].click(); boxes[1].click(); await sleep(50);
+out.afterTicks = $("sel-count").textContent;
+out.postsAfterTicks = window.__calls.filter((c) => !c.key.startsWith("GET ")).length;
+$("btn-sel-all").click();
+await until(() => /beyond this page/.test($("sel-count").textContent), 4000);
+out.afterAll = $("sel-count").textContent;
+$("btn-del-sessions").click();
+await until(() => !$("delete-panel").hidden, 4000);
+out.previewBody = window.__calls.find((c) => c.key === "POST /api/sessions/delete/preview").body;
+out.label = $("btn-del-confirm").textContent;
+out.blockedRow = [...document.querySelectorAll("#tbl-delete tr")].some((tr) => tr.classList.contains("row-warn"));
+$("btn-del-cancel").click(); await sleep(100);
+out.hiddenAfterCancel = $("delete-panel").hidden;
+out.executeAfterCancel = window.__count("POST /api/sessions/delete/execute");
+$("btn-del-sessions").click();
+await until(() => !$("delete-panel").hidden, 4000);
+$("btn-del-confirm").click();
+await until(() => $("delete-result").textContent.includes("RESULT"), 4000);
+out.executeBody = window.__calls.find((c) => c.key === "POST /api/sessions/delete/execute").body;
+out.result = $("delete-result").textContent;
+"""
+
+
+def test_sessions_selection_preview_cancel_and_one_confirmation(tmp_path):
+    data = tmp_path / "datatree"
+    fx.build(data)
+    roots = sc.Roots.under(data)
+    sc.build_index(roots)
+    listing = sc.list_sessions({"per_page": "5", "page": "1", "ids": "1"}, roots)
+    ids = [s["campaign_id"] for s in listing["selection"]]
+    preview = {"token": "a" * 64, "mode": "sessions", "categories": [], "ids": ids, "deletable": 5, "files": 40,
+               "space": {"recoverable_bytes": 123456, "kept_alive_by_outside_hard_links": 0, "kept_alive_bytes": 0, "estimate_note": "estimate"},
+               "blocked": [{"campaign_id": ids[0], "why": "PRESERVED: x"}], "busy": [], "kept_resources": [{"path": fx.PROFILE_A, "why": "calibration profile"}],
+               "confirm_label": "DELETE 5 SESSIONS — IRREVERSIBLE",
+               "sessions": [{"campaign_id": i, "name": i, "started_chile": None, "capture_state": "COMPLETED", "files": 8,
+                             "space": {"recoverable_bytes": 1000}, "items": [], "kept": [], "warnings": [], "blocked": "PRESERVED: x" if n == 0 else None}
+                            for n, i in enumerate(ids)]}
+    result = {"batch_id": "DEL-1", "audit_dir": "data/sessions/deletions/DEL-1", "bytes_removed_estimate": 123456, "free_bytes_change_observed": 120000,
+              "catalog_sessions_after": 1, "sessions": [{"campaign_id": i, "status": "DELETED", "files_removed": 8, "bytes_removed_estimate": 1000,
+                                                         "error_count": 0, "errors": [], "blocked": None} for i in ids[1:]]}
+    js = (f"window.__routes['GET /api/sessions/list'] = {{ body: {{ ok: true, data: {json.dumps(listing)} }} }};\n"
+          f"window.__routes['POST /api/sessions/delete/preview'] = {{ body: {{ ok: true, data: {json.dumps(preview)} }} }};\n"
+          f"window.__routes['POST /api/sessions/delete/execute'] = {{ body: {{ ok: true, data: {json.dumps(result)} }} }};\n"
+          "window.__routes['GET /api/sessions/deletions'] = { body: { ok: true, data: { batches: [] } } };\n").replace("</", "<\\/")
+    out = run_page(tmp_path, "sessions", js, DELETE_DRIVER, budget=20000)
+    assert not out.get("driver_error"), out.get("driver_error")
+    assert out["errors"] == [], out["errors"]
+    assert out["afterTicks"].startswith("2 selected") and out["postsAfterTicks"] == 0          # ticking never deletes
+    assert out["afterAll"].startswith(f"{len(ids)} selected") and "beyond this page" in out["afterAll"]
+    assert sorted(out["previewBody"]["ids"]) == sorted(ids) and out["previewBody"]["mode"] == "sessions"
+    assert out["label"] == "DELETE 5 SESSIONS — IRREVERSIBLE" and out["blockedRow"]
+    assert out["hiddenAfterCancel"] and out["executeAfterCancel"] == 0
+    assert out["executeBody"]["token"] == "a" * 64 and out["executeBody"]["confirm"] == "DELETE"
+    assert "free space change observed" in out["result"] and "DEL-1" in out["result"]

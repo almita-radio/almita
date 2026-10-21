@@ -77,3 +77,57 @@ Las 3 corridas sin `manifest.json` son corridas interrumpidas: tienen `REDUCE_CA
   esa sesión. Se asocia solo si el operador lo confirma.
 - `data/science/via_lactea/SCIENCE_WEB-20261015-232340-610800`: archivos de procedencia vacíos o corruptos, sin
   candidato.
+
+## 7. Borrado para recuperar espacio (BL-093, `session_deletion.py`)
+
+Implementado el 2026-10-21. **Nunca se probó sobre el `data/` real:** solo con fixtures en directorios temporales y
+vistas previas (que no escriben nada en las carpetas de datos). La primera eliminación real la hace el operador desde
+la página.
+
+**Flujo.** Las casillas solo seleccionan. DELETE PRODUCTS… o DELETE SESSIONS… piden una vista previa al servidor. El
+botón rojo, rotulado por el servidor («DELETE 4 SESSIONS — IRREVERSIBLE»), envía el lote con el token de esa vista
+previa y `confirm: "DELETE"`. CANCEL no envía nada. No hay papelera: el espacio se libera de verdad.
+
+**Qué pertenece a una sesión** (asociaciones del catálogo, nunca rutas leídas de un manifiesto y recorridas):
+- la carpeta `data/mosaic/<campaign_id>/`;
+- las REDUCE vinculadas con evidencia cuyos puntos leen **solo** esa campaña (se revisan todos los puntos);
+- las SCIENCE WEB con vínculo LINKED a una de esas REDUCE.
+
+**Nunca se borra en este flujo:** perfiles de calibración (compartidos), análisis manuales (pueden tener trabajo
+único), SCIENCE con vínculo INCONSISTENT o PENDING, la REDUCE de una SCIENCE que se queda, el registro de
+temperaturas, los exportes y `data/sessions/`.
+
+**Productos regenerables.** QUICKLOOK y REDUCE solo se borran si se pueden regenerar ahora: las capturas están y su
+perfil se puede cargar (existen `.json` y `.npz` y no hay marcador INVALIDATED). SCIENCE, mientras exista su REDUCE.
+Antes de borrar una REDUCE o una SCIENCE se guardan sus `config.json`, `provenance.json` y `manifest.json` en el registro
+del lote. El código actual puede diferir del `git_commit` original. En los datos del 2026-10-21, la mayoría de las
+sesiones con V4 tienen el perfil INVALIDATED, así que sus QUICKLOOK y REDUCE **no** se pueden borrar como productos
+(sí como sesión completa).
+
+**Bloqueos.**
+- Cualquier actividad del pipeline bloquea el lote entero: un trabajo web en curso, una observación activa
+  (`active_campaign_reason`) o un script del pipeline corriendo fuera de la web.
+- La campaña de 400 puntos del 2026-10-02 y todo lo derivado de ella están protegidos por nombre
+  (`PRESERVED_CAMPAIGNS`), sin forma de quitar la protección desde la página o la API.
+- Una sesión cuyas capturas lee una REDUCE de otra sesión no se puede borrar completa.
+- Toda ruta se calcula en el servidor, debe estar dentro de `data/mosaic`, `data/reduced` o `data/science`, sin
+  ningún enlace simbólico en el camino. Los enlaces que hay dentro se borran como enlaces, nunca su destino.
+
+**Espacio.** Bloques reales de cada inodo único del lote. Un archivo con enlaces duros fuera del lote no libera nada
+y se informa aparte. Es una estimación: el resultado muestra además el cambio real del espacio libre (`statvfs`)
+antes y después.
+
+**Carreras.** Un `flock` en `data/runtime/sessions_deletion.lock` (se puede mover con
+`ALMITA_SESSIONS_DELETION_LOCK_PATH`) lo comparten el borrado, `almita_web_ops.start()` y el START de OBSERVE. Un
+arranque se rechaza mientras corre un borrado, y el borrado espera (hasta 10 s) a que termine un arranque. Al
+confirmar se rehace la vista previa con el candado tomado: si cambió algún archivo, la selección o el estado del
+pipeline, no se borra nada y se pide una nueva vista previa. Repetir una solicitud ya ejecutada no toca nada. **Límite:**
+un proceso lanzado a mano desde la terminal no toma el candado; lo detecta la revisión de procesos al confirmar, pero
+no entre esa revisión y el borrado.
+
+**Resultado y auditoría.** Por sesión: DELETED, PARTIAL (con cada archivo que quedó y su error), NOTHING TO DELETE o
+BLOCKED. El registro queda en `data/sessions/deletions.jsonl` (una línea por lote) y en
+`data/sessions/deletions/<lote>/` (`batch.json` y los parámetros guardados). Una sesión borrada completa sale de
+`annotations.json` y queda registrada en `deleted_sessions.json` (nombre, fecha, lote), sin aparecer como fantasma en el
+catálogo. Una sesión borrada en parte conserva sus notas. Las copias de `data/sessions/backups/` guardan notas, no
+capturas: no sirven para recuperar nada de lo borrado.

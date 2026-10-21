@@ -87,6 +87,7 @@ def _private_mount_lock(tmp_path, monkeypatch):
     import os
     import mount_lock
     monkeypatch.setenv("ALMITA_MOUNT_LOCK_PATH", str(tmp_path / "mount.lock"))
+    monkeypatch.setenv("ALMITA_SESSIONS_DELETION_LOCK_PATH", str(tmp_path / "sessions_deletion.lock"))
     yield
     if mount_lock._held is not None:
         os.close(mount_lock._held[0])

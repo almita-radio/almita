@@ -1204,6 +1204,17 @@ def _running_wizard_job_on(session_rel: str) -> Optional[str]:
 
 
 def start(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> Dict[str, Any]:
+    """Checks + launch of one job, inside SESSIONS' deletion lock (session_deletion.job_start_gate): a deletion never
+    runs between these checks and the job's record, and a start is refused while a deletion runs (BL-093)."""
+    import session_deletion
+    try:
+        with session_deletion.job_start_gate():
+            return _start_unlocked(stage, params, confirm)
+    except session_deletion.DeletionBlocked as exc:
+        raise OpsBlocked(str(exc)) from None
+
+
+def _start_unlocked(stage: str, params: Dict[str, Any], confirm: Optional[str] = None) -> Dict[str, Any]:
     if stage == "calibrate_wizard" and str((params or {}).get("action", "")) not in WIZARD_SDR_ACTIONS:
         stage = "calibrate_wizard_state"          # state-only wizard action: needs no SDR (see STAGES)
     if stage not in STAGES:

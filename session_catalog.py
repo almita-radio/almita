@@ -745,12 +745,16 @@ def list_sessions(params: Dict[str, str], roots: Optional[Roots] = None) -> Dict
     except ValueError:
         raise ValueError("page and per_page must be integers") from None
     total = len(rows)
+    # "select all filtered" (BL-093): every id that matches, beyond the visible page, with its listed size
+    selection = [{"campaign_id": r["campaign_id"], "bytes_on_disk": ((r.get("size") or {}).get("campaign") or {}).get("bytes_on_disk", 0)
+                  + ((r.get("size") or {}).get("products") or {}).get("bytes_on_disk", 0)} for r in rows] if params.get("ids") == "1" else None
     tags = sorted({t for a in ann.values() for t in (a.get("tags") or [])})
     orphans = sorted(set(ann) - {s["campaign_id"] for s in index["sessions"]})
     return {"generated_utc": index["generated_utc"], "build_seconds": index.get("build_seconds"), "size_method": index["size_method"],
             "total": total, "page": page, "per_page": per_page, "pages": max(1, -(-total // per_page)),
             "sessions": rows[(page - 1) * per_page: page * per_page], "tags": tags, "orphan_annotations": orphans,
-            "pending_associations": len(index.get("pending_associations", [])), "all_sessions": len(index["sessions"])}
+            "pending_associations": len(index.get("pending_associations", [])), "all_sessions": len(index["sessions"]),
+            **({"selection": selection} if selection is not None else {})}
 
 
 # ------------------------------------------------------------------ one session in full (viewer)
