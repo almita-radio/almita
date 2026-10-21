@@ -45,11 +45,9 @@ import session_catalog as sc
 
 MODES = ("products", "sessions")
 CATEGORIES = ("QUICKLOOK", "REDUCE", "SCIENCE")
-# Protected by name; there is no switch in the UI or the API to release them.
-PRESERVED_CAMPAIGNS = {
-    "ALMITA-OBSERVE-20261002-01:45:08": "400-point campaign of 2026-10-02: preserved session (also backed up in "
-                                        "/home/stellarmate/almita_preserve_20261002), with its REDUCE and SCIENCE runs",
-}
+# Protected by name; there is no switch in the UI or the API to release them. Empty since 2026-10-21: the operator
+# released the 400-point campaign of 2026-10-02 (indoor-era V4 data; only outdoor sessions matter from now on).
+PRESERVED_CAMPAIGNS: Dict[str, str] = {}
 PIPELINE_SCRIPTS = ("capture.py", "quicklook_live.py", "alignment.py", "calibrate_reference_wizard.py", "lobe_transit.py",
                     "observation_gain_pilot.py", "reduce_single_capture.py", "almita_reduce.py", "almita_science.py",
                     "science_web_bridge.py", "almita_observe.py", "hw_hi_night_scan.py", "rf_line_bench.py", "sdr_health.py")

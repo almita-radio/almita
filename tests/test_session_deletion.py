@@ -12,9 +12,14 @@ import session_catalog as sc
 import session_deletion as sd
 from tests import session_fixtures as fx
 
-P = "ALMITA-OBSERVE-20261002-01:45:08"          # the preserved 400-point campaign (by name)
+P = "ALMITA-OBSERVE-20261002-01:45:08"          # a campaign the tests preserve by name (the real list is empty)
 IDLE = lambda: []                                # noqa: E731 - no pipeline activity
 BUSY = lambda: ["job REDUCE-20261021-000000-abcd (reduce) is running"]   # noqa: E731
+
+
+@pytest.fixture(autouse=True)
+def preserved(monkeypatch):
+    monkeypatch.setattr(sd, "PRESERVED_CAMPAIGNS", {P: "test: preserved session"})
 
 
 @pytest.fixture()
