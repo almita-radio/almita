@@ -4,8 +4,10 @@ Read-only over everything an observation, a REDUCE or a SCIENCE run wrote: nothi
 data/science or data/calibration is ever moved, renamed, rewritten or deleted here, no HDF5 IQ array is ever read,
 and nothing touches the mount, the SDRs, rtl_tcp or INDI. The only files this module writes live under data/sessions/:
   catalog_index.json   the catalog, rebuilt from the data at any time (disposable)
-  annotations.json     the operator's names, notes, tags, marks and confirmed associations (never rebuilt)
+  annotations.json     the operator's names, notes, tags, marks and confirmed associations (never rebuilt). Kept out of
+                       Git on purpose: the repository is public and notes may carry site or personal details
   annotations_log.jsonl every annotation change, appended
+  backups/             a copy of annotations.json taken before every change (the newest ANNOTATION_BACKUPS kept)
   exports/<id>-<utc>/  exported reports (report.md + manifest.json + figures, and a .zip of them)
 
 The canonical identity is session_identity's: campaign_id = the data/mosaic/<campaign_id>/ directory name.
@@ -38,6 +40,7 @@ _TAG_RE = re.compile(r"^[A-Za-z0-9_.+ -]{1,40}$")
 _INDEX_LOCK = threading.Lock()
 _ANNOTATION_LOCK = threading.Lock()
 MAX_FILES_LISTED = 500
+ANNOTATION_BACKUPS = 50
 TEMPERATURE_MAX_POINTS = 600
 # Files an export never carries, whatever is asked: authentication, keys, tokens, environment files.
 _SECRET_NAME_RE = re.compile(r"(auth|passw|secret|token|credential|\.key$|\.pem$|\.env$|id_rsa|htpasswd)", re.I)
@@ -636,6 +639,20 @@ def _validate_patch(patch: Dict[str, Any], session: Optional[Dict[str, Any]], in
     return out
 
 
+def _backup_annotations(roots: Roots) -> Optional[Path]:
+    """Copy annotations.json into backups/ before it is rewritten; keep the newest ANNOTATION_BACKUPS copies."""
+    src = _annotations_path(roots)
+    if not src.is_file():
+        return None
+    folder = roots.store / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    dst = folder / f"annotations-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.json"
+    shutil.copy2(src, dst)
+    for old in sorted(folder.glob("annotations-*.json"))[:-ANNOTATION_BACKUPS]:
+        old.unlink()
+    return dst
+
+
 def annotate(campaign_id: str, patch: Dict[str, Any], roots: Optional[Roots] = None, by: str = "operator") -> Dict[str, Any]:
     """Merge the operator's changes into annotations.json (atomic) and append them to annotations_log.jsonl. Capture
     and product files are never touched. An annotation may name a campaign that is no longer on disk (kept, orphaned)."""
@@ -651,6 +668,7 @@ def annotate(campaign_id: str, patch: Dict[str, Any], roots: Optional[Roots] = N
         data = load_annotations(roots)
         entry = dict(data["sessions"].get(campaign_id) or {})
         before = {k: entry.get(k) for k in clean}
+        _backup_annotations(roots)
         entry.update(clean)
         entry["updated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         data["sessions"][campaign_id] = entry

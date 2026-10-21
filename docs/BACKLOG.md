@@ -193,7 +193,7 @@ recalcular nada al abrirlas.
 | BL-084 | 1 | Visor de una sesión: ocho secciones y estados distinguidos | P2 | autónomo | BL-081, BL-082 | impl + tests + vista con datos reales; sin desplegar |
 | BL-085 | 1 | QUICKLOOK y stack 3D históricos, aislados de la sesión en curso | P2 | autónomo | BL-084 | impl + tests + stack real dibujado; sin desplegar |
 | BL-086 | 1 | Juego de fixtures y tests del catálogo y las asociaciones | P2 | autónomo | BL-080 | hecho |
-| BL-087 | 2 | Anotaciones del operador: nombre, notas, etiquetas, favorito, referencia, descartada, archivada | P2 | autónomo | BL-081 | impl + tests; sin desplegar; sin respaldo de `annotations.json` (decisión 7) |
+| BL-087 | 2 | Anotaciones del operador: nombre, notas, etiquetas, favorito, referencia, descartada, archivada | P2 | autónomo | BL-081 | impl + tests; `annotations.json` fuera de Git (repositorio público), copia antes de cada cambio en `data/sessions/backups/` (últimas 50, mismo disco) |
 | BL-088 | 2 | Informe exportable y manifiesto estructurado, sin IQ ni secretos | P2 | autónomo | BL-084, BL-087 | impl + tests + un exporte real (al scratchpad); sin desplegar |
 | BL-089 | 3 | Historial de corridas: varias REDUCE por sesión, varias SCIENCE por REDUCE, corrida preferida | P2 | autónomo; el operador elige la preferida | BL-082, BL-087 | impl + tests; sin desplegar |
 | BL-090 | 3 | Comparar dos sesiones o dos análisis de una sesión | P3 | autónomo | BL-089 | impl + tests + vista con datos reales: configuración, temperaturas, `config.json`, espectros de un mismo punto superpuestos (dos REDUCE) y mapas A/B/C guardados lado a lado; lo no registrado sale «NOT RECORDED», nunca «same»; sin desplegar |

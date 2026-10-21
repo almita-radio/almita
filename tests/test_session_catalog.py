@@ -269,6 +269,19 @@ def test_opening_a_session_keeps_the_live_session_untouched_and_loads_no_hardwar
     assert (base / "data" / "runtime" / "current_session.json").read_bytes() == live
 
 
+def test_every_annotation_change_keeps_a_copy_of_the_previous_file(tree, monkeypatch):
+    _, roots, _ = tree
+    monkeypatch.setattr(sc, "ANNOTATION_BACKUPS", 3)
+    sc.annotate(fx.A, {"name": "first"}, roots)                            # nothing to copy yet
+    assert not (roots.store / "backups").exists()
+    for i in range(5):
+        sc.annotate(fx.A, {"name": f"v{i}"}, roots)
+    copies = sorted((roots.store / "backups").glob("annotations-*.json"))
+    assert len(copies) == 3
+    assert json.loads(copies[-1].read_text())["sessions"][fx.A]["name"] == "v3"     # the state just before the last change
+    assert sc.load_annotations(roots)["sessions"][fx.A]["name"] == "v4"
+
+
 def test_an_unreadable_annotations_file_is_never_overwritten(tree):
     _, roots, _ = tree
     roots.store.mkdir(parents=True)
