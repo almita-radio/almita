@@ -250,19 +250,7 @@
     if (current && p.mode === "sessions" && r.sessions.some((s) => s.campaign_id === current && s.status === "DELETED")) { current = null; detail = null; $("session-panel").hidden = true; history.replaceState(null, "", "#"); }
     else if (current) await openSession(current, currentTab);
     await loadCatalog();
-    await loadHistory();
   }, "DELETING…"));
-
-  async function loadHistory() {
-    const tb = clear($("tbl-del-history"));
-    let d;
-    try { d = await get("/api/sessions/deletions"); } catch (err) { emptyRow(tb, 6, "history unavailable"); return; }
-    if (!d.batches.length) { emptyRow(tb, 6, "No deletion yet."); return; }
-    for (const b of d.batches) tb.append(el("tr", {}, el("td", { class: "ses-id", text: b.batch_id }), el("td", { text: U.utc(b.utc) }),
-      el("td", { text: b.mode + (b.categories && b.categories.length ? " " + b.categories.join("+") : "") }),
-      el("td", { class: "ses-why", text: b.sessions.map((s) => `${s.campaign_id} ${s.status}${s.error_count ? ` (${s.error_count} errors)` : ""}`).join("\n") }),
-      el("td", { text: U.bytes(b.bytes_removed_estimate) }), el("td", { text: b.free_bytes_change_observed === null ? "unknown" : U.bytes(b.free_bytes_change_observed) })));
-  }
 
   // ------------------------------------------------------------------ SESSION VIEWER
   const TABS = ["SUMMARY", "OBSERVATION", "CALIBRATION", "CAPTURES / QUICKLOOK", "REDUCE", "SCIENCE", "INSTRUMENT", "FILES", "ORGANIZE", "EXPORT", "COMPARE"];
@@ -906,7 +894,6 @@
   window.addEventListener("resize", () => { if (points.length && !$("sec-quicklook").hidden) drawGrid(currentPoint); });
   (async () => {
     await loadCatalog();
-    loadHistory();
     const h = new URLSearchParams(location.hash.slice(1));
     if (h.get("id")) await openSession(h.get("id"), h.get("tab"));
   })();
