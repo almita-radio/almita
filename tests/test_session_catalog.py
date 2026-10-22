@@ -303,3 +303,16 @@ def test_a_point_finds_its_capture_by_data_filename_not_by_point_id(tmp_path):
     found = sc._h5_for_point(tmp_path, {"point_id": "10", "point_number": "6", "data_filename": "ALMITA-OBSERVE_0006.dat"})
     assert found is not None and found.name == "ALMITA-OBSERVE_0006.h5"
     assert sc._h5_for_point(tmp_path, {"point_id": "10", "point_number": "6"}).name == "ALMITA-OBSERVE_0006.h5"
+
+
+def test_a_new_observation_after_the_last_build_shows_up_without_rebuild_index(tree):
+    base, roots, _ = tree
+    first = {s["campaign_id"] for s in sc.load_index(roots)["sessions"]}
+    new = "ALMITA-OBSERVE-20261022-11:19:52"
+    fx._campaign(base, new, "2026-10-22T11:19:52", ["success"] * 3, fx.PROFILE_A)
+    import os
+    future = sc._index_path(roots).stat().st_mtime + 5          # the new run is newer than the stored index
+    os.utime(roots.mosaic / new / "mosaic.csv", (future, future))
+    again = {s["campaign_id"] for s in sc.load_index(roots)["sessions"]}
+    assert new not in first and again == first | {new}
+    assert sc.load_index(roots) is not None                       # and a fresh index is reused, not rebuilt each time

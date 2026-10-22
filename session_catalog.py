@@ -532,11 +532,42 @@ def build_index(roots: Optional[Roots] = None, write: bool = True) -> Dict[str, 
         return index
 
 
+def _newest_input_mtime(roots: Roots) -> float:
+    """Newest mtime among what the index is built from, by stat only: the data roots, every campaign and run directory
+    (a new or removed run changes its parent's mtime) and each campaign's mosaic.csv / stop_report.json (a running or
+    just-finished observation rewrites them inside its own directory)."""
+    newest = 0.0
+    stats = [roots.mosaic, roots.reduced, roots.science]
+    for root in (roots.reduced, roots.science):
+        try:
+            stats += [d for d in root.iterdir() if d.is_dir()]
+        except OSError:
+            pass
+    try:
+        for camp in roots.mosaic.iterdir():
+            stats += [camp, camp / "mosaic.csv", camp / "stop_report.json"]
+    except OSError:
+        pass
+    for p in stats:
+        try:
+            newest = max(newest, p.stat().st_mtime)
+        except OSError:
+            pass
+    return newest
+
+
 def load_index(roots: Optional[Roots] = None) -> Dict[str, Any]:
+    """The stored index, rebuilt when it is missing, of another schema, or older than the data it describes (an
+    observation run after the last build used to stay invisible until REBUILD INDEX)."""
     roots = roots or default_roots()
-    idx, state = _read_json(_index_path(roots), 200_000_000)
+    path = _index_path(roots)
+    idx, state = _read_json(path, 200_000_000)
     if state == "OK" and isinstance(idx, dict) and idx.get("schema_version") == INDEX_SCHEMA:
-        return idx
+        try:
+            if path.stat().st_mtime >= _newest_input_mtime(roots):
+                return idx
+        except OSError:
+            pass
     return build_index(roots)
 
 
