@@ -401,6 +401,8 @@ def sky_view(points: List[Dict[str, Any]], location: EarthLocation, t0: Time, pe
     now = coords.transform_to(AltAz(obstime=t0, location=location))       # the footprint itself: every point at t0
     sun = get_sun(t0).transform_to(AltAz(obstime=t0, location=location))
     return {"computed_utc": t0.utc.isot + "Z", "min_altitude_deg": min_altitude_deg,
+            # the map's own observer: OBSERVE turns a click on the map back into RA/Dec at computed_utc
+            "observer": {"latitude_deg": float(location.lat.deg), "longitude_deg": float(location.lon.deg)},
             "points": [{"scan_order": int(p["scan_order"]), "az_deg": float(az), "alt_deg": float(alt),
                         "below_min": bool(alt < min_altitude_deg)} for p, az, alt in zip(points, aa.az.deg, aa.alt.deg)],
             # red means "below the floor WHEN captured" in both views: a point low now may be captured after it rose

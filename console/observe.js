@@ -506,6 +506,20 @@
   function updateRfiBiasTeeAvailability() { $("f-rfi-bias-tee").disabled = !$("f-rfi-enabled").checked; }
 
   $("f-placement").addEventListener("change", (e) => { $("row-center-ra").hidden = e.target.value !== "FIXED_CENTER"; });
+  // A click on the sky map centres the region there: FIXED_CENTER with the RA/Dec under the click at the map's own time
+  // (approximate - plain spherical astronomy, well under 1 deg; plenty for a ~20 deg beam). The estimate then re-runs.
+  $("est-skymap").style.cursor = "crosshair";
+  $("est-skymap").addEventListener("click", (ev) => {
+    const aa = U.skyAzAlt($("est-skymap"), ev), obs = lastSky && lastSky.observer;
+    if (!aa || !obs) return;
+    const c = U.azAltToRaDec(aa.az_deg, aa.alt_deg, obs.latitude_deg, obs.longitude_deg, lastSky.computed_utc);
+    $("f-placement").value = "FIXED_CENTER";
+    $("f-center-ra").value = c.ra_hours.toFixed(3);
+    $("f-center-dec").value = c.dec_deg.toFixed(2);
+    $("f-placement").dispatchEvent(new Event("change", { bubbles: true }));
+    $("est-skymap-note").textContent = `clicked az ${aa.az_deg.toFixed(1)}° alt ${aa.alt_deg.toFixed(1)}° → centre RA ${c.ra_hours.toFixed(3)} h, `
+      + `Dec ${c.dec_deg.toFixed(2)}° (FIXED_CENTER, approximate) · recomputing…`;
+  });
   $("f-rfi-enabled").addEventListener("change", updateRfiBiasTeeAvailability);
   updateRfiBiasTeeAvailability();
   $("observe-form").addEventListener("submit", submitPlan);

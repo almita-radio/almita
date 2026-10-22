@@ -808,6 +808,7 @@
     const okColor = U.cssVar("--ok", "#55c985"), D = U.dataColor;
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = ringBg; ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, 2 * Math.PI); ctx.fill();
+    canvas.__skyProj = { cx, cy, R };                   // the final projection (zoom included): U.skyAzAlt() inverts it
     const rFor = (altDeg) => R * (1 - Math.max(0, Math.min(90, altDeg)) / 90);
     const toXY = (azDeg, altDeg) => { const r = rFor(altDeg), t = (azDeg * Math.PI) / 180; return [cx + r * Math.sin(t), cy - r * Math.cos(t)]; };
 
@@ -926,6 +927,28 @@
       });
     }
     canvas.__onPick = o.onPick || null;
+  };
+
+  // A click on a drawSkyView canvas back to {az_deg, alt_deg}; null outside the horizon or before the first draw.
+  U.skyAzAlt = function (canvas, ev) {
+    const p = canvas.__skyProj;
+    if (!p) return null;
+    const rect = canvas.getBoundingClientRect();
+    const dx = ev.clientX - rect.left - p.cx, dy = p.cy - (ev.clientY - rect.top), r = Math.hypot(dx, dy);
+    if (r > p.R) return null;
+    return { az_deg: (((Math.atan2(dx, dy) * 180) / Math.PI) + 360) % 360, alt_deg: 90 * (1 - r / p.R) };
+  };
+  // Az/alt seen from (lat, lon) at `utc` -> RA (hours) / Dec (deg). Plain spherical astronomy with GMST: no
+  // precession, nutation or refraction (well under 1 deg - for picking a region's centre, not for pointing).
+  U.azAltToRaDec = function (azDeg, altDeg, latDeg, lonDeg, utc) {
+    const d2r = Math.PI / 180, A = azDeg * d2r, a = altDeg * d2r, phi = latDeg * d2r;
+    const sinDec = Math.sin(phi) * Math.sin(a) + Math.cos(phi) * Math.cos(a) * Math.cos(A);
+    const dec = Math.asin(Math.max(-1, Math.min(1, sinDec)));
+    const H = Math.atan2(-Math.sin(A) * Math.cos(a), Math.cos(phi) * Math.sin(a) - Math.sin(phi) * Math.cos(a) * Math.cos(A));
+    const jd = new Date(utc).getTime() / 86400000 + 2440587.5;
+    const lst = 18.697374558 + 24.06570982441908 * (jd - 2451545.0) + lonDeg / 15;
+    const ra = (((lst - H / d2r / 15) % 24) + 24) % 24;
+    return { ra_hours: ra, dec_deg: dec / d2r };
   };
 
   // Horizontal colour-scale legend for the HI4PI overlay: real cm^-2 values at both ends, drawn on its own canvas.
