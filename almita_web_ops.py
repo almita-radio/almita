@@ -318,6 +318,49 @@ def sky_layer_now(beam_fwhm_deg: Optional[float] = None) -> Dict[str, Any]:
     return _SKY_NOW_CACHE[key]
 
 
+_SKY_PROJECTION_CACHE: Dict[Any, Dict[str, Any]] = {}
+SKY_PROJECTION_MAX_HOURS = 25.0
+
+
+def sky_projection(at_utc: str, beam_fwhm_deg: Optional[float] = None) -> Dict[str, Any]:
+    """The sky ALIGN/OBSERVE draw (HI4PI Alt/Az layer + the Sun) at another instant, for the maps' time slider
+    (operator 2026-10-27: now .. +24 h in 2 h steps, ◀ ▶ arrows). Display only - nothing is planned from it. `at_utc` is rounded
+    to the minute and must lie within [now - 1 h, now + 25 h]. The layer takes ~0.03 s once hi4pi_map has the map
+    loaded; cached per (minute, beam). Raises ValueError for a bad instant; an unavailable map is reported."""
+    if beam_fwhm_deg is None:
+        beam_fwhm_deg = float(json.loads((ROOT / "observer_config.json").read_text()).get("observation_defaults", {}).get("beam_fwhm_deg") or 20.0)
+    try:
+        at = datetime.fromisoformat(str(at_utc).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"at must be an ISO UTC instant: {exc}") from exc
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    hours_ahead = (at - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    if not -1.0 <= hours_ahead <= SKY_PROJECTION_MAX_HOURS:
+        raise ValueError(f"at must lie between 1 h ago and {SKY_PROJECTION_MAX_HOURS:g} h ahead (got {hours_ahead:+.1f} h)")
+    minute = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:00")
+    key = (minute, round(float(beam_fwhm_deg), 3))
+    if key in _SKY_PROJECTION_CACHE:
+        return _SKY_PROJECTION_CACHE[key]
+    import alignment
+    from astropy.coordinates import AltAz, EarthLocation
+    from astropy.time import Time
+    import astropy.units as u
+    obs = json.loads((ROOT / "observer_config.json").read_text())["observer"]
+    location = EarthLocation(lat=obs["latitude_deg"] * u.deg, lon=obs["longitude_deg"] * u.deg, height=obs["elevation_m"] * u.m)
+    t = Time(minute, scale="utc")
+    sun = alignment.sun_eod(t).transform_to(AltAz(obstime=t, location=location))
+    out = {"projected_utc": minute + "Z", "beam_fwhm_deg": float(beam_fwhm_deg),
+           "observer": {"latitude_deg": float(obs["latitude_deg"]), "longitude_deg": float(obs["longitude_deg"])},
+           "sun": {"az_deg": float(sun.az.deg), "alt_deg": float(sun.alt.deg), "above_horizon": bool(sun.alt.deg > 0)}}
+    layer = _hi_plan_sky({"generated_utc": minute, "beam_fwhm_deg": beam_fwhm_deg})
+    out.update({k: v for k, v in layer.items() if k in ("hi4pi_grid", "hi4pi_error")})
+    if len(_SKY_PROJECTION_CACHE) > 16:
+        _SKY_PROJECTION_CACHE.clear()
+    _SKY_PROJECTION_CACHE[key] = out
+    return out
+
+
 def _hi_plan_sky(hi_plan: Dict[str, Any]) -> Dict[str, Any]:
     """ALIGN's HI4PI Alt/Az layer (hi4pi_map.sky_grid, same smoothing as the plan: its own beam_fwhm_deg) at the
     plan's OWN instant, so the colour under each zone is what the plan saw. Cached per plan (job facts are polled
@@ -2364,6 +2407,8 @@ def _align_sky_compute(mode: str, ring_radii_deg: List[float], ring_points: int,
     sun = alignment.sun_eod(now)
     sun_altaz = sun.transform_to(AltAz(obstime=now, location=location))
     out: Dict[str, Any] = {"computed_utc": _utc(), "mode": mode, "exterior_radius_deg": exterior_radius,
+                           # the map's own observer: the time slider re-places the areas (RA/Dec) at other instants
+                           "observer": {"latitude_deg": float(obs["latitude_deg"]), "longitude_deg": float(obs["longitude_deg"])},
                            "sun": {"ra_hours": float(sun.ra.hour), "dec_deg": float(sun.dec.deg), "az_deg": float(sun_altaz.az.deg),
                                    "alt_deg": float(sun_altaz.alt.deg), "above_horizon": bool(sun_altaz.alt.deg > 0)}}
     if mode == "solar":

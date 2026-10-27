@@ -452,6 +452,13 @@
     let mode = "hi";              // "hi" | "solar" - the operator's explicit choice; never switched automatically
     let selectedArea = null;      // HI only: "A" | "B" | "C" (the operator's pick); solar always uses the Sun itself
     let sky = null;               // last real /api/ops/align/sky response
+    let proj = null;              // the time slider's projected layer (null = "now"); display only, never planned from
+    const skyTime = U.skyTimeSlider($("real-sky-time"), async (hours) => {
+      if (!hours || !sky) { proj = null; drawSky(); return; }
+      const at = skyTime.at();
+      try { const p = await U.fetchSkyProjection(at, $("real-beam-fwhm").value || 20); if (skyTime.at() === at) { proj = p; drawSky(); } }
+      catch (e) { $("real-sky-note").textContent = "projection unavailable: " + e.message; }
+    });
     let durationModel = null;     // from /api/ops/align/defaults
     // How long an approved (EXITED, PASS) PLAN stays valid for RUN, in seconds - read from the server
     // (align_defaults()'s own plan_validity_seconds) rather than hardcoded here, so the countdown shown below
@@ -523,15 +530,33 @@
       if (!r.ok) { $("real-sky-note").textContent = "sky view unavailable: " + U.errorText(r.error); return; }
       sky = r.data.data;
       if (selectedArea && !(sky.areas || []).some((a) => a.label === selectedArea)) selectedArea = null;
+      proj = null; skyTime.setBase(sky.computed_utc); skyTime.reset();      // a new sky view goes back to "now"
       drawSky();
+    }
+
+    // The sky drawn: the real response, or (time slider moved) its projection - the Milky Way and the Sun from the
+    // server at that instant, the areas re-placed from their RA/Dec. A projection is display only: no area picking.
+    function drawnSky() {
+      if (!proj) return { data: sky, utc: sky.computed_utc };
+      const obs = sky.observer, utc = proj.projected_utc;
+      const areas = (sky.areas || []).map((a) => (a.label === "SUN" ? { ...a, az_deg: proj.sun.az_deg, alt_deg: proj.sun.alt_deg }
+        : { ...a, ...(obs ? U.raDecToAzAlt(a.ra_hours, a.dec_deg, obs.latitude_deg, obs.longitude_deg, utc) : {}) }));
+      return { data: { ...sky, sun: proj.sun, hi4pi_grid: sky.hi4pi_grid ? proj.hi4pi_grid : undefined, areas }, utc };
     }
 
     function drawSky() {
       if (!sky) return;
-      U.drawSkyView($("real-sky"), sky, { selected: mode === "solar" ? "SUN" : selectedArea, onPick: mode === "hi" ? (label) => { selectedArea = label; drawSky(); renderAreas(); updateReal(); } : null });
+      const { data, utc } = drawnSky();
+      U.drawSkyView($("real-sky"), data, { selected: mode === "solar" ? "SUN" : selectedArea, markers: U.magellanicMarkers(sky.observer, utc),
+        onPick: mode === "hi" && !proj ? (label) => { selectedArea = label; drawSky(); renderAreas(); updateReal(); } : null });
       if ($("real-sky-legend")) {
-        if (mode === "hi" && sky.hi4pi_grid) { $("real-sky-legend").hidden = false; U.drawHi4piLegend($("real-sky-legend"), sky.hi4pi_grid.value_range_1e20cm2, "N_HI (cm⁻²)"); }
+        if (mode === "hi" && data.hi4pi_grid) { $("real-sky-legend").hidden = false; U.drawHi4piLegend($("real-sky-legend"), data.hi4pi_grid.value_range_1e20cm2, "N_HI (cm⁻²)"); }
         else { $("real-sky-legend").hidden = true; }
+      }
+      if (proj) {
+        $("real-sky-note").textContent = `PROJECTION ${U.chileStamp(utc)} (display only - areas cannot be picked here; back to "now" to choose) · Sun: `
+          + (proj.sun.above_horizon ? `az ${proj.sun.az_deg.toFixed(1)}° alt ${proj.sun.alt_deg.toFixed(1)}°` : "below the horizon");
+        return;
       }
       const parts = [`sky computed ${U.utc(sky.computed_utc)} · Sun: az ${sky.sun.az_deg.toFixed(1)}° alt ${sky.sun.alt_deg.toFixed(1)}° ${sky.sun.above_horizon ? "(up)" : "(below horizon)"}`];
       if (mode === "hi") {

@@ -782,8 +782,9 @@
     // opts.dotScale multiplies the point size; opts.ringFirst=false drops the ring on the first point (MONITOR).
     // opts.zoomToPoints: frame the view on the points with opts.zoomMargin (fraction of their extent, each side) -
     // the projection is linear on screen, so only the centre and the scale change and every layer follows (MONITOR).
+    // opts.markers [{label, az_deg, alt_deg}]: named objects (ALIGN/OBSERVE: the Magellanic Clouds).
     const o = Object.assign({ selected: null, onPick: null, colors: null, path: null, points: null, minAlt: null, dotScale: 1, ringFirst: true,
-                              zoomToPoints: false, zoomMargin: 0.3 }, opts || {});
+                              zoomToPoints: false, zoomMargin: 0.3, markers: null }, opts || {});
     canvas.__skyArgs = [data, opts];                    // the DÍA/NOCHE switch redraws it with the same data (no request)
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
@@ -862,6 +863,15 @@
       ctx.fillStyle = data.sun.above_horizon ? D("#e6b85c") : (U.isDay() ? "rgba(168,100,0,0.35)" : "rgba(230,184,92,0.35)");
       ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
       ctx.strokeStyle = ringBg; ctx.lineWidth = 1; ctx.stroke();
+    }
+    // opts.markers [{label, az_deg, alt_deg}]: named sky objects (the Magellanic Clouds), dashed ring + label
+    for (const m of o.markers || []) {
+      if (m.alt_deg < 0) continue;
+      const [x, y] = toXY(m.az_deg, m.alt_deg);
+      ctx.save(); ctx.setLineDash([2, 2]); ctx.lineWidth = 1.5; ctx.strokeStyle = fg;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, 2 * Math.PI); ctx.stroke(); ctx.restore();
+      ctx.font = "10px ui-monospace,monospace"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = ringBg;
+      ctx.strokeText(m.label, x, y + 15); ctx.fillStyle = fg; ctx.fillText(m.label, x, y + 15);
     }
     // areas: outline circles only, clickable when onPick is set (HI A/B/C)
     canvas.__hitAreas = [];
@@ -949,6 +959,73 @@
     const lst = 18.697374558 + 24.06570982441908 * (jd - 2451545.0) + lonDeg / 15;
     const ra = (((lst - H / d2r / 15) % 24) + 24) % 24;
     return { ra_hours: ra, dec_deg: dec / d2r };
+  };
+  // The inverse: RA (hours) / Dec (deg) -> az/alt seen from (lat, lon) at `utc`. Same plain GMST astronomy (display only).
+  U.raDecToAzAlt = function (raHours, decDeg, latDeg, lonDeg, utc) {
+    const d2r = Math.PI / 180, phi = latDeg * d2r, dec = decDeg * d2r;
+    const jd = new Date(utc).getTime() / 86400000 + 2440587.5;
+    const lst = 18.697374558 + 24.06570982441908 * (jd - 2451545.0) + lonDeg / 15;
+    const H = (lst - raHours) * 15 * d2r;
+    const sinAlt = Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H);
+    const alt = Math.asin(Math.max(-1, Math.min(1, sinAlt)));
+    const az = Math.atan2(-Math.cos(dec) * Math.sin(H), Math.cos(phi) * Math.sin(dec) - Math.sin(phi) * Math.cos(dec) * Math.cos(H));
+    return { az_deg: ((az / d2r) + 360) % 360, alt_deg: alt / d2r };
+  };
+
+  // Magellanic Clouds (J2000 centres), marked on ALIGN's and OBSERVE's maps (operator 2026-10-27).
+  U.MAGELLANIC = [{ label: "LMC", ra_hours: 5.392, dec_deg: -69.756 }, { label: "SMC", ra_hours: 0.877, dec_deg: -72.829 }];
+  U.magellanicMarkers = (obs, utc) => (obs ? U.MAGELLANIC.map((m) => ({ label: m.label, ...U.raDecToAzAlt(m.ra_hours, m.dec_deg, obs.latitude_deg, obs.longitude_deg, utc) })) : []);
+
+  // dd/mm HH:MM in Chile's own time (America/Santiago follows its summer/winter change).
+  U.chileStamp = function (utc) {
+    const parts = {};
+    for (const p of new Intl.DateTimeFormat("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(utc))) parts[p.type] = p.value;
+    return `${parts.day}/${parts.month} ${parts.hour}:${parts.minute}`;
+  };
+
+  // Time stepper under a sky map (operator 2026-10-27; arrows instead of a slider, easier to hit): ◀ / ▶ move U.SKY_PROJECTION_STEP_H (2 h)
+  // between the map's own instant and +24 h, label dd/mm HH:MM (+N h). Display only. onChange(hours) on every step;
+  // reset() puts it back on "now" without calling onChange.
+  U.SKY_PROJECTION_STEP_H = 2;
+  U.skyTimeSlider = function (host, onChange) {
+    const steps = 24 / U.SKY_PROJECTION_STEP_H;
+    host.className = "sky-time";
+    host.style.cssText = "display:flex;align-items:center;justify-content:center;gap:10px;max-width:420px;margin:4px auto;font:12px ui-monospace,monospace";
+    const el = (tag, props) => Object.assign(document.createElement(tag), props);
+    const prev = el("button", { type: "button", className: "mode-btn", textContent: "◀", title: `${U.SKY_PROJECTION_STEP_H} h earlier` });
+    const next = el("button", { type: "button", className: "mode-btn", textContent: "▶", title: `${U.SKY_PROJECTION_STEP_H} h later (up to +24 h)` });
+    prev.setAttribute("aria-label", `sky ${U.SKY_PROJECTION_STEP_H} h earlier`); next.setAttribute("aria-label", `sky ${U.SKY_PROJECTION_STEP_H} h later`);
+    const label = el("b", { className: "sky-time-label" });
+    label.style.cssText = "min-width:150px;text-align:center";
+    host.replaceChildren(prev, label, next);
+    let base = null, step = 0;
+    const hours = () => step * U.SKY_PROJECTION_STEP_H;
+    const at = () => (base ? new Date(new Date(base).getTime() + hours() * 3600000).toISOString() : null);
+    const paint = () => {
+      label.textContent = base ? `${U.chileStamp(at())} ${step ? `(+${hours()} h)` : "(now)"}` : "";
+      prev.disabled = step === 0; next.disabled = step === steps;
+    };
+    const go = (d) => { const s = Math.max(0, Math.min(steps, step + d)); if (s === step) return; step = s; paint(); onChange(hours()); };
+    prev.addEventListener("click", () => go(-1));
+    next.addEventListener("click", () => go(1));
+    paint();
+    return {
+      hours, at,
+      setBase(utc) { base = utc; paint(); },
+      reset() { step = 0; paint(); },
+    };
+  };
+  // The projected sky layer (HI4PI + Sun) at `atUtc`, cached per instant and beam (the server caches too).
+  const projCache = new Map();
+  U.fetchSkyProjection = async function (atUtc, beamFwhm) {
+    const minute = new Date(atUtc).toISOString().slice(0, 16) + ":00Z";
+    const key = `${minute}|${beamFwhm || ""}`;
+    if (projCache.has(key)) return projCache.get(key);
+    const r = await U.api(`/api/ops/sky/projection?at=${encodeURIComponent(minute)}${beamFwhm ? `&beam_fwhm=${beamFwhm}` : ""}`, { timeoutMs: 30000 });
+    if (!r.ok) throw new Error(U.errorText(r.error));
+    if (projCache.size > 32) projCache.clear();
+    projCache.set(key, r.data.data);
+    return r.data.data;
   };
 
   // Horizontal colour-scale legend for the HI4PI overlay: real cm^-2 values at both ends, drawn on its own canvas.

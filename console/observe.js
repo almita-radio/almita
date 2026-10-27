@@ -77,13 +77,20 @@
   // The requested grid on ALIGN's sky map: each point where it will be WHEN it is captured (scan order, PLAN's own
   // schedule), small white points (red: below the minimum altitude when captured), the first one ringed; Sun and HI4PI layer.
   let skyView = "now", lastSky = null;
+  let proj = null;              // the time slider's projected layer (null = "now"); display only
+  const skyTime = U.skyTimeSlider($("est-sky-time"), async (hours) => {
+    if (!hours || !lastSky) { proj = null; renderEstimateSky(lastSky); return; }
+    const at = skyTime.at();
+    try { const p = await U.fetchSkyProjection(at); if (skyTime.at() === at) { proj = p; renderEstimateSky(lastSky); } }
+    catch (e) { $("est-skymap-note").textContent = "projection unavailable: " + e.message; }
+  });
   // The map is a square as tall as the specification column beside it (OBSERVATION NAME .. SETTLE), never wider
   // than the space left; on a narrow screen (stacked) it takes the width instead.
   function sizeSkyMap() {
     const form = $("obs-split-form"), canvas = $("est-skymap");
     if (!form || !canvas) return;
     const stacked = window.matchMedia("(max-width:900px)").matches;
-    const other = $("est-view-bar").offsetHeight + ($("est-skymap-legend").hidden ? 0 : 40) + $("est-skymap-note").offsetHeight + 28;
+    const other = $("est-view-bar").offsetHeight + $("est-sky-time").offsetHeight + ($("est-skymap-legend").hidden ? 0 : 40) + $("est-skymap-note").offsetHeight + 28;
     const byHeight = form.offsetHeight - other;
     const byWidth = stacked ? form.offsetWidth : Math.max(280, form.parentElement.offsetWidth * 0.5);
     const side = Math.round(Math.max(260, Math.min(stacked ? byWidth : byHeight, byWidth, 640)));
@@ -91,18 +98,44 @@
   }
   window.addEventListener("resize", () => { if (lastSky) renderEstimateSky(lastSky); });
   function renderEstimateSky(sky) {
+    if (sky !== lastSky) { proj = null; skyTime.reset(); }        // a new estimate (form change) goes back to "now"
     lastSky = sky;
     const canvas = $("est-skymap"), legend = $("est-skymap-legend"), note = $("est-skymap-note");
     if (!sky || !sky.points || !sky.points.length) {
-      canvas.hidden = true; legend.hidden = true; note.textContent = "";
+      canvas.hidden = true; legend.hidden = true; note.textContent = ""; $("est-sky-time").hidden = true;
       return;
     }
-    canvas.hidden = false;
+    canvas.hidden = false; $("est-sky-time").hidden = false;
+    skyTime.setBase(sky.computed_utc);
     sizeSkyMap();
+    canvas.style.cursor = proj ? "default" : "crosshair";
+    const obs = sky.observer;
+    if (proj && obs) {
+      // Projection: the region's points (AREA NOW, all at the map's instant) back to RA/Dec and on to the slider's
+      // instant; the Milky Way and the Sun from the server at that instant. Display only.
+      const utc = proj.projected_utc;
+      const pp = (sky.points_now || sky.points).map((p) => {
+        const c = U.azAltToRaDec(p.az_deg, p.alt_deg, obs.latitude_deg, obs.longitude_deg, sky.computed_utc);
+        const aa = U.raDecToAzAlt(c.ra_hours, c.dec_deg, obs.latitude_deg, obs.longitude_deg, utc);
+        return { ...p, ...aa, below_min: aa.alt_deg < sky.min_altitude_deg };
+      });
+      U.drawSkyView(canvas, { sun: proj.sun, hi4pi_grid: proj.hi4pi_grid || null, areas: [] },
+        { points: pp, minAlt: sky.min_altitude_deg, markers: U.magellanicMarkers(obs, utc) });
+      const range = proj.hi4pi_grid && proj.hi4pi_grid.value_range_1e20cm2;
+      legend.hidden = !range;
+      if (range) U.drawHi4piLegend(legend, range);
+      const low = pp.filter((p) => p.below_min).length;
+      note.textContent = `PROJECTION ${U.chileStamp(utc)}: the region, all points at that instant · `
+        + (low ? `${low} below the minimum altitude ${sky.min_altitude_deg}° (red)` : "all above the minimum altitude (green circle)")
+        + ` · Sun ${proj.sun.above_horizon ? `az ${proj.sun.az_deg.toFixed(0)}° alt ${proj.sun.alt_deg.toFixed(0)}°` : "below the horizon"}`
+        + " · display only: the click-to-centre works on \"now\" only";
+      return;
+    }
     // AREA NOW: every point at the same instant - the region's real shape. AT EACH CAPTURE: where the sky will have
     // carried each point when its turn comes - a long run drags the footprint along the sky's rotation.
     const pts = skyView === "now" && sky.points_now ? sky.points_now : sky.points;
-    U.drawSkyView(canvas, { sun: sky.sun, hi4pi_grid: sky.hi4pi_grid || null, areas: [] }, { points: pts, minAlt: sky.min_altitude_deg });
+    U.drawSkyView(canvas, { sun: sky.sun, hi4pi_grid: sky.hi4pi_grid || null, areas: [] },
+      { points: pts, minAlt: sky.min_altitude_deg, markers: U.magellanicMarkers(obs, sky.computed_utc) });
     const range = sky.hi4pi_grid && sky.hi4pi_grid.value_range_1e20cm2;
     legend.hidden = !range;
     if (range) U.drawHi4piLegend(legend, range);
@@ -510,6 +543,7 @@
   // (approximate - plain spherical astronomy, well under 1 deg; plenty for a ~20 deg beam). The estimate then re-runs.
   $("est-skymap").style.cursor = "crosshair";
   $("est-skymap").addEventListener("click", (ev) => {
+    if (proj) return;                         // a projected sky is display only: centring there would plan another hour's sky
     const aa = U.skyAzAlt($("est-skymap"), ev), obs = lastSky && lastSky.observer;
     if (!aa || !obs) return;
     const c = U.azAltToRaDec(aa.az_deg, aa.alt_deg, obs.latitude_deg, obs.longitude_deg, lastSky.computed_utc);

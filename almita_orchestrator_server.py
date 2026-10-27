@@ -402,6 +402,16 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.calibrate_wizard_defaults()})
             if path == "/api/ops/align/sky":
                 return self._ops_align_sky()
+            if path == "/api/ops/sky/projection":
+                q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                try:
+                    beam = float(q["beam_fwhm"]) if q.get("beam_fwhm") else None
+                    if beam is not None and not 0.1 <= beam <= 90:
+                        raise ValueError("beam_fwhm out of range")
+                    data = almita_web_ops.sky_projection(q.get("at", ""), beam)
+                except ValueError as exc:
+                    return _error_response(self, 400, str(exc))
+                return _json_response(self, 200, {"ok": True, "data": data})
             if path == "/api/observe/sky":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.observe_sky_progress()})
             if path in ("/api/ops/lobe/status", "/api/ops/lobe/samples"):
