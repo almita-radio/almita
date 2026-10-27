@@ -310,6 +310,7 @@ class PlannedLattice:
     center_dec_deg: float
     cell_by_point: dict
     target_by_point: dict
+    rotation_deg: float = 0.0       # OBSERVE's grid ANGLE: position angle of the grid's up axis, North through East
 
 
 def load_planned_lattice(filtered_input) -> Optional[PlannedLattice]:
@@ -342,12 +343,9 @@ def load_planned_lattice(filtered_input) -> Optional[PlannedLattice]:
         center_dec_deg = float(grid["center_dec_degrees"])
     except (KeyError, TypeError, ValueError) as exc:
         raise MosaicShapeError(f"campaign plan {meta_path} lacks rows/columns/nominal_spacing_deg/center: {exc}")
+    # A turned grid (BL-077) keeps RA/Dec as the maps' rigid axes: A's cells are drawn where its points lie (a tilted
+    # board), B/C weigh each point by its real position, and the raster widens to hold every corner.
     rotation = float(grid.get("rotation_deg") or 0.0)
-    if abs(rotation) > 1e-9:
-        # The A/B/C board is aligned with RA/Dec: a turned grid's corners would fall off it and its rows would not run
-        # east. Refuse clearly rather than draw a wrong map (support: work in the grid's own frame - BL-077).
-        raise MosaicShapeError(f"campaign plan {meta_path} is a grid rotated {rotation:g} deg: SCIENCE A/B/C maps do not "
-                               "support rotated grids yet (BL-077) - REDUCE and QUICKLOOK do")
     cell_by_point: dict[int, tuple[int, int]] = {}
     target_by_point: dict[int, tuple[float, float]] = {}
     for row in rows:
@@ -365,7 +363,7 @@ def load_planned_lattice(filtered_input) -> Optional[PlannedLattice]:
         raise MosaicShapeError(f"campaign plan {csv_path} assigns the same (grid_row, grid_col) to two points")
     return PlannedLattice(campaign_dir=str(root), n_rows=n_rows, n_cols=n_cols, spacing_deg=spacing,
                           center_ra_deg=center_ra_deg, center_dec_deg=center_dec_deg,
-                          cell_by_point=cell_by_point, target_by_point=target_by_point)
+                          cell_by_point=cell_by_point, target_by_point=target_by_point, rotation_deg=rotation)
 
 
 def _board_from_plan(filtered_input, spacing_deg: float, planned: PlannedLattice):
@@ -399,7 +397,10 @@ def _board_from_plan(filtered_input, spacing_deg: float, planned: PlannedLattice
     point_cell = {p.point_index: planned.cell_by_point[p.point_index] for p in points}
     rc = np.array([point_cell[p.point_index] for p in points])
     x, y = tangent_plane_offsets_deg(ra, dec, planned.center_ra_deg, planned.center_dec_deg)
-    for axis, line_idx, step_idx, v in (("column", 0, 1, x), ("row", 1, 0, y)):
+    # the order is checked in the grid's own frame: columns advance along (cos t, -sin t), rows along (sin t, cos t)
+    t = np.radians(planned.rotation_deg)
+    u_col, v_row = x * np.cos(t) - y * np.sin(t), x * np.sin(t) + y * np.cos(t)
+    for axis, line_idx, step_idx, v in (("column", 0, 1, u_col), ("row", 1, 0, v_row)):
         for k in np.unique(rc[:, line_idx]):
             sel = rc[:, line_idx] == k
             order = np.argsort(rc[sel, step_idx])
@@ -490,6 +491,7 @@ def mosaic_geometry_summary(filtered_input, base_grid, nodes, point_cell, planne
     out: dict[str, Any] = {
         "lattice_source": "campaign_plan" if planned else "measured_positions",
         "campaign_plan": planned.campaign_dir if planned else None,
+        "rotation_deg": planned.rotation_deg if planned else 0.0,
         "projection": "science_engine linear tangent plane (x = dRA cos dec0, y = dDec) - shared by A, B and C",
         "point_to_planned_target_max_deg": None,
         "point_to_a_cell_node_max_deg": float(np.hypot(x - node[:, 0], y - node[:, 1]).max()),
@@ -1483,6 +1485,9 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
     AX_RECT, CAX_RECT = [0.10, 0.21, 0.66, 0.62], [0.80, 0.21, 0.028, 0.62]
     FS_TITLE, FS_LABEL, FS_TICK, FS_CAPTION = 12, 10.5, 9.5, 10
     window = f"LSRK [{cfg.velocity_window_min_m_s / 1000:.0f}, {cfg.velocity_window_max_m_s / 1000:.0f}] km/s"
+    rotation = float((built.get("mosaic_geometry") or {}).get("rotation_deg") or 0.0)
+    if rotation:        # a turned grid on rigid RA/Dec axes: say so on every map (BL-077)
+        window += f" · grid turned {rotation:g}° from North"
     unit_label = "integrated relative intensity (dimensionless × m/s)"
     written: dict[str, list[str]] = {}
     notes: list[str] = []

@@ -245,8 +245,9 @@
     const spacing = sp && Number.isFinite(sp.mosaic_spacing_deg)
       ? `${sp.mosaic_spacing_deg.toFixed(4)} deg (${sp.mosaic_spacing_source || "?"})` : "—";
     const lattice = geo.lattice_source === "campaign_plan" ? `campaign plan ${geo.campaign_plan}` : "measured positions (no plan)";
+    const turned = Number(geo.rotation_deg) ? `   grid turned ${geo.rotation_deg} deg from North (RA/Dec axes stay fixed)` : "";
     const ext = Array.isArray(geo.raster_extent_deg) ? `${geo.raster_extent_deg[0].toFixed(2)} x ${geo.raster_extent_deg[1].toFixed(2)} deg` : "—";
-    return `board lattice: ${lattice}   spacing: ${spacing}\n`
+    return `board lattice: ${lattice}   spacing: ${spacing}${turned}\n`
       + `A/B/C: one projection, one footprint ${ext}; A cells drawn at their points (max offset ${deg(geo.point_to_a_cell_node_max_deg)}; `
       + `a rectangular board would be off by up to ${deg(geo.regular_board_offset_max_deg)})\n`;
   }
