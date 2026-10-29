@@ -429,7 +429,7 @@
   function drawBoardA() {
     const canvas = $("board-canvas-a");
     const ctx = canvas.getContext("2d");
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = U.pixelRatio();
     const cssW = canvas.clientWidth || 440, cssH = canvas.clientWidth || 440;   // square box, like B/C's <img>
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -541,7 +541,7 @@
   function drawPointSpectrum(arrays, window_m_s) {
     lastPointSpectrum = [arrays, window_m_s];
     const canvas = $("point-spectrum-canvas");
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = U.pixelRatio();
     const cssW = canvas.clientWidth || 900, cssH = 240;
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     const ctx = canvas.getContext("2d");

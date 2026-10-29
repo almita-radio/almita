@@ -32,7 +32,7 @@ from astropy.coordinates import AltAz, ICRS, SkyCoord
 from astropy.time import Time
 from indi_telescope_control import INDITelescopeControl
 from session_manager import SessionManager
-from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture
+from sdr_capture import SDRCapture, CaptureMetrics, SDRNetworkError, validate_hdf5_capture, ADC_CLIPPED_RAIL_FRACTION
 import sdr_tuning
 from temperature_sensors import DS18B20Reader, format_temperatures, temperature_metadata
 from runtime_state import announce_session, atomic_write_json
@@ -2131,6 +2131,13 @@ class CaptureExecutor:
                         force=True,
                     )
                     
+                    adc_rms = getattr(sdr_metrics, "adc_rms_codes", None)
+                    adc_rail = getattr(sdr_metrics, "adc_rail_hit_fraction", None)
+                    adc_clipped = adc_rail is not None and adc_rail > ADC_CLIPPED_RAIL_FRACTION
+                    if adc_clipped:
+                        self._adc_clipped_points = getattr(self, "_adc_clipped_points", 0) + 1
+                        self.log(f"ADC SATURATION | point={point.get('point_id', point_num)} | rails={adc_rail:.2%} | "
+                                 f"rms={adc_rms} codes | gain={self.sdr_gain_db} dB - lower the gain", "WARNING", force=True)
                     if self.verbose:
                         self.log(f"SDR Metrics:")
                         self.log(f"  Capture time: {sdr_metrics.capture_time*1000:.2f}ms")
@@ -2178,7 +2185,10 @@ class CaptureExecutor:
                 self._announce(event="POINT_COMPLETED", state="RUNNING",
                                 points_success=successful + 1,
                                 last_successful_point_id=str(point.get("point_id", point_num)),
-                                last_capture_utc=end_time_iso, error=None)
+                                last_capture_utc=end_time_iso, error=None,
+                                last_adc_rms_codes=adc_rms, last_adc_rail_hit_fraction=adc_rail,
+                                last_adc_clipped=adc_clipped,
+                                points_adc_clipped=getattr(self, "_adc_clipped_points", 0))
                 write_quicklook_manifest_row(output_dir, {
                     "point_id": str(point.get("point_id", point_num)),
                     "status": "SUCCESS",

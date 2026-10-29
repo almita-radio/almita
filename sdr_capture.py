@@ -60,6 +60,8 @@ class CaptureMetrics:
     buffer_used: int = 0
     socket_reconnect_count: int = 0
     last_error: Optional[str] = None
+    adc_rms_codes: Optional[float] = None
+    adc_rail_hit_fraction: Optional[float] = None
     
     def __str__(self) -> str:
         lines = [
@@ -157,6 +159,23 @@ def validate_hdf5_capture(path: Path, expected_samples: Optional[int] = None,
 def _validate_hdf5_capture(path: Path, expected_samples: int) -> None:
     """Compatibility wrapper used by the atomic writer and fault-injection tests."""
     validate_hdf5_capture(path, expected_samples=expected_samples)
+
+
+ADC_CLIPPED_RAIL_FRACTION = 1.0e-4     # the same CLIPPED line as calibration_engine.clipping and the gain pilot
+
+
+def adc_level_summary(iq_samples: np.ndarray) -> Dict[str, float]:
+    """How full the 8-bit ADC ran during one capture: the exact fraction of I/Q values on a rail (0 or 255) and the
+    noise rms in codes (from every 7th value - odd, so I and Q alternate - which keeps a 10 s capture at ~0.2 s on
+    the Pi). Saturation alarm for OBSERVE (operator, 2026-10-29: the SAWbird clips the V3 at 40.2 dB)."""
+    if iq_samples.size == 0:
+        return {"adc_rms_codes": float("nan"), "adc_rail_hit_fraction": float("nan")}
+    rail = (np.count_nonzero(iq_samples == 0) + np.count_nonzero(iq_samples == 255)) / iq_samples.size
+    histogram = np.bincount(iq_samples[::7], minlength=256).astype(float)
+    codes = np.arange(256, dtype=float)
+    mean = (histogram * codes).sum() / histogram.sum()
+    rms = float(np.sqrt((histogram * (codes - mean) ** 2).sum() / histogram.sum()))
+    return {"adc_rms_codes": round(rms, 2), "adc_rail_hit_fraction": float(rail)}
 
 
 def write_hdf5_atomic(output_file: str, iq_samples: np.ndarray,
@@ -913,6 +932,7 @@ class SDRCapture:
         self._emit_timing_event(
             "capture_end", duration=capture_time, samples_received=actual_samples
         )
+        adc_level = adc_level_summary(iq_samples)
         
         # Write to HDF5 with complete metadata
         if not self.verbose and not self.compact_console:
@@ -959,6 +979,7 @@ class SDRCapture:
             'data_type': 'IQ_uint8',
             'sample_format': 'interleaved',  # I,Q,I,Q,I,Q...
             'bits_per_sample': 8,
+            **adc_level,
             'capture_status': 'success',
             'file_state': 'complete',
             'final_filename': Path(output_file).name,
@@ -1026,6 +1047,7 @@ class SDRCapture:
             buffer_used=bytes_received,
             socket_reconnect_count=telemetry["socket_reconnect_count"],
             last_error=telemetry["last_error"],
+            **adc_level,
         )
         
         if not self.verbose and not self.compact_console:

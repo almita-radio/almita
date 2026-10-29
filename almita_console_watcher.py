@@ -152,6 +152,7 @@ _ACQUISITION_IDLE = {
     "last_capture_utc": None, "capture_process_detected": False,
     "acquisition_stale": False, "error": None,
     "started_utc": None, "settle_seconds": None, "capture_seconds": None,
+    "last_adc_rms_codes": None, "last_adc_rail_hit_fraction": None, "last_adc_clipped": None, "points_adc_clipped": None,
 }
 
 
@@ -197,6 +198,11 @@ def build_acquisition(now_utc: str, current_session: Optional[dict], capture_pro
         "started_utc": current_session.get("started_utc"),
         "settle_seconds": current_session.get("settle_seconds"),
         "capture_seconds": current_session.get("capture_seconds"),
+        # ADC saturation alarm (2026-10-29): how full the SDR's 8-bit converter ran on the last point, and how many clipped.
+        "last_adc_rms_codes": current_session.get("last_adc_rms_codes"),
+        "last_adc_rail_hit_fraction": current_session.get("last_adc_rail_hit_fraction"),
+        "last_adc_clipped": current_session.get("last_adc_clipped"),
+        "points_adc_clipped": current_session.get("points_adc_clipped"),
     }
 
 

@@ -5,7 +5,7 @@
   "use strict";
   const U = window.AlmitaUI;
   const $ = (id) => document.getElementById(id);
-  const MONITOR_URL = `${U.consoleBase()}/`;
+  const MONITOR_URL = U.pageHref(`${U.consoleBase()}/`);
 
   U.mountHealthStrip(U.mountHeader("OBSERVE", "ORCHESTRATOR"));
   U.mountFooter();
@@ -350,6 +350,9 @@
         `  point index: ${U.finite(done) ? done : "—"} / ${U.finite(total) ? total : "—"}   current point id: ${cs.current_point_id || "—"}`,
         `  succeeded: ${cs.points_success ?? 0}   failed: ${cs.points_failed ?? 0}   deferred: ${cs.points_deferred ?? 0}`,
         `  last completed point: ${cs.last_successful_point_id || "—"} at ${U.utc(cs.last_capture_utc)}`,
+        cs.last_adc_rms_codes == null ? "  ADC: —"
+          : `  ADC last point: rms ${Number(cs.last_adc_rms_codes).toFixed(1)} codes, rails ${(100 * (cs.last_adc_rail_hit_fraction || 0)).toFixed(3)}%`
+            + `   saturated points: ${cs.points_adc_clipped ?? 0}` + (cs.last_adc_clipped ? "   ⚠ SATURATING: LOWER THE GAIN" : ""),
         `  started: ${U.utc(cs.started_utc)}   updated: ${U.utc(cs.updated_utc)}`);
       const started = Date.parse(cs.started_utc);
       const live = ACTIVE.includes(stateOf(orch));
@@ -375,7 +378,9 @@
     let kind = STATE_HELP[state] || state;
     if (TERMINAL.includes(state) && U.finite(total) && U.finite(success) && success < total) kind = `PARTIAL — ${success} of ${total} points captured (${state})`;
     if (!ACTIVE.includes(state) && state !== "PLANNED") kind = "LAST RUN — " + kind;
+    if (cs.last_adc_clipped && ACTIVE.includes(state)) kind += ` — ⚠ ADC SATURATING (${cs.points_adc_clipped ?? 1} points): LOWER THE GAIN`;
     $("run-kind").textContent = kind;
+    $("run-kind").style.color = cs.last_adc_clipped && ACTIVE.includes(state) ? "var(--error)" : "";
     const wrap = $("run-progress-wrap");
     if (U.finite(total) && total > 0) {
       wrap.hidden = false;

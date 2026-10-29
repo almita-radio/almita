@@ -113,7 +113,7 @@
   // ------------------------------------------------------------------ live plot: intensity (x) vs time (y, downwards)
   function drawPlot(data) {
     const canvas = $("lobe-plot"), ctx = canvas.getContext("2d");
-    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = U.pixelRatio();
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -179,7 +179,7 @@
   let specMode = "power", lastData = null;
   function drawSpectrum(data) {
     const s = data && data.last_spectrum, canvas = $("lobe-spectrum"), ctx = canvas.getContext("2d");
-    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 320, dpr = U.pixelRatio();
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     const muted = U.cssRgba("--muted", 0.75, "#91a2ad");

@@ -105,6 +105,10 @@ STATIC_FILES = {
     "/sessions.html": "sessions.html",
     "/sessions.js": "sessions.js",
 }
+# BL-094 presentation mode: /present/<page>.html (and /present/ for MONITOR) is the SAME page, marked <html data-present>
+# so styles.css zooms it for a projector; a <base href="/"> keeps its relative assets and API calls where they are.
+PRESENT_PREFIX = "/present"
+_PRESENT_NAV_RE = re.compile(r'href="/([a-z]+\.html)"')
 _STATIC_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")  # Fase 57: no path traversal via a session id
 _ALIGN_SESSION_RE = re.compile(r"^/api/align/session/(?P<id>[^/]+)$")
@@ -131,6 +135,16 @@ def _sanitize(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_sanitize(v) for v in value]
     return value
+
+
+def present_html(html: str) -> str:
+    """A console page in presentation mode (BL-094): marked for the zoom, its relative URLs anchored at the root, and its
+    links to other pages kept inside /present/. MONITOR's static nav also gets its own MONITOR link and a way out."""
+    html = re.sub(r"<html\b", '<html data-present="1"', html, count=1)
+    html = html.replace("<head>", '<head><base href="/">', 1)
+    html = _PRESENT_NAV_RE.sub(lambda m: f'href="{PRESENT_PREFIX}/{m.group(1)}"', html)
+    html = html.replace('class="obs-nav-link active" href="#"', f'class="obs-nav-link active" href="{PRESENT_PREFIX}/"', 1)
+    return html.replace("</nav>", '<a class="obs-nav-link" href="/">EXIT PRESENT</a></nav>', 1) if 'id="nav-status"' in html else html
 
 
 def _common_headers(handler: BaseHTTPRequestHandler) -> None:
@@ -374,6 +388,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": mount_device.describe()})
             if path == "/api/sdr/lna":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.lna_power_state()})
+            if path == "/api/sdr/rfi_check":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.rfi_check_state()})
             if path == "/api/ops/campaigns":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.campaigns()})
             if path == "/api/ops/reduce/captures":
@@ -439,6 +455,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return self._sessions_get(path)
             if path == almita_web_sessions.EXPORT_FILE_ROUTE:
                 return self._sessions_export_file()
+            if path == PRESENT_PREFIX or path.startswith(PRESENT_PREFIX + "/"):
+                return self._serve_present(path[len(PRESENT_PREFIX):] or "/")
             if path in STATIC_FILES:
                 return self._serve_static(path)
             asset_match = _ASSET_PATH_RE.match(path)
@@ -477,6 +495,24 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         data = candidate.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", _STATIC_CONTENT_TYPES[candidate.suffix])
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        _common_headers(self)
+        self.end_headers()
+        _write_body(self, data)
+
+    def _serve_present(self, page: str) -> None:
+        if page in ("/", "/index.html"):
+            candidate = (Path(self.directory) / "index.html").resolve()     # MONITOR as prepared (cache-busted assets)
+        elif page in STATIC_FILES and page.endswith(".html"):
+            candidate = (CONSOLE_SOURCE / STATIC_FILES[page]).resolve()
+        else:
+            return self.send_error(404, "not found")
+        if not candidate.is_file():
+            return self.send_error(404, "not found")
+        data = present_html(candidate.read_text()).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", _STATIC_CONTENT_TYPES[".html"])
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         _common_headers(self)
@@ -556,6 +592,12 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                     raise ValueError("send {on: true|false, confirm: true}")
                 _log("WARNING", f"req={self._request_id} MAIN LNA (Bias-T) -> {'ON' if body['on'] else 'OFF'} requested")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_lna_power(body["on"])})
+            if path == "/api/sdr/rfi_check":
+                body = _read_json_body(self)
+                if body.get("confirm") is not True or not isinstance(body.get("gain_db"), (int, float)):
+                    raise ValueError("send {gain_db: <admitted gain>, confirm: true}")
+                _log("WARNING", f"req={self._request_id} LOCAL RFI CHECK at {body['gain_db']} dB requested")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.run_rfi_check(float(body["gain_db"]))})
             if path == "/api/align/sun_sync":
                 confirm = _read_json_body(self).get("confirm")
                 _log("WARNING", f"req={self._request_id} SUN SYNC requested")

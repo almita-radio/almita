@@ -278,30 +278,101 @@ def needs_low_pilot(high_eval: Dict[str, Any], config: PilotConfig) -> Dict[str,
                                         "point too, to see the real dynamic range before choosing a gain"}
 
 
+ADC_HALF_SCALE_CODES = 127.5        # uint8 IQ: the rails sit 127.5 codes either side of the nominal centre
+GAUSSIAN_P999_SIGMAS = 3.29         # the 99.9th percentile of |x| for Gaussian noise, in sigmas
+MIN_LOW_SIGMA_CODES = 3.0           # below ~3 codes rms the 8-bit ADC quantises the noise itself (BL-068: ~7 codes was normal)
+RAIL_TARGET_FRACTION_OF_LIMIT = 0.1  # aim for a tenth of the CLIPPED rail-hit fraction, not right at it
+
+
+def _erfc_inverse(y: float) -> float:
+    """x with erfc(x) = y, 0 < y < 1, by bisection (no scipy on the Pi)."""
+    import math
+    lo, hi = 0.0, 10.0
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        if math.erfc(mid) > y:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def estimate_true_sigma_codes(stats: Dict[str, Any]) -> float:
+    """The capture's noise rms in ADC codes. A clipped capture under-reports its own std (the rails cut the tails),
+    so for one with rail hits the Gaussian sigma that would put exactly that fraction of samples on the rails is used
+    instead, whichever is larger. Impulsive RFI makes the rail estimate pessimistic (more gain cut than needed); the
+    mandatory HIGH re-capture at the new gain catches it either way."""
+    sigma = (float(stats["std_i"]) + float(stats["std_q"])) / 2.0
+    rail = float(stats.get("rail_hit_fraction") or 0.0)
+    if 0.0 < rail < 1.0:
+        sigma = max(sigma, (ADC_HALF_SCALE_CODES - 0.5) / (np.sqrt(2.0) * _erfc_inverse(rail)))
+    return sigma
+
+
+def _peak_to_sigma(stats: Dict[str, Any], sigma: float) -> float:
+    """How many sigmas the capture's 99.9th-percentile excursion sits from its mean: Gaussian noise gives ~3.29,
+    a capture with strong lines or impulses more. Never below the Gaussian value (a clipped capture has its peaks cut)."""
+    p = stats["percentiles"]
+    centre = (float(stats["mean_i"]) + float(stats["mean_q"])) / 2.0
+    excursion = max(float(p["p99_9"]) - centre, centre - float(p["p0_1"]))
+    return max(GAUSSIAN_P999_SIGMAS, excursion / max(sigma, 1e-9))
+
+
 def recommend_gain(evals: Dict[str, Dict[str, Any]], current_gain_db: float, config: PilotConfig) -> Dict[str, Any]:
     """Picks a REAL admitted gain value (calibration_engine.gain_sweep's own published R820T2/R828D table) from
-    the measured pilot(s) - the worst (least headroom) of whatever was actually measured decides. Never proposes
-    an arbitrary float; a single fixed gain is proposed for the WHOLE grid (never per-point)."""
+    the measured pilot(s). Never proposes an arbitrary float; a single fixed gain is proposed for the WHOLE grid.
+
+    Each measured point says how much gain it can take: its noise rms (true rms, see estimate_true_sigma_codes) scaled
+    so that its own 99.9th-percentile excursion stays the comfortable margin (warning margin x headroom multiplier)
+    inside the rails. The loudest point (HIGH) sets the ceiling: the highest admitted value under it is chosen in ONE
+    jump, down or up, instead of one table step per pilot cycle (a ~40 dB LNA can need 20 dB less). The quietest
+    point (LOW) is the floor: at the chosen gain its rms should stay above MIN_LOW_SIGMA_CODES; if the sky's dynamic
+    range does not fit between floor and ceiling, not clipping wins and the reason says so."""
     from calibration_engine.gain_sweep import CANDIDATE_GAIN_TABLE_DB
     table = np.asarray(CANDIDATE_GAIN_TABLE_DB, dtype=float)
-    worst_label, worst_eval = min(evals.items(), key=lambda kv: (kv[1]["clipping"]["percentile_margin_codes"] if kv[1]["clipping"]["percentile_margin_codes"] is not None else -1e9))
-    clip = worst_eval["clipping"]
-    threshold = clip["thresholds"]["warning_percentile_margin_codes"]
-    margin = clip.get("percentile_margin_codes")
     current_idx = int(np.argmin(np.abs(table - current_gain_db)))
-    if clip["status"] == "CLIPPED" or (margin is not None and margin < threshold):
-        # Step down to the next lower admitted value - one step first (evidence-based, not a blind jump to minimum).
-        new_idx = max(0, current_idx - 1)
-        reason = f"{worst_label} point clipping={clip['status']} (margin {margin if margin is not None else 'n/a'} codes < {threshold:g}) - reducing gain one admitted step"
-    elif margin is not None and margin >= threshold * config.headroom_comfortable_multiplier * 1.5 and current_idx < len(table) - 1:
-        # Comfortably far from clipping even beyond the "comfortable" bar - allow one step UP for better sensitivity, still evidence-based.
-        new_idx = min(len(table) - 1, current_idx + 1)
-        reason = f"{worst_label} point headroom margin {margin:.1f} codes is well beyond comfortable - one admitted step up is still safe"
-    else:
-        new_idx = current_idx
-        reason = f"{worst_label} point headroom margin {'n/a' if margin is None else f'{margin:.1f} codes'} is within the comfortable-but-not-excessive range - keeping the current gain"
-    return {"recommended_gain_db": float(table[new_idx]), "current_gain_db": current_gain_db, "changed": new_idx != current_idx,
-           "worst_pilot": worst_label, "reason": reason, "candidate_table_size": len(table)}
+    points = {}
+    for label, ev in evals.items():
+        stats = ev["sample_statistics"]
+        sigma = estimate_true_sigma_codes(stats)
+        margin_target = ev["clipping"]["thresholds"]["warning_percentile_margin_codes"] * config.headroom_comfortable_multiplier
+        peak = _peak_to_sigma(stats, sigma)
+        # Two ceilings, both scaled by how peaky this capture is: the 99.9th percentile keeps the comfortable margin,
+        # and the rail-hit fraction stays a tenth of the CLIPPED limit (the stricter of the two for Gaussian noise).
+        rail_sigmas = np.sqrt(2.0) * _erfc_inverse(config.clipping_rail_hit_fraction * RAIL_TARGET_FRACTION_OF_LIMIT)
+        sigma_ceiling = min((ADC_HALF_SCALE_CODES - margin_target) / peak,
+                            (ADC_HALF_SCALE_CODES - 0.5) / (rail_sigmas * peak / GAUSSIAN_P999_SIGMAS))
+        gain_db = float(ev.get("gain_db", current_gain_db))
+        points[label] = {"gain_db": gain_db, "sigma_codes": round(sigma, 2), "clipping": ev["clipping"]["status"],
+                         "max_gain_db": gain_db + 20.0 * np.log10(sigma_ceiling / max(sigma, 1e-9))}
+    worst_label = min(points, key=lambda k: points[k]["max_gain_db"])
+    ceiling_db = points[worst_label]["max_gain_db"]
+    admitted = np.flatnonzero(table <= ceiling_db + 1e-9)
+    new_idx = int(admitted[-1]) if admitted.size else 0
+    new_gain = float(table[new_idx])
+    reason = (f"{worst_label} point ({points[worst_label]['clipping']}, rms {points[worst_label]['sigma_codes']:g} codes at "
+              f"{points[worst_label]['gain_db']:g} dB) takes up to {ceiling_db:.1f} dB with a comfortable margin - "
+              + ("highest admitted value under it" if admitted.size else "below the lowest admitted value: the minimum, still to be verified"))
+    quiet_label = min(points, key=lambda k: points[k]["sigma_codes"] / 10 ** (points[k]["gain_db"] / 20.0))
+    quiet = points[quiet_label]
+    low_sigma_at_new = quiet["sigma_codes"] * 10 ** ((new_gain - quiet["gain_db"]) / 20.0)
+    floor_ok = low_sigma_at_new >= MIN_LOW_SIGMA_CODES
+    dynamic_range_db = None
+    if len(points) > 1:
+        loud = points[worst_label]
+        dynamic_range_db = round(20.0 * np.log10((loud["sigma_codes"] / 10 ** (loud["gain_db"] / 20.0)) /
+                                                 (quiet["sigma_codes"] / 10 ** (quiet["gain_db"] / 20.0))), 1)
+        reason += f"; HIGH/LOW dynamic range {dynamic_range_db:g} dB"
+    if not floor_ok:
+        reason += (f"; WARNING: the quietest point ({quiet_label}) would sit at {low_sigma_at_new:.1f} codes rms, under "
+                   f"{MIN_LOW_SIGMA_CODES:g} - not clipping wins, but its spectra will be coarsely quantised")
+    elif len(points) == 1:
+        reason += "; no LOW point measured, so the quiet end (quantisation floor) is not checked"
+    return {"recommended_gain_db": new_gain, "current_gain_db": current_gain_db, "changed": new_idx != current_idx,
+           "worst_pilot": worst_label, "reason": reason, "candidate_table_size": len(table),
+           "max_gain_db": round(float(ceiling_db), 2), "dynamic_range_db": dynamic_range_db,
+           "low_sigma_codes_at_recommended": round(float(low_sigma_at_new), 2), "quantisation_floor_ok": bool(floor_ok),
+           "points": {k: {**v, "max_gain_db": round(float(v["max_gain_db"]), 2)} for k, v in points.items()}}
 
 
 # ------------------------------------------------------------------ CLI subcommands (stateful, one action per web click)
@@ -537,7 +608,9 @@ def cmd_verify_gain(args) -> int:
         state["initial_gain_db"] = gain   # this gain is now what a future set-gain/recommend cycle should compare against
         state["step"] = "READY"
     else:
-        state["gain_recommendation"] = recommend_gain({"VERIFY": result["evaluation"]}, gain, PilotConfig.from_dict(state["config"]))
+        # The LOW point (if measured) still bounds the quiet end; each evaluation carries its own gain.
+        evals = {"VERIFY": result["evaluation"], **({"LOW": state["evaluations"]["LOW"]} if "LOW" in state["evaluations"] else {})}
+        state["gain_recommendation"] = recommend_gain(evals, gain, PilotConfig.from_dict(state["config"]))
         state["step"] = "GAIN_DECISION"
     _save_state(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})

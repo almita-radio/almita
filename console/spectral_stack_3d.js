@@ -27,6 +27,12 @@
     [0.75, 1.00, 0.90, 0.00],
     [1.00, 0.90, 0.10, 0.05],
   ];
+  // presentation mode (BL-094) zooms the whole page; the renderer and the tooltip work in unzoomed CSS px
+  function pageZoom() {
+    const z = document.documentElement.hasAttribute("data-present") ? parseFloat(getComputedStyle(document.documentElement).zoom) : 1;
+    return Number.isFinite(z) && z > 0 ? z : 1;
+  }
+
   function colormap(t) {
     t = Math.min(1, Math.max(0, t));
     for (let i = 1; i < COLOR_STOPS.length; i++) {
@@ -164,6 +170,7 @@
     _resize() {
       if (!this.webglAvailable) return;
       const w = this.viewport.clientWidth || 1, h = this.viewport.clientHeight || 1;
+      this.renderer.setPixelRatio(pageZoom());    // 1 except in presentation mode (BL-094), where the page is zoomed
       this.renderer.setSize(w, h, false);
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
@@ -326,8 +333,8 @@
         `frequency   ${freqMhz != null ? freqMhz.toFixed(3) : "—"} MHz\n` +
         `power       ${power != null ? power.toFixed(2) : "—"} dB\n` +
         `utc         ${row.utc || "—"}`;
-      this.tooltip.style.left = `${event.clientX - rect.left}px`;
-      this.tooltip.style.top = `${event.clientY - rect.top}px`;
+      this.tooltip.style.left = `${(event.clientX - rect.left) / pageZoom()}px`;
+      this.tooltip.style.top = `${(event.clientY - rect.top) / pageZoom()}px`;
       this.tooltip.hidden = false;
     }
 

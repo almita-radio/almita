@@ -127,6 +127,10 @@ function renderSession(acquisition){
     pair("FAILED",acquisition.points_failed),
     pair("DEFERRED",acquisition.points_deferred),
     pair("LAST SUCCESS POINT",acquisition.last_successful_point_id),
+    pair("ADC LAST POINT",acquisition.last_adc_rms_codes==null?"—":
+      `rms ${num(acquisition.last_adc_rms_codes,1)} codes, rails ${(100*(acquisition.last_adc_rail_hit_fraction||0)).toFixed(3)}%`+
+      (acquisition.last_adc_clipped?" — SATURATING, LOWER THE GAIN":"")),
+    pair("POINTS SATURATED",acquisition.points_adc_clipped),
     pair("STALE",acquisition.acquisition_stale?"YES":"NO"),
     pair("ERROR",acquisition.error),
   ].join("");

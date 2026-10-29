@@ -1366,6 +1366,40 @@ def set_lna_power(on: bool) -> Dict[str, Any]:
     return lna_power_state()
 
 
+# ------------------------------------------------------------------ LOCAL RFI CHECK from STATUS (operator 2026-10-29)
+def rfi_check_state() -> Dict[str, Any]:
+    import local_rfi_check
+    return {"last": local_rfi_check.last_check(), "nanovna": local_rfi_check.nanovna_present(),
+            "default_gain_db": local_rfi_check.DEFAULT_GAIN_DB, "default_seconds": local_rfi_check.DEFAULT_SECONDS}
+
+
+def run_rfi_check(gain_db: float) -> Dict[str, Any]:
+    """A few seconds of MAIN for the comb/line check. Same refusals as the LNA switch: rtl_tcp serves one client."""
+    import local_rfi_check
+    import observation_orchestrator
+    import sdr_tuning
+    from almita_web_common import get_sdr_resource_status
+    from calibration_engine.gain_sweep import CANDIDATE_GAIN_TABLE_DB
+    if not any(abs(g - gain_db) < 0.05 for g in CANDIDATE_GAIN_TABLE_DB):
+        raise OpsBlocked(f"{gain_db} dB is not an admitted R820T2 gain")
+    held = busy_reason(("sdr",))
+    if held:
+        raise OpsBlocked(f"cannot check now: {held}")
+    held = observation_orchestrator.active_campaign_reason(observation_orchestrator.get_status().get("orchestrator") or {})
+    if held:
+        raise OpsBlocked(f"cannot check now: an observation is active - {held}")
+    res = get_sdr_resource_status()
+    if res.status.value != "FREE":
+        raise OpsBlocked(f"cannot check now: MAIN SDR is {res.status.value}: {res.detail}")
+    try:
+        local_rfi_check.run_check(gain_db)
+    except sdr_tuning.TuningIncoherent as exc:
+        raise OpsBlocked(str(exc)) from exc
+    except OSError as exc:
+        raise OpsBlocked(f"rtl_tcp not reachable: {exc}") from exc
+    return rfi_check_state()
+
+
 # ------------------------------------------------------------------ MOUNT DEVICE (LX200 OnStep / Telescope Simulator)
 def set_mount_device(name: str) -> Dict[str, Any]:
     """Switch the mount every page drives. Refused while anything holds or could move the mount (a web job on the mount,

@@ -86,7 +86,7 @@
 
   function drawTemps(ch) {
     const c = $(ch.canvas), d = ch.data;
-    const dpr = window.devicePixelRatio || 1, w = c.clientWidth || 800, h = 260;
+    const dpr = U.pixelRatio(), w = c.clientWidth || 800, h = 260;
     c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
     const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     ctx.font = "11px ui-monospace,monospace";
@@ -123,7 +123,7 @@
   function tipAt(ch, ev) {
     const tip = $(ch.tip), g = ch.geom;
     if (!g) { tip.hidden = true; return; }
-    const rect = $(ch.canvas).getBoundingClientRect(), mx = ev.clientX - rect.left;
+    const mx = U.pointerXY(ev, $(ch.canvas)).x;
     if (mx < g.padL || mx > g.w - g.padR) { tip.hidden = true; drawTemps(ch); return; }
     const t = g.t0 + ((mx - g.padL) / (g.w - g.padL - g.padR)) * (g.t1 - g.t0);
     const rows = [];
@@ -200,6 +200,97 @@
   }, "SWITCHING…"));
 
   U.poller(async () => { await loadLna(); return true; }, { intervalMs: 300000 }).start();   // and after every click
+
+  // ------------------------------------------------------------------ LOCAL RFI CHECK (local_rfi_check.py, operator 2026-10-29)
+  // The excess of each channel over a rolling median, so narrow lines stand out from the band shape; the comb teeth
+  // (every 357.14 kHz) are marked on the axis. The verdict lines come from the 2026-10-28 hunt.
+  const RFI_GAINS = [0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 10.0, 10.6, 11.2, 12.5, 14.4, 15.7, 16.6, 19.7, 20.7, 22.9, 25.4, 28.0,
+    29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0, 49.6];   // calibration_engine.gain_sweep table
+  let rfi = null, rfiGeom = null;
+  function drawRfi() {
+    const c = $("rfi-chart"), r = rfi && rfi.last;
+    const dpr = U.pixelRatio(), w = c.clientWidth || 800, h = 260;
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    ctx.font = "11px ui-monospace,monospace";
+    if (!r || !r.spectrum) { ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.fillText(rfi ? "no check yet: press RUN CHECK" : "loading…", 12, 24); rfiGeom = null; return; }
+    const f = r.spectrum.frequency_hz, e = r.spectrum.excess_db;
+    const f0 = f[0], f1 = f[f.length - 1];
+    const lo = -3, hi = Math.max(12, Math.ceil(Math.max(...e) + 1));
+    const padL = 40, padR = 12, padT = 10, padB = 24;
+    const x = (v) => padL + ((v - f0) / (f1 - f0)) * (w - padL - padR);
+    const y = (v) => padT + (1 - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (h - padT - padB);
+    ctx.strokeStyle = U.cssRgba("--muted", U.isDay() ? 0.3 : 0.18, "#91a2ad"); ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.lineWidth = 1;
+    for (let v = 0; v <= hi; v += hi > 24 ? 6 : 3) {
+      ctx.beginPath(); ctx.moveTo(padL, y(v)); ctx.lineTo(w - padR, y(v)); ctx.stroke();
+      ctx.textAlign = "right"; ctx.fillText(`${v > 0 ? "+" : ""}${v}`, padL - 6, y(v) + 4);
+    }
+    ctx.textAlign = "center";
+    for (let mhz = Math.ceil(f0 / 2e5) * 0.2; mhz * 1e6 <= f1; mhz += 0.2) ctx.fillText((mhz).toFixed(1), x(mhz * 1e6), h - 6);
+    ctx.textAlign = "left";
+    ctx.strokeStyle = U.cssVar("--warn", "#e6b85c"); ctx.setLineDash([4, 4]);                 // the line threshold
+    ctx.beginPath(); ctx.moveTo(padL, y(r.line_threshold_db)); ctx.lineTo(w - padR, y(r.line_threshold_db)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = U.dataColor("#3987e5"); ctx.lineWidth = 1.2; ctx.beginPath();
+    e.forEach((v, i) => { const px = x(f[i]), py = y(v); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.stroke();
+    for (const t of r.teeth) {                                                                   // comb teeth: marker + value
+      const px = x(t.frequency_hz), bad = t.excess_db >= 6, faint = t.excess_db >= 3;
+      ctx.fillStyle = bad ? U.cssVar("--error", "#e36b6b") : faint ? U.cssVar("--warn", "#e6b85c") : U.cssVar("--muted", "#91a2ad");
+      ctx.beginPath(); ctx.moveTo(px, h - padB); ctx.lineTo(px - 5, h - padB + 8); ctx.lineTo(px + 5, h - padB + 8); ctx.fill();
+      ctx.fillText(`${t.excess_db >= 0 ? "+" : ""}${t.excess_db.toFixed(1)}`, px + 4, padT + 10);
+    }
+    rfiGeom = { x, f0, f1, padL, padR, w, h, f, e };
+  }
+  function renderRfi(d) {
+    rfi = d;
+    const nv = d.nanovna || {};
+    $("rfi-nanovna").hidden = !nv.present;
+    $("rfi-nanovna").textContent = nv.present ? "⚠ " + nv.detail : "";
+    $("rfi-nanovna").style.color = "var(--error)";
+    const r = d.last;
+    U.setBadge($("rfi-badge"), r ? r.verdict : "NO CHECK YET");
+    $("rfi-detail").textContent = !r ? "No check recorded yet."
+      : `${r.verdict}: ${r.verdict_text}
+`
+        + `comb teeth: max ${r.tooth_max_db >= 0 ? "+" : ""}${r.tooth_max_db} dB, sum ${r.tooth_sum_db} dB · lines over +${r.line_threshold_db} dB: ${r.lines_over_threshold}`
+        + ` · ADC rms ${r.adc_rms_codes} codes, rails ${(100 * r.adc_rail_hit_fraction).toFixed(3)}%
+`
+        + `${U.utc(r.utc)} · gain ${r.gain_db} dB · ${r.capture_seconds} s`
+        + (r.nanovna && r.nanovna.present ? " · the NanoVNA WAS plugged in during this check" : "");
+    const sel = $("rfi-gain");
+    if (!sel.options.length) {
+      for (const g of RFI_GAINS) sel.add(new Option(g.toFixed(1), String(g)));
+      sel.value = String(r ? r.gain_db : d.default_gain_db);
+    }
+    drawRfi();
+  }
+  async function loadRfi() {
+    const r = await U.api("/api/sdr/rfi_check", { timeoutMs: 15000 });
+    if (r.ok) renderRfi(r.data.data);
+  }
+  $("btn-rfi").addEventListener("click", U.guard($("btn-rfi"), async () => {
+    const gain = Number($("rfi-gain").value);
+    if (!window.confirm(`Run a local RFI check now?\n\nMAIN captures a few seconds at ${gain} dB (the LNA is switched on). Refused while anything else uses MAIN.`)) return;
+    const r = await U.api("/api/sdr/rfi_check", { method: "POST", body: { gain_db: gain, confirm: true }, timeoutMs: 60000 });
+    if (!r.ok) { window.alert("CHECK NOT RUN: " + U.errorText(r.error)); return; }
+    renderRfi(r.data.data);
+  }, "MEASURING…"));
+  $("rfi-chart").addEventListener("mousemove", (ev) => {
+    const g = rfiGeom, tip = $("rfi-tip");
+    if (!g) { tip.hidden = true; return; }
+    const mx = U.pointerXY(ev, $("rfi-chart")).x;
+    if (mx < g.padL || mx > g.w - g.padR) { tip.hidden = true; return; }
+    const fq = g.f0 + ((mx - g.padL) / (g.w - g.padL - g.padR)) * (g.f1 - g.f0);
+    let i = Math.round(((fq - g.f0) / (g.f1 - g.f0)) * (g.f.length - 1));
+    let best = i;                                                   // snap to the strongest bin within ±3 px
+    for (let k = -6; k <= 6; k++) { const j = i + k; if (j >= 0 && j < g.e.length && g.e[j] > g.e[best]) best = j; }
+    tip.textContent = `${(g.f[best] / 1e6).toFixed(4)} MHz\n${g.e[best] >= 0 ? "+" : ""}${g.e[best].toFixed(1)} dB over the median`;
+    tip.style.left = Math.min(mx + 12, g.w - 170) + "px"; tip.hidden = false;
+  });
+  $("rfi-chart").addEventListener("mouseleave", () => { $("rfi-tip").hidden = true; });
+  U.onThemeChange(drawRfi);
+  window.addEventListener("resize", drawRfi);
+  U.poller(async () => { await loadRfi(); return true; }, { intervalMs: 60000 }).start();   // the NanoVNA warning follows the USB
 
   const tempPoller1h = U.poller(async () => {
     const r = await U.api("/api/system/temperatures?hours=1", { timeoutMs: 15000 });

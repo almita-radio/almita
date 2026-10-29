@@ -333,3 +333,5 @@ body:has(#session-panel) #error-banner{overflow-wrap:anywhere}   /* long request
 .ses-table td:nth-child(11){white-space:normal;min-width:90px}
 .ses-why{font-size:11px;white-space:pre-line;max-width:520px;overflow-wrap:anywhere}
 @media(max-width:700px){.ses-split{flex-direction:column}.ses-points{flex-basis:auto;width:100%}}
+/* BL-094 presentation mode: /present/<page> serves the same pages with <html data-present>, scaled for a projector */
+html[data-present]{zoom:1.5}

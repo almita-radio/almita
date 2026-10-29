@@ -642,7 +642,7 @@
   function drawSpectrum(arrays) {
     lastSpectrumArrays = arrays;
     const canvas = $("spectrum-canvas");
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = U.pixelRatio();
     const cssW = canvas.clientWidth || 900, cssH = 260;
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     const ctx = canvas.getContext("2d");

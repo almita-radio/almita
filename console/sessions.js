@@ -436,7 +436,7 @@
       const tra = Number(p.ra), tdec = Number(p.dec), real = p.mount_ra_hours != null && p.mount_dec_deg != null;
       return { p, real, ra: real ? Number(p.mount_ra_hours) : tra, dec: real ? Number(p.mount_dec_deg) : tdec, tra, tdec };
     }).filter((s) => Number.isFinite(s.ra) && Number.isFinite(s.dec));
-    const dpr = window.devicePixelRatio || 1, w = Math.max(220, Math.min(360, c.parentElement.clientWidth || 320));
+    const dpr = U.pixelRatio(), w = Math.max(220, Math.min(360, c.parentElement.clientWidth || 320));
     const all = sky.flatMap((s) => [[s.ra, s.dec], [s.tra, s.tdec]]).filter(([a, d]) => Number.isFinite(a) && Number.isFinite(d));
     // RA centre by circular mean, so a field across 0h stays in one piece
     const ang = all.map(([a]) => (a / 24) * 2 * Math.PI);
@@ -473,7 +473,7 @@
   }
   $("points-grid").addEventListener("click", (e) => {
     if (!gridGeom) return;
-    const rect = e.currentTarget.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const { x: mx, y: my } = U.pointerXY(e, e.currentTarget);
     let best = null, bd = Infinity;
     for (const q of gridGeom.pos) { const d = Math.hypot(q.x - mx, q.y - my); if (d < bd) { bd = d; best = q; } }
     if (best && bd <= gridGeom.r + 6) openPoint(best.id);
@@ -529,7 +529,7 @@
 
   function drawSpectrum(arrays) {
     const canvas = $("point-spectrum");
-    const dpr = window.devicePixelRatio || 1, cssW = canvas.clientWidth || 900, cssH = 260;
+    const dpr = U.pixelRatio(), cssW = canvas.clientWidth || 900, cssH = 260;
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, cssW, cssH);
     const freq = arrays.frequency_hz || [], val = arrays.relative_intensity || [], mask = arrays.mask;
@@ -649,7 +649,7 @@
     return box;
   }
   function drawOverlay(canvas, A, B) {
-    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth || 900, h = 260;
+    const dpr = U.pixelRatio(), w = canvas.clientWidth || 900, h = 260;
     canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
     const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     const fin = (arr) => (arr || []).filter((v) => Number.isFinite(v));
@@ -744,7 +744,7 @@
 
   function drawTemps(d) {
     const c = $("ses-temp-chart"), series = d.series || {};
-    const dpr = window.devicePixelRatio || 1, w = c.clientWidth || 900, h = 260;
+    const dpr = U.pixelRatio(), w = c.clientWidth || 900, h = 260;
     c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
     const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     const all = [];

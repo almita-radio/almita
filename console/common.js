@@ -6,6 +6,22 @@
   const U = {};
   const DASH = "—";
 
+  // ------------------------------------------------------------------ presentation mode (BL-094)
+  // /present/<page> serves these same pages with <html data-present>; styles.css then zooms the whole page for a projector.
+  // Canvases are sized from clientWidth (unzoomed CSS px) while the pointer and getBoundingClientRect are in zoomed px, so
+  // backing stores and hit tests go through these helpers. Outside presentation mode they are the plain values.
+  U.PRESENT = document.documentElement.hasAttribute("data-present");
+  U.uiZoom = () => {
+    const z = U.PRESENT ? parseFloat(getComputedStyle(document.documentElement).zoom) : 1;
+    return Number.isFinite(z) && z > 0 ? z : 1;
+  };
+  U.pixelRatio = () => (window.devicePixelRatio || 1) * U.uiZoom();
+  U.pointerXY = (ev, el) => {
+    const r = el.getBoundingClientRect(), z = U.uiZoom();
+    return { x: (ev.clientX - r.left) / z, y: (ev.clientY - r.top) / z };
+  };
+  U.pageHref = (href) => (U.PRESENT && href.startsWith("/") && !href.startsWith("/vnc/") ? "/present" + href : href);
+
   // ------------------------------------------------------------------ text safety and formatting
   const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   U.esc = (v) => String(v === null || v === undefined ? "" : v).replace(/[&<>"']/g, (c) => ESC[c]);
@@ -303,11 +319,18 @@
     for (const it of items) {
       const a = document.createElement("a");
       a.className = "obs-nav-link" + (it.key === section ? " active" : "");
-      a.href = it.href;
+      a.href = U.pageHref(it.href);
       if (it.newTab) { a.target = "_blank"; a.rel = "noopener"; }
       a.textContent = it.key;
       if (it.key === section) a.setAttribute("aria-current", "page");
       nav.appendChild(a);
+    }
+    if (U.PRESENT) {                              // back to this same page at normal size
+      const out = document.createElement("a");
+      out.className = "obs-nav-link";
+      out.href = location.pathname.replace(/^\/present/, "") || "/";
+      out.textContent = "EXIT PRESENT";
+      nav.appendChild(out);
     }
     U.mountStopButton(nav);
     const strip = document.createElement("div");
@@ -788,7 +811,7 @@
     canvas.__skyArgs = [data, opts];                    // the DÍA/NOCHE switch redraws it with the same data (no request)
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 320, cssH = canvas.clientHeight || 320;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = U.pixelRatio();
     if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) { canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const w = cssW, h = cssH;
@@ -931,8 +954,7 @@
       canvas.__skyClickBound = true;
       canvas.addEventListener("click", (ev) => {
         if (!canvas.__onPick) return;
-        const rect = canvas.getBoundingClientRect();
-        const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+        const { x: mx, y: my } = U.pointerXY(ev, canvas);
         for (const a of canvas.__hitAreas || []) { if (Math.hypot(mx - a.x, my - a.y) <= Math.max(a.r, 14)) { canvas.__onPick(a.label); return; } }
       });
     }
@@ -943,8 +965,8 @@
   U.skyAzAlt = function (canvas, ev) {
     const p = canvas.__skyProj;
     if (!p) return null;
-    const rect = canvas.getBoundingClientRect();
-    const dx = ev.clientX - rect.left - p.cx, dy = p.cy - (ev.clientY - rect.top), r = Math.hypot(dx, dy);
+    const q = U.pointerXY(ev, canvas);
+    const dx = q.x - p.cx, dy = p.cy - q.y, r = Math.hypot(dx, dy);
     if (r > p.R) return null;
     return { az_deg: (((Math.atan2(dx, dy) * 180) / Math.PI) + 360) % 360, alt_deg: 90 * (1 - r / p.R) };
   };
@@ -1033,7 +1055,7 @@
     canvas.__legendArgs = [valueRange, unit];           // redrawn by the DÍA/NOCHE switch
     const ctx = canvas.getContext("2d");
     const cssW = canvas.clientWidth || 300, cssH = canvas.clientHeight || 34;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = U.pixelRatio();
     if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) { canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);

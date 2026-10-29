@@ -16,6 +16,13 @@
       <div id="lna-detail" class="obs-summary">Loading…</div>
       <div class="obs-actions"><button id="btn-lna" type="button" disabled>…</button></div>
     </section>
+    <section class="panel" aria-labelledby="h-rfi">
+      <header><h2 id="h-rfi">LOCAL RFI CHECK <span class="muted">(a few seconds of MAIN · the Pi's 357.14 kHz comb and narrow lines over the floor · run it before every outing)</span></h2><span id="rfi-badge" class="badge">—</span></header>
+      <div id="rfi-nanovna" class="obs-summary" hidden></div>
+      <div id="rfi-detail" class="obs-summary">Loading…</div>
+      <div class="temp-chart-wrap"><canvas id="rfi-chart" height="260" aria-label="MAIN spectrum: excess over the rolling median, with the comb teeth marked"></canvas><div id="rfi-tip" class="temp-tip" hidden></div></div>
+      <div class="obs-actions"><label>GAIN <select id="rfi-gain"></select> dB</label><button id="btn-rfi" type="button">RUN CHECK</button><span class="muted">compare checks at the same gain · 19.7 dB = the 2026-10-28 hunt</span></div>
+    </section>
     <section class="panel" aria-labelledby="h-temp">
       <header><h2 id="h-temp">TEMPERATURES <span class="muted">(last hour, refreshed every 20 s · below: last 6 h · one sample a minute · STABLE = moved ≤ 0.2 °C in 10 min)</span></h2><span id="temp-badge" class="badge">—</span></header>
       <div class="temp-chart-wrap"><canvas id="temp-chart" height="260" aria-label="temperature of each sensor over the last hour"></canvas><div id="temp-tip" class="temp-tip" hidden></div></div>

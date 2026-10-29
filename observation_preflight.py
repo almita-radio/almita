@@ -108,7 +108,15 @@ def _system_checks(observer_config: Optional[Dict[str, Any]] = None) -> List[Dic
     except Exception as exc:
         checks.append(_check("Recent USB/kernel issues", "SYSTEM", OPTIONAL, WARNING,
                               f"dmesg unavailable: {type(exc).__name__}: {exc}; skipped"))
+    checks.append(_nanovna_check())
     return checks
+
+
+def _nanovna_check() -> Dict[str, Any]:
+    """WARNING-only: a NanoVNA on the Pi's USB radiates into MAIN while it sweeps (2026-10-28, 1420.000 MHz is a sweep point)."""
+    import local_rfi_check
+    found = local_rfi_check.nanovna_present()
+    return _check("NanoVNA on the Pi", "SYSTEM", OPTIONAL, WARNING if found["present"] else PASS, found["detail"])
 
 
 def _disk_check(output_root: Path, required_bytes: int) -> Dict[str, Any]:
