@@ -28,6 +28,9 @@
         stackMode = (stackMode + 1) % STACK_MODES.length;
         stack.setDataUrl(STACK_MODES[stackMode].url);
         label();
+        upStamp = null;
+        const cur = last && last.session_id;
+        if (cur) drawUnknownPleasures(cur);
       });
       header.insertBefore(stackBtn, header.lastElementChild);
     }
@@ -128,6 +131,69 @@
       + `lines masked: ${ll}`;
   }
 
+  // UNKNOWN PLEASURES (operator 2026-10-30): the stacked spectra drawn like CP 1919's pulses on Joy Division's cover -
+  // white lines on black, each point's line hiding the ones behind it. Masked/empty bins break the line (nothing filled).
+  let upStamp = null;
+  async function drawUnknownPleasures(sessionId) {
+    const mode = STACK_MODES[stackMode];
+    const url = mode.url || `${ROOT}/quicklook_products/session_waterfall_state.json`;
+    let doc = null;
+    try { const r = await fetch(url, { cache: "no-store" }); doc = r.ok ? await r.json() : null; } catch (e) { doc = null; }
+    if (!doc || String(doc.session_id) !== String(sessionId) || !Array.isArray(doc.rows) || !doc.rows.length) return;
+    const stamp = `${mode.name}|${doc.updated_utc}|${doc.rows.length}`;
+    if (stamp === upStamp) return;
+    upStamp = stamp;
+    const rows = doc.rows.slice().sort((a, b) => parseInt(a.point_id, 10) - parseInt(b.point_id, 10)).slice(-90);
+    const canvas = $("rfi-mask-up"), { ctx, w, h } = setup(canvas);
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+    const n = rows[0].relative_db.length;
+    // ART VIEW, not a measurement: each line around its own median, smoothed over SMOOTH bins (empty bins stay empty),
+    // and tapered towards the band edges so the peaks gather in the middle as on the cover
+    const SMOOTH = 3;
+    const centered = rows.map((r) => {
+      const v = r.relative_db.filter((x) => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
+      const med = v.length ? v[Math.floor(v.length / 2)] : 0;
+      const c = r.relative_db.map((x) => (x === null || !Number.isFinite(x) ? null : x - med));
+      return c.map((x, i) => {
+        if (x === null) return null;
+        let s = 0, k = 0;
+        for (let j = Math.max(0, i - SMOOTH); j <= Math.min(c.length - 1, i + SMOOTH); j++) if (c[j] !== null) { s += c[j]; k++; }
+        const u = (i - (c.length - 1) / 2) / (c.length * 0.30);
+        return (s / k) * (0.18 + 0.82 * Math.exp(-(u ** 4)));
+      });
+    });
+    const all = []; centered.forEach((r) => r.forEach((x) => { if (x !== null) all.push(Math.abs(x)); }));
+    all.sort((a, b) => a - b);
+    const at = (q) => (all.length ? all[Math.floor(q * (all.length - 1))] : 0) || 1e-3;
+    const med = at(0.5), p999 = at(0.999);
+    const top = h * 0.16, bottom = h * 0.94, left = w * 0.18, right = w * 0.82;
+    const step = (bottom - top) / Math.max(rows.length - 1, 1);
+    const amp = Math.min(step * 0.35 / med, step * 5 / p999);                  // noise a tremor, the strongest ~5 lines
+    const X = (i) => left + (right - left) * i / (n - 1);
+    ctx.lineWidth = Math.max(0.8, w / 600); ctx.lineJoin = "round";
+    centered.forEach((r, k) => {                                                // back (top) first, front (bottom) last
+      const base = top + k * step;
+      const Y = (x) => base - Math.max(-step * 0.4, x * amp);
+      ctx.beginPath(); ctx.moveTo(X(0), base);                                  // the black body that hides the lines behind
+      for (let i = 0; i < n; i++) ctx.lineTo(X(i), r[i] === null ? base : Y(r[i]));
+      ctx.lineTo(X(n - 1), h); ctx.lineTo(X(0), h); ctx.closePath();
+      ctx.fillStyle = "#000"; ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < n; i++) {
+        if (r[i] === null) { pen = false; continue; }
+        if (pen) ctx.lineTo(X(i), Y(r[i])); else ctx.moveTo(X(i), Y(r[i]));
+        pen = true;
+      }
+      ctx.stroke();
+    });
+    ctx.fillStyle = "#fff"; ctx.font = `${Math.round(w / 40)}px ui-monospace,monospace`; ctx.textAlign = "center";
+    ctx.fillText("ALMITA", w / 2, h * 0.07);
+    ctx.font = `${Math.round(w / 60)}px ui-monospace,monospace`;
+    ctx.fillText(`art view · ${mode.name} · session ${sessionId} · ${rows.length} points · ${Array.isArray(doc.frequency_mhz) && doc.frequency_mhz.length ? `${doc.frequency_mhz[0].toFixed(1)}-${doc.frequency_mhz[doc.frequency_mhz.length - 1].toFixed(1)} MHz` : ""}`, w / 2, h * 0.11);
+    try { $("rfi-mask-up-png").href = canvas.toDataURL("image/png"); } catch (e) { /* tainted canvas: no link */ }
+  }
+
   async function tick() {
     if (document.hidden) return;
     const [d, cur] = await Promise.all([getJson("main_rfi_mask_latest.json"), getJson("current_session.json")]);
@@ -135,7 +201,8 @@
     const live = d && cur && d.session_id && String(d.session_id) === String(cur.session_id);
     panel.hidden = !live;
     stackButton(!!live);
-    if (!live) { last = null; return; }
+    if (!live) { last = null; upStamp = null; return; }
+    drawUnknownPleasures(d.session_id);
     const stamp = d.updated_utc + "|" + document.documentElement.getAttribute("data-theme");
     $("rfi-mask-badge").textContent = d.masked_channel_fraction > 0 || d.pulse_fraction > 0 ? "MASKING" : "CLEAN";
     if (stamp === lastStamp) return;
