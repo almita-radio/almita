@@ -173,7 +173,8 @@
     ctx.lineWidth = Math.max(0.8, w / 600); ctx.lineJoin = "round";
     centered.forEach((r, k) => {                                                // back (top) first, front (bottom) last
       const base = top + k * step;
-      const Y = (x) => base - Math.max(-step * 0.4, x * amp);
+      const floor = step * 0.4;                                                 // dips compressed softly, never cut flat
+      const Y = (x) => { const y = x * amp; return base - (y >= 0 ? y : -floor * Math.tanh(-y / floor)); };
       ctx.beginPath(); ctx.moveTo(X(0), base);                                  // the black body that hides the lines behind
       for (let i = 0; i < n; i++) ctx.lineTo(X(i), r[i] === null ? base : Y(r[i]));
       ctx.lineTo(X(n - 1), h); ctx.lineTo(X(0), h); ctx.closePath();
