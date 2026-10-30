@@ -72,3 +72,20 @@ def test_preflight_warns_when_the_nanovna_is_plugged(monkeypatch):
     assert pf._nanovna_check()["status"] == pf.WARNING
     monkeypatch.setattr(rc, "nanovna_present", lambda: {"present": False, "devices": [], "detail": "none"})
     assert pf._nanovna_check()["status"] == pf.PASS
+
+
+def test_a_clipping_capture_is_called_clipped_not_noisy():
+    iq = _iq(sigma=20.0)
+    iq[:2000] = 255                                                   # 1/2400 of the samples on a rail: far over 1e-4
+    r = rc.analyze(iq, RATE, CENTER)
+    assert r["verdict"] == "CLIPPED" and r["adc_rail_hit_fraction"] >= rc.CLIP_RAIL_FRACTION
+
+
+def test_default_gain_is_the_observing_gain_not_the_hunt_gain(monkeypatch):
+    import sdr_tuning
+    monkeypatch.setattr(sdr_tuning, "operating_config", lambda path=None: {"gain_db": 33.8})
+    assert rc.default_gain_db() == 33.8
+    def broken(path=None):
+        raise sdr_tuning.OperatingConfigError("no config")
+    monkeypatch.setattr(sdr_tuning, "operating_config", broken)
+    assert rc.default_gain_db() == rc.FALLBACK_GAIN_DB

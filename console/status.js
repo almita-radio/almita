@@ -260,7 +260,7 @@
     const sel = $("rfi-gain");
     if (!sel.options.length) {
       for (const g of RFI_GAINS) sel.add(new Option(g.toFixed(1), String(g)));
-      sel.value = String(r ? r.gain_db : d.default_gain_db);
+      sel.value = String(d.default_gain_db);                                    // the observing gain, not the last check's
     }
     drawRfi();
   }

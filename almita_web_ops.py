@@ -1370,7 +1370,7 @@ def set_lna_power(on: bool) -> Dict[str, Any]:
 def rfi_check_state() -> Dict[str, Any]:
     import local_rfi_check
     return {"last": local_rfi_check.last_check(), "nanovna": local_rfi_check.nanovna_present(),
-            "default_gain_db": local_rfi_check.DEFAULT_GAIN_DB, "default_seconds": local_rfi_check.DEFAULT_SECONDS}
+            "default_gain_db": local_rfi_check.default_gain_db(), "hunt_gain_db": local_rfi_check.HUNT_GAIN_DB, "default_seconds": local_rfi_check.DEFAULT_SECONDS}
 
 
 def run_rfi_check(gain_db: float) -> Dict[str, Any]:

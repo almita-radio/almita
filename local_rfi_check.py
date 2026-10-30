@@ -38,8 +38,21 @@ EDGE_FRACTION = 0.05                   # band edges (anti-alias roll-off) are le
 COMB_PRESENT_DB = 6.0
 COMB_FAINT_DB = 3.0
 LINES_MANY = 10
-DEFAULT_GAIN_DB = 19.7                 # the gain of the 2026-10-28 hunt, so results compare with it
+HUNT_GAIN_DB = 19.7                    # the gain of the 2026-10-28 hunt (kept for comparing with it)
+# The default is the OBSERVING gain (observer_config observation_defaults.gain_db, the gain pilot's start value), not
+# the hunt's 19.7: the check must say what MAIN sees at the gain it observes with (operator 2026-10-30). The check
+# leaves rtl_tcp at whatever gain it measured with; every capture re-tunes its own gain (gain pilot / tune_explicitly).
+FALLBACK_GAIN_DB = 40.2
+CLIP_RAIL_FRACTION = 1.0e-4            # same limit as the gain pilot (PilotConfig.clipping_rail_hit_fraction)
 DEFAULT_SECONDS = 2.0
+
+
+def default_gain_db() -> float:
+    try:
+        import sdr_tuning
+        return float(sdr_tuning.operating_config()["gain_db"])
+    except Exception:
+        return FALLBACK_GAIN_DB
 NANOVNA_USB_ID = ("0483", "5740")      # STMicroelectronics Virtual COM Port, as the NanoVNA-H enumerates on the Pi
 
 
@@ -110,7 +123,11 @@ def analyze(iq: np.ndarray, sample_rate_hz: float, center_frequency_hz: float) -
             lines.append({"frequency_hz": round(float(freq[i]), 1), "excess_db": round(float(excess[i]), 2)})
     tooth_max = max((t["excess_db"] for t in teeth), default=0.0)
     tooth_sum = sum(t["excess_db"] for t in teeth)
-    if tooth_max >= COMB_PRESENT_DB or len(lines) >= LINES_MANY:
+    adc = adc_level_summary(iq)
+    rail = adc.get("adc_rail_hit_fraction")
+    if rail is not None and np.isfinite(rail) and rail >= CLIP_RAIL_FRACTION:
+        verdict, verdict_text = "CLIPPED", "MAIN clips at this gain: the comb/line numbers are not reliable; use a lower gain"
+    elif tooth_max >= COMB_PRESENT_DB or len(lines) >= LINES_MANY:
         verdict, verdict_text = "NOISY", "comb and/or many lines present: check the ferrites, the harness and what is near the feed"
     elif tooth_max >= COMB_FAINT_DB or lines:
         verdict, verdict_text = "FAINT", "faint comb or a few lines: acceptable, but compare with the last clean check"
@@ -119,7 +136,7 @@ def analyze(iq: np.ndarray, sample_rate_hz: float, center_frequency_hz: float) -
     return {"verdict": verdict, "verdict_text": verdict_text,
             "tooth_max_db": round(tooth_max, 2), "tooth_sum_db": round(tooth_sum, 1), "teeth": teeth,
             "lines_over_threshold": len(lines), "lines": lines[:60], "line_threshold_db": LINE_THRESHOLD_DB,
-            "floor_db": round(float(np.median(db[inner])), 2), **adc_level_summary(iq),
+            "floor_db": round(float(np.median(db[inner])), 2), **adc,
             "spectrum": {"frequency_hz": [round(float(f), 1) for f in freq], "excess_db": [round(float(e), 2) for e in excess],
                          "power_db": [round(float(d), 2) for d in db], "fft_size": FFT_SIZE, "segments": n_seg}}
 
@@ -143,10 +160,12 @@ async def _capture(output_path: Path, gain_db: float, seconds: float, host: str,
         await sdr.close()
 
 
-def run_check(gain_db: float = DEFAULT_GAIN_DB, seconds: float = DEFAULT_SECONDS, host: str = "127.0.0.1",
+def run_check(gain_db: Optional[float] = None, seconds: float = DEFAULT_SECONDS, host: str = "127.0.0.1",
               port: int = 1234, out_dir: Path = CHECK_DIR) -> Dict[str, Any]:
     """Capture, analyse and record one check. The caller makes sure nothing else holds MAIN."""
     from calibration_engine.acquisition import read_capture_iq
+    if gain_db is None:
+        gain_db = default_gain_db()
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     h5 = out_dir / f"rfi_check_{stamp}.h5"
@@ -173,7 +192,7 @@ def last_check(out_dir: Path = CHECK_DIR) -> Optional[Dict[str, Any]]:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--gain", type=float, default=DEFAULT_GAIN_DB)
+    p.add_argument("--gain", type=float, default=None, help="default: the observing gain (observer_config)")
     p.add_argument("--seconds", type=float, default=DEFAULT_SECONDS)
     a = p.parse_args(argv)
     r = run_check(a.gain, a.seconds)
