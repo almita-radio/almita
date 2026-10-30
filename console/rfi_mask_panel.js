@@ -148,27 +148,28 @@
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
     const n = rows[0].relative_db.length;
     // ART VIEW, not a measurement: each line around its own median, smoothed over SMOOTH bins (empty bins stay empty),
-    // and tapered towards the band edges so the peaks gather in the middle as on the cover
+    // and tapered hard towards the band edges: signal in the middle, flat margins on both sides as on the cover
     const SMOOTH = 3;
     const centered = rows.map((r) => {
       const v = r.relative_db.filter((x) => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
       const med = v.length ? v[Math.floor(v.length / 2)] : 0;
       const c = r.relative_db.map((x) => (x === null || !Number.isFinite(x) ? null : x - med));
       return c.map((x, i) => {
-        if (x === null) return null;
+        const u = (i - (c.length - 1) / 2) / (c.length * 0.20);
+        const wgt = 0.03 + 0.97 * Math.exp(-(u ** 6));                       // centre ~half alive, outer ~quarter each side flat
+        if (x === null) return wgt < 0.05 ? 0 : null;                          // flat edges stay one unbroken line
         let s = 0, k = 0;
         for (let j = Math.max(0, i - SMOOTH); j <= Math.min(c.length - 1, i + SMOOTH); j++) if (c[j] !== null) { s += c[j]; k++; }
-        const u = (i - (c.length - 1) / 2) / (c.length * 0.30);
-        return (s / k) * (0.18 + 0.82 * Math.exp(-(u ** 4)));
+        return (s / k) * wgt;
       });
     });
-    const all = []; centered.forEach((r) => r.forEach((x) => { if (x !== null) all.push(Math.abs(x)); }));
+    const all = []; centered.forEach((r) => r.forEach((x, i) => { if (x !== null && Math.abs(i - (n - 1) / 2) < n * 0.2) all.push(Math.abs(x)); }));   // scale from the live middle only
     all.sort((a, b) => a - b);
     const at = (q) => (all.length ? all[Math.floor(q * (all.length - 1))] : 0) || 1e-3;
     const med = at(0.5), p999 = at(0.999);
     const top = h * 0.16, bottom = h * 0.94, left = w * 0.18, right = w * 0.82;
     const step = (bottom - top) / Math.max(rows.length - 1, 1);
-    const amp = Math.min(step * 0.35 / med, step * 5 / p999);                  // noise a tremor, the strongest ~5 lines
+    const amp = Math.min(step * 0.5 / med, step * 6 / p999);                  // noise a tremor, the strongest ~5 lines
     const X = (i) => left + (right - left) * i / (n - 1);
     ctx.lineWidth = Math.max(0.8, w / 600); ctx.lineJoin = "round";
     centered.forEach((r, k) => {                                                // back (top) first, front (bottom) last
