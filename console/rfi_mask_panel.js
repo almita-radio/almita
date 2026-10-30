@@ -9,8 +9,11 @@
   const css = (name, fallback) => (getComputedStyle(document.documentElement).getPropertyValue(name) || "").trim() || fallback;
   const COLORS = () => ({ comb: css("--error", "#e36b6b"), line: css("--warn", "#e6b85c"), clean: css("--accent", "#65b7d8"),
     raw: css("--muted", "#91a2ad"), text: css("--muted", "#91a2ad"), grid: css("--line", "#2b3942"), bg: css("--inset", "#0d1317") });
-  let last = null, lastStamp = null, stackClean = false, stackBtn = null;
-  const CLEAN_STACK = `${ROOT}/main_rfi_mask_session_waterfall_state.json`;
+  let last = null, lastStamp = null, stackMode = 0, stackBtn = null;
+  // RAW (quicklook, default) -> CLEAN (masked, pulse-free) -> DIFF (clean minus the session median per bin)
+  const STACK_MODES = [{ name: "RAW", url: null },
+    { name: "CLEAN", url: `${ROOT}/main_rfi_mask_session_waterfall_state.json` },
+    { name: "DIFF", url: `${ROOT}/main_rfi_mask_session_waterfall_diff.json` }];
 
   // RAW / CLEAN switch on SPECTRAL STACK 3D: shown only while clean rows exist for the current session; default RAW
   function stackButton(show) {
@@ -22,16 +25,16 @@
       stackBtn = document.createElement("button");
       stackBtn.type = "button"; stackBtn.className = "spectral-stack-reset"; stackBtn.style.position = "static";
       stackBtn.addEventListener("click", () => {
-        stackClean = !stackClean;
-        stack.setDataUrl(stackClean ? CLEAN_STACK : null);
+        stackMode = (stackMode + 1) % STACK_MODES.length;
+        stack.setDataUrl(STACK_MODES[stackMode].url);
         label();
       });
       header.insertBefore(stackBtn, header.lastElementChild);
     }
-    const label = () => { stackBtn.textContent = stackClean ? "CLEAN · show RAW" : "RAW · show CLEAN"; };
+    const label = () => { stackBtn.textContent = `${STACK_MODES[stackMode].name} · show ${STACK_MODES[(stackMode + 1) % STACK_MODES.length].name}`; };
     label();
     stackBtn.hidden = !show;
-    if (!show && stackClean) { stackClean = false; stack.setDataUrl(null); label(); }
+    if (!show && stackMode) { stackMode = 0; stack.setDataUrl(null); label(); }
   }
 
   async function getJson(name) {

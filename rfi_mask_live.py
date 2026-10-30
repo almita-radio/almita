@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_RUNTIME_DIR = ROOT / "data" / "runtime"
 LATEST, SESSION = "main_rfi_mask_latest.json", "main_rfi_mask_session.json"
 STACK = "main_rfi_mask_session_waterfall_state.json"   # same format as quicklook's session_waterfall_state.json
+STACK_DIFF = "main_rfi_mask_session_waterfall_diff.json"  # CLEAN rows minus the session's per-bin median
 STACK_BINS = 256                                        # quicklook_session_waterfall.DEFAULT_FREQUENCY_BINS
 STOP = False
 KNOWN_AFTER_HITS = 2
@@ -40,6 +41,21 @@ def _stop(signum=None, frame=None):
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def diff_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each row minus the per-bin median of all rows (bins empty in a row stay empty). Display only."""
+    import numpy as np
+    if not rows:
+        return []
+    m = np.array([[np.nan if v is None else v for v in r["relative_db"]] for r in rows], float)
+    import warnings
+    with warnings.catch_warnings():                      # a bin empty in every row stays empty, silently
+        warnings.simplefilter("ignore", RuntimeWarning)
+        ref = np.nanmedian(m, axis=0)
+    d = m - ref
+    return [{**{k: v for k, v in r.items() if k != "relative_db"},
+             "relative_db": [float(x) if np.isfinite(x) else None for x in d[i]]} for i, r in enumerate(rows)]
 
 
 def sidecar_dir(session_root: Path) -> Path:
@@ -81,6 +97,10 @@ class MaskLive:
             self.rows = list(prior.get("rows") or [])
             self.done = {r["point_id"]: r for r in self.rows}
             self.line_hits = [list(h) for h in prior.get("line_hits") or []]
+            stack = read_json_safe(self.runtime_dir / STACK) or {}
+            if stack.get("session_id") == session_id:                    # keep the stack rows already built
+                self.stack_rows = list(stack.get("rows") or [])
+                self.stack_freq_mhz = stack.get("frequency_mhz") or []
 
     @property
     def known_lines(self) -> List[float]:
@@ -194,9 +214,15 @@ class MaskLive:
             del self.stack_pending[pid]
             changed = True
         if changed:
+            now = utcnow()
             atomic_write_json(self.runtime_dir / STACK, {
                 "schema_version": 1, "session_id": self.session_id, "source": "rfi_mask_live.py (clean)",
-                "frequency_mhz": self.stack_freq_mhz, "rows": self.stack_rows, "updated_utc": utcnow()})
+                "frequency_mhz": self.stack_freq_mhz, "rows": self.stack_rows, "updated_utc": now})
+            atomic_write_json(self.runtime_dir / STACK_DIFF, {
+                "schema_version": 1, "session_id": self.session_id, "updated_utc": now,
+                "source": "rfi_mask_live.py (clean minus the session's per-bin median: what is fixed in frequency "
+                          "- comb skirts, lines, the band shape - cancels; what changes between points stays)",
+                "frequency_mhz": self.stack_freq_mhz, "rows": diff_rows(self.stack_rows)})
 
     def follow_from(self, utc: str) -> "MaskLive":
         self.started_utc = utc

@@ -59,3 +59,11 @@ def test_a_line_is_known_only_after_two_strong_captures(tmp_path):
     assert m.known_lines == [1_420_100_000.0]
     m._count_hits([{"frequency_hz": 1_420_500_000.0, "excess_db": 0.8, "known": False}], 1.0)   # weak: never counted
     assert len(m.line_hits) == 1
+
+
+def test_diff_rows_cancel_what_is_fixed_and_keep_what_changes():
+    rows = [{"point_id": str(k), "relative_db": [1.0, 5.0 + (2.0 if k == 2 else 0.0), None]} for k in range(5)]
+    d = live.diff_rows(rows)
+    assert [r["relative_db"][0] for r in d] == [0.0] * 5                 # fixed in every point: gone
+    assert d[2]["relative_db"][1] == 2.0 and d[0]["relative_db"][1] == 0.0
+    assert d[0]["relative_db"][2] is None
