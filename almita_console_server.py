@@ -178,6 +178,9 @@ def prepare_console_web(source_dir: Path, runtime_dir: Path, public_root: Path) 
     )
     if (source_dir / "common.js").is_file():
         html = html.replace('src="common.js"', f'src="common.js?v={_asset_version(source_dir / "common.js")}"')
+    if (source_dir / "rfi_mask_panel.js").is_file():  # MAIN · RFI MASK panel (rfi_mask_live.py, optional, 2026-10-30)
+        shutil.copyfile(source_dir / "rfi_mask_panel.js", public_root / "rfi_mask_panel.js")
+        html = html.replace('src="rfi_mask_panel.js"', f'src="rfi_mask_panel.js?v={_asset_version(source_dir / "rfi_mask_panel.js")}"')
     (public_root / "index.html").write_text(html)
     # Vendored third-party (SPECTRAL STACK 3D's three.js) - large and never
     # edited by us, so symlinked whole rather than copied like the small

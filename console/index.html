@@ -93,6 +93,13 @@
         </div>
       </section>
     </div>
+    <section id="rfi-mask-panel" class="panel" hidden style="margin:10px 0">
+      <header><h2>MAIN · RFI MASK — clean spectrum (masked channels left as gaps)</h2><span id="rfi-mask-badge" class="badge">—</span></header>
+      <canvas id="rfi-mask-clean" style="width:100%;height:230px;display:block"></canvas>
+      <header><h2>WHAT THE MASK REMOVES — raw spectrum, masked channels at their real level</h2></header>
+      <canvas id="rfi-mask-removed" style="width:100%;height:230px;display:block"></canvas>
+      <pre id="rfi-mask-summary" style="margin:0;padding:8px 11px;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;color:var(--muted)"></pre>
+    </section>
     <section id="activity-log-panel" class="panel compact" hidden>
       <h2>ACTIVITY LOG</h2><pre id="activity-log-lines" class="activity-log"></pre>
     </section>
@@ -106,4 +113,5 @@
   <script src="spectral_stack_3d.js"></script>
   <script src="common.js"></script>
   <script src="app.js"></script>
+  <script src="rfi_mask_panel.js"></script>
 </body></html>
