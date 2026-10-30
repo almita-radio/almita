@@ -48,3 +48,14 @@ def test_a_new_session_is_masked_next_to_its_data(tmp_path):
     assert len(latest["spectrum"]["power_db"]) == len(latest["spectrum"]["code"])
     sess = json.loads((rt / live.SESSION).read_text())
     assert [r["point_id"] for r in sess["rows"]] == ["1", "2"]
+
+
+def test_a_line_is_known_only_after_two_strong_captures(tmp_path):
+    m = live.MaskLive(tmp_path)
+    strong = [{"frequency_hz": 1_420_100_000.0, "excess_db": 5.0, "known": False}]
+    m._count_hits(strong, 1.0)
+    assert m.known_lines == []
+    m._count_hits([{**strong[0], "frequency_hz": 1_420_100_300.0}], 1.0)          # same line, next capture
+    assert m.known_lines == [1_420_100_000.0]
+    m._count_hits([{"frequency_hz": 1_420_500_000.0, "excess_db": 0.8, "known": False}], 1.0)   # weak: never counted
+    assert len(m.line_hits) == 1

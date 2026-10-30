@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_RUNTIME_DIR = ROOT / "data" / "runtime"
 LATEST, SESSION = "main_rfi_mask_latest.json", "main_rfi_mask_session.json"
 STOP = False
+KNOWN_AFTER_HITS = 2
 
 
 def _stop(signum=None, frame=None):
@@ -53,7 +54,7 @@ class MaskLive:
         self.session_id: Optional[str] = None
         self.done: Dict[str, Dict[str, Any]] = {}
         self.rows: List[Dict[str, Any]] = []
-        self.known_lines: List[float] = []
+        self.line_hits: List[List[float]] = []     # [frequency_hz, captures where it was found over the NEW-line bar]
         self.started_utc = utcnow()                # only sessions that start after this process are followed
 
     def _current(self) -> Optional[tuple]:
@@ -68,12 +69,29 @@ class MaskLive:
 
     def _reset(self, root: Path, session_id: str) -> None:
         self.session_root, self.session_id = root, session_id
-        self.done, self.rows, self.known_lines = {}, [], []
+        self.done, self.rows, self.line_hits = {}, [], []
         prior = read_json_safe(self.runtime_dir / SESSION) or {}
         if prior.get("session_id") == session_id:                       # restarted mid-session: keep what was done
             self.rows = list(prior.get("rows") or [])
             self.done = {r["point_id"]: r for r in self.rows}
-            self.known_lines = list(prior.get("known_lines_hz") or [])
+            self.line_hits = [list(h) for h in prior.get("line_hits") or []]
+
+    @property
+    def known_lines(self) -> List[float]:
+        """A line is "known" (masked from the lower bar) only once it was found over the new-line bar in at least
+        KNOWN_AFTER_HITS captures: one strong capture alone no longer lowers the bar for the whole session."""
+        return [f for f, n in self.line_hits if n >= KNOWN_AFTER_HITS]
+
+    def _count_hits(self, lines: List[Dict[str, Any]], line_db: float) -> None:
+        for ln in lines:
+            if ln.get("dc") or ln["excess_db"] < line_db:
+                continue
+            for h in self.line_hits:
+                if abs(h[0] - ln["frequency_hz"]) < rfi_mask.KNOWN_MATCH_HZ:
+                    h[1] += 1
+                    break
+            else:
+                self.line_hits.append([ln["frequency_hz"], 1])
 
     def _sidecars(self, root: Path) -> Path:
         return self.sidecar_override or sidecar_dir(root)
@@ -101,9 +119,7 @@ class MaskLive:
                 self.done[pid] = {"point_id": pid, "error": f"{type(exc).__name__}: {exc}"}
                 continue
             paths = rfi_mask.write_sidecar(result, self._sidecars(root), src.stem)
-            for ln in result["lines"]:
-                if not ln["known"] and not ln.get("dc"):
-                    self.known_lines.append(ln["frequency_hz"])
+            self._count_hits(result["lines"], result["thresholds"]["line_db"])
             summ = {"point_id": pid, "source_hdf5": str(src), "sidecar_json": paths["json"],
                     "capture_start_utc": result["capture_start_utc"], "gain_db": result["gain_db"],
                     "tooth_max_db": result["tooth_max_db"], "comb_channels": result["comb_channels"],
@@ -121,7 +137,7 @@ class MaskLive:
             atomic_write_json(self.runtime_dir / SESSION, {
                 "schema": rfi_mask.SCHEMA, "session_id": self.session_id, "session_root": str(root),
                 "sidecar_dir": str(self._sidecars(root)), "updated_utc": utcnow(), "rows": self.rows,
-                "known_lines_hz": self.known_lines})
+                "known_lines_hz": self.known_lines, "line_hits": self.line_hits})
             processed += 1
             del result
         return processed
