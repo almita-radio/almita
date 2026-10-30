@@ -135,7 +135,7 @@
   // white lines on black, each point's line hiding the ones behind it. Masked/empty bins break the line (nothing filled).
   let upStamp = null;
   async function drawUnknownPleasures(sessionId) {
-    const mode = STACK_MODES[stackMode];
+    const mode = STACK_MODES[2];                                                // always DIFF: the view that looks like the cover
     const url = mode.url || `${ROOT}/quicklook_products/session_waterfall_state.json`;
     let doc = null;
     try { const r = await fetch(url, { cache: "no-store" }); doc = r.ok ? await r.json() : null; } catch (e) { doc = null; }
