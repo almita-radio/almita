@@ -110,6 +110,7 @@
       this.message = message; this.badge = badge; this.resetButton = resetButton;
       this.lastSessionId = null; this.lastUpdatedUtc = null; this.lastFetchFailed = false;
       this.fetchInFlight = false;
+      this.dataUrl = DATA_URL;         // rfi_mask_panel.js may switch to the clean rows (RAW / CLEAN), default RAW
       this.webglAvailable = true;
       this.lines = []; this.surfaceMesh = null; this.freq = []; this.rows = [];
       try {
@@ -356,7 +357,7 @@
       if (this.fetchInFlight) return;
       this.fetchInFlight = true;
       try {
-        const response = await fetch(DATA_URL, { cache: "no-store" });
+        const response = await fetch(this.dataUrl, { cache: "no-store" });
         if (response.status === 404) {
           // Normal at the start of a session: Quicklook hasn't produced its
           // first point yet, so the symlinked artifact doesn't exist yet -
@@ -390,6 +391,16 @@
       }
     }
   }
+
+  // RAW / CLEAN (operator 2026-10-30): the same stack drawn from another session_waterfall_state-shaped file
+  SpectralStack3D.prototype.setDataUrl = function (url) {
+    const next = url || DATA_URL;
+    if (next === this.dataUrl) return;
+    this.dataUrl = next; this.lastUpdatedUtc = null;
+    this._clearGeometry(); this.rows = [];
+    this._setState("LOADING");
+  };
+  SpectralStack3D.RAW_URL = DATA_URL;
 
   // SESSIONS (BL-085): draw a session_waterfall_state.json read from a stored campaign, handed over by the caller. It
   // never fetches the live runtime artifact and never changes what MONITOR shows (each page owns its own instance).

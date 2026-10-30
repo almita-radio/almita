@@ -9,7 +9,30 @@
   const css = (name, fallback) => (getComputedStyle(document.documentElement).getPropertyValue(name) || "").trim() || fallback;
   const COLORS = () => ({ comb: css("--error", "#e36b6b"), line: css("--warn", "#e6b85c"), clean: css("--accent", "#65b7d8"),
     raw: css("--muted", "#91a2ad"), text: css("--muted", "#91a2ad"), grid: css("--line", "#2b3942"), bg: css("--inset", "#0d1317") });
-  let last = null, lastStamp = null;
+  let last = null, lastStamp = null, stackClean = false, stackBtn = null;
+  const CLEAN_STACK = `${ROOT}/main_rfi_mask_session_waterfall_state.json`;
+
+  // RAW / CLEAN switch on SPECTRAL STACK 3D: shown only while clean rows exist for the current session; default RAW
+  function stackButton(show) {
+    const stack = window.SpectralStack3D;
+    if (!stack || typeof stack.setDataUrl !== "function") return;
+    if (!stackBtn) {
+      const header = document.querySelector("#spectral-stack-panel > header");
+      if (!header) return;
+      stackBtn = document.createElement("button");
+      stackBtn.type = "button"; stackBtn.className = "spectral-stack-reset"; stackBtn.style.position = "static";
+      stackBtn.addEventListener("click", () => {
+        stackClean = !stackClean;
+        stack.setDataUrl(stackClean ? CLEAN_STACK : null);
+        label();
+      });
+      header.insertBefore(stackBtn, header.lastElementChild);
+    }
+    const label = () => { stackBtn.textContent = stackClean ? "CLEAN · show RAW" : "RAW · show CLEAN"; };
+    label();
+    stackBtn.hidden = !show;
+    if (!show && stackClean) { stackClean = false; stack.setDataUrl(null); label(); }
+  }
 
   async function getJson(name) {
     try {
@@ -108,6 +131,7 @@
     const panel = $("rfi-mask-panel");
     const live = d && cur && d.session_id && String(d.session_id) === String(cur.session_id);
     panel.hidden = !live;
+    stackButton(!!live);
     if (!live) { last = null; return; }
     const stamp = d.updated_utc + "|" + document.documentElement.getAttribute("data-theme");
     $("rfi-mask-badge").textContent = d.masked_channel_fraction > 0 || d.pulse_fraction > 0 ? "MASKING" : "CLEAN";
