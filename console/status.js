@@ -226,7 +226,8 @@
       ctx.textAlign = "right"; ctx.fillText(`${v > 0 ? "+" : ""}${v}`, padL - 6, y(v) + 4);
     }
     ctx.textAlign = "center";
-    for (let mhz = Math.ceil(f0 / 2e5) * 0.2; mhz * 1e6 <= f1; mhz += 0.2) ctx.fillText((mhz).toFixed(1), x(mhz * 1e6), h - 6);
+    const tickHz = w < 700 ? 4e5 : 2e5;                                                         // MHz labels, no overlap on a phone
+    for (let k = Math.ceil(f0 / tickHz); k * tickHz <= f1; k++) ctx.fillText((k * tickHz / 1e6).toFixed(1), x(k * tickHz), h - 6);
     ctx.textAlign = "left";
     ctx.strokeStyle = U.cssVar("--warn", "#e6b85c"); ctx.setLineDash([4, 4]);                 // the line threshold
     ctx.beginPath(); ctx.moveTo(padL, y(r.line_threshold_db)); ctx.lineTo(w - padR, y(r.line_threshold_db)); ctx.stroke(); ctx.setLineDash([]);

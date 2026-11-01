@@ -261,7 +261,7 @@ body.mount-simulated .mount-device-btn.active{background:var(--warn);color:var(-
 
 /* STATUS temperatures (operator 2026-10-17) */
 .temp-chart-wrap{position:relative;margin:6px 0 10px}
-#temp-chart,#temp-chart-6h{width:100%;height:260px;display:block;background:var(--inset);border:1px solid var(--line)}
+#temp-chart,#temp-chart-6h,#rfi-chart{width:100%;height:260px;display:block;background:var(--inset);border:1px solid var(--line)}
 .temp-tip{position:absolute;top:14px;background:var(--overlay-strong);color:var(--text);border:1px solid var(--line);padding:6px 9px;font:11px/1.5 ui-monospace,monospace;white-space:pre;pointer-events:none}
 .temp-tip[hidden]{display:none}
 .temp-swatch{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:baseline}
