@@ -1,0 +1,14 @@
+[Unit]
+Description=Start x11vnc at startup.
+After=multi-user.target
+
+ 
+[Service]
+Type=simple
+ExecStart=/usr/bin/x11vnc -xkb -noxdamage -verbose -avahi -safer -forever -shared -rfbauth /home/stellarmate/.vnc/passwd -autoport 5900 -auth /var/run/lightdm/root/:0
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target
+

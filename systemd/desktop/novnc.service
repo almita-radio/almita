@@ -1,0 +1,11 @@
+[Unit]
+Description=Start NoVNC at startup after x11vnc
+Requires=x11vnc.service
+After=multi-user.target x11vnc.service
+
+[Service]
+Type=simple
+ExecStart=/opt/noVNC/utils/novnc_proxy --vnc localhost:5900
+
+[Install]
+WantedBy=graphical.target
