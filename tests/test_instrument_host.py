@@ -24,7 +24,7 @@ def config(tmp_path, monkeypatch):
 
 @pytest.fixture
 def live_agent(monkeypatch):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), agent.Handler)
+    server = agent.Server(("127.0.0.1", 0), agent.Handler)
     monkeypatch.setattr(ih, "AGENT_PORT", server.server_address[1])
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server
@@ -186,3 +186,11 @@ def test_server_routes_get_and_post_of_the_capture_pi(config, monkeypatch):
             urllib.request.urlopen(bad, timeout=10)
     finally:
         server.shutdown()
+
+
+def test_agent_survives_a_burst_of_parallel_requests(config, live_agent):
+    from concurrent.futures import ThreadPoolExecutor
+    ih.set_host("127.0.0.1")
+    with ThreadPoolExecutor(20) as ex:
+        results = list(ex.map(lambda i: ih.run(["ps", "-eo", "pid,args"], text=True).returncode, range(100)))
+    assert results == [0] * 100

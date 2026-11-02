@@ -14,6 +14,7 @@ STATUS page reads and writes it (set_host)."""
 from __future__ import annotations
 
 import base64
+import http.client
 import ipaddress
 import json
 import os
@@ -86,10 +87,16 @@ def describe() -> Dict[str, Any]:
 # ------------------------------------------------------------------ commands on the instrument machine
 def _agent_call(host: str, path: str, body: Optional[dict], timeout: float) -> dict:
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(f"http://{host}:{AGENT_PORT}{path}", data=data, method="POST" if data else "GET",
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
+    for attempt in (1, 2):           # every agent command is read-only: one retry after a dropped connection is safe
+        req = urllib.request.Request(f"http://{host}:{AGENT_PORT}{path}", data=data, method="POST" if data else "GET",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except (ConnectionResetError, ConnectionAbortedError, http.client.RemoteDisconnected):
+            if attempt == 2:
+                raise
+    raise AssertionError("unreachable")
 
 
 def run(argv: Sequence[str], *, capture_output: bool = True, text: bool = False, timeout: float = 10.0,
@@ -105,7 +112,7 @@ def run(argv: Sequence[str], *, capture_output: bool = True, text: bool = False,
     except urllib.error.HTTPError as exc:
         raise subprocess.SubprocessError(f"instrument agent on {host} refused {argv[0]}: "
                                          f"{exc.read().decode(errors='replace')[:200]}") from exc
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+    except (urllib.error.URLError, TimeoutError, ValueError, ConnectionError, http.client.HTTPException) as exc:
         raise OSError(f"instrument agent on {host}:{AGENT_PORT} unreachable: {exc}") from exc
     stdout = base64.b64decode(out.get("stdout_b64", ""))
     stderr = base64.b64decode(out.get("stderr_b64", ""))

@@ -106,6 +106,11 @@ def health() -> dict:
             "rtlsdr_serials": rtlsdr_serials(), "ds18_ids": ds18_ids()}
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 64          # the default 5 reset connections when the web, capture and quicklook ask at once
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "almita-instrument-agent/1"
 
@@ -154,7 +159,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8099)
     a = ap.parse_args(argv)
-    server = ThreadingHTTPServer((a.bind, a.port), Handler)
+    server = Server((a.bind, a.port), Handler)
     sys.stderr.write(f"instrument agent on {a.bind}:{a.port}\n")
     try:
         server.serve_forever()
