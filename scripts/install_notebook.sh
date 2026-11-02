@@ -3,11 +3,13 @@
 #
 #   scripts/install_notebook.sh [capture-pi-host]        (default 192.168.50.254, the direct cable)
 #
-# Run it as your own user from the repo; it asks for sudo once (system units, so they run without a login).
+# Run it as your own user from the repo. No sudo: the units are systemd USER units with linger on, so they start at
+# boot without a login (installed this way on 2026-11-02).
 # What it does, in order - every step can be repeated safely:
 #   1. ~/.config/almita/instrument.json -> {"host": "<capture-pi-host>"}   (the web's STATUS > CAPTURE PI edits it later)
 #   2. web credentials ~/.config/almita/web_auth.json, only if missing (asks the password; stored as a hash)
-#   3. installs systemd/notebook/*.service for this user and this checkout, enables and (re)starts them:
+#   3. installs systemd/notebook/*.service as user units (~/.config/systemd/user) for this checkout, enables and
+#      (re)starts them, and turns linger on:
 #      almita-instrument-forwarder  127.0.0.1:1234 + :7624 -> capture Pi
 #      almita-observe-api           the web on :8088
 #      almita-console-watcher       field console status
@@ -23,7 +25,7 @@ UNITS=(almita-instrument-forwarder almita-observe-api almita-console-watcher alm
 
 cd "$ROOT"
 [[ -x "$PY" ]] || { echo "no $PY - create the venv first (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)"; exit 1; }
-[[ "$ME" != root ]] || { echo "run it as your own user, not with sudo (it asks for sudo itself)"; exit 1; }
+[[ "$ME" != root ]] || { echo "run it as your own user, not with sudo"; exit 1; }
 
 echo "== 1. capture Pi = $HOST"
 "$PY" - "$HOST" <<'EOF'
@@ -41,17 +43,21 @@ else
     "$PY" "$ROOT/almita_web_auth.py" set-password --user "$WEBUSER"
 fi
 
-echo "== 3. systemd units (sudo)"
+echo "== 3. systemd user units"
+mkdir -p "$HOME/.config/systemd/user"
 for u in "${UNITS[@]}"; do
-    sed -e "s|@USER@|$ME|g" -e "s|@ROOT@|$ROOT|g" "$ROOT/systemd/notebook/$u.service" | sudo tee "/etc/systemd/system/$u.service" >/dev/null
+    sed -e "/^User=@USER@$/d" -e "s|@ROOT@|$ROOT|g" -e "s|^WantedBy=multi-user.target|WantedBy=default.target|" \
+        -e "s|^After=network-online.target|After=network.target|" -e "/^Wants=network-online.target/d" \
+        "$ROOT/systemd/notebook/$u.service" > "$HOME/.config/systemd/user/$u.service"
 done
-sudo systemctl daemon-reload
-sudo systemctl enable "${UNITS[@]/%/.service}" >/dev/null
-sudo systemctl restart "${UNITS[@]/%/.service}"
+systemctl --user daemon-reload
+systemctl --user enable "${UNITS[@]/%/.service}" >/dev/null
+systemctl --user restart "${UNITS[@]/%/.service}"
+loginctl enable-linger "$ME" || echo "   linger NOT enabled: the services stop when you log out (sudo loginctl enable-linger $ME)"
 sleep 3
 
 echo "== 4. checks"
-for u in "${UNITS[@]}"; do printf "   %-30s %s\n" "$u" "$(systemctl is-active "$u")"; done
+for u in "${UNITS[@]}"; do printf "   %-30s %s\n" "$u" "$(systemctl --user is-active "$u")"; done
 "$PY" - <<'EOF'
 import json, socket, sys, urllib.request
 sys.path.insert(0, ".")
