@@ -144,14 +144,21 @@
     let doc = null;
     try { const r = await fetch(url, { cache: "no-store" }); doc = r.ok ? await r.json() : null; } catch (e) { doc = null; }
     if (!doc || String(doc.session_id) !== String(sessionId) || !Array.isArray(doc.rows) || !doc.rows.length) return;
-    const stamp = `${mode.name}|${doc.updated_utc}|${doc.rows.length}`;
+    const canvas = $("rfi-mask-up"), box = canvas.getBoundingClientRect();
+    if (box.width < 50 || box.height < 50) return;                              // not laid out yet: draw on the next tick
+    // drawn at least 3x the screen pixels (whatever the screen) and shrunk by the browser: smooth lines, sharp PNG
+    const scale = Math.min(Math.max(3, 2 * (window.devicePixelRatio || 1)), 4000 / box.width);
+    const stamp = `${mode.name}|${doc.updated_utc}|${doc.rows.length}|${Math.round(box.width)}x${Math.round(box.height)}|${scale}`;
     if (stamp === upStamp) return;
     upStamp = stamp;
     const rows = doc.rows.slice().sort((a, b) => parseInt(a.point_id, 10) - parseInt(b.point_id, 10)).slice(-UP_LINES);
-    const canvas = $("rfi-mask-up"), { ctx, w, h } = setup(canvas);
+    const w = box.width, h = box.height;
+    canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext("2d"); ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
     const n = rows[0].relative_db.length;
-    // ART VIEW, not a measurement: each line around its own median, smoothed over SMOOTH bins (empty bins stay empty),
+    // ART VIEW, not a measurement: each line around its own median, smoothed (gaussian, SIGMA bins) (empty bins stay empty),
     // and tapered hard towards the band edges: signal in the middle, flat margins on both sides as on the cover
     const SIGMA = 2, RADIUS = 6;                                                // gaussian smoothing, in bins
     const centered = rows.map((r) => {
@@ -228,6 +235,6 @@
     drawClean(d); drawRemoved(d); text(d, sess && sess.rows ? sess.rows.length : "?");
   }
 
-  window.addEventListener("resize", () => { if (last) { drawClean(last); drawRemoved(last); } });
+  window.addEventListener("resize", () => { if (last) { drawClean(last); drawRemoved(last); drawUnknownPleasures(last.session_id); } });
   document.addEventListener("DOMContentLoaded", () => { tick(); setInterval(tick, POLL_MS); });
 })();
