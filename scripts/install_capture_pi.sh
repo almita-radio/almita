@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ALMITA capture Pi (Pi 4 at the tripod): installs instrument_agent.py as a service there and enables rtl_tcp.service
-# (already installed on the Pi), so a power-on brings both up. Run it FROM THE NOTEBOOK:
+# ALMITA capture Pi (Pi 4 at the tripod): installs instrument_agent.py as a service there, a fixed CPU clock
+# (almita-cpu-governor: the ondemand clock changes radiated pulses into MAIN, 2026-11-02) and enables rtl_tcp.service
+# (already installed on the Pi), so a power-on brings them up. Run it FROM THE NOTEBOOK:
 #
 #   scripts/install_capture_pi.sh [user@pi] [bind-address]
 #       default: stellarmate@192.168.50.254, bind 192.168.50.254 (the agent answers on the direct cable only)
@@ -16,20 +17,22 @@ BIND="${2:-192.168.50.254}"
 PI_USER="${TARGET%@*}"
 AGENT_DIR="/home/$PI_USER/almita-agent"
 UNIT=almita-instrument-agent.service
+GOV_UNIT=almita-cpu-governor.service
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 sed -e "s|@USER@|$PI_USER|g" -e "s|@AGENT_DIR@|$AGENT_DIR|g" -e "s|@BIND@|$BIND|g" \
     "$ROOT/systemd/capture-pi/$UNIT" > "$TMP/$UNIT"
-cp "$ROOT/instrument_agent.py" "$TMP/"
+cp "$ROOT/instrument_agent.py" "$ROOT/systemd/capture-pi/$GOV_UNIT" "$TMP/"
 
 echo "== copying the agent to $TARGET:$AGENT_DIR"
 ssh -o ControlMaster=auto -o ControlPath="$TMP/cm" -o ControlPersist=60 "$TARGET" "mkdir -p '$AGENT_DIR'"
-scp -o ControlPath="$TMP/cm" "$TMP/instrument_agent.py" "$TMP/$UNIT" "$TARGET:$AGENT_DIR/"
-echo "== installing $UNIT, enabling rtl_tcp.service (sudo on the Pi)"
-ssh -t -o ControlPath="$TMP/cm" "$TARGET" "sudo install -m 644 '$AGENT_DIR/$UNIT' /etc/systemd/system/$UNIT && rm '$AGENT_DIR/$UNIT' \
-  && sudo systemctl daemon-reload && sudo systemctl enable rtl_tcp.service $UNIT && sudo systemctl restart $UNIT \
-  && sleep 3 && systemctl is-active rtl_tcp.service $UNIT"
+scp -o ControlPath="$TMP/cm" "$TMP/instrument_agent.py" "$TMP/$UNIT" "$TMP/$GOV_UNIT" "$TARGET:$AGENT_DIR/"
+echo "== installing $UNIT + $GOV_UNIT, enabling rtl_tcp.service (sudo on the Pi)"
+ssh -t -o ControlPath="$TMP/cm" "$TARGET" "for u in $UNIT $GOV_UNIT; do sudo install -m 644 '$AGENT_DIR/'\$u /etc/systemd/system/\$u && rm '$AGENT_DIR/'\$u; done \
+  && sudo systemctl daemon-reload && sudo systemctl enable rtl_tcp.service $UNIT $GOV_UNIT \
+  && sudo systemctl restart $UNIT $GOV_UNIT && sleep 3 && systemctl is-active rtl_tcp.service $UNIT $GOV_UNIT \
+  && cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
 ssh -O exit -o ControlPath="$TMP/cm" "$TARGET" 2>/dev/null || true
 
 echo "== agent health from here"
