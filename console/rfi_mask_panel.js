@@ -133,6 +133,9 @@
 
   // UNKNOWN PLEASURES (operator 2026-10-30): the stacked spectra drawn like CP 1919's pulses on Joy Division's cover -
   // white lines on black, each point's line hiding the ones behind it. Masked/empty bins break the line (nothing filled).
+  // Room for UP_LINES lines always (operator 2026-11-02: "tiene 80 líneas"): same spacing from the first point on, the
+  // drawing grows downward as points arrive; past UP_LINES only the latest UP_LINES are drawn.
+  const UP_LINES = 80;
   let upStamp = null;
   async function drawUnknownPleasures(sessionId) {
     const mode = STACK_MODES[2];                                                // always DIFF: the view that looks like the cover
@@ -143,7 +146,7 @@
     const stamp = `${mode.name}|${doc.updated_utc}|${doc.rows.length}`;
     if (stamp === upStamp) return;
     upStamp = stamp;
-    const rows = doc.rows.slice().sort((a, b) => parseInt(a.point_id, 10) - parseInt(b.point_id, 10)).slice(-90);
+    const rows = doc.rows.slice().sort((a, b) => parseInt(a.point_id, 10) - parseInt(b.point_id, 10)).slice(-UP_LINES);
     const canvas = $("rfi-mask-up"), { ctx, w, h } = setup(canvas);
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
     const n = rows[0].relative_db.length;
@@ -168,7 +171,7 @@
     const at = (q) => (all.length ? all[Math.floor(q * (all.length - 1))] : 0) || 1e-3;
     const med = at(0.5), p999 = at(0.999);
     const top = h * 0.16, bottom = h * 0.94, left = w * 0.18, right = w * 0.82;
-    const step = (bottom - top) / Math.max(rows.length - 1, 1);
+    const step = (bottom - top) / (UP_LINES - 1);
     const amp = Math.min(step * 0.5 / med, step * 6 / p999);                  // noise a tremor, the strongest ~5 lines
     const X = (i) => left + (right - left) * i / (n - 1);
     ctx.lineWidth = Math.max(0.8, w / 600); ctx.lineJoin = "round";
@@ -192,7 +195,7 @@
     ctx.fillStyle = "#fff"; ctx.font = `${Math.round(w / 40)}px ui-monospace,monospace`; ctx.textAlign = "center";
     ctx.fillText("ALMITA", w / 2, h * 0.07);
     ctx.font = `${Math.round(w / 60)}px ui-monospace,monospace`;
-    ctx.fillText(`art view · ${mode.name} · session ${sessionId} · ${rows.length} points · ${Array.isArray(doc.frequency_mhz) && doc.frequency_mhz.length ? `${doc.frequency_mhz[0].toFixed(1)}-${doc.frequency_mhz[doc.frequency_mhz.length - 1].toFixed(1)} MHz` : ""}`, w / 2, h * 0.11);
+    ctx.fillText(`art view · ${mode.name} · session ${sessionId} · ${rows.length}/${UP_LINES} lines · ${Array.isArray(doc.frequency_mhz) && doc.frequency_mhz.length ? `${doc.frequency_mhz[0].toFixed(1)}-${doc.frequency_mhz[doc.frequency_mhz.length - 1].toFixed(1)} MHz` : ""}`, w / 2, h * 0.11);
     try { $("rfi-mask-up-png").href = canvas.toDataURL("image/png"); } catch (e) { /* tainted canvas: no link */ }
   }
 
