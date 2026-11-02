@@ -153,7 +153,7 @@
     const n = rows[0].relative_db.length;
     // ART VIEW, not a measurement: each line around its own median, smoothed over SMOOTH bins (empty bins stay empty),
     // and tapered hard towards the band edges: signal in the middle, flat margins on both sides as on the cover
-    const SMOOTH = 3;
+    const SIGMA = 2, RADIUS = 6;                                                // gaussian smoothing, in bins
     const centered = rows.map((r) => {
       const v = r.relative_db.filter((x) => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
       const med = v.length ? v[Math.floor(v.length / 2)] : 0;
@@ -163,7 +163,10 @@
         const wgt = 0.03 + 0.97 * Math.exp(-(u ** 6));                       // centre ~half alive, outer ~quarter each side flat
         if (x === null) return wgt < 0.05 ? 0 : null;                          // flat edges stay one unbroken line
         let s = 0, k = 0;
-        for (let j = Math.max(0, i - SMOOTH); j <= Math.min(c.length - 1, i + SMOOTH); j++) if (c[j] !== null) { s += c[j]; k++; }
+        for (let j = Math.max(0, i - RADIUS); j <= Math.min(c.length - 1, i + RADIUS); j++) {
+          if (c[j] === null) continue;
+          const g = Math.exp(-0.5 * ((j - i) / SIGMA) ** 2); s += c[j] * g; k += g;
+        }
         return (s / k) * wgt;
       });
     });
@@ -176,21 +179,28 @@
     const ampStep = Math.min(step, UP_MAX_GROW * (bottom - top) / (UP_LINES - 1));   // wiggle size: capped
     const amp = Math.min(ampStep * 0.5 / med, ampStep * 6 / p999);                  // noise a tremor, the strongest ~5 lines
     const X = (i) => left + (right - left) * i / (n - 1);
-    ctx.lineWidth = Math.max(0.8, w / 600); ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(1, w / 450); ctx.lineJoin = "round"; ctx.lineCap = "round";
+    // a smooth curve through the points (quadratic through the midpoints), not straight segments with corners
+    const trace = (pts, start) => {
+      if (start) ctx.moveTo(pts[0][0], pts[0][1]); else ctx.lineTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length - 1; i++)
+        ctx.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
+      if (pts.length > 1) ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+    };
     centered.forEach((r, k) => {                                                // back (top) first, front (bottom) last
       const base = top + k * step;
       const floor = ampStep * 0.4;                                                 // dips compressed softly, never cut flat
       const Y = (x) => { const y = x * amp; return base - (y >= 0 ? y : -floor * Math.tanh(-y / floor)); };
-      ctx.beginPath(); ctx.moveTo(X(0), base);                                  // the black body that hides the lines behind
-      for (let i = 0; i < n; i++) ctx.lineTo(X(i), r[i] === null ? base : Y(r[i]));
+      ctx.beginPath();                                                          // the black body that hides the lines behind
+      trace(r.map((x, i) => [X(i), x === null ? base : Y(x)]), true);
       ctx.lineTo(X(n - 1), h); ctx.lineTo(X(0), h); ctx.closePath();
       ctx.fillStyle = "#000"; ctx.fill();
       ctx.strokeStyle = "#fff"; ctx.beginPath();
-      let pen = false;
-      for (let i = 0; i < n; i++) {
-        if (r[i] === null) { pen = false; continue; }
-        if (pen) ctx.lineTo(X(i), Y(r[i])); else ctx.moveTo(X(i), Y(r[i]));
-        pen = true;
+      let run = [];
+      for (let i = 0; i <= n; i++) {                                            // each unbroken run of bins is one curve
+        if (i < n && r[i] !== null) { run.push([X(i), Y(r[i])]); continue; }
+        if (run.length) trace(run, true);
+        run = [];
       }
       ctx.stroke();
     });
