@@ -1191,11 +1191,16 @@ window.__fetches = 0; const _f = window.fetch; window.fetch = (...a) => { window
         html = html.replace("</body>", METRICS + r"""
 <pre id="__result"></pre><script>(async () => { const out = {}; const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  const m = () => ({ nodes: document.getElementsByTagName("*").length, timers: window.__liveTimers(), fetches: window.__fetches, heap: performance.memory ? performance.memory.usedJSHeapSize : 0 });
- await sleep(60000); out.m1 = m(); await sleep(29 * 60000); out.m2 = m(); document.getElementById("__result").textContent = JSON.stringify(out); })();</script></body>""".replace(METRICS, ""), 1)
+ const mm = async () => { const xs = []; for (let k = 0; k < 5; k++) { xs.push(m()); await sleep(700); }   // a request's own abort
+   return { ...xs[0], timers: Math.min(...xs.map((x) => x.timers)) }; };                                   // timer may be in flight at one instant
+ await sleep(60000); out.m1 = await mm(); await sleep(29 * 60000 - 3500); out.m2 = await mm(); document.getElementById("__result").textContent = JSON.stringify(out); })();</script></body>""".replace(METRICS, ""), 1)
         (tmp_path / "public" / "probe.html").write_text(html)
         # 31.7 min of VIRTUAL time, but every poll is a real request to the local server (~1000 of them): on a loaded Pi
         # that takes longer than dom_of()'s default 60 s of wall time and the test failed on the clock, not on the
         # page (BL-047). The assertions below are unchanged.
+        # Timers are the minimum of 5 samples 0.7 s apart: one sample counted a fetch's short abort timer in flight
+        # (7 -> 8 on one run, 8 -> 7 on the next, on a loaded desktop). A real leak raises the minimum too. The second
+        # wait is 3.5 s shorter so the first samples stay 29 min apart for the polling rate.
         dom = dom_of(base + "/probe.html", 1_900_000, timeout=300)
     out = result_of(dom)
     m1, m2 = out["m1"], out["m2"]
