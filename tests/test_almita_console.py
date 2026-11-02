@@ -365,9 +365,9 @@ def status_fixture(acquisition_state, **overrides):
     return base
 
 
-def dom(root, query="/?snapshot=1"):
+def dom(root, query="/?snapshot=1", extra_flags=()):
     with running(root) as base:
-        run = subprocess.run([BROWSER, "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+        run = subprocess.run([BROWSER, "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", *extra_flags,
                                "--virtual-time-budget=1200", "--dump-dom", base + query],
                               capture_output=True, text=True, timeout=20)
     assert run.returncode == 0, run.stderr
@@ -1288,8 +1288,9 @@ def test_62_spectral_stack_degrades_gracefully_without_webgl(tmp_path):
     panel's own try/catch keeps the rest of the console working rather than
     breaking the page, not just an assumption. A real desktop browser has
     WebGL and reaches LIVE/COMPLETED instead - only verifiable by a human,
-    hence the SSH-visual-check steps handed back to the operator."""
-    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
+    hence the SSH-visual-check steps handed back to the operator.
+    WebGL is switched off explicitly: google-chrome on a desktop renders it in software even with --disable-gpu."""
+    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")), extra_flags=("--disable-webgl", "--disable-3d-apis"))
     assert 'id="spectral-stack-badge" class="badge status-error">ERROR<' in html
     # The rest of the console must be completely unaffected by that failure.
     assert ">RUNNING<" in html and "demo" in html
