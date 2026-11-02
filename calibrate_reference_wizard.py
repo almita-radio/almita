@@ -513,11 +513,13 @@ def cmd_capture_hi(args) -> int:
         # PLAN vigente: re-check, right now, that this real point still clears min_elevation for the whole
         # hold - never trust a candidate computed earlier without re-verifying it still holds at GOTO time
         # (the same discipline ALIGN's own RUN and OBSERVE's gain-pilot capture already apply before moving).
-        from calibration_engine.hi_reference_selection import point_stays_above_elevation
-        fresh = point_stays_above_elevation(cand["ra_hours"], cand["dec_deg"], cfg.min_elevation_deg, cfg.hi_hold_seconds)
+        # The window includes a real slew (minutes on OnStep), not only the hold (2026-11-02).
+        from calibration_engine.hi_reference_selection import PLAN_SLEW_ALLOWANCE_S, point_stays_above_elevation
+        window_s = PLAN_SLEW_ALLOWANCE_S + cfg.hi_hold_seconds
+        fresh = point_stays_above_elevation(cand["ra_hours"], cand["dec_deg"], cfg.min_elevation_deg, window_s)
         if not fresh["clears"]:
             raise SystemExit(f"{label} PLAN is no longer valid: real altitude check now gives margin "
-                             f"{fresh['margin_deg']:+.1f} deg over the {cfg.hi_hold_seconds:g} s hold - "
+                             f"{fresh['margin_deg']:+.1f} deg over the {window_s:g} s slew + hold - "
                              f"PLAN the HI candidates again ({fresh})")
         from calibration_engine.hi_reference_selection import meridian_limit_check
         mer = meridian_limit_check(cand["ra_hours"], cfg.hi_hold_seconds)

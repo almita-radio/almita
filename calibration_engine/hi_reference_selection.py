@@ -79,6 +79,11 @@ ONSTEP_MERIDIAN_LIMIT_MIN = 12.0
 # reach the limit within this long after PROPOSE is not offered.
 PLAN_MERIDIAN_LOOKAHEAD_S = 45 * 60
 SIDEREAL_RATE = 1.0027379        # hour angle advances this many hours per hour
+# 2026-11-02: HI BAJO was proposed at 20.02 deg (margin +0.02 deg over min_elevation, setting) because only the
+# 12 s hold was checked. A real OnStep GOTO across ~90 deg takes minutes, and the plan is used minutes after PROPOSE:
+# a zone is offered only if it stays this far above min_elevation from now through the plan lookahead + slew + hold.
+PLAN_ALTITUDE_MARGIN_DEG = 5.0
+PLAN_SLEW_ALLOWANCE_S = 5 * 60
 
 
 def hour_angle_hours(ra_hours, location, obstime):
@@ -142,7 +147,7 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
     codebase) - never guessed in advance from the HI4PI column density, which has nothing to do with RFI."""
     import astropy.units as u
     from astropy.coordinates import AltAz, ICRS, SkyCoord
-    from astropy.time import Time
+    from astropy.time import Time, TimeDelta
     import hi4pi_map
 
     location = _observer_location()
@@ -160,13 +165,19 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
     inside = r <= 1.0
     alt = 90.0 * (1.0 - r[inside])
     az = np.degrees(np.arctan2(px[inside], -py[inside])) % 360.0
-    candidate_mask = alt >= min_elevation_deg
+    required_alt = min_elevation_deg + PLAN_ALTITUDE_MARGIN_DEG
+    candidate_mask = alt >= required_alt
     if not candidate_mask.any():
-        raise NoHIContrastAvailable(f"no point of the visible sky currently clears min_elevation_deg={min_elevation_deg:g}")
+        raise NoHIContrastAvailable(f"no point of the visible sky currently clears {required_alt:g} deg "
+                                    f"(min_elevation_deg={min_elevation_deg:g} + {PLAN_ALTITUDE_MARGIN_DEG:g} deg margin)")
     alt_c, az_c = alt[candidate_mask], az[candidate_mask]
     altaz = SkyCoord(AltAz(az=az_c * u.deg, alt=alt_c * u.deg, obstime=now, location=location))
     icrs = altaz.transform_to(ICRS())
     ra_deg, dec_deg = icrs.ra.deg, icrs.dec.deg
+    # still above the margin when the plan is actually used: after the lookahead, a real slew and the hold
+    window_s = meridian_lookahead_s + PLAN_SLEW_ALLOWANCE_S + hold_seconds
+    alt_later = icrs.transform_to(AltAz(obstime=now + TimeDelta(window_s, format="sec"), location=location)).alt.deg
+    sinks_below = alt_later < required_alt
 
     # Vectorized: ONE wcs.all_world2pix() call over the whole candidate array (not one scalar astropy call per
     # candidate in a Python loop - confirmed ~45x faster at a realistic ~15000-candidate count while building
@@ -182,7 +193,7 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
     ha = hour_angle_hours(ra_deg / 15.0, location, now)
     lim = ONSTEP_MERIDIAN_LIMIT_MIN / 60.0
     meridian_bad = (ha < lim) & (ha + (meridian_lookahead_s + hold_seconds) / 3600.0 * SIDEREAL_RATE >= lim)
-    finite = np.isfinite(means) & (means >= 0) & ~meridian_bad
+    finite = np.isfinite(means) & (means >= 0) & ~meridian_bad & ~sinks_below
     if finite.sum() < 2:
         raise NoHIContrastAvailable("fewer than 2 visible points had a real, finite HI4PI value - cannot propose a HIGH/LOW pair")
     order = np.argsort(np.where(finite, means, -np.inf))[::-1]        # descending mean, non-finite last
@@ -204,10 +215,11 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
     low_i = int(np.argmin(np.where(far_enough, means, np.inf)))
 
     def _row(i: int, label: str, other_ra_dec: Optional[SkyCoord]) -> HICandidate:
-        check = point_stays_above_elevation(ra_deg[i] / 15.0, dec_deg[i], min_elevation_deg, hold_seconds, location, now)
+        check = point_stays_above_elevation(ra_deg[i] / 15.0, dec_deg[i], min_elevation_deg, window_s, location, now)
         reason = (f"real HI4PI beam-averaged N_HI = {means[i]:.3f} (x1e20 cm^-2, beam FWHM {beam_fwhm_deg:g} deg) - "
                   f"{'highest' if label == 'HI_ALTO' else 'lowest'} among {int(finite.sum())} visible points considered; "
-                  f"altitude margin {check['margin_deg']:+.1f} deg over {hold_seconds:g} s hold")
+                  f"altitude margin {check['margin_deg']:+.1f} deg over the next {window_s / 60:.0f} min "
+                  f"(plan lookahead + slew + {hold_seconds:g} s hold)")
         if other_ra_dec is not None:
             sep = SkyCoord(ra=ra_deg[i] * u.deg, dec=dec_deg[i] * u.deg).separation(other_ra_dec).deg
             reason += f"; {sep:.1f} deg from the other candidate ({sep / beam_fwhm_deg:.1f} beam widths - real slew distance)"
@@ -235,7 +247,8 @@ def select_hi_alto_bajo_candidates(min_elevation_deg: float, beam_fwhm_deg: floa
             "beam_fwhm_deg": beam_fwhm_deg, "min_elevation_deg": min_elevation_deg, "hold_seconds": hold_seconds,
             "min_separation_deg": min_sep_deg, "source": hi4pi_map.SOURCE,
             "meridian_limit_min": ONSTEP_MERIDIAN_LIMIT_MIN, "meridian_lookahead_s": meridian_lookahead_s,
-            "meridian_excluded_points": int(meridian_bad.sum()), "hi_alto_kept_from_previous_plan": fixed_high is not None,
+            "meridian_excluded_points": int(meridian_bad.sum()), "altitude_margin_deg": PLAN_ALTITUDE_MARGIN_DEG,
+            "altitude_window_s": window_s, "altitude_excluded_points": int(sinks_below.sum()), "hi_alto_kept_from_previous_plan": fixed_high is not None,
             "rfi_note": "RFI is not predicted here (no per-sky-position RFI forecast exists in this project) - "
                         "each real capture's own bandpass usable-band-fraction proxy reports RFI-proxy findings "
                         "after the fact, at the RESULT step."}
