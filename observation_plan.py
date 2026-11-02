@@ -500,6 +500,7 @@ def plan_observation(spec: Dict[str, Any], *, observer_config_path: str = "obser
         base_dir=data_dir,
         beam_fwhm_deg=grid_spec["nominal_spacing_deg"],
         beam_sampling_fraction=1.0,
+        instrument_beam_fwhm_deg=(observer_config.get("observation_defaults") or {}).get("beam_fwhm_deg"),
     )
     generator.persist_observer_config(Path(observer_config_path))
     generator.generate_grid_plan(

@@ -183,11 +183,15 @@ class GridGenerator:
         base_dir: str = "./data/mosaic",
         beam_fwhm_deg: float = 20.0,
         beam_sampling_fraction: float = 0.3333333333,
+        instrument_beam_fwhm_deg: Optional[float] = None,
     ):
         self.session_name = session_name
         self.base_dir = base_dir
         self.beam_fwhm_deg = beam_fwhm_deg
         self.beam_sampling_fraction = beam_sampling_fraction
+        # The antenna's real beam, for the plots only. OBSERVE fixes the spacing directly and passes it here as
+        # beam_fwhm_deg with sampling 1.0 (2026-11-02: the coverage plot then drew 3.3 deg circles for a 20 deg beam).
+        self.instrument_beam_fwhm_deg = instrument_beam_fwhm_deg
 
         self.session_timestamp = datetime.now(timezone.utc)
         self.session_id = self.session_timestamp.strftime("%Y%m%d-%H:%M:%S")
@@ -353,7 +357,7 @@ class GridGenerator:
         """Prepare plotting data for the plan and coverage views."""
         center_ra_deg = float(metadata["center_ra"]) * 15.0
         center_dec_deg = float(metadata["center_dec"])
-        beam_fwhm_deg = float(metadata["beam_fwhm_deg"])
+        beam_fwhm_deg = float(metadata.get("instrument_beam_fwhm_deg") or metadata["beam_fwhm_deg"])
 
         projected_points = []
         for point in points:
@@ -409,6 +413,8 @@ class GridGenerator:
                 "projection": "tangent-plane",
             }
         )
+        if self.instrument_beam_fwhm_deg:
+            metadata["instrument_beam_fwhm_deg"] = float(self.instrument_beam_fwhm_deg)
         return points, metadata
 
     def _build_equatorial_grid_overlay(self, center_ra_deg: float, center_dec_deg: float, span_deg: float) -> Dict:
@@ -614,8 +620,8 @@ class GridGenerator:
                         f"DEC center: {metadata['center_dec']:.4f}°\n"
                         f"Width: {metadata['width_deg']:.2f}°\n"
                         f"Height: {metadata['height_deg']:.2f}°\n"
-                        f"Beam FWHM: {metadata['beam_fwhm_deg']:.2f}°\n"
-                        f"Sampling: {metadata['beam_sampling_fraction']:.6f}\n"
+                        f"Beam FWHM: {plot_data['beam_fwhm_deg']:.2f}°\n"
+                        f"Sampling: {metadata['nominal_spacing_deg'] / plot_data['beam_fwhm_deg']:.6f}\n"
                         f"Spacing: {metadata['nominal_spacing_deg']:.3f}°\n"
                         f"Rows/Cols: {metadata['rows']} / {metadata['columns']}\n"
                         f"Points: {metadata['total_points']}\n"
@@ -667,18 +673,17 @@ class GridGenerator:
                 for point in projected_points:
                     x = point["x_proj"]
                     y = point["y_proj"]
-                    radius_deg = float(metadata["beam_fwhm_deg"]) / 2.0
-                    for iy, yy in enumerate(ys):
-                        for ix, xx in enumerate(xs):
-                            if (xx - x) ** 2 + (yy - y) ** 2 <= radius_deg ** 2:
-                                coverage[iy, ix] += 1
+                    radius_deg = float(plot_data["beam_fwhm_deg"]) / 2.0
+                    gx, gy = np.meshgrid(xs, ys)                    # coverage[iy, ix]: rows are y, as imshow expects
+                    coverage += ((gx - x) ** 2 + (gy - y) ** 2 <= radius_deg ** 2)
 
-                cmap = ListedColormap(["#f7f7f7", "#d0f0c0", "#7bc043", "#2b7a4b"])
                 ax.imshow(
-                    coverage.T,
+                    coverage,
                     extent=[x_min, x_max, y_min, y_max],
                     origin="lower",
-                    cmap=cmap,
+                    cmap="Greens",
+                    vmin=0,
+                    vmax=max(1, int(coverage.max())),
                     alpha=0.78,
                     aspect="equal",
                     zorder=1,
@@ -695,7 +700,7 @@ class GridGenerator:
                 )
                 ax.plot(outline_x, outline_y, "k--", linewidth=1.2, alpha=0.7, zorder=6, label="Requested region")
                 ax.scatter([0.0], [0.0], s=140, color="red", marker="*", zorder=6)
-                ax.text(0.02, 0.02, "SCP / center", transform=ax.transAxes, fontsize=8, color="#111827", bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.85), zorder=6)
+                ax.text(0.02, 0.06, "red star: grid center", transform=ax.transAxes, fontsize=8, color="#111827", bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.85), zorder=6)
                 for point in projected_points:
                     ax.scatter([point["x_proj"]], [point["y_proj"]], s=20, color="black", alpha=0.7, zorder=5)
 
@@ -742,6 +747,8 @@ class GridGenerator:
             beam_sampling_fraction=self.beam_sampling_fraction,
             rotation_deg=rotation_deg,
         )
+        if self.instrument_beam_fwhm_deg:
+            metadata["instrument_beam_fwhm_deg"] = float(self.instrument_beam_fwhm_deg)
 
         nominal_spacing_deg = metadata["nominal_spacing_deg"]
         self.log(f"Center: RA={center_ra}h, DEC={center_dec} deg")
