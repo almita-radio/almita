@@ -17,6 +17,7 @@ import quicklook_live as quicklook_module
 import wifi_health
 from runtime_state import announce_session, atomic_write_json, read_json_safe, utcnow
 from serve_dashboard import make_server
+from tests.browser import BROWSER
 
 ROOT = Path(__file__).parent.parent.resolve()
 CONSOLE = ROOT / "console"
@@ -366,7 +367,7 @@ def status_fixture(acquisition_state, **overrides):
 
 def dom(root, query="/?snapshot=1"):
     with running(root) as base:
-        run = subprocess.run(["chromium", "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+        run = subprocess.run([BROWSER, "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
                                "--virtual-time-budget=1200", "--dump-dom", base + query],
                               capture_output=True, text=True, timeout=20)
     assert run.returncode == 0, run.stderr

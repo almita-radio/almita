@@ -15,6 +15,7 @@ import pytest
 import almita_console_server as console_server
 import serve_dashboard
 from runtime_state import atomic_write_json
+from tests.browser import BROWSER
 
 ROOT = Path(__file__).resolve().parent.parent
 CONSOLE = ROOT / "console"
@@ -74,7 +75,7 @@ const RUNNING = { orchestrator: { orchestrator_state: "RUNNING", session_id: "s1
 
 
 def chromium(html_path: Path, budget_ms=6000, width=None):
-    cmd = ["chromium", "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--allow-file-access-from-files",
+    cmd = [BROWSER, "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--allow-file-access-from-files",
            f"--virtual-time-budget={budget_ms}", "--dump-dom"]
     if width:
         cmd.append(f"--window-size={width},1000")
@@ -1028,7 +1029,7 @@ def console_running(tmp_path, status):
 
 
 def dom_of(url, budget=3500, timeout=60):
-    run = subprocess.run(["chromium", "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", f"--virtual-time-budget={budget}", "--dump-dom", url],
+    run = subprocess.run([BROWSER, "--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", f"--virtual-time-budget={budget}", "--dump-dom", url],
                          capture_output=True, text=True, timeout=timeout)
     assert run.returncode == 0, run.stderr
     return run.stdout

@@ -96,12 +96,19 @@ Nota: RA puede ingresarse como decimal (18.615) o en formato HH:MM:SS.
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Modo verbose (muestra XML/depuración)")
 
+    def coordinate(value: str) -> str:
+        # Python 3.14's argparse hands an option ("--status") to a nargs=2 option as a value; on 3.11 it was
+        # already an error. Refuse option-like values here so both versions reject "--goto RA --status".
+        if value.startswith("-") and not parser._negative_number_matcher.match(value):
+            raise argparse.ArgumentTypeError(f"{value!r} is an option, not a coordinate")
+        return value
+
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--status", action="store_true",
                        help="Mostrar coordenadas actuales")
-    group.add_argument("--goto", nargs=2, metavar=("RA", "DEC"),
+    group.add_argument("--goto", nargs=2, metavar=("RA", "DEC"), type=coordinate,
                        help="GOTO a coordenadas (RA en horas, DEC en grados)")
-    group.add_argument("--sync", nargs=2, metavar=("RA", "DEC"),
+    group.add_argument("--sync", nargs=2, metavar=("RA", "DEC"), type=coordinate,
                        help="SYNC (actualiza posición sin mover)")
     group.add_argument("--track", choices=["on", "off"],
                        help="Encender/apagar tracking")

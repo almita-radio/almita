@@ -8,6 +8,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 import pytest
+from tests.browser import BROWSER
 
 ROOT=Path(__file__).parent.parent.resolve(); DASH=ROOT/"dashboard"
 
@@ -53,7 +54,7 @@ def fixture(tmp_path,kind="OK",map_state="POINT_ONLY",products=True,updated="209
 
 def dom(root,query="/dashboard/?root=/data"):
     with server(root) as base:
-        run=subprocess.run(["chromium","--headless","--no-sandbox","--disable-gpu","--disable-dev-shm-usage",
+        run=subprocess.run([BROWSER,"--headless","--no-sandbox","--disable-gpu","--disable-dev-shm-usage",
           "--virtual-time-budget=1200","--dump-dom",base+query],capture_output=True,text=True,timeout=20)
     assert run.returncode==0,run.stderr
     return run.stdout

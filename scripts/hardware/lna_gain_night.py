@@ -23,7 +23,10 @@ from pathlib import Path
 import numpy as np
 
 HOST, PORT = "127.0.0.1", 1234
-F0, FS, G0 = 1420405752, 2400000, 402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import sdr_tuning  # noqa: E402
+
+F0, FS, G0 = sdr_tuning.operating_center_frequency_hz(), 2400000, 402  # F0 from observer_config.json
 NFFT = 4096
 OUT = Path(sys.argv[1])
 LONG_H = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0

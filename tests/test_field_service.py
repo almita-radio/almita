@@ -48,7 +48,7 @@ def test_http_methods_cache_types_listing_and_traversal(tmp_path):
 
 def test_cli_sigterm_graceful_shutdown(tmp_path):
     (tmp_path/"index.html").write_text("ok")
-    process=subprocess.Popen(["/home/stellarmate/almita/.venv/bin/python","serve_dashboard.py","--root",str(tmp_path),"--port","0"],
+    process=subprocess.Popen([sys.executable,"serve_dashboard.py","--root",str(tmp_path),"--port","0"],
                              stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     assert "FIELD STATIC START" in process.stdout.readline()
     process.terminate();assert process.wait(timeout=5)==0

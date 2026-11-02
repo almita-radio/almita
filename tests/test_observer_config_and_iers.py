@@ -120,7 +120,12 @@ def test_iers_policy_reproduces_and_then_resolves_the_reported_error(monkeypatch
 
     location = EarthLocation(lat=-33.4489 * u.deg, lon=-70.6693 * u.deg, height=570 * u.m)
 
-    monkeypatch.setattr(iers.conf, "auto_max_age", 30.0)
+    # 10 days is astropy's smallest allowed auto_max_age. The default (30) only reproduced the error while the
+    # bundled table was older than 30 days: with astropy-iers-data 2026.10.19 it was 24 days old and nothing raised.
+    age_days = Time.now().mjd - iers.IERS_Auto.open().meta["predictive_mjd"]
+    if age_days <= 10.0:
+        pytest.skip(f"bundled IERS predictive values are only {age_days:.1f} days old - nothing to reproduce")
+    monkeypatch.setattr(iers.conf, "auto_max_age", 10.0)
     with pytest.raises(ValueError, match="predictive values"):
         Time.now().sidereal_time("apparent", longitude=location.lon)
 
