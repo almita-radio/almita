@@ -170,6 +170,51 @@
     U.setBadge($("temp-badge"), !roles.length ? "NOT CONFIGURED" : states.every((x) => x === "STABLE") ? "ALL STABLE" : states.some((x) => x === "CHANGING") ? "CHANGING" : "INCOMPLETE");
   }
 
+  // ------------------------------------------------------------------ CAPTURE PI (operator 2026-11-02)
+  // The notebook runs the web, capture and processing; the Pi at the tripod serves rtl_tcp, INDI and the sensors.
+  // Its address is stored on this computer (instrument_host); the forwarder and the agent calls follow it.
+  let capEdited = false;
+  function renderCap(d) {
+    const a = d.agent || {};
+    const lines = [];
+    if (!d.remote) {
+      U.setBadge($("cap-badge"), "THIS COMPUTER");
+      lines.push("rtl_tcp, INDI and the sensors are served by this computer itself (no capture Pi configured).");
+    } else {
+      const sdr = (a.rtlsdr_serials || []).includes("00000001");
+      const svc = a.rtl_tcp_service;
+      U.setBadge($("cap-badge"), !a.ok ? "UNREACHABLE" : svc === "active" && sdr ? "CONNECTED" : "DEGRADED");
+      lines.push(`Capture Pi: ${d.host}` + (a.hostname ? ` (${a.hostname})` : ""));
+      if (!a.ok) lines.push(a.detail || "agent unreachable");
+      else {
+        lines.push(`rtl_tcp.service: ${svc || "unknown"} · MAIN SDR (USB serial 00000001): ${sdr ? "present" : "NOT attached"}`
+          + ((a.rtlsdr_serials || []).length ? ` · RTL-SDR serials: ${a.rtlsdr_serials.join(", ")}` : ""));
+        lines.push(`DS18 sensors: ${(a.ds18_ids || []).length ? a.ds18_ids.join(", ") : "none (1-wire off or not wired)"} · Pi clock ${a.utc ? U.utc(a.utc) : "—"}`);
+      }
+      if (d.indi_port) lines.push(`INDI ${d.indi_port.open ? "answers" : "does NOT answer"}: ${d.indi_port.detail}`);
+    }
+    lines.push(`Stored in ${d.config_file}`);
+    $("cap-detail").textContent = lines.join("\n");
+    if (!capEdited) $("cap-host").value = d.host || "";
+  }
+  async function loadCap(probe) {
+    const r = await U.api("/api/instrument" + (probe ? "?probe=1" : ""), { timeoutMs: 15000 });
+    if (r.ok) renderCap(r.data.data);
+    else $("cap-detail").textContent = "cannot read the capture Pi setting: " + U.errorText(r.error);
+  }
+  $("cap-host").addEventListener("input", () => { capEdited = true; });
+  $("btn-cap-test").addEventListener("click", U.guard($("btn-cap-test"), async () => { await loadCap(true); }, "TESTING…"));
+  $("btn-cap-save").addEventListener("click", U.guard($("btn-cap-save"), async () => {
+    const host = $("cap-host").value.trim();
+    if (!window.confirm(host ? `Use ${host} as the capture Pi?\n\nEvery page and service of this computer will reach rtl_tcp, INDI and the sensors there.`
+      : "Serve rtl_tcp, INDI and the sensors from THIS computer (no capture Pi)?")) return;
+    const r = await U.api("/api/instrument", { method: "POST", body: { host, confirm: true }, timeoutMs: 20000 });
+    if (!r.ok) { window.alert("Capture Pi NOT changed: " + U.errorText(r.error)); return; }
+    capEdited = false;
+    renderCap(r.data.data);
+  }, "SAVING…"));
+  U.poller(async () => { await loadCap(false); return true; }, { intervalMs: 30000 }).start();
+
   // ------------------------------------------------------------------ MAIN LNA POWER (Bias-T), operator 2026-10-17
   // Switched OFF by hand while idle; every MAIN acquisition switches it ON by itself. The state is what rtl_tcp itself
   // last acknowledged (no voltage readback exists). The server refuses while anything holds MAIN.

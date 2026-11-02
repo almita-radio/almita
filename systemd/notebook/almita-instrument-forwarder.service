@@ -1,0 +1,17 @@
+[Unit]
+Description=ALMITA instrument forwarder - 127.0.0.1:1234 (rtl_tcp) and :7624 (INDI) to the capture Pi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/instrument_forwarder.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

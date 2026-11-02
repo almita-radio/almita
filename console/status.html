@@ -11,6 +11,11 @@
       <div id="op-reasons" class="obs-summary">Loading…</div>
       <div class="obs-actions"><button id="btn-refresh" type="button">REFRESH NOW</button><span id="updated" class="muted">—</span></div>
     </section>
+    <section class="panel" aria-labelledby="h-cap">
+      <header><h2 id="h-cap">CAPTURE PI <span class="muted">(the machine at the tripod that serves rtl_tcp, INDI and the sensors · every page and service of this computer connects to it)</span></h2><span id="cap-badge" class="badge">—</span></header>
+      <div id="cap-detail" class="obs-summary">Loading…</div>
+      <div class="obs-actions"><label for="cap-host">IP OR HOSTNAME</label> <input id="cap-host" type="text" size="22" maxlength="253" spellcheck="false" autocomplete="off" placeholder="192.168.50.254"><button id="btn-cap-save" type="button">SAVE</button><button id="btn-cap-test" type="button">TEST</button><span class="muted">empty = this computer serves them itself · refused while anything uses the SDR or the mount</span></div>
+    </section>
     <section class="panel" aria-labelledby="h-lna">
       <header><h2 id="h-lna">MAIN LNA POWER <span class="muted">(Bias-T · every acquisition switches it on by itself before capturing)</span></h2><span id="lna-badge" class="badge">—</span></header>
       <div id="lna-detail" class="obs-summary">Loading…</div>

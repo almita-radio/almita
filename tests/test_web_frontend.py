@@ -1829,3 +1829,29 @@ out.after = [$("lna-badge").textContent, $("lna-detail").textContent];
     assert out["before"] == ["ON", False]
     assert out["posted"] == [{"on": False, "confirm": True}] and "switches it back on by itself" in out["confirm"]
     assert out["after"][0] == "OFF" and "will not be thermally settled" in out["after"][1]
+
+
+def test_status_capture_pi_shows_the_pi_and_saves_a_new_host_with_one_confirmation(tmp_path):
+    routes = r"""
+window.__cap = { host: "192.168.50.254", remote: true, where: "192.168.50.254", config_file: "/home/felipe/.config/almita/instrument.json",
+  agent: { ok: true, hostname: "stellarmate", utc: "2026-11-02T06:00:00+00:00", rtl_tcp_service: "active", rtlsdr_serials: ["00000001"], ds18_ids: [] } };
+window.__routes["GET /api/instrument"] = () => ({ body: { ok: true, data: window.__cap } });
+window.__routes["GET /api/instrument?probe=1"] = () => ({ body: { ok: true, data: window.__cap } });
+window.__routes["POST /api/instrument"] = (b) => { window.__cap = { host: b.host, remote: true, where: b.host, config_file: window.__cap.config_file,
+  agent: { ok: false, detail: `agent ${b.host}:8099 unreachable: URLError` } }; return { body: { ok: true, data: window.__cap } }; };
+"""
+    driver = r"""
+await until(() => $("cap-badge").textContent === "CONNECTED", 4000);
+out.before = [$("cap-host").value, $("cap-detail").textContent];
+$("cap-host").value = "almita-pi4.local"; $("cap-host").dispatchEvent(new Event("input"));
+$("btn-cap-save").click();
+await until(() => $("cap-badge").textContent === "UNREACHABLE", 4000);
+out.posted = window.__calls.filter((c) => c.key === "POST /api/instrument").map((c) => c.body);
+out.confirm = window.__confirmText;
+out.after = [$("cap-host").value, $("cap-detail").textContent];
+""".strip()
+    out = run_page(tmp_path, "status", routes, driver, budget=8000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert out["before"][0] == "192.168.50.254" and "rtl_tcp.service: active" in out["before"][1] and "present" in out["before"][1]
+    assert out["posted"] == [{"host": "almita-pi4.local", "confirm": True}] and "almita-pi4.local" in out["confirm"]
+    assert out["after"][0] == "almita-pi4.local" and "unreachable" in out["after"][1]

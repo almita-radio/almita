@@ -84,7 +84,7 @@ def atomic_json(path,value):
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_name(path.name+".tmp")
     with tmp.open("w") as stream:json.dump(value,stream,indent=2);stream.flush();os.fsync(stream.fileno())
     os.replace(tmp,path)
-def collect(workspace=Path("/home/stellarmate/almita"),proc=Path("/proc"),w1=Path("/sys/bus/w1/devices")):
+def collect(workspace=Path(__file__).resolve().parent,proc=Path("/proc"),w1=Path("/sys/bus/w1/devices")):
     started=time.perf_counter();warnings=[]
     try:load=parse_load((proc/"loadavg").read_text())
     except Exception as e:load=(None,None,None);warnings.append(f"load unavailable: {e}")

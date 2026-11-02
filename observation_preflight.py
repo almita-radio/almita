@@ -309,7 +309,7 @@ def _software_check(resolved_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _rtl_tcp_service_check() -> Dict[str, Any]:
     try:
         import instrument_host
-        out = subprocess.run(instrument_host.command(["systemctl", "is-active", "rtl_tcp.service"]),
+        out = instrument_host.run(["systemctl", "is-active", "rtl_tcp.service"],
                               capture_output=True, text=True, timeout=10)
         detail = out.stdout.strip() or out.stderr.strip()
         status = PASS if out.returncode == 0 else BLOCK

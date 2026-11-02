@@ -1,0 +1,18 @@
+[Unit]
+Description=ALMITA web - single authenticated server: field console + orchestrator API + streams (0.0.0.0:8088)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/almita_orchestrator_server.py --host 0.0.0.0 --port 8088
+Restart=on-failure
+RestartSec=5
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -97,7 +97,7 @@ class JournalAckSource:
         self.describe = f"journal of {unit} on {instrument_host.where()}"
 
     def mark(self) -> None:
-        out = subprocess.run(instrument_host.command(["journalctl", "-u", self.unit, "-n", "0", "--show-cursor", "--no-pager"]),
+        out = instrument_host.run(["journalctl", "-u", self.unit, "-n", "0", "--show-cursor", "--no-pager"],
                              capture_output=True, text=True, timeout=10).stdout
         m = re.search(r"-- cursor: (\S+)", out)
         if not m:
@@ -105,8 +105,8 @@ class JournalAckSource:
         self.cursor = m.group(1)
 
     def lines(self) -> List[str]:
-        out = subprocess.run(instrument_host.command(["journalctl", "-u", self.unit, f"--after-cursor={self.cursor}", "-o", "cat",
-                                                          "--no-pager"]), capture_output=True, text=True, timeout=10).stdout
+        out = instrument_host.run(["journalctl", "-u", self.unit, f"--after-cursor={self.cursor}", "-o", "cat",
+                                                          "--no-pager"], capture_output=True, text=True, timeout=10).stdout
         return out.splitlines()
 
 
@@ -202,10 +202,10 @@ async def tune_explicitly(sdr: Any, center_frequency_hz: float, sample_rate_hz: 
 
 
 # ------------------------------------------------------------------ MAIN Bias-T (LNA power): state and manual switch
-def main_service_has_bias_tee_flag(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = subprocess.run) -> Optional[bool]:
+def main_service_has_bias_tee_flag(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = instrument_host.run) -> Optional[bool]:
     """Whether MAIN's rtl_tcp unit is configured with -T. None when it cannot be read."""
     try:
-        out = run(instrument_host.command(["systemctl", "show", "-p", "ExecStart", "--value", unit]), capture_output=True, text=True, timeout=10).stdout
+        out = run(["systemctl", "show", "-p", "ExecStart", "--value", unit], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return None
     if "rtl_tcp" not in out:
@@ -213,17 +213,17 @@ def main_service_has_bias_tee_flag(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[
     return " -T" in f" {out} ".replace(";", " ")
 
 
-def main_bias_tee_state(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = subprocess.run) -> Dict[str, Any]:
+def main_bias_tee_state(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = instrument_host.run) -> Dict[str, Any]:
     """MAIN's Bias-T as rtl_tcp itself last reported it since the running service started: "activated bias-T on GPIO"
     at startup (-T) or "set bias tee N" from a client. rtl_tcp has no readback: this is what it was told and
     acknowledged, not a measured voltage. state: on / off / unknown."""
     out: Dict[str, Any] = {"state": "unknown", "since_utc": None, "source": None}
     try:
-        started = run(instrument_host.command(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit]), capture_output=True,
+        started = run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit], capture_output=True,
                       text=True, timeout=10).stdout.strip()
         if not started:
             return {**out, "source": f"{unit} is not running"}
-        lines = run(instrument_host.command(["journalctl", "-u", unit, "--since", started, "-o", "short-iso", "--no-pager"]), capture_output=True,
+        lines = run(["journalctl", "-u", unit, "--since", started, "-o", "short-iso", "--no-pager"], capture_output=True,
                     text=True, timeout=15).stdout.splitlines()
     except (OSError, subprocess.SubprocessError):
         return out
@@ -310,16 +310,16 @@ async def verify_acknowledged(source: Any, requested: Dict[str, Any], *, operati
 
 
 def main_device_reenumerated_since_rtl_tcp_start(serial: str = "00000001", unit: str = MAIN_RTL_TCP_UNIT,
-                                                run: Callable[..., Any] = subprocess.run) -> Optional[str]:
+                                                run: Callable[..., Any] = instrument_host.run) -> Optional[str]:
     """Reason when the MAIN dongle (USB serial `serial`) was (re)attached by the kernel AFTER the running rtl_tcp
     process started - rtl_tcp then holds a handle to a device that no longer exists and every command fails (-4).
     None when not detected. Read-only: the unit's start time and the kernel journal."""
     try:
-        started = run(instrument_host.command(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit]), capture_output=True,
+        started = run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit], capture_output=True,
                       text=True, timeout=10).stdout.strip()
         if not started:
             return None
-        kernel = run(instrument_host.command(["journalctl", "-k", "--since", started, "-o", "short-iso", "--no-pager"]), capture_output=True,
+        kernel = run(["journalctl", "-k", "--since", started, "-o", "short-iso", "--no-pager"], capture_output=True,
                      text=True, timeout=15).stdout
     except (OSError, subprocess.SubprocessError):
         return None

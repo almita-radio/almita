@@ -279,7 +279,7 @@ def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/pro
     name = "MAIN rtl_tcp tuning evidence"
     try:
         if pid is None:
-            pid = int(subprocess.run(instrument_host.command(["systemctl", "show", "-p", "MainPID", "--value", sdr_tuning.MAIN_RTL_TCP_UNIT]),
+            pid = int(instrument_host.run(["systemctl", "show", "-p", "MainPID", "--value", sdr_tuning.MAIN_RTL_TCP_UNIT],
                                      capture_output=True, text=True, timeout=10).stdout.strip() or 0)
         if not pid:
             return _check(name, "BLOCK", f"{sdr_tuning.MAIN_RTL_TCP_UNIT} has no running process", "hardware")
@@ -1399,6 +1399,48 @@ def run_rfi_check(gain_db: float) -> Dict[str, Any]:
     except OSError as exc:
         raise OpsBlocked(f"rtl_tcp not reachable: {exc}") from exc
     return rfi_check_state()
+
+
+# ------------------------------------------------------------------ CAPTURE PI (where rtl_tcp / INDI / sensors run)
+def _tcp_open(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return {"open": True, "detail": f"{host}:{port} accepts connections"}
+    except OSError as exc:
+        return {"open": False, "detail": f"{host}:{port}: {exc}"}
+
+
+def instrument_state(probe: bool = False) -> Dict[str, Any]:
+    """Which machine serves rtl_tcp, INDI and the sensors (instrument_host), what its agent reports and - only on
+    probe (the page's TEST button) - whether its INDI port answers. rtl_tcp's port is never opened here: it serves one
+    client and a capture may be using it; its state comes from the agent (rtl_tcp.service, SDR on USB)."""
+    import instrument_host
+    out = instrument_host.describe()
+    out["agent"] = instrument_host.agent_health()
+    if probe and out["remote"]:
+        out["indi_port"] = _tcp_open(out["host"], instrument_host.INDI_PORT)
+    return out
+
+
+def set_instrument_host(host: str) -> Dict[str, Any]:
+    """Point every page and service at another capture Pi ("" = this machine). Refused while anything uses the SDR or
+    the mount, or an observation is live: those keep their open connection to the previous Pi."""
+    import instrument_host
+    host = (host or "").strip()
+    if host and not instrument_host.valid_host(host):
+        raise ValueError(f"not an IP address or hostname: {host!r}")
+    if (host or None) == instrument_host.remote_host():
+        return instrument_state()
+    held = busy_reason(("sdr", "mount"))
+    if held:
+        raise OpsBlocked(f"cannot change the capture Pi now: {held} - wait for it to end or STOP it first")
+    import observation_orchestrator
+    held = observation_orchestrator.active_campaign_reason(observation_orchestrator.get_status().get("orchestrator") or {})
+    if held:
+        raise OpsBlocked(f"cannot change the capture Pi now: an observation is active - {held}")
+    instrument_host.set_host(host)
+    return instrument_state(probe=True)
 
 
 # ------------------------------------------------------------------ MOUNT DEVICE (LX200 OnStep / Telescope Simulator)

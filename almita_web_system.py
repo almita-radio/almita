@@ -86,7 +86,11 @@ def listening_ports() -> Set[int]:
 
 
 def usb_rtlsdr_serials() -> Set[str]:
-    """Serial numbers of attached Realtek (0bda) dongles, read from sysfs. Passive."""
+    """Serial numbers of attached Realtek (0bda) dongles, read from sysfs - the capture Pi's, through its agent, when
+    the instrument services run there (instrument_host). Passive."""
+    import instrument_host
+    if instrument_host.remote_host() is not None:
+        return set(instrument_host.agent_health().get("rtlsdr_serials") or [])
     serials: Set[str] = set()
     try:
         for dev in Path("/sys/bus/usb/devices").glob("*"):

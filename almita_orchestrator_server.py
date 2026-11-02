@@ -386,6 +386,9 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.read_mount()})
             if path == "/api/mount/device":
                 return _json_response(self, 200, {"ok": True, "data": mount_device.describe()})
+            if path == "/api/instrument":
+                probe = (parse_qs(urlsplit(self.path).query).get("probe") or ["0"])[0] == "1"
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.instrument_state(probe=probe)})
             if path == "/api/sdr/lna":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.lna_power_state()})
             if path == "/api/sdr/rfi_check":
@@ -582,6 +585,12 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 body = _read_json_body(self)
                 _log("INFO", f"req={self._request_id} OPS START {ops_start.group('stage')} params={json.dumps(body.get('params') or {})[:200]}")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.start(ops_start.group("stage"), body.get("params") or {}, confirm=body.get("confirm"))})
+            if path == "/api/instrument":
+                body = _read_json_body(self)
+                if body.get("confirm") is not True or not isinstance(body.get("host"), str):
+                    raise ValueError("send {host: \"<ip or hostname>\" (\"\" = this machine), confirm: true}")
+                _log("WARNING", f"req={self._request_id} CAPTURE PI -> {body['host'][:80]!r} requested")
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_instrument_host(body["host"])})
             if path == "/api/mount/device":
                 body = _read_json_body(self)
                 _log("WARNING", f"req={self._request_id} MOUNT DEVICE -> {str(body.get('device'))[:40]!r} requested")

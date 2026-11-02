@@ -163,7 +163,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .obs-summary{overflow-x:auto}
 .status-up,.status-alive,.status-connected,.status-success,.status-completed,.status-available{color:var(--ok)}
 .status-connecting,.status-busy,.status-partial,.status-stopping,.status-preflight,.status-planned,.status-not_ready,.status-warning{color:var(--warn)}
-.status-down,.status-disconnected,.status-blocked,.status-block{color:var(--error)}
+.status-down,.status-unreachable,.status-disconnected,.status-blocked,.status-block{color:var(--error)}
 .status-not_exposed,.status-optional{color:var(--muted)}
 .chip-value.status-not_ready{color:var(--error)}
 @media(max-width:700px){

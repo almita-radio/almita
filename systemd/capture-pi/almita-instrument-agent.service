@@ -1,0 +1,18 @@
+[Unit]
+Description=ALMITA instrument agent - read-only rtl_tcp evidence and sensors for the notebook (@BIND@:8099)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@AGENT_DIR@
+ExecStart=/usr/bin/python3 @AGENT_DIR@/instrument_agent.py --bind @BIND@ --port 8099
+# the direct cable's address may come up after this unit: keep retrying until it can bind
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=ALMITA System Black Box - lightweight host heartbeat log (non-scientific)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/almita_system_blackbox.py --interval 10
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
