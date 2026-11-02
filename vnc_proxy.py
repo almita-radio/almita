@@ -3,7 +3,7 @@
 StellarMate already runs x11vnc (:5900) and noVNC/websockify (:6080). ALMITA's web server forwards /vnc/... to that
 noVNC on localhost - its page and files over plain HTTP, and its websocket by splicing the raw TCP stream once the
 handshake is forwarded - so the desktop needs no extra port and sits behind the same authentication as every ALMITA
-page. The websocket handshake must also pass the same-origin check (a browser attaches cached credentials to a
+page. With a capture Pi configured (instrument_host), the desktop shown is the capture Pi's noVNC, not this machine's. The websocket handshake must also pass the same-origin check (a browser attaches cached credentials to a
 websocket opened by another site). Nothing here speaks VNC: noVNC and websockify do."""
 from __future__ import annotations
 
@@ -13,12 +13,20 @@ import threading
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
+import instrument_host
+
 PREFIX = "/vnc"
 UPSTREAM: Tuple[str, int] = ("127.0.0.1", 6080)
 # noVNC builds its websocket URL from `path` (relative to the host): it must come back through this same prefix
 ENTRY = PREFIX + "/vnc.html?path=vnc/websockify&autoconnect=true&resize=scale&reconnect=true"
 _FORWARD_HTTP_HEADERS = ("Content-Type", "Last-Modified", "ETag")
 _DROP_WS_HEADERS = ("host", "authorization", "cookie")
+
+
+def novnc_address() -> Tuple[str, int]:
+    """Where noVNC runs: this machine, or the capture Pi when one is configured."""
+    host = instrument_host.remote_host()
+    return UPSTREAM if host is None else (host, UPSTREAM[1])
 
 
 def handles(path: str) -> bool:
@@ -37,7 +45,7 @@ def is_websocket(handler) -> bool:
 
 
 def proxy_http(handler, upstream: Optional[Tuple[str, int]] = None, head_only: bool = False) -> None:
-    conn = http.client.HTTPConnection(*(upstream or UPSTREAM), timeout=10)
+    conn = http.client.HTTPConnection(*(upstream or novnc_address()), timeout=10)
     try:
         conn.request("GET", upstream_target(handler.path), headers={"Accept-Encoding": "identity"})
         resp = conn.getresponse()
@@ -76,7 +84,7 @@ def _pump(src: socket.socket, dst: socket.socket) -> None:
 def proxy_websocket(handler, upstream: Optional[Tuple[str, int]] = None) -> None:
     """Forward the handshake to websockify, then splice both directions until either side closes. websockify itself
     answers the handshake (101) - this side never writes an HTTP response of its own."""
-    upstream = upstream or UPSTREAM
+    upstream = upstream or novnc_address()
     up = socket.create_connection(upstream, timeout=10)
     lines = [f"GET {upstream_target(handler.path)} HTTP/1.1", f"Host: {upstream[0]}:{upstream[1]}"]
     lines += [f"{k}: {v}" for k, v in handler.headers.items() if k.lower() not in _DROP_WS_HEADERS]

@@ -133,3 +133,14 @@ def test_novnc_down_is_a_clear_502(web, monkeypatch):
     monkeypatch.setattr(vnc_proxy, "UPSTREAM", ("127.0.0.1", dead_port))
     status, _, body = _get(port, "/vnc/vnc.html")
     assert status == 502 and b"DESKTOP unavailable" in body
+
+
+def test_desktop_is_the_capture_pis_novnc_when_one_is_configured(tmp_path, monkeypatch):
+    import instrument_host
+    assert vnc_proxy.novnc_address() == vnc_proxy.UPSTREAM          # conftest: no capture Pi -> this machine
+    cfg = tmp_path / "instrument.json"
+    monkeypatch.setenv(instrument_host.INSTRUMENT_FILE_ENV, str(cfg))
+    instrument_host.set_host("192.168.50.254")
+    assert vnc_proxy.novnc_address() == ("192.168.50.254", vnc_proxy.UPSTREAM[1])
+    instrument_host.set_host("")
+    assert vnc_proxy.novnc_address() == vnc_proxy.UPSTREAM

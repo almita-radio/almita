@@ -300,7 +300,7 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         return True
 
     def _handle_vnc(self, path: str) -> None:
-        """DESKTOP (noVNC on localhost:6080) through this port and this login - see vnc_proxy.py. Already authenticated
+        """DESKTOP (noVNC on localhost:6080, or on the capture Pi) through this port and this login - see vnc_proxy.py. Already authenticated
         by _gate(); the websocket handshake must also be same-origin."""
         try:
             if vnc_proxy.is_websocket(self):
@@ -319,7 +319,7 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return None
             return vnc_proxy.proxy_http(self, head_only=self._head_only)
         except OSError as exc:
-            return self._fail(exc, 502, f"DESKTOP unavailable: noVNC not reachable on {vnc_proxy.UPSTREAM[0]}:{vnc_proxy.UPSTREAM[1]} ({type(exc).__name__})")
+            return self._fail(exc, 502, f"DESKTOP unavailable: noVNC not reachable on {vnc_proxy.novnc_address()[0]}:{vnc_proxy.novnc_address()[1]} ({type(exc).__name__})")
 
     def _same_origin(self) -> bool:
         origin = self.headers.get("Origin")
