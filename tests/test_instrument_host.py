@@ -194,3 +194,21 @@ def test_agent_survives_a_burst_of_parallel_requests(config, live_agent):
     with ThreadPoolExecutor(20) as ex:
         results = list(ex.map(lambda i: ih.run(["ps", "-eo", "pid,args"], text=True).returncode, range(100)))
     assert results == [0] * 100
+
+
+def test_agent_allows_kernel_priority_and_process_ages_only():
+    import instrument_agent as ag
+    assert ag.allowed(["journalctl", "-k", "-p", "warning", "--since", "-1 hour", "--no-pager", "-o", "short-iso"])
+    assert not ag.allowed(["journalctl", "-k", "-p", "debug; rm"])
+    assert ag.allowed(["ps", "-eo", "pid,etimes,args"])
+    assert not ag.allowed(["ps", "-eo", "pid,etimes,args,env"])
+
+
+def test_agent_health_reports_a_nanovna(tmp_path):
+    import instrument_agent as ag
+    d = tmp_path / "1-1.2"
+    d.mkdir()
+    (d / "idVendor").write_text("0483\n")
+    (d / "idProduct").write_text("5740\n")
+    assert ag.nanovna(tmp_path)["present"] is True
+    assert ag.nanovna(tmp_path / "none")["present"] is False

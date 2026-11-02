@@ -106,6 +106,7 @@ def _onstep_offset_seconds(seconds_ago: float, monkeypatch):
         return _fake_process(f"Mount.TIME_UTC.UTC={snapshot}\n".encode())
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(pf, "_onstep_driver_age_seconds", lambda: None)     # no driver age known: the original rules
     return asyncio.run(pf._onstep_time_snapshot_check("localhost", 7624, "Mount"))
 
 
@@ -620,3 +621,89 @@ def test_no_stray_clock_drift_terminology_in_source():
     assert '"OnStep clock"' not in source
     assert "_onstep_clock_check" not in source
     assert "DEFAULT_CLOCK_DRIFT_THRESHOLD_SEC" not in source
+
+
+# 2026-11-02: the snapshot is what the client sent when the driver connected - an offset equal to the driver's age
+# is explained (PASS), anything else keeps the WARNING.
+def _onstep_with_driver_age(seconds_ago, driver_age, monkeypatch):
+    import datetime
+    snapshot = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds_ago)).isoformat()
+
+    async def fake_exec(*args, **kwargs):
+        return _fake_process(f"Mount.TIME_UTC.UTC={snapshot}\n".encode())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(pf, "_onstep_driver_age_seconds", lambda: driver_age)
+    return asyncio.run(pf._onstep_time_snapshot_check("localhost", 7624, "Mount"))
+
+
+def test_onstep_snapshot_as_old_as_the_driver_connection_passes(monkeypatch):
+    r = _onstep_with_driver_age(3253, 3180, monkeypatch)
+    assert r["status"] == pf.PASS and "not clock drift" in r["detail"] and "not readable" in r["detail"]
+
+
+def test_onstep_snapshot_older_or_newer_than_the_driver_keeps_the_warning(monkeypatch):
+    assert _onstep_with_driver_age(3253, 600, monkeypatch)["status"] == pf.WARNING
+    assert _onstep_with_driver_age(3253, None, monkeypatch)["status"] == pf.WARNING
+
+
+def test_onstep_driver_age_read_from_ps(monkeypatch):
+    import subprocess
+    out = "    PID ELAPSED COMMAND\n  2167    3180 indi_simulator_ccd\n  2168    3180 indi_lx200_OnStep\n"
+    monkeypatch.setattr(pf.instrument_host, "run",
+                        lambda argv, **k: subprocess.CompletedProcess(argv, 0, out, ""))
+    assert pf._onstep_driver_age_seconds() == 3180.0
+
+
+def test_console_check_accepts_the_watcher_as_a_user_unit(monkeypatch, tmp_path):
+    import subprocess
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "console_web").mkdir(parents=True)
+    calls = []
+
+    def fake_run(argv, **k):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0 if "--user" in argv else 3, "active" if "--user" in argv else "inactive", "")
+    monkeypatch.setattr(pf.subprocess, "run", fake_run)
+    r = pf._console_check()
+    assert r["status"] == pf.PASS and "user unit" in r["detail"]
+    assert all("almita-console-web.service" not in a for a in calls)
+
+
+def test_temperatures_all_unreadable_is_a_warning_not_a_pass(monkeypatch):
+    class Reader:
+        def __init__(self, *a, **k):
+            pass
+
+        def read_all(self):
+            return {"sdr": {"valid": False, "sensor_id": "28-x"}, "lna": {"valid": False, "sensor_id": "28-y"}}
+    monkeypatch.setattr(pf.temperature_sensors, "DS18B20Reader", Reader)
+    monkeypatch.setattr(pf.temperature_sensors, "format_temperatures", lambda r: "TEMP SDR=ERR LNA=ERR")
+    r = pf._temperature_check({"sdr": "28-x", "lna": "28-y"})
+    assert r["status"] == pf.WARNING and "unreadable" in r["detail"]
+
+
+def test_temperatures_on_a_capture_pi_without_1wire_say_so(monkeypatch):
+    monkeypatch.setattr(pf.instrument_host, "remote_host", lambda: "192.168.50.254")
+    monkeypatch.setattr(pf.instrument_host, "where", lambda: "192.168.50.254")
+    monkeypatch.setattr(pf.instrument_host, "agent_health", lambda *a, **k: {"ok": True, "ds18_ids": []})
+    r = pf._temperature_check({"sdr": "28-x"})
+    assert r["status"] == pf.WARNING and "capture Pi 192.168.50.254" in r["detail"] and "1-Wire" in r["detail"]
+
+
+def test_kernel_and_nanovna_are_the_capture_pis(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(pf.instrument_host, "remote_host", lambda: "192.168.50.254")
+    monkeypatch.setattr(pf.instrument_host, "where", lambda: "192.168.50.254")
+    seen = []
+
+    def fake_run(argv, **k):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "-- No entries --\n", "")
+    monkeypatch.setattr(pf.instrument_host, "run", fake_run)
+    monkeypatch.setattr(pf.instrument_host, "agent_health", lambda *a, **k: {
+        "ok": True, "nanovna": {"present": False, "devices": [], "detail": "no NanoVNA on the capture Pi's USB"}})
+    k = pf._kernel_check_capture_pi()
+    assert k["status"] == pf.PASS and "no kernel warnings" in k["detail"] and seen[0][:4] == ["journalctl", "-k", "-p", "warning"]
+    n = pf._nanovna_check()
+    assert n["status"] == pf.PASS and "capture Pi" in n["detail"]

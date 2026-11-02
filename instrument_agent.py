@@ -29,9 +29,9 @@ from typing import List, Optional, Sequence
 
 UNIT = "rtl_tcp.service"
 MAX_TIMEOUT = 20.0
-_JOURNAL_FLAGS = {"-n", "--show-cursor", "--no-pager", "-o", "--since", "--utc", "-k"}
+_JOURNAL_FLAGS = {"-n", "--show-cursor", "--no-pager", "-o", "--since", "--utc", "-k", "-p"}
 _JOURNAL_VALUES = {"-n": re.compile(r"^\d{1,6}$"), "-o": re.compile(r"^(cat|short-iso|short-iso-precise)$"),
-                   "--since": re.compile(r"^[\w :.+\-]{1,64}$")}
+                   "--since": re.compile(r"^[\w :.+\-]{1,64}$"), "-p": re.compile(r"^(err|warning|[0-7])$")}
 _SYSTEMCTL_PROPS = {"ExecStart", "ActiveEnterTimestamp", "MainPID", "ActiveState"}
 _PROC_FILE = re.compile(r"^/proc/\d{1,9}/(cmdline|environ)$")
 _W1_FILE = re.compile(r"^/sys/bus/w1/devices/28-[0-9a-f]{12}/w1_slave$")
@@ -74,7 +74,7 @@ def allowed(argv: Sequence[str]) -> bool:
             return True
         return (len(argv) == 6 and argv[1:3] == ["show", "-p"] and argv[3] in _SYSTEMCTL_PROPS
                 and argv[4] == "--value" and argv[5] == UNIT)
-    if argv == ["ps", "-eo", "pid,args"]:
+    if argv in (["ps", "-eo", "pid,args"], ["ps", "-eo", "pid,etimes,args"]):
         return True
     if argv[0] == "cat" and len(argv) == 2:
         return bool(_PROC_FILE.match(argv[1]) or _W1_FILE.match(argv[1]))
@@ -92,6 +92,26 @@ def rtlsdr_serials(root: Path = Path("/sys/bus/usb/devices")) -> List[str]:
     return sorted(out)
 
 
+def nanovna(root: Path = Path("/sys/bus/usb/devices")) -> dict:
+    """A NanoVNA on this Pi's USB radiates into the SDR while it sweeps (same test as local_rfi_check.nanovna_present)."""
+    found = []
+    for dev in sorted(root.glob("*")):
+        try:
+            vid, pid = (dev / "idVendor").read_text().strip(), (dev / "idProduct").read_text().strip()
+        except OSError:
+            continue
+        try:
+            product = (dev / "product").read_text().strip()
+        except OSError:
+            product = ""
+        if (vid, pid) == ("0483", "5740") or "nanovna" in product.lower():
+            found.append({"usb_path": dev.name, "usb_id": f"{vid}:{pid}", "product": product or "-"})
+    if found:
+        return {"present": True, "devices": found,
+                "detail": "NanoVNA plugged into the capture Pi: while it sweeps it radiates into the SDR. Unplug it first."}
+    return {"present": False, "devices": [], "detail": "no NanoVNA on the capture Pi's USB"}
+
+
 def ds18_ids(root: Path = Path("/sys/bus/w1/devices")) -> List[str]:
     return sorted(p.name for p in root.glob("28-*")) if root.is_dir() else []
 
@@ -103,7 +123,7 @@ def health() -> dict:
         state = f"unknown ({exc})"
     return {"agent": "almita-instrument-agent", "hostname": socket.gethostname(),
             "utc": datetime.now(timezone.utc).isoformat(), "rtl_tcp_service": state,
-            "rtlsdr_serials": rtlsdr_serials(), "ds18_ids": ds18_ids()}
+            "rtlsdr_serials": rtlsdr_serials(), "ds18_ids": ds18_ids(), "nanovna": nanovna()}
 
 
 class Server(ThreadingHTTPServer):

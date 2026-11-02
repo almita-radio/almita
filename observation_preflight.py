@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 import calibration_foundation
 import capture as capture_module
 import dual_sdr_benchmark
+import instrument_host
 import observation_plan
 import runtime_state
 import temperature_sensors
@@ -90,12 +91,12 @@ def _system_checks(observer_config: Optional[Dict[str, Any]] = None) -> List[Dic
         checks.append(_check("Temperatures", "SYSTEM", OPTIONAL, WARNING,
                               "no temperature_sensors configured in observer_config.json; skipped"))
     else:
-        try:
-            readings = temperature_sensors.DS18B20Reader(sensor_ids).read_all()
-            checks.append(_check("Temperatures", "SYSTEM", OPTIONAL, PASS, temperature_sensors.format_temperatures(readings)))
-        except Exception as exc:
-            checks.append(_check("Temperatures", "SYSTEM", OPTIONAL, WARNING, f"unavailable: {type(exc).__name__}: {exc}"))
+        checks.append(_temperature_check(sensor_ids))
 
+    if instrument_host.remote_host():
+        checks.append(_kernel_check_capture_pi())
+        checks.append(_nanovna_check())
+        return checks
     try:
         out = subprocess.run(["dmesg", "--ctime", "--level=err,warn"], capture_output=True, text=True, timeout=5)
         if out.returncode != 0:
@@ -113,10 +114,63 @@ def _system_checks(observer_config: Optional[Dict[str, Any]] = None) -> List[Dic
 
 
 def _nanovna_check() -> Dict[str, Any]:
-    """WARNING-only: a NanoVNA on the Pi's USB radiates into MAIN while it sweeps (2026-10-28, 1420.000 MHz is a sweep point)."""
+    """WARNING-only: a NanoVNA on the Pi's USB radiates into MAIN while it sweeps (2026-10-28, 1420.000 MHz is a sweep point).
+    With a capture Pi it is that Pi's USB that matters (the SDR is there), asked through its agent."""
     import local_rfi_check
+    if instrument_host.remote_host():
+        h = instrument_host.agent_health()
+        if not h.get("ok") or "nanovna" not in h:
+            return _check("NanoVNA on the Pi", "SYSTEM", OPTIONAL, WARNING,
+                          f"capture Pi {instrument_host.where()}: not checked ({h.get('detail') or 'agent without the NanoVNA check - reinstall it'})")
+        found = h["nanovna"]
+        return _check("NanoVNA on the Pi", "SYSTEM", OPTIONAL, WARNING if found["present"] else PASS,
+                      f"capture Pi {instrument_host.where()}: {found['detail']}")
     found = local_rfi_check.nanovna_present()
     return _check("NanoVNA on the Pi", "SYSTEM", OPTIONAL, WARNING if found["present"] else PASS, found["detail"])
+
+
+def _kernel_check_capture_pi() -> Dict[str, Any]:
+    """The capture Pi's kernel warnings/errors of the last hour (its USB holds the SDR), through its agent."""
+    where = instrument_host.where()
+    try:
+        out = instrument_host.run(["journalctl", "-k", "-p", "warning", "--since", "-1 hour", "--no-pager",
+                                   "-o", "short-iso"], text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _check("Recent USB/kernel issues", "SYSTEM", OPTIONAL, WARNING, f"capture Pi {where}: unavailable: {exc}; skipped")
+    if out.returncode != 0:
+        return _check("Recent USB/kernel issues", "SYSTEM", OPTIONAL, WARNING,
+                      f"capture Pi {where}: journalctl exit {out.returncode}: {out.stderr.strip()[:200]}; skipped")
+    lines = [l for l in out.stdout.strip().splitlines() if l and not l.startswith("-- ")]
+    return _check("Recent USB/kernel issues", "SYSTEM", OPTIONAL, PASS,
+                  f"capture Pi {where}: " + ("\n".join(lines[-5:]) if lines else "no kernel warnings/errors in the last hour"))
+
+
+def _temperature_check(sensor_ids: Dict[str, str]) -> Dict[str, Any]:
+    """DS18B20 sensors: on this machine, or on the capture Pi (read through its agent). PASS only when every
+    configured sensor gave a valid reading - an all-ERR line is not a pass (2026-11-02: 1-Wire was off)."""
+    import tempfile
+    try:
+        if instrument_host.remote_host():
+            where = instrument_host.where()
+            present = set(instrument_host.agent_health().get("ds18_ids") or [])
+            if not present:
+                return _check("Temperatures", "SYSTEM", OPTIONAL, WARNING,
+                              f"capture Pi {where}: no DS18B20 on its 1-Wire bus (off or not connected); skipped")
+            with tempfile.TemporaryDirectory() as tmp:          # the capture Pi's w1_slave files, read through its agent
+                for sid in set(sensor_ids.values()) & present:
+                    (Path(tmp) / sid).mkdir()
+                    (Path(tmp) / sid / "w1_slave").write_bytes(
+                        instrument_host.read_bytes(Path("/sys/bus/w1/devices") / sid / "w1_slave"))
+                readings = temperature_sensors.DS18B20Reader(sensor_ids, sysfs_root=Path(tmp)).read_all()
+        else:
+            where = None
+            readings = temperature_sensors.DS18B20Reader(sensor_ids).read_all()
+    except Exception as exc:
+        return _check("Temperatures", "SYSTEM", OPTIONAL, WARNING, f"unavailable: {type(exc).__name__}: {exc}")
+    text = temperature_sensors.format_temperatures(readings)
+    ok = all(r.get("valid") for r in readings.values())
+    return _check("Temperatures", "SYSTEM", OPTIONAL, PASS if ok else WARNING,
+                  (f"capture Pi {where}: " if where else "") + text + ("" if ok else " (some sensors unreadable)"))
 
 
 def _disk_check(output_root: Path, required_bytes: int) -> Dict[str, Any]:
@@ -127,6 +181,22 @@ def _disk_check(output_root: Path, required_bytes: int) -> Dict[str, Any]:
                       f"free_bytes={free}, required_bytes={required_bytes}")
     except Exception as exc:
         return _check("Disk space", "SYSTEM", REQUIRED, BLOCK, f"{type(exc).__name__}: {exc}")
+
+
+ONSTEP_CONNECT_SNAPSHOT_TOLERANCE_SEC = 300.0     # driver start -> client connects and sends its time
+
+
+def _onstep_driver_age_seconds() -> Optional[float]:
+    """Seconds since the OnStep INDI driver process started, on the machine that runs INDI (capture Pi or here)."""
+    try:
+        out = instrument_host.run(["ps", "-eo", "pid,etimes,args"], text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and "indi_lx200_OnStep" in parts[2] and parts[1].isdigit():
+            return float(parts[1])
+    return None
 
 
 async def _onstep_time_snapshot_check(host: str, port: int, device_name: str,
@@ -174,6 +244,14 @@ async def _onstep_time_snapshot_check(host: str, port: int, device_name: str,
             return _check("OnStep time snapshot", "MOUNT", OPTIONAL, PASS,
                            f"TIME_UTC snapshot is within {offset:.1f}s of host UTC. "
                            "Property freshness is not guaranteed by this INDI driver.")
+        age = _onstep_driver_age_seconds()
+        if age is not None and abs(offset - age) <= ONSTEP_CONNECT_SNAPSHOT_TOLERANCE_SEC:
+            # 2026-11-02: the snapshot is the time the client (KStars) sent when the driver connected - its "offset"
+            # is just how long ago that was. That explains it; it says nothing about the mount's running clock.
+            return _check("OnStep time snapshot", "MOUNT", OPTIONAL, PASS,
+                          f"TIME_UTC is the time sent to the OnStep when its driver connected ({age / 60:.0f} min ago): "
+                          f"its {offset:.0f} s difference from host UTC is that age (within "
+                          f"{abs(offset - age):.0f} s), not clock drift. The OnStep's running clock is not readable via INDI.")
         return _check(
             "OnStep time snapshot", "MOUNT", OPTIONAL, WARNING,
             f"OnStep TIME_UTC snapshot differs from host UTC by {offset:.1f}s, but this INDI property "
@@ -271,13 +349,16 @@ def _console_check() -> Dict[str, Any]:
     if not web_root.exists():
         return _check("Console", "CONSOLE", OPTIONAL, WARNING, f"{web_root} not present")
     try:
-        out = subprocess.run(
-            ["systemctl", "is-active", "almita-console-watcher.service", "almita-console-web.service"],
-            capture_output=True, text=True, timeout=5,
-        )
-        detail = out.stdout.strip().replace("\n", ", ") or out.stderr.strip()
-        status = PASS if out.returncode == 0 else WARNING
-        return _check("Console", "CONSOLE", OPTIONAL, status, detail or "systemctl reported no output")
+        # The console page is served by the main web now (almita-console-web.service was removed, 1d58c18); only the
+        # watcher runs - as a system unit on the Pi 5, as a user unit on the notebook.
+        for scope in ([], ["--user"]):
+            out = subprocess.run(["systemctl", *scope, "is-active", "almita-console-watcher.service"],
+                                 capture_output=True, text=True, timeout=5)
+            if out.returncode == 0:
+                return _check("Console", "CONSOLE", OPTIONAL, PASS,
+                              f"almita-console-watcher {'(user unit) ' if scope else ''}active")
+        detail = out.stdout.strip() or out.stderr.strip()
+        return _check("Console", "CONSOLE", OPTIONAL, WARNING, f"almita-console-watcher not active ({detail or 'no output'})")
     except Exception as exc:
         return _check("Console", "CONSOLE", OPTIONAL, WARNING,
                        f"systemctl unavailable: {type(exc).__name__}: {exc}; skipped")
