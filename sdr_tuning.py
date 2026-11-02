@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import instrument_host
+
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "observer_config.json"
 MAIN_RTL_TCP_UNIT = "rtl_tcp.service"
@@ -92,10 +94,10 @@ class JournalAckSource:
     def __init__(self, unit: str = MAIN_RTL_TCP_UNIT):
         self.unit = unit
         self.cursor: Optional[str] = None
-        self.describe = f"journal of {unit}"
+        self.describe = f"journal of {unit} on {instrument_host.where()}"
 
     def mark(self) -> None:
-        out = subprocess.run(["journalctl", "-u", self.unit, "-n", "0", "--show-cursor", "--no-pager"],
+        out = subprocess.run(instrument_host.command(["journalctl", "-u", self.unit, "-n", "0", "--show-cursor", "--no-pager"]),
                              capture_output=True, text=True, timeout=10).stdout
         m = re.search(r"-- cursor: (\S+)", out)
         if not m:
@@ -103,8 +105,8 @@ class JournalAckSource:
         self.cursor = m.group(1)
 
     def lines(self) -> List[str]:
-        out = subprocess.run(["journalctl", "-u", self.unit, f"--after-cursor={self.cursor}", "-o", "cat",
-                              "--no-pager"], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(instrument_host.command(["journalctl", "-u", self.unit, f"--after-cursor={self.cursor}", "-o", "cat",
+                                                          "--no-pager"]), capture_output=True, text=True, timeout=10).stdout
         return out.splitlines()
 
 
@@ -203,7 +205,7 @@ async def tune_explicitly(sdr: Any, center_frequency_hz: float, sample_rate_hz: 
 def main_service_has_bias_tee_flag(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] = subprocess.run) -> Optional[bool]:
     """Whether MAIN's rtl_tcp unit is configured with -T. None when it cannot be read."""
     try:
-        out = run(["systemctl", "show", "-p", "ExecStart", "--value", unit], capture_output=True, text=True, timeout=10).stdout
+        out = run(instrument_host.command(["systemctl", "show", "-p", "ExecStart", "--value", unit]), capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return None
     if "rtl_tcp" not in out:
@@ -217,11 +219,11 @@ def main_bias_tee_state(unit: str = MAIN_RTL_TCP_UNIT, run: Callable[..., Any] =
     acknowledged, not a measured voltage. state: on / off / unknown."""
     out: Dict[str, Any] = {"state": "unknown", "since_utc": None, "source": None}
     try:
-        started = run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit], capture_output=True,
+        started = run(instrument_host.command(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit]), capture_output=True,
                       text=True, timeout=10).stdout.strip()
         if not started:
             return {**out, "source": f"{unit} is not running"}
-        lines = run(["journalctl", "-u", unit, "--since", started, "-o", "short-iso", "--no-pager"], capture_output=True,
+        lines = run(instrument_host.command(["journalctl", "-u", unit, "--since", started, "-o", "short-iso", "--no-pager"]), capture_output=True,
                     text=True, timeout=15).stdout.splitlines()
     except (OSError, subprocess.SubprocessError):
         return out
@@ -313,11 +315,11 @@ def main_device_reenumerated_since_rtl_tcp_start(serial: str = "00000001", unit:
     process started - rtl_tcp then holds a handle to a device that no longer exists and every command fails (-4).
     None when not detected. Read-only: the unit's start time and the kernel journal."""
     try:
-        started = run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit], capture_output=True,
+        started = run(instrument_host.command(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit]), capture_output=True,
                       text=True, timeout=10).stdout.strip()
         if not started:
             return None
-        kernel = run(["journalctl", "-k", "--since", started, "-o", "short-iso", "--no-pager"], capture_output=True,
+        kernel = run(instrument_host.command(["journalctl", "-k", "--since", started, "-o", "short-iso", "--no-pager"]), capture_output=True,
                      text=True, timeout=15).stdout
     except (OSError, subprocess.SubprocessError):
         return None

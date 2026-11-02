@@ -97,7 +97,8 @@ def inspect_rtl_tcp_service_command_line(port: int) -> ServiceCommandLineInfo:
     labeled SERVICE_STARTUP_ARGV, distinct from and weaker
     than a true protocol readback."""
     try:
-        result = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True, timeout=5)
+        import instrument_host
+        result = subprocess.run(instrument_host.command(["ps", "-eo", "pid,args"]), capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError) as exc:
         return ServiceCommandLineInfo(False, None, None, {}, VERIFICATION_SERVICE_COMMAND_LINE,
                                        f"{type(exc).__name__}: {exc}")

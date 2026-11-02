@@ -308,8 +308,9 @@ def _software_check(resolved_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _rtl_tcp_service_check() -> Dict[str, Any]:
     try:
-        out = subprocess.run(["systemctl", "is-active", "rtl_tcp.service"],
-                              capture_output=True, text=True, timeout=5)
+        import instrument_host
+        out = subprocess.run(instrument_host.command(["systemctl", "is-active", "rtl_tcp.service"]),
+                              capture_output=True, text=True, timeout=10)
         detail = out.stdout.strip() or out.stderr.strip()
         status = PASS if out.returncode == 0 else BLOCK
         return _check("MAIN / rtl_tcp.service", "MAIN", REQUIRED, status, detail or "systemctl reported no output")

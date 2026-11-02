@@ -4,9 +4,15 @@ Every real acquisition calls sdr_tuning.tune_explicitly(), which waits for rtl_t
 rtl_tcp journal (RFI_REF: in its dedicated rtl_tcp log). Tests use fake SDRs with no rtl_tcp behind them, so by default the call is replaced by a stub
 that still sends configure() to the fake and records the request as applied, with evidence "TEST_STUB" (never
 the real RTL_TCP_SERVER_ACK). Tests of the real tuning logic opt out with @pytest.mark.real_tuning."""
+import os
+
 import pytest
 
 import sdr_tuning
+
+# The machine's own ~/.config/almita/instrument.json (the notebook points it at the tripod Pi) must never send a
+# test's systemctl/journalctl over ssh: tests run as if the instrument services were local, like on the Pi 5.
+os.environ["ALMITA_INSTRUMENT_FILE"] = os.devnull
 
 
 @pytest.fixture(autouse=True)

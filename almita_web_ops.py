@@ -274,16 +274,17 @@ def main_rtl_tcp_tuning_check(pid: Optional[int] = None, proc: Path = Path("/pro
     evidence every acquisition waits for (sdr_tuning) - without them every capture is blocked, so BLOCK here.
     Its startup argv differing from the operating configuration is only a WARNING: acquisitions retune
     explicitly and never trust the argv as the current tuning."""
+    import instrument_host
     import sdr_tuning
     name = "MAIN rtl_tcp tuning evidence"
     try:
         if pid is None:
-            pid = int(subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", sdr_tuning.MAIN_RTL_TCP_UNIT],
-                                     capture_output=True, text=True, timeout=5).stdout.strip() or 0)
+            pid = int(subprocess.run(instrument_host.command(["systemctl", "show", "-p", "MainPID", "--value", sdr_tuning.MAIN_RTL_TCP_UNIT]),
+                                     capture_output=True, text=True, timeout=10).stdout.strip() or 0)
         if not pid:
             return _check(name, "BLOCK", f"{sdr_tuning.MAIN_RTL_TCP_UNIT} has no running process", "hardware")
-        argv = (proc / str(pid) / "cmdline").read_bytes().split(b"\0")
-        env = (proc / str(pid) / "environ").read_bytes().split(b"\0")
+        argv = instrument_host.read_bytes(proc / str(pid) / "cmdline").split(b"\0")
+        env = instrument_host.read_bytes(proc / str(pid) / "environ").split(b"\0")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return _check(name, "BLOCK", f"cannot inspect MAIN rtl_tcp: {exc}", "hardware")
     if b"_STDBUF_O=L" not in env:
