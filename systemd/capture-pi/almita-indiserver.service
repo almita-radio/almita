@@ -1,0 +1,21 @@
+[Unit]
+Description=ALMITA INDI server on the capture Pi (port 7624) - started at boot, independent of KStars/Ekos
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+# Telescope Simulator only until the OnStep is connected (operator 2026-11-02); then add indi_lx200_OnStep
+# (the Pi 5 ran it on /dev/ttyUSB0 at 9600, ~/.indi/LX200 OnStep_config.xml)
+ExecStart=/usr/bin/indiserver -v -p 7624 indi_simulator_telescope
+# connect the driver once it is up, as Ekos did on the Pi 5: without it the web's read-only mount check BLOCKs the
+# preflight until something connects (found rebooting the Pi 4, 2026-11-02). Tries for ~30 s, never fails the unit.
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do sleep 1; /usr/bin/indi_setprop -p 7624 "Telescope Simulator.CONNECTION.CONNECT=On" 2>/dev/null && /usr/bin/indi_getprop -p 7624 -t 2 "Telescope Simulator.CONNECTION.CONNECT" 2>/dev/null | grep -q "=On" && exit 0; done; echo "Telescope Simulator not connected after 30 s"; exit 0'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
