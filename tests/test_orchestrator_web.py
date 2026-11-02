@@ -261,3 +261,20 @@ def test_plan_end_to_end_reflects_resolved_core_output(tmp_path, monkeypatch):
         assert body["resolved"]["point_count"] == 9
         assert body["visibility"] == "PASS"
         assert body["observation_config_sha256"]
+
+
+def test_estimate_still_draws_the_sky_when_only_quicklook_lacks_a_profile(monkeypatch):
+    seen = []
+    monkeypatch.setattr(observation_plan, "estimate_observation",
+                        lambda spec, **k: (seen.append(spec["quicklook"]["enabled"]),
+                                           {"feasible": True, "duration": {"estimated_seconds": 1.0}, "sky": None})[1])
+    ql_spec = dict(VALID_SPEC, quicklook=dict(VALID_SPEC["quicklook"], enabled=True, calibration_profile_path=None))
+    bad_grid = dict(ql_spec, grid=dict(VALID_SPEC["grid"], width_deg=10))
+    with running_server() as base:
+        status, body = _post(f"{base}/api/observe/estimate", ql_spec)
+        assert status == 200 and body["spec_valid"] is False and body["feasible"] is False
+        assert "calibration_profile_path" in body["spec_error"] and body["duration"]["estimated_seconds"] == 1.0
+        assert seen == [False]                 # estimated without QUICKLOOK, never reported as valid
+        status, body = _post(f"{base}/api/observe/estimate", bad_grid)
+        assert status == 200 and body["spec_valid"] is False and "must match" in body["spec_error"]
+        assert seen == [False]                 # another section wrong too: no estimate at all

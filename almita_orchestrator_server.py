@@ -36,7 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import observation_orchestrator
@@ -159,6 +159,14 @@ def _common_headers(handler: BaseHTTPRequestHandler) -> None:
 def _write_body(handler: BaseHTTPRequestHandler, data: bytes) -> None:
     if not getattr(handler, "_head_only", False):  # HEAD: same headers, no body
         handler.wfile.write(data)
+
+
+def _without_quicklook(body: Any) -> Optional[Dict[str, Any]]:
+    """The spec with QUICKLOOK switched off, or None when it was not on (then QUICKLOOK is not what was rejected)."""
+    ql = body.get("quicklook") if isinstance(body, dict) else None
+    if not isinstance(ql, dict) or ql.get("enabled") is not True:
+        return None
+    return {**body, "quicklook": {**ql, "enabled": False, "calibration_profile_path": None}}
 
 
 def _duration_from_raw(body: Any) -> Dict[str, Any]:
@@ -706,8 +714,20 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
         try:
             spec = observation_spec.validate_spec_dict(body)
         except observation_spec.ObservationSpecError as exc:
-            return _json_response(self, 200, {"spec_valid": False, "spec_error": str(exc), "feasible": False,
-                                              **_duration_from_raw(body)})
+            # The map and duration do not depend on QUICKLOOK: when only its section is rejected (no calibration
+            # profile yet), still show them under the PLAN-would-reject verdict (2026-11-02, sky vanished).
+            sky_only = _without_quicklook(body)
+            try:
+                spec = observation_spec.validate_spec_dict(sky_only) if sky_only is not None else None
+            except observation_spec.ObservationSpecError:
+                spec = None
+            if spec is None:
+                return _json_response(self, 200, {"spec_valid": False, "spec_error": str(exc), "feasible": False,
+                                                  **_duration_from_raw(body)})
+            est = observation_plan.estimate_observation(spec)
+            if est.get("sky"):
+                est["sky"].update(almita_web_ops.sky_layer_now())
+            return _json_response(self, 200, {**est, "spec_valid": False, "spec_error": str(exc), "feasible": False})
         est = observation_plan.estimate_observation(spec)
         if est.get("sky"):
             est["sky"].update(almita_web_ops.sky_layer_now())      # the same HI4PI layer ALIGN draws, for OBSERVE's map
