@@ -133,9 +133,10 @@
 
   // UNKNOWN PLEASURES (operator 2026-10-30): the stacked spectra drawn like CP 1919's pulses on Joy Division's cover -
   // white lines on black, each point's line hiding the ones behind it. Masked/empty bins break the line (nothing filled).
-  // Room for UP_LINES lines always (operator 2026-11-02: "tiene 80 líneas"): same spacing from the first point on, the
-  // drawing grows downward as points arrive; past UP_LINES only the latest UP_LINES are drawn.
-  const UP_LINES = 80;
+  // At most UP_LINES lines (operator 2026-11-02: "tiene 80 líneas"); past that only the latest UP_LINES are drawn.
+  // Fewer lines are spread over the whole height ("espaciadas pero sin disparar los gráficos"): the wiggles are scaled
+  // from the UP_LINES spacing and may grow at most UP_MAX_GROW times, however far apart the lines are.
+  const UP_LINES = 80, UP_MAX_GROW = 3;
   let upStamp = null;
   async function drawUnknownPleasures(sessionId) {
     const mode = STACK_MODES[2];                                                // always DIFF: the view that looks like the cover
@@ -171,13 +172,14 @@
     const at = (q) => (all.length ? all[Math.floor(q * (all.length - 1))] : 0) || 1e-3;
     const med = at(0.5), p999 = at(0.999);
     const top = h * 0.16, bottom = h * 0.94, left = w * 0.18, right = w * 0.82;
-    const step = (bottom - top) / (UP_LINES - 1);
-    const amp = Math.min(step * 0.5 / med, step * 6 / p999);                  // noise a tremor, the strongest ~5 lines
+    const step = (bottom - top) / Math.max(rows.length - 1, 1);              // spacing: the lines fill the height
+    const ampStep = Math.min(step, UP_MAX_GROW * (bottom - top) / (UP_LINES - 1));   // wiggle size: capped
+    const amp = Math.min(ampStep * 0.5 / med, ampStep * 6 / p999);                  // noise a tremor, the strongest ~5 lines
     const X = (i) => left + (right - left) * i / (n - 1);
     ctx.lineWidth = Math.max(0.8, w / 600); ctx.lineJoin = "round";
     centered.forEach((r, k) => {                                                // back (top) first, front (bottom) last
       const base = top + k * step;
-      const floor = step * 0.4;                                                 // dips compressed softly, never cut flat
+      const floor = ampStep * 0.4;                                                 // dips compressed softly, never cut flat
       const Y = (x) => { const y = x * amp; return base - (y >= 0 ? y : -floor * Math.tanh(-y / floor)); };
       ctx.beginPath(); ctx.moveTo(X(0), base);                                  // the black body that hides the lines behind
       for (let i = 0; i < n; i++) ctx.lineTo(X(i), r[i] === null ? base : Y(r[i]));
