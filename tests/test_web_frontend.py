@@ -1201,7 +1201,10 @@ window.__fetches = 0; const _f = window.fetch; window.fetch = (...a) => { window
     m1, m2 = out["m1"], out["m2"]
     assert abs(m2["nodes"] - m1["nodes"]) <= 5 and m1["timers"] == m2["timers"] and m2["timers"] <= 8
     per_min = (m2["fetches"] - m1["fetches"]) / 29
-    assert 25 <= per_min <= 60                                                       # ~30 polls/min at 2 s (+ optional artifacts): no runaway polling
+    # With WebGL (any desktop browser; google-chrome even headless) the SPECTRAL STACK panel fetches its data on every
+    # 2 s poll: measured 90/min and 8 timers on a PC, 60/min and 5 timers on the Pi's chromium (no WebGL, panel in ERROR).
+    stack_live = 'id="spectral-stack-badge" class="badge status-error">ERROR<' not in dom
+    assert 25 <= per_min <= (90 if stack_live else 60)                               # ~30 polls/min at 2 s (+ optional artifacts): no runaway polling
 
 
 # ------------------------------------------------------------------ CALIBRATE wizard: Alt/Az preview of the HI plan
