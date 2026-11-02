@@ -57,7 +57,10 @@ FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("scien
           # capture.py re-pinned from 69b9b61 to 72fd7cf (2026-10-20, operator: "keep everything that works backed up"):
           # Telescope Simulator stand-in for the OnStep status gates. LX200 behaviour, acquisition loop, spectral path
           # and HDF5 format unchanged.
-          ("capture.py", "72fd7cf"),
+          # capture.py re-pinned from 72fd7cf to f099e6b (2026-11-02, operator: "dale con todo"): ADC saturation alarm -
+          # an ADC SATURATION log line and last_adc_* / points_adc_clipped in the session announcement. Acquisition loop,
+          # spectral path and HDF5 format unchanged.
+          ("capture.py", "f099e6b"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
           # observation_spec.py re-pinned from 7b2eefb to e4b0a0b (2026-10-15): operator-ordered grid ANGLE - an optional
