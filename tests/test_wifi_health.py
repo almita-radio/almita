@@ -533,3 +533,12 @@ def test_monitor_never_raises_when_journalctl_and_iw_both_missing(monkeypatch):
     monitor = wh.WifiMonitor()
     sample = monitor.sample()  # must not raise
     assert sample["wifi_health"] in (wh.WIFI_OK, wh.WIFI_DEGRADED, wh.WIFI_FAILED)
+
+
+def test_wireless_interface_prefers_wlan0_else_the_first_wireless(tmp_path):
+    (tmp_path / "eno2").mkdir()
+    (tmp_path / "wlo1" / "wireless").mkdir(parents=True)
+    assert wh.wireless_interface(tmp_path) == "wlo1"
+    (tmp_path / "wlan0").mkdir()
+    assert wh.wireless_interface(tmp_path) == "wlan0"
+    assert wh.wireless_interface(tmp_path / "none") == "wlan0"

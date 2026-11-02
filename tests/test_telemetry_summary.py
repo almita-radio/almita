@@ -105,3 +105,12 @@ def test_w1_reads_the_crc_checked_file_only(tmp_path):
     assert ts.read_w1("28-nocrc",tmp_path)["status"]=="NOT_AVAILABLE"
     bad=tmp_path/"28-crcno";bad.mkdir();_slave(bad,-24062,crc="NO")
     assert ts.read_w1("28-crcno",tmp_path)=={"value_c":None,"status":"INVALID","path":str(bad/"w1_slave")}
+
+
+def test_rtl_tcp_on_a_capture_pi_is_asked_to_its_agent(monkeypatch):
+    import telemetry_summary as ts
+    monkeypatch.setattr(ts.instrument_host, "agent_health", lambda host=None, **k: {"ok": True, "rtl_tcp_service": "active"})
+    found = ts.capture_pi_rtl_tcp("192.168.50.254")
+    assert found and "capture Pi 192.168.50.254" in found[0]["cmdline"]
+    monkeypatch.setattr(ts.instrument_host, "agent_health", lambda host=None, **k: {"ok": False, "detail": "unreachable"})
+    assert ts.capture_pi_rtl_tcp("192.168.50.254") == []

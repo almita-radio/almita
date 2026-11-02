@@ -130,6 +130,15 @@ def utcnow_iso() -> str:
 # Cheap, every-cycle, /sys and /proc readers - no subprocess, no throttling.
 # --------------------------------------------------------------------------
 
+def wireless_interface(sys_root: Path = Path("/sys/class/net")) -> str:
+    """wlan0 when there is one (the Pis); otherwise this machine's first wireless interface (the notebook's is wlo1 -
+    watching a wlan0 it does not have read as Wi-Fi FAILED, 2026-11-02)."""
+    if (sys_root / DEFAULT_INTERFACE).exists():
+        return DEFAULT_INTERFACE
+    found = sorted(d.name for d in sys_root.glob("*") if (d / "wireless").is_dir())
+    return found[0] if found else DEFAULT_INTERFACE
+
+
 def wlan_present(interface: str = DEFAULT_INTERFACE, sys_root: Path = Path("/sys/class/net")) -> bool:
     return (sys_root / interface).exists()
 

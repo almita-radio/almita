@@ -9,6 +9,7 @@ from typing import Any
 
 from temperature_sensors import is_plausible_temperature_c
 import sdr_tuning
+import instrument_host
 
 SDR_SENSOR="28-082471f4e41b";LNA_SENSOR="28-2c5acd1e64ff"
 
@@ -71,6 +72,11 @@ def find_process(name="rtl_tcp",proc=Path("/proc")):
         executable=Path(cmd.split()[0]).name if cmd else ""
         if executable==name:found.append({"pid":int(entry.name),"cmdline":cmd[:300]})
     return found
+def capture_pi_rtl_tcp(host):
+    """rtl_tcp runs on the capture Pi (instrument_host): ask its agent; the local 127.0.0.1:1234 is the forwarder."""
+    h=instrument_host.agent_health(host)
+    if h.get("ok") and h.get("rtl_tcp_service")=="active":return [{"pid":None,"cmdline":f"rtl_tcp.service active on the capture Pi {host}"}]
+    return []
 def parse_listening_port(text,port=1234,address="127.0.0.1"):
     wanted_port=f"{port:04X}";wanted_addr="0100007F" if address=="127.0.0.1" else None
     for line in text.splitlines()[1:]:
@@ -96,12 +102,13 @@ def collect(workspace=Path(__file__).resolve().parent,proc=Path("/proc"),w1=Path
     except Exception as e:uptime=None;warnings.append(f"uptime unavailable: {e}")
     disk=shutil.disk_usage(workspace);network=select_network(parse_network((proc/"net/dev").read_text()))
     sdr_temp,lna_temp=read_temperatures(w1)
-    processes=find_process(proc=proc)
+    capture_pi=instrument_host.remote_host()
+    processes=capture_pi_rtl_tcp(capture_pi) if capture_pi else find_process(proc=proc)
     try:listening=parse_listening_port((proc/"net/tcp").read_text()) or parse_listening_port((proc/"net/tcp6").read_text(),address="::1")
     except OSError:listening=None;warnings.append("tcp table unavailable")
     if sdr_temp["status"]!="OK":warnings.append(f"SDR temperature {sdr_temp['status']}")
     if lna_temp["status"]!="OK":warnings.append(f"LNA temperature {lna_temp['status']}")
-    if not processes:warnings.append("rtl_tcp process not detected")
+    if not processes:warnings.append(f"rtl_tcp not detected on the capture Pi {capture_pi}" if capture_pi else "rtl_tcp process not detected")
     if listening is False:warnings.append("rtl_tcp port 127.0.0.1:1234 not listening")
     _op=sdr_tuning.operating_config()  # expected values: the single source, observer_config.json
     value={"schema_version":"1.0","status":"DEGRADED" if warnings else "OK","created_utc":utcnow(),

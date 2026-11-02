@@ -502,7 +502,7 @@ def run(runtime_dir: Path, interval: float = 2.0, iterations: Optional[int] = No
     state = WatcherState()
     # Seed the last-session archive so a restart never invents an active session.
     state.last_session_archive = read_json_safe(Path(runtime_dir) / "last_session.json")
-    state.wifi_monitor = wifi_health.WifiMonitor()
+    state.wifi_monitor = wifi_health.WifiMonitor(interface=wifi_health.wireless_interface())
     count = 0
     while iterations is None or count < iterations:
         tick(runtime_dir, state)

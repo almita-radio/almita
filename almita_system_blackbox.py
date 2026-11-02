@@ -392,7 +392,7 @@ def main() -> int:
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES, help="rotate blackbox.log past this size")
     parser.add_argument("--backup-count", type=int, default=DEFAULT_BACKUP_COUNT, help="rotated files to retain")
-    parser.add_argument("--wifi-interface", default=wifi_health.DEFAULT_INTERFACE)
+    parser.add_argument("--wifi-interface", default=None, help="default: wlan0, else the first wireless interface")
     parser.add_argument("--no-wifi-monitor", action="store_true", help="disable Wi-Fi/SDIO monitoring")
     args = parser.parse_args()
 
@@ -400,7 +400,7 @@ def main() -> int:
     wifi_monitor = None
     if not args.no_wifi_monitor:
         wifi_monitor = wifi_health.WifiMonitor(
-            interface=args.wifi_interface,
+            interface=args.wifi_interface or wifi_health.wireless_interface(),
             events_log_path=Path(args.log_dir) / "wifi_events.log",
         )
 
