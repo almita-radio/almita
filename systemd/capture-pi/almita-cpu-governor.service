@@ -1,7 +1,9 @@
 [Unit]
-Description=ALMITA capture Pi: fixed CPU clock (powersave, 600 MHz on a Pi 4) - the ondemand clock changes radiated RF pulses into MAIN
-# 2026-11-02 indoor tests in the box: ondemand -> pulses in 7-8 % of the FFT frames and a ~1421.3 MHz bump
-# when the OnStep USB was busy; any FIXED clock (powersave or performance) -> 0 %. powersave is the coolest.
+Description=ALMITA capture Pi: fixed CPU clock (powersave, 600 MHz on a Pi 4) - coolest in the box, fewer clock changes
+# 2026-11-02 indoor tests in the box: pulses in MAIN (7-8 % of the FFT frames, a ~1421.3 MHz bump with the OnStep
+# USB busy) vanished right when the clock was fixed - but they came back after a reboot WITH the fixed clock and
+# then stopped on their own: the pulses are intermittent and the clock is NOT proven to be their cause. Kept because
+# it is harmless: ~60 C idle at load ~0.2 with rtl_tcp + INDI + KStars.
 After=sysinit.target
 
 [Service]
