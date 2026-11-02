@@ -32,9 +32,10 @@
   function currentParams() {
     return {
       mode, input: selectedInput, calibration_profile: selectedProfile || null,
-      velocity_frame: $("in-velocity-frame").value,
+      velocity_frame: $("in-velocity-frame").value, rfi_mask: rfiMaskOn(),
     };
   }
+  function rfiMaskOn() { return mode !== "capture" && $("in-rfi-mask").checked; }
   function paramsEqual(a, b) {
     return !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
   }
@@ -155,6 +156,7 @@
     $("mode-campaign").classList.toggle("active", mode === "campaign");
     $("row-capture").hidden = mode !== "capture";
     $("row-campaign").hidden = mode !== "campaign";
+    $("row-rfi-mask").hidden = mode !== "campaign";
     selectedInput = mode === "capture" ? $("in-capture").value : $("in-campaign").value;
     onInputChanged();
   }
@@ -324,6 +326,7 @@
     refreshCompatibility(mySeq);
   });
   $("in-velocity-frame").addEventListener("change", invalidateDownstream);
+  $("in-rfi-mask").addEventListener("change", invalidateDownstream);
 
   function setBanner(banner, status, text) {
     const ok = status === "COMPATIBLE";
@@ -436,6 +439,7 @@
   function inputParams() {
     const p = { calibration_profile: selectedProfile || undefined, velocity_frame: $("in-velocity-frame").value };
     p[mode === "capture" ? "capture" : "campaign_dir"] = selectedInput;
+    if (rfiMaskOn()) p.rfi_mask = true;
     return p;
   }
 
@@ -543,14 +547,20 @@
     $("results-summary").textContent = `status: ${facts.status} · points: ${facts.points_discovered} discovered / `
       + `${facts.points_accepted} accepted / ${facts.points_completed} completed / ${facts.points_blocked} blocked / ${facts.points_failed} failed\n`
       + `calibration: ${JSON.stringify(cl)}   velocity: ${JSON.stringify(vf)}   quality: ${JSON.stringify(qc)}\n`
-      + `median usable fraction: ${U.fixed(facts.median_usable_fraction, 3)}   median baseline RMS fraction: ${U.fixed(facts.median_baseline_rms_fraction, 3)}`;
+      + `median usable fraction: ${U.fixed(facts.median_usable_fraction, 3)}   median baseline RMS fraction: ${U.fixed(facts.median_baseline_rms_fraction, 3)}`
+      + (facts.rfi_mask && facts.rfi_mask.enabled
+        ? `\nRFI MASK: ${facts.rfi_mask.points_masked}/${facts.rfi_mask.points} points masked (${facts.rfi_mask.from_sidecar} from the run's side-cars, `
+          + `${facts.rfi_mask.computed_at_reduce} computed now) · ${facts.rfi_mask.pulse_frames_cut} pulse frames cut · `
+          + `median ${U.fixed(100 * (facts.rfi_mask.median_fraction_of_band ?? NaN), 2)} % of the band flagged RFI`
+        : "\nRFI MASK: off");
     $("results-provenance").textContent = `campaign_id: ${facts.campaign_id}   reduce_session_id: ${facts.session_id}   output: ${job.output_dir || "—"}`;
     $("results-hi-caveat").textContent = "These are INSTRUMENTAL results (relative spectra, masks, quality) — no celestial HI detection or astrophysical claim is made here. That is SCIENCE's job, not REDUCE's.";
 
     const artifacts = $("results-artifacts"); artifacts.textContent = "";
     if (job.output_dir) {
       for (const rel of ["manifest.json", "config.json", "provenance.json", "calibration_compatibility_record.json",
-        "qc/quality_summary.json", "qc/calibration_summary.json", "qc/velocity_summary.json", "qc/mask_occupancy.json"]) {
+        "qc/quality_summary.json", "qc/calibration_summary.json", "qc/velocity_summary.json", "qc/mask_occupancy.json",
+        ...(facts.rfi_mask && facts.rfi_mask.enabled ? ["rfi_mask_report.json"] : [])]) {
         const a = document.createElement("a"); a.href = `/api/ops/file?path=${encodeURIComponent(job.output_dir + "/" + rel)}`;
         a.target = "_blank"; a.rel = "noopener"; a.textContent = rel; a.style.marginRight = "12px";
         artifacts.appendChild(a);

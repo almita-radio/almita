@@ -14,6 +14,11 @@ only RUN needs the pre-execution capture.
 
 100% offline: filesystem-only, no hardware, no INDI, no rtl_tcp, no mount, no network, never touches
 the original HDF5s or almita_reduce.py/reduce_engine.
+
+--rfi-mask (opt-in, operator 2026-11-02): reduce with the captures' RFI masks - pulse frames out of the spectral
+estimate, comb/line channels flagged RFI. See reduce_rfi_mask.py: it wraps three reduce_engine functions inside
+this process only, for this RUN only (no reduce_engine file changes), and writes rfi_mask_report.json next to
+the result. Without the flag this RUN is exactly what it was.
 """
 from __future__ import annotations
 
@@ -140,18 +145,31 @@ def cmd_run(args) -> int:
     )
 
     follower = _ProgressFollower(Path(args.output_root).resolve() / manifest.campaign_id, len(manifest.points))
-    print(f"[REDUCE] starting: {len(manifest.points)} points, velocity frame {args.velocity_frame}",
-          file=sys.stderr, flush=True)
+    print(f"[REDUCE] starting: {len(manifest.points)} points, velocity frame {args.velocity_frame}"
+          + (", RFI mask ON (pulses cut, comb/lines flagged)" if args.rfi_mask else ""), file=sys.stderr, flush=True)
+    mask_report = None
     follower.start()
     try:
-        report = reduce_campaign(manifest, config, output_root=args.output_root,
-                                 calibration_profile_path=args.calibration_profile)
+        if args.rfi_mask:
+            import reduce_rfi_mask
+            with reduce_rfi_mask.install() as masked:
+                report = reduce_campaign(manifest, config, output_root=args.output_root,
+                                         calibration_profile_path=args.calibration_profile)
+            mask_report = masked.report()
+        else:
+            report = reduce_campaign(manifest, config, output_root=args.output_root,
+                                     calibration_profile_path=args.calibration_profile)
     finally:
         follower.finish()
     record_path = calrecord.write_record(report.output_dir, record)
 
     payload = dict(report.__dict__)
     payload["calibration_compatibility_record_path"] = record_path
+    payload["rfi_mask"] = {"enabled": False}
+    if mask_report is not None:
+        mask_path = reduce_rfi_mask.write_report(report.output_dir, mask_report)
+        payload["rfi_mask"] = {k: v for k, v in mask_report.items() if k != "per_point"}
+        payload["rfi_mask"]["report_path"] = mask_path
     _print(payload, args.json, [
         f"REDUCE {report.status}",
         f"Campaign:        {report.campaign_id}",
@@ -163,6 +181,9 @@ def cmd_run(args) -> int:
         f"Runtime:         {report.runtime_seconds:.2f}s",
         f"Output:          {report.output_dir}",
         *([f"Calibration compatibility record: {record_path}"] if record_path else []),
+        *([f"RFI mask:        {mask_report['points_masked']}/{mask_report['points']} points masked, "
+           f"{mask_report['pulse_frames_cut']} pulse frames cut, median {mask_report['median_fraction_of_band']} "
+           f"of the band flagged"] if mask_report else []),
     ])
     return 0 if report.status in ("COMPLETED", "PARTIAL") else 1
 
@@ -175,6 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-root", default="data/reduced")
     p.add_argument("--velocity-frame", default="lsrk")
     p.add_argument("--calibration-profile", default=None)
+    p.add_argument("--rfi-mask", action="store_true", help="opt-in: cut pulse frames and flag comb/line channels (reduce_rfi_mask.py)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_run)
     return parser

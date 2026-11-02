@@ -14,6 +14,7 @@
 #      almita-observe-api           the web on :8088
 #      almita-console-watcher       field console status
 #      almita-system-blackbox       host heartbeat log
+#      almita-rfi-mask-live         live RFI masks for the monitor (RFI MASK panel, UNKNOWN PLEASURES)
 #   4. checks: forwarder up, rtl_tcp handshake through it, INDI port, the Pi's agent, the web answering.
 set -euo pipefail
 
@@ -21,7 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${1:-192.168.50.254}"
 ME="$(id -un)"
 PY="$ROOT/.venv/bin/python"
-UNITS=(almita-instrument-forwarder almita-observe-api almita-console-watcher almita-system-blackbox)
+UNITS=(almita-instrument-forwarder almita-observe-api almita-console-watcher almita-system-blackbox almita-rfi-mask-live)
 
 cd "$ROOT"
 [[ -x "$PY" ]] || { echo "no $PY - create the venv first (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)"; exit 1; }

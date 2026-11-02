@@ -963,6 +963,10 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
                 raise ValueError("calibration_profile must be an existing file inside data/calibration")
             argv += ["--calibration-profile", str(pp.relative_to(ROOT))]
         meta = {"campaign_dir": str(camp.relative_to(ROOT)), "calibration_profile": str(prof) if prof else None, "velocity_frame": vf}
+        if p.get("rfi_mask") is True:              # opt-in RFI masks (reduce_rfi_mask.py); PLAN records the choice, RUN applies it
+            meta["rfi_mask"] = True
+            if stage == "reduce":
+                argv += ["--rfi-mask"]
         if stage == "reduce":
             _require_fresh_plan("reduce", meta, p)
             if prof:
