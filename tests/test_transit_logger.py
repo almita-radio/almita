@@ -21,7 +21,7 @@ def test_rows_go_to_the_daily_csv_and_the_window_crosses_midnight(tmp_path):
         tl.append_row(_row(now - timedelta(minutes=minutes), power_db=40.0 + minutes / 100), tmp_path)
     tl.append_row(_row(now, status="SDR_BUSY", power_db=None, error="skipped: capture.py is using the SDR"), tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["transit_20261102.csv", "transit_20261103.csv"]
-    rows = tl.read_window(now, out_dir=tmp_path)
+    rows = tl.read_window(now, out_dir=tmp_path, runtime_dir=tmp_path / "runtime")
     assert [r["power_db"] for r in rows] == [41.7, 40.61, 40.05, None]
     assert rows[-1]["status"] == "SDR_BUSY"
 
@@ -94,3 +94,18 @@ def test_start_route_needs_confirm_and_reports_a_failed_systemctl(monkeypatch):
                 assert e.code == code
         with urllib.request.urlopen(base + "/api/transit/state", timeout=10) as r:
             assert json.loads(r.read())["data"]["unit"] == tl.UNIT
+
+
+def test_clear_empties_the_view_but_keeps_the_record(tmp_path):
+    out, rt = tmp_path / "transit", tmp_path / "runtime"
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    tl.append_row(_row(old), out)
+    tl.write_latest(tl.read_window(datetime.now(timezone.utc), out_dir=out, runtime_dir=rt), {"every_s": 10}, rt)
+    assert len(json.loads((rt / tl.LATEST_NAME).read_text())["rows"]) == 1
+    c = tl.clear_view(rt)
+    doc = json.loads((rt / tl.LATEST_NAME).read_text())
+    assert doc["rows"] == [] and doc["cleared_utc"] == c["cleared_utc"] and doc["every_s"] == 10
+    assert tl.read_window(datetime.now(timezone.utc), out_dir=out, runtime_dir=rt) == []
+    tl.append_row(_row(datetime.now(timezone.utc) + timedelta(seconds=2)), out)
+    assert len(tl.read_window(datetime.now(timezone.utc) + timedelta(seconds=3), out_dir=out, runtime_dir=rt)) == 1
+    assert len(list(out.glob("*.csv"))) == 1 and sum(1 for _ in open(next(out.glob("*.csv")))) == 3   # header + both rows kept

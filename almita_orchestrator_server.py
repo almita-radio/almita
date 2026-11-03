@@ -608,6 +608,12 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 body = _read_json_body(self)
                 _log("WARNING", f"req={self._request_id} MOUNT DEVICE -> {str(body.get('device'))[:40]!r} requested")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_mount_device(str(body.get("device", "")))})
+            if path == "/api/transit/clear":
+                if _read_json_body(self).get("confirm") is not True:
+                    raise ValueError("send {confirm: true}")
+                import transit_logger
+                _log("INFO", f"req={self._request_id} TRANSIT graphs CLEAR requested")
+                return _json_response(self, 200, {"ok": True, "data": transit_logger.clear_view()})
             if path in ("/api/transit/start", "/api/transit/stop"):
                 body = _read_json_body(self)
                 if body.get("confirm") is not True:

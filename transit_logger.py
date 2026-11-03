@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "data" / "transit"
 RUNTIME_DIR = ROOT / "data" / "runtime"
 LATEST_NAME = "transit_latest.json"
+CLEARED_NAME = "transit_cleared.json"     # CLEAR on the page: the graphs start after this instant (the CSVs are kept)
 WINDOW_MIN = 180                       # what the page shows at most
 FIELDS = ("utc", "status", "power_db", "power_lin", "clipping_fraction", "adc_std_codes", "gain_db",
           "sun_alt_deg", "sun_az_deg", "error")
@@ -131,9 +132,21 @@ def service_action(action: str) -> Dict[str, Any]:
     return {"action": action, **service_state()}
 
 
-def read_window(now: datetime, minutes: int = WINDOW_MIN, out_dir: Path = OUT_DIR) -> List[Dict[str, Any]]:
-    """Rows of the last `minutes` from the daily CSVs (today's and, around 00 UTC, yesterday's)."""
+def cleared_since(runtime_dir: Path = RUNTIME_DIR) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(json.loads((runtime_dir / CLEARED_NAME).read_text())["cleared_utc"].replace("Z", "+00:00"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def read_window(now: datetime, minutes: int = WINDOW_MIN, out_dir: Path = OUT_DIR,
+                runtime_dir: Path = RUNTIME_DIR) -> List[Dict[str, Any]]:
+    """Rows of the last `minutes` from the daily CSVs (today's and, around 00 UTC, yesterday's), none from before the
+    last CLEAR."""
     since = now - timedelta(minutes=minutes)
+    cleared = cleared_since(runtime_dir)
+    if cleared and cleared > since:
+        since = cleared
     rows: List[Dict[str, Any]] = []
     for day in sorted({since.date(), now.date()}):
         p = out_dir / f"transit_{day:%Y%m%d}.csv"
@@ -145,7 +158,7 @@ def read_window(now: datetime, minutes: int = WINDOW_MIN, out_dir: Path = OUT_DI
                     t = datetime.fromisoformat(r["utc"].replace("Z", "+00:00"))
                 except (KeyError, ValueError):
                     continue
-                if t >= since:
+                if t > since or (t == since and not cleared):
                     rows.append({"utc": r["utc"], "status": r.get("status"),
                                  **{k: (float(r[k]) if r.get(k) not in (None, "") else None)
                                     for k in ("power_db", "clipping_fraction", "sun_alt_deg", "sun_az_deg")}})
@@ -158,6 +171,26 @@ def write_latest(rows: List[Dict[str, Any]], meta: Dict[str, Any], runtime_dir: 
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps({"schema": "almita.transit_logger.v1", **meta, "rows": rows}, default=float))
     tmp.replace(p)
+
+
+def clear_view(runtime_dir: Path = RUNTIME_DIR) -> Dict[str, Any]:
+    """CLEAR (operator 2026-11-02: "limpiar el gráfico y partir de cero"): the page's graphs start empty from now.
+    Only the view: every sample stays in data/transit/*.csv."""
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    tmp = runtime_dir / (CLEARED_NAME + ".tmp")
+    tmp.write_text(json.dumps({"cleared_utc": now}))
+    tmp.replace(runtime_dir / CLEARED_NAME)
+    p = runtime_dir / LATEST_NAME
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, ValueError):
+        doc = {"schema": "almita.transit_logger.v1"}
+    doc["rows"], doc["cleared_utc"] = [], now
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(doc, default=float))
+    tmp.replace(p)
+    return {"cleared_utc": now}
 
 
 def append_row(row: Dict[str, Any], out_dir: Path = OUT_DIR) -> Path:
@@ -215,7 +248,7 @@ def main(argv=None) -> int:
                 row["status"] = "FAILED"
                 row["error"] = f"{type(exc).__name__}: {exc}"
         append_row(row)
-        write_latest(read_window(now), {"updated_utc": row["utc"], "started_utc": started, "every_s": a.every,
+        write_latest(read_window(now), {"updated_utc": row["utc"], "cleared_utc": (lambda c: c and c.isoformat().replace("+00:00", "Z"))(cleared_since()), "started_utc": started, "every_s": a.every,
                                         "seconds": a.seconds, "gain_db": gain, "pid": os.getpid(),
                                         "location": (cfg.get("site_info") or {}).get("location")})
         p = row.get("power_db")

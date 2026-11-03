@@ -29,7 +29,8 @@
                 power: css("--accent", "#65b7d8"), sun: css("--warn", "#e6b85c"), bad: css("--error", "#e36b6b") };
     ctx.fillStyle = C.bg; ctx.fillRect(0, 0, w, h);
     const padL = 56, padR = 46, padT = 12, padB = 26;
-    const t1 = doc && doc.updated_utc ? Date.parse(doc.updated_utc) : Date.now(), t0 = t1 - minutes * 60e3;
+    const t1 = Math.max(doc && doc.updated_utc ? Date.parse(doc.updated_utc) : 0, doc && doc.cleared_utc ? Date.parse(doc.cleared_utc) : 0) || Date.now();
+    const t0 = t1 - minutes * 60e3;
     const pts = rows.map((r) => ({ t: Date.parse(r.utc), ...r })).filter((r) => r.t >= t0 && r.t <= t1);
     const good = pts.filter((r) => r.power_db !== null && (r.status === "VALID" || r.status === "CLIPPED"));
     const X = (t) => padL + (w - padL - padR) * (t - t0) / (t1 - t0);
@@ -116,6 +117,13 @@
   }
   $("btn-start").addEventListener("click", () => control("start"));
   $("btn-stop").addEventListener("click", () => control("stop"));
+  $("btn-clear").addEventListener("click", async () => {
+    if (!window.confirm("Clear the graphs and start from zero? (the samples stay saved in data/transit/)")) return;
+    const r = await U.api("/api/transit/clear", { method: "POST", body: { confirm: true }, timeoutMs: 15000 });
+    $("ctl-note").textContent = r.ok ? `graphs cleared at ${chile(Date.parse(r.data.data.cleared_utc))} Chile - the samples stay saved in data/transit/`
+                                     : `CLEAR failed: ${U.errorText(r.error)}`;
+    tick();
+  });
 
   async function tick() {
     if (document.hidden) return;
