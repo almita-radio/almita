@@ -14,13 +14,14 @@ check** of MAIN (here: faint, comb teeth ≤ +2.8 dB) and the temperatures.
 
 ## PIPELINE — the whole chain end to end
 Preflight → alignment → calibration → grid observation → reduce → science, each stage running the real command and judged
-by its exit code and result files.
+by its exit code and result files. The alignment stage shows the all-sky HI4PI map (the Milky Way's hydrogen, in colour)
+with the candidate HI areas A, B and C.
 
 ![PIPELINE](screenshots/pipeline.jpg)
 
 ## LOBE — beam from a solar transit (with the mount)
-Drift (mount still, tracking off) or scan (steps in RA) across the Sun, with a live Gaussian fit of the beam. Empty here:
-it was night.
+Drift (mount still, tracking off) or scan (steps in RA) across the Sun, with a live Gaussian fit of the beam. The sky
+view shows the mount's pointing with the expected beam; the Sun was below the horizon, so START is blocked.
 
 ![LOBE](screenshots/lobe.jpg)
 
@@ -44,8 +45,9 @@ RELATIVE; no Kelvin is claimed.
 ![CALIBRATE](screenshots/calibrate.jpg)
 
 ## OBSERVE — plan and run a sky mosaic
-Grid specification, PREFLIGHT, the time estimate, the calibration profile check, and the run's progress (here a finished
-9-point run).
+Grid specification, the sky projection of the planned region over the real HI4PI map (the Milky Way's hydrogen in colour,
+the minimum-altitude circle, the Magellanic Clouds marked), the run and sky-time estimates, the calibration profile check,
+and the run's progress (here a finished 9-point run).
 
 ![OBSERVE](screenshots/observe.jpg)
 
@@ -67,7 +69,7 @@ Level 1 → Level 2 cubes and heatmaps, relative and dimensionless.
 ![SCIENCE](screenshots/science.jpg)
 
 ## SESSIONS — the catalog
-Every stored session with filters, a sky map of its real pointings and safe deletion (preview first). The catalog was empty on the notebook when this was taken.
+Every stored session with filters, a sky map of its real pointings and safe deletion (preview first). Empty in this shot: every session had just been deleted from this very page.
 
 ![SESSIONS](screenshots/sessions.jpg)
 
