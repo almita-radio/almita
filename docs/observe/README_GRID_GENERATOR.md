@@ -1,78 +1,78 @@
-# 📐 Grid Generator - Generador de Grilla de Escaneo
+# 📐 Grid Generator - Scan Grid Generator
 
-## 🎯 Propósito
+## 🎯 Purpose
 
-Genera archivos JSON con coordenadas RA/DEC para escaneo sistemático de regiones del cielo en radioastronomía.
+Generates JSON files with RA/DEC coordinates for systematic scans of sky regions in radio astronomy.
 
-## 🚀 Uso Básico
+## 🚀 Basic use
 
 ```bash
 python grid_generator.py --center-ra 19.99 --center-dec 40.73 --width 2.0 --height 2.0 --step 0.1
 ```
 
-Este comando genera una grilla de 2°×2° centrada en **Cygnus A** con puntos cada 0.1°.
+This command generates a 2°×2° grid centred on **Cygnus A** with a point every 0.1°.
 
-## 📋 Parámetros
+## 📋 Parameters
 
-| Parámetro | Tipo | Descripción | Ejemplo |
+| Parameter | Type | Description | Example |
 |-----------|------|-------------|---------|
-| `--center-ra` | float | Centro en RA (horas, 0-24) | `19.99` |
-| `--center-dec` | float | Centro en DEC (grados, -90 a +90) | `40.73` |
-| `--width` | float | Ancho en grados | `2.0` |
-| `--height` | float | Alto en grados | `2.0` |
-| `--step` | float | Separación entre puntos (grados) | `0.1` |
-| `--pattern` | str | Patrón de escaneo | `snake` |
-| `--output` | str | Archivo de salida JSON | `grid.json` |
-| `--preview` | flag | Solo mostrar primeros 10 puntos | - |
+| `--center-ra` | float | Centre in RA (hours, 0-24) | `19.99` |
+| `--center-dec` | float | Centre in DEC (degrees, -90 to +90) | `40.73` |
+| `--width` | float | Width in degrees | `2.0` |
+| `--height` | float | Height in degrees | `2.0` |
+| `--step` | float | Spacing between points (degrees) | `0.1` |
+| `--pattern` | str | Scan pattern | `snake` |
+| `--output` | str | Output JSON file | `grid.json` |
+| `--preview` | flag | Only show the first 10 points | - |
 
-## 🔀 Patrones de Escaneo
+## 🔀 Scan patterns
 
-### 1. **RASTER** (línea por línea)
+### 1. **RASTER** (line by line)
 ```
------> (línea 1)
------> (línea 2)
------> (línea 3)
+-----> (line 1)
+-----> (line 2)
+-----> (line 3)
 ```
-- Más simple
-- Siempre de izquierda a derecha
-- Más movimientos del telescopio
+- Simplest
+- Always left to right
+- More telescope movement
 
 ```bash
 python grid_generator.py --center-ra 18.5 --center-dec 40.0 --width 3.0 --height 3.0 --step 0.15 --pattern raster
 ```
 
-### 2. **SNAKE** (serpiente) ⭐ Recomendado
+### 2. **SNAKE** ⭐ Recommended
 ```
------> (línea 1)
-<----- (línea 2)
------> (línea 3)
+-----> (line 1)
+<----- (line 2)
+-----> (line 3)
 ```
-- **Más eficiente**
-- Alterna dirección en cada línea
-- Menos tiempo de movimiento del telescopio
-- Ideal para áreas grandes
+- **Most efficient**
+- Alternates direction on each line
+- Less telescope movement time
+- Ideal for large areas
 
 ```bash
 python grid_generator.py --center-ra 18.5 --center-dec 40.0 --width 3.0 --height 3.0 --step 0.15 --pattern snake
 ```
 
-### 3. **SPIRAL** (espiral desde centro)
+### 3. **SPIRAL** (outward from the centre)
 ```
-Empieza en el centro y va hacia afuera en espiral
+Starts at the centre and spirals outward
 ```
-- Útil para fuentes compactas
-- Prioriza el centro de la región
-- Bueno si el objetivo principal está en el centro
+- Useful for compact sources
+- Gives the centre of the region priority
+- Good when the main target is at the centre
 
 ```bash
 python grid_generator.py --center-ra 19.99 --center-dec 40.73 --width 1.5 --height 1.5 --step 0.1 --pattern spiral
 ```
 
-## 📊 Ejemplos Prácticos
+## 📊 Practical examples
 
-### Escaneo fino de Cygnus A
+### Fine scan of Cygnus A
 ```bash
-# Región pequeña (1°×1°) con alta resolución (0.05°)
+# Small region (1°×1°) at high resolution (0.05°)
 python grid_generator.py \
     --center-ra 19.99 \
     --center-dec 40.73 \
@@ -82,11 +82,11 @@ python grid_generator.py \
     --pattern snake \
     --output cygnus_a_fine.json
 ```
-**Resultado**: ~400 puntos, ~1 hora de captura
+**Result**: ~400 points, ~1 hour of capture
 
-### Escaneo rápido de región grande
+### Quick scan of a large region
 ```bash
-# Región grande (5°×5°) con baja resolución (0.25°)
+# Large region (5°×5°) at low resolution (0.25°)
 python grid_generator.py \
     --center-ra 18.5 \
     --center-dec 40.0 \
@@ -96,11 +96,11 @@ python grid_generator.py \
     --pattern snake \
     --output wide_field.json
 ```
-**Resultado**: ~400 puntos, ~1 hora de captura
+**Result**: ~400 points, ~1 hour of capture
 
-### Preview antes de generar
+### Preview before generating
 ```bash
-# Ver primeros 10 puntos sin guardar archivo
+# See the first 10 points without saving a file
 python grid_generator.py \
     --center-ra 19.99 \
     --center-dec 40.73 \
@@ -111,9 +111,9 @@ python grid_generator.py \
     --preview
 ```
 
-## 📄 Formato del Archivo JSON
+## 📄 JSON file format
 
-El archivo generado contiene:
+The generated file contains:
 
 ```json
 {
@@ -152,77 +152,82 @@ El archivo generado contiene:
 }
 ```
 
-## ⏱️ Estimación de Tiempo
+(The `description` string is written in Spanish by the generator itself.)
 
-El script calcula automáticamente el tiempo estimado:
+## ⏱️ Time estimate
 
-| Puntos | Tiempo/punto | Tiempo total |
-|--------|--------------|--------------|
-| 100    | 10s          | ~17 minutos  |
-| 400    | 10s          | ~1 hora      |
-| 1000   | 10s          | ~2.8 horas   |
+The script computes the estimated time automatically:
 
-**Nota**: El tiempo por punto incluye:
-- GOTO del telescopio (~3-5s)
-- Estabilización (~1-2s)
-- Captura de datos (~3-5s)
+| Points | Time/point | Total time |
+|--------|------------|------------|
+| 100    | 10s        | ~17 minutes |
+| 400    | 10s        | ~1 hour    |
+| 1000   | 10s        | ~2.8 hours |
 
-## 🔗 Siguientes Pasos
+**Note**: the time per point includes:
+- the telescope GOTO (~3-5s)
+- settling (~1-2s)
+- data capture (~3-5s)
 
-Una vez generado el archivo JSON, úsalo con el capturador:
+## 🔗 Next steps
+
+Once the JSON file is generated, use it with the capture program:
 
 ```bash
-# 1. Generar grilla
+# 1. Generate the grid
 python grid_generator.py --center-ra 19.99 --center-dec 40.73 --width 2.0 --height 2.0 --step 0.1 --output grid.json
 
-# 2. Capturar datos (próximo script)
+# 2. Capture data (next script)
 python radio_capture.py --grid grid.json --output observations.json
 ```
 
-## 🧮 Cálculo de Resolución
+## 🧮 Working out the resolution
 
-Para decidir el `--step` adecuado:
+To choose a suitable `--step`:
 
 ```
-Ancho del haz (HPBW) de tu antena en grados
-└─> Usar step = HPBW / 2 (criterio Nyquist)
+Beam width (HPBW) of your antenna in degrees
+└─> Use step = HPBW / 2 (Nyquist criterion)
 
-Ejemplo: 
-  Antena de 21cm (línea HI) con reflector de 1m
-  HPBW ≈ 0.2° 
-  step recomendado = 0.1°
+Example:
+  21 cm (HI line) antenna with a 1 m reflector
+  HPBW ≈ 70 λ / D ≈ 70 × 0.21 m / 1 m ≈ 15°
+  recommended step ≈ 7.5°
 ```
+
+(An earlier version of this page said HPBW ≈ 0.2° for a 1 m dish, which is off by a factor of ~70. ALMITA's ~90 × 60 cm dish
+is planned with a provisional 20° beam.)
 
 ## 💡 Tips
 
-1. **Usa `--preview`** antes de generar grillas grandes
-2. **Patrón snake** es casi siempre la mejor opción
-3. **Step pequeño** = mejor resolución pero más tiempo
-4. **Verifica coordenadas** con herramientas como Stellarium antes
-5. **Considera rotación del cielo**: Para observaciones largas, el área se mueve
+1. **Use `--preview`** before generating large grids
+2. **The snake pattern** is almost always the best option
+3. **A small step** = better resolution but more time
+4. **Check the coordinates** beforehand with tools such as Stellarium
+5. **Mind the sky's rotation**: during long observations the area moves
 
 ## 🐛 Troubleshooting
 
-**Demasiados puntos generados**:
+**Too many points generated**:
 ```bash
-# Reducir resolución (aumentar step)
---step 0.2  # en vez de 0.1
+# Lower the resolution (increase step)
+--step 0.2  # instead of 0.1
 ```
 
-**Muy pocos puntos**:
+**Too few points**:
 ```bash
-# Aumentar resolución (reducir step)
---step 0.05  # en vez de 0.1
+# Raise the resolution (reduce step)
+--step 0.05  # instead of 0.1
 ```
 
-**Coordenadas fuera de rango**:
+**Coordinates out of range**:
 ```bash
-# RA debe estar entre 0-24 horas
-# DEC debe estar entre -90 y +90 grados
+# RA must be between 0-24 hours
+# DEC must be between -90 and +90 degrees
 ```
 
 ---
 
-**Creado para**: Sistema de control INDI para radioastronomía  
-**Versión**: 1.0  
-**Fecha**: 2024-02-13
+**Written for**: INDI control system for radio astronomy
+**Version**: 1.0
+**Date**: 2024-02-13

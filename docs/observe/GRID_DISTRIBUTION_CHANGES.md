@@ -1,99 +1,100 @@
-# Grid Generator - Cambios de Distribución de Puntos
+# Grid Generator - Point Distribution Changes
 
-## Resumen de Cambios
+## Summary of the change
 
-Se ha reemplazado el sistema de **paso angular fijo** (`--step`) por un sistema de **número de puntos** (`--points`) con distribución automática uniforme.
-
----
-
-## ¿Por Qué Este Cambio?
-
-### Antes (con `--step`)
-```bash
---step 0.1  # Paso angular fijo
-```
-
-**Problema:**
-- No sabes cuántos puntos obtendrás hasta ejecutar
-- Difícil planificar tiempo de observación
-- Los "pixels" pueden no ser cuadrados si el área no es cuadrada
-
-### Ahora (con `--points`)
-```bash
---points 100  # Número total deseado
-```
-
-**Ventajas:**
-- ✅ Sabes exactamente cuántos puntos (aproximadamente)
-- ✅ Planificación de tiempo precisa
-- ✅ Pixels siempre lo más cuadrados posible
-- ✅ Perfecto para graficar mapas de intensidad
+The **fixed angular step** (`--step`) has been replaced by a **number of points** (`--points`) with an automatic, uniform
+distribution.
 
 ---
 
-## Algoritmo de Distribución
+## Why this change?
 
-### 1. Objetivo
-Dado:
+### Before (with `--step`)
+```bash
+--step 0.1  # fixed angular step
+```
+
+**Problem:**
+- You don't know how many points you will get until you run it
+- Hard to plan the observing time
+- The "pixels" may not be square if the area is not square
+
+### Now (with `--points`)
+```bash
+--points 100  # desired total
+```
+
+**Advantages:**
+- ✅ You know (roughly) exactly how many points
+- ✅ Precise time planning
+- ✅ Pixels always as square as possible
+- ✅ Perfect for plotting intensity maps
+
+---
+
+## Distribution algorithm
+
+### 1. Goal
+Given:
 - `--points 100`
-- `--width 10` (grados)
-- `--height 15` (grados)
+- `--width 10` (degrees)
+- `--height 15` (degrees)
 
-Calcular:
-- Número de filas y columnas que aproximen 100 puntos
-- Que los pixels sean lo más cuadrados posible
-- Que respete el ratio del área (10:15 = 2:3)
+Work out:
+- the number of rows and columns that comes close to 100 points
+- with pixels as square as possible
+- keeping the area's ratio (10:15 = 2:3)
 
-### 2. Proceso
+### 2. Process
 
 ```python
-# Paso 1: Calcular ratio del área
+# Step 1: area ratio
 aspect_ratio = 10 / 15 = 0.667
 
-# Paso 2: Base aproximada (raíz cuadrada)
+# Step 2: approximate base (square root)
 base = √100 = 10
 
-# Paso 3: Probar combinaciones alrededor de base
+# Step 3: try combinations around the base
 for dec_points in range(5, 16):  # base ± 5
-    ra_points = dec_points × 0.667  # mantener ratio
+    ra_points = dec_points × 0.667  # keep the ratio
     actual_points = ra_points × dec_points
-    
-    # Calcular pasos
+
+    # Steps
     ra_step = 10 / (ra_points - 1)
     dec_step = 15 / (dec_points - 1)
-    
-    # ¿Qué tan cuadrado es cada pixel?
+
+    # How square is each pixel?
     pixel_aspect = ra_step / dec_step
     pixel_squareness = min(pixel_aspect, 1/pixel_aspect)
-    
-    # Score: preferir pixels cuadrados y cerca de 100
+
+    # Score: prefer square pixels and close to 100
     score = |actual - 100| × (2 - squareness)
-    
-# Paso 4: Elegir mejor solución
+
+# Step 4: pick the best solution
 ```
 
-### 3. Resultado
+### 3. Result
 
 ```
-Puntos solicitados: 100
-Área: 10° x 15°
+Points requested: 100
+Area: 10° x 15°
 
-Mejor distribución: 8 x 12 = 96 puntos
+Best distribution: 8 x 12 = 96 points
 
-  RA: 8 puntos → paso = 10/7 = 1.43°
-  DEC: 12 puntos → paso = 15/11 = 1.36°
-  
+  RA: 8 points → step = 10/7 = 1.43°
+  DEC: 12 points → step = 15/11 = 1.36°
+
   Pixel aspect: 1.43/1.36 = 1.05
-  → Casi cuadrados perfectos! (1.0 = ideal)
-  
-  Ajuste: -4 puntos (de 100 a 96)
+  → Nearly perfect squares! (1.0 = ideal)
+
+  Adjustment: -4 points (from 100 to 96)
 ```
 
 ---
 
-## Ejemplos Prácticos
+## Practical examples
 
-### Ejemplo 1: Área Cuadrada
+### Example 1: square area
 
 ```bash
 python grid_generator.py \
@@ -105,7 +106,7 @@ python grid_generator.py \
   --points 100
 ```
 
-**Resultado:**
+**Result:**
 ```
 Input: 100 points in 10° x 10° area
 → Grid: 10 x 10 = 100 points
@@ -114,7 +115,7 @@ Input: 100 points in 10° x 10° area
 → Adjustment: 0 points
 ```
 
-### Ejemplo 2: Área Rectangular 2:1
+### Example 2: 2:1 rectangular area
 
 ```bash
 python grid_generator.py \
@@ -126,7 +127,7 @@ python grid_generator.py \
   --points 200
 ```
 
-**Resultado:**
+**Result:**
 ```
 Input: 200 points in 20° x 10° area
 → Grid: 14 x 7 = 98 points (adjusted for squareness)
@@ -135,9 +136,9 @@ Input: 200 points in 20° x 10° area
 → Adjustment: -102 points
 ```
 
-Ajuste grande pero necesario para mantener pixels cuadrados.
+A large adjustment, but needed to keep the pixels square.
 
-### Ejemplo 3: Muchos Puntos
+### Example 3: many points
 
 ```bash
 python grid_generator.py \
@@ -149,7 +150,7 @@ python grid_generator.py \
   --points 500
 ```
 
-**Resultado:**
+**Result:**
 ```
 Input: 500 points in 5° x 5° area
 → Grid: 22 x 22 = 484 points
@@ -160,15 +161,15 @@ Input: 500 points in 5° x 5° area
 
 ---
 
-## Verificar la Distribución
+## Checking the distribution
 
-### Script de Prueba
+### Test script
 
 ```bash
 python -m pytest tests/test_grid_distribution.py
 ```
 
-**Salida:**
+**Output:**
 ```
 ================================================================================
 GRID DISTRIBUTION TEST
@@ -193,32 +194,35 @@ Input: 200 points in 20° x 10° area
   → Adjustment: -60 points
 ```
 
+(This test output and Example 2 above disagree for the same 200 points over 20° x 10°: 14 x 10 here, 14 x 7 above.
+Both are kept as they were written.)
+
 ---
 
-## Visualización de la Grilla
+## What the grid looks like
 
-### 100 puntos → 10x10 grid (área cuadrada)
-
-```
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-█ █ █ █ █ █ █ █ █ █
-
-100 pixels cuadrados perfectos
-Ideal para heatmap!
-```
-
-### 100 puntos → 8x12 grid (área 10x15)
+### 100 points → 10x10 grid (square area)
 
 ```
-█ █ █ █ █ █ █ █   ← 12 filas
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+█ █ █ █ █ █ █ █ █ █
+
+100 perfectly square pixels
+Ideal for a heatmap!
+```
+
+### 100 points → 8x12 grid (10x15 area)
+
+```
+█ █ █ █ █ █ █ █   ← 12 rows
 █ █ █ █ █ █ █ █
 █ █ █ █ █ █ █ █
 █ █ █ █ █ █ █ █
@@ -231,44 +235,44 @@ Ideal para heatmap!
 █ █ █ █ █ █ █ █
 █ █ █ █ █ █ █ █
 ↑
-8 columnas
+8 columns
 
-96 pixels (ajustado de 100)
-Respeta ratio 2:3 del área
-Pixels casi cuadrados!
+96 pixels (adjusted from 100)
+Keeps the area's 2:3 ratio
+Nearly square pixels!
 ```
 
 ---
 
-## Casos Especiales
+## Special cases
 
-### 1. Puntos muy pocos (< 10)
+### 1. Very few points (< 10)
 
 ```bash
 --points 4 --width 1 --height 1
 → Grid: 2 x 2 = 4 points (exact)
 ```
 
-### 2. Puntos impares
+### 2. Odd numbers of points
 
 ```bash
 --points 27 --width 3 --height 3
 → Grid: 5 x 5 = 25 points (closest square)
 ```
 
-### 3. Área muy rectangular (10:1)
+### 3. Very elongated area (10:1)
 
 ```bash
 --points 100 --width 10 --height 1
 → Grid: 31 x 3 = 93 points
-→ Pixels rectangulares inevitables (ratio extremo)
+→ Rectangular pixels are unavoidable (extreme ratio)
 ```
 
 ---
 
-## Migración desde Versión Anterior
+## Migrating from the previous version
 
-### Antes (con `--step`)
+### Before (with `--step`)
 
 ```bash
 python grid_generator.py \
@@ -280,9 +284,9 @@ python grid_generator.py \
   --step 0.3
 ```
 
-Resultado: 11 x 11 = 121 puntos
+Result: 11 x 11 = 121 points
 
-### Ahora (con `--points`)
+### Now (with `--points`)
 
 ```bash
 python grid_generator.py \
@@ -294,17 +298,17 @@ python grid_generator.py \
   --points 121
 ```
 
-Resultado: 11 x 11 = 121 puntos (exactamente igual)
+Result: 11 x 11 = 121 points (exactly the same)
 
-### Conversión Rápida
+### Quick conversion
 
 ```python
-# Si antes usabas:
+# If you used to run:
 step = 0.3
 width = 3.0
 height = 3.0
 
-# Calcular puntos equivalentes:
+# Equivalent number of points:
 num_ra = int(width / step) + 1
 num_dec = int(height / step) + 1
 points = num_ra * num_dec
@@ -315,51 +319,51 @@ print(f"--points {points}")
 
 ---
 
-## Ventajas para Radioastronomía
+## Advantages for radio astronomy
 
-### 1. Planificación de Observaciones
+### 1. Planning observations
 
 ```python
-# Calcular tiempo total
+# Total time
 points = 144  # 12x12
-capture_time = 60  # segundos
+capture_time = 60  # seconds
 settling_time = 2
 slew_time_avg = 8
 
 time_per_point = capture_time + settling_time + slew_time_avg
-total_time = points * time_per_point / 3600  # horas
+total_time = points * time_per_point / 3600  # hours
 
 print(f"{total_time:.1f} hours")
 # Output: 2.8 hours
 ```
 
-### 2. Mapas de Calidad
+### 2. Good maps
 
-- Pixels cuadrados → heatmaps sin distorsión
-- Distribución uniforme → cobertura consistente
-- Fácil de procesar con numpy/matplotlib
+- Square pixels → heatmaps without distortion
+- Uniform distribution → consistent coverage
+- Easy to process with numpy/matplotlib
 
-### 3. Optimización de Recursos
+### 3. Making the most of the time
 
 ```bash
-# Observación de 2 horas disponibles
-time_available = 7200  # segundos
+# 2 hours of observing available
+time_available = 7200  # seconds
 capture_time = 30
 overhead = 10
 points_possible = time_available / (capture_time + overhead)
 
-# Usar: --points 180 (será ajustado a ~196 = 14x14)
+# Use: --points 180 (adjusted to ~196 = 14x14)
 ```
 
 ---
 
-## Resumen
+## Summary
 
-✅ **Reemplazado** `--step` por `--points`  
-✅ **Distribución automática** para pixels cuadrados  
-✅ **Respeta ratio del área** definida  
-✅ **Ajuste inteligente** del número de puntos  
-✅ **Perfecto para plotting** de datos radio  
-✅ **Planificación precisa** de tiempo de observación  
+✅ **Replaced** `--step` with `--points`
+✅ **Automatic distribution** for square pixels
+✅ **Keeps the ratio** of the area given
+✅ **Smart adjustment** of the number of points
+✅ **Perfect for plotting** radio data
+✅ **Precise planning** of observing time
 
-**El cambio es incompatible con scripts anteriores**, pero mejora significativamente la usabilidad.
+**The change is incompatible with earlier scripts**, but it makes the tool much easier to use.

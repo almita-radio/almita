@@ -1,11 +1,16 @@
-# rtl_tcp como servicio systemd
+# rtl_tcp as a systemd service
 
-Esta configuración mantiene `rtl_tcp` escuchando sólo en la interfaz local
-`127.0.0.1:1234` y lo reinicia automáticamente si el proceso termina.
+This setup keeps `rtl_tcp` listening only on the local interface
+`127.0.0.1:1234` and restarts it automatically if the process exits.
 
-## Unidad de servicio
+> Since November 2026 `rtl_tcp` runs on the Raspberry Pi 4 capture box and the notebook reaches it through
+> `instrument_forwarder` (see [README.md](README.md)). The unit below describes the single-machine setup; on the capture Pi
+> `rtl_tcp` must listen on the network interface the notebook reaches, not only on 127.0.0.1. The capture-Pi install script
+> on the development branch (`scripts/install_capture_pi.sh`) enables `rtl_tcp.service` there.
 
-Crear `/etc/systemd/system/rtl_tcp.service` con este contenido:
+## Service unit
+
+Create `/etc/systemd/system/rtl_tcp.service` with this content:
 
 ```ini
 [Unit]
@@ -26,12 +31,12 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-Antes de habilitar la unidad, cerrar cualquier instancia manual de `rtl_tcp`
-para evitar que dos procesos compitan por el SDR o por el puerto 1234.
+Before enabling the unit, close any manually started `rtl_tcp` so that two
+processes do not compete for the SDR or for port 1234.
 
-## Activación
+## Enabling it
 
-Después de crear o modificar la unidad:
+After creating or changing the unit:
 
 ```bash
 sudo systemctl daemon-reload
@@ -39,203 +44,182 @@ sudo systemctl enable --now rtl_tcp
 sudo systemctl status rtl_tcp
 ```
 
-`enable --now` configura el inicio automático durante el arranque y levanta el
-servicio inmediatamente.
+`enable --now` makes it start at boot and starts the service right away.
 
-## Logs y verificación
+## Logs and checks
 
-Seguir el journal del servicio en vivo:
+Follow the service journal live:
 
 ```bash
 journalctl -u rtl_tcp -f
 ```
 
-Confirmar que el servidor escucha en TCP/1234:
+Check that the server listens on TCP/1234:
 
 ```bash
 ss -lntp | grep 1234
 ```
 
-El resultado esperado contiene un socket `LISTEN` en `127.0.0.1:1234`. Si el
-servicio falla, revisar primero el journal por errores de acceso al dispositivo
-USB, interfaz ocupada o puerto ya utilizado.
+The expected output contains a `LISTEN` socket on `127.0.0.1:1234`. If the
+service fails, look in the journal first for USB device access errors, a busy
+interface or a port already in use.
 
-## RFI_REF: secundario desechable (V3) en paralelo con MAIN
+## RFI_REF: a disposable secondary SDR (V3) in parallel with MAIN
 
-MAIN (`rtl_tcp.service`, serial `00000001`, `127.0.0.1:1234`; desde el 2026-10-17 es un RTL-SDR Blog V3 con su EEPROM reprogramada a ese serial, porque el V4 se retiró)
-es la única fuente autoritativa para Capture. Un segundo RTL-SDR (V3/R820T,
-serial `00000002`) puede usarse como referencia de RFI en paralelo ("RFI_REF"),
-pero **nunca** como parte de `rtl_tcp.service` ni de la ruta científica: se
-lanza como proceso `rtl_tcp` temporal e independiente en `127.0.0.1:1235`, y
-una falla, atraso o crash en él no debe poder bloquear, pausar ni alterar la
-adquisición de MAIN.
+MAIN (`rtl_tcp.service`, serial `00000001`, `127.0.0.1:1234`; since 2026-10-17 it is an RTL-SDR Blog V3 with its EEPROM
+reprogrammed to that serial, because the V4 was retired) is the only authoritative source for Capture. A second RTL-SDR
+(V3/R820T, serial `00000002`) can be used in parallel as an RFI reference ("RFI_REF"), but **never** as part of
+`rtl_tcp.service` or of the science path: it is launched as a separate, temporary `rtl_tcp` process on
+`127.0.0.1:1235`, and a failure, delay or crash in it must never be able to block, pause or alter MAIN's acquisition.
 
-Esta arquitectura fue validada en hardware con
+This architecture was validated on hardware with
 [`dual_sdr_benchmark.py`](../../dual_sdr_benchmark.py):
 
 ```bash
 python3 dual_sdr_benchmark.py --duration 180
 ```
 
-El script nunca reinicia ni modifica `rtl_tcp.service`; lanza RFI_REF como
-subproceso propio, verifica por PID (vía `ss -lntp`) que el socket de
-`127.0.0.1:1235` pertenece realmente al subproceso que lanzó (para no
-consumir por error un `rtl_tcp` manual preexistente en ese puerto), y aísla
-cualquier falla del lado de RFI_REF de MAIN con
-`asyncio.gather(..., return_exceptions=True)`. El quicklook FFT de RFI_REF
-corre en un thread separado para no bloquear el loop que drena el socket de
-MAIN. No persiste IQ completo de RFI_REF a propósito — es un sidecar de
-referencia, no una fuente de datos científicos, por lo que un quicklook FFT
-liviano (~5% de los bloques, sin guardar IQ) es suficiente para caracterizar
-RFI sin agregar carga de I/O.
+The script never restarts or changes `rtl_tcp.service`. It launches RFI_REF as its own subprocess and checks by PID (via
+`ss -lntp`) that the `127.0.0.1:1235` socket really belongs to the subprocess it launched, so it never consumes a
+pre-existing manual `rtl_tcp` on that port by mistake. It isolates any RFI_REF-side failure from MAIN with
+`asyncio.gather(..., return_exceptions=True)`. RFI_REF's quick-look FFT runs in a separate thread so it never blocks the
+loop that drains MAIN's socket. RFI_REF's full IQ is deliberately not kept. It is a reference side-car, not a source of
+science data, so a light quick-look FFT (~5% of the blocks, no IQ saved) is enough to characterise RFI without adding
+I/O load.
 
-Resultado validado (corrida de 180s baseline + 180s dual, MAIN a 1420405000 Hz
-/ 2.4 MS/s / gain 40.2 dB / Bias-T ON; RFI_REF a 1420405000 Hz / 2.4 MS/s /
-gain 25 dB):
+Validated result (a 180 s baseline run + a 180 s dual run; MAIN at 1420405000 Hz / 2.4 MS/s / gain 40.2 dB / Bias-T ON;
+RFI_REF at 1420405000 Hz / 2.4 MS/s / gain 25 dB):
 
-- ratio de throughput MAIN dual/baseline: 0.99999
-- pérdidas/errores/discontinuidades en MAIN: 0
-- resets USB: 0
-- CPU promedio del sistema durante dual: 2.75%
-- RAM usada: 23.3%
-- duty del FFT quicklook de RFI_REF: ~5% de los bloques
-- pérdidas en RFI_REF: 0
+- MAIN dual/baseline throughput ratio: 0.99999
+- losses/errors/discontinuities on MAIN: 0
+- USB resets: 0
+- mean system CPU during dual: 2.75%
+- RAM used: 23.3%
+- RFI_REF quick-look FFT duty: ~5% of the blocks
+- losses on RFI_REF: 0
 
-La evidencia completa (CSV por bloque, muestreo de recursos, logs, JSON) de
-cada corrida se guarda bajo `data/dual_sdr_bench/<run_id>/` y no se versiona
-en git (ver `.gitignore`) — es evidencia de runtime, no un artefacto de
-código.
+The full evidence of each run (per-block CSV, resource sampling, logs, JSON) is kept under
+`data/dual_sdr_bench/<run_id>/` and is not versioned in git (see `.gitignore`): it is runtime evidence, not a code
+artefact.
 
-## RFI_REF integrado en Capture: sidecar opcional y desechable
+## RFI_REF inside Capture: an optional, disposable side-car
 
-El benchmark standalone de arriba valida el par rtl_tcp MAIN+RFI_REF de forma
-aislada. [`rfi_monitor.py`](../../rfi_monitor.py) (`RFIReferenceMonitor`) lleva esa
-misma arquitectura — verificación de ownership del socket por PID, subproceso
-propio nunca gestionado por `rtl_tcp.service`, FFT quicklook en thread aparte,
-sin persistir IQ — dentro de `capture.py`, como un sidecar real de campo.
+The standalone benchmark above validates the MAIN+RFI_REF rtl_tcp pair on its own.
+[`rfi_monitor.py`](../../rfi_monitor.py) (`RFIReferenceMonitor`) brings the same architecture into `capture.py` as a
+real field side-car:
+- socket ownership checked by PID;
+- its own subprocess, never managed by `rtl_tcp.service`;
+- the quick-look FFT in a separate thread;
+- no IQ kept.
 
-**Regla de arquitectura no negociable:** MAIN es la única fuente científica
-autoritativa. RFI_REF es opcional y desechable — una falla, crash, bind error,
-device ausente, atraso de procesamiento o salida malformada en RFI_REF nunca
-debe bloquear, pausar, ni alterar MAIN: ni su ganancia, ni `rtl_tcp.service`,
-ni el HDF5 científico, ni el comportamiento de mount/GOTO, ni abortar la
-sesión. RFI_REF es un monitor de diagnóstico, **no** un cancelador activo de
-interferencia — no se resta ni se mezcla con la IQ de MAIN en esta etapa.
+**Non-negotiable architecture rule:** MAIN is the only authoritative science source. RFI_REF is optional and
+disposable. None of these in RFI_REF may ever block, pause or alter MAIN, or abort the session:
+- a failure, crash or bind error;
+- a missing device;
+- processing lag or malformed output.
 
-Activación (por defecto deshabilitado — comportamiento existente sin cambios):
+"Alter MAIN" covers its gain, `rtl_tcp.service`, the science HDF5 and the mount/GOTO behaviour. RFI_REF is a diagnostic
+monitor, **not** an active interference canceller: at this stage it is neither subtracted from nor mixed with MAIN's IQ.
+
+Enabling it (disabled by default, so existing behaviour is unchanged):
 
 ```bash
 python3 capture.py --csv <plan.csv> --settle 5 --capture 10 \
   --rfi-ref-enabled --rfi-ref-gain-db 25.0 --runtime-dir data/runtime
 ```
 
-`--rfi-ref-gain-db` es independiente de `--sdr-gain` (nunca reutiliza la
-ganancia de MAIN implícitamente). `--rfi-ref-port` (default `1235`) y
-`--rfi-ref-serial` (default `00000002`) también son configurables; la
-frecuencia y el sample rate de RFI_REF siempre replican los de MAIN
-(`--sdr-freq`/`--sdr-rate`), para coincidir exactamente por diseño.
+`--rfi-ref-gain-db` is independent of `--sdr-gain` (MAIN's gain is never reused implicitly). `--rfi-ref-port`
+(default `1235`) and `--rfi-ref-serial` (default `00000002`) can also be set. RFI_REF's frequency and sample rate always
+copy MAIN's (`--sdr-freq`/`--sdr-rate`), so they match exactly by design.
 
-Capture inicia el sidecar como tarea de fondo (`asyncio.create_task`, nunca
-bloqueante) justo después de que el SDR de MAIN queda conectado, y lo detiene
-en el `finally` de `execute_observation_plan` — cubre toda salida (sesión
-completa, pausada, abortada, `KeyboardInterrupt`). El estado de RFI_REF se
-publica en `data/runtime/rfi_ref_status.json`, asociado al mismo `session_id`
-canónico que ya usa Capture (nunca una segunda identidad de sesión), y el
-watcher (`almita_console_watcher.py`) lo pliega dentro de `almita_status.json`
-bajo la clave `rfi_ref`; un archivo ausente, de una sesión vieja, o sin el
-campo (sesiones anteriores a esta integración) siempre se interpreta como
-`DISABLED`, nunca como error. La Console local (`console/`) agrega un panel
-**RFI REFERENCE** con estado/serial/ganancia/duty/occupancy/clipping/peak/
-última actualización; una falla de RFI_REF nunca cambia el estado de la
-sesión de MAIN a `ABORTED`.
+**Lifecycle.**
+- Capture starts the side-car as a background task (`asyncio.create_task`, never blocking) right after MAIN's SDR is
+  connected.
+- It stops it in the `finally` of `execute_observation_plan`, which covers every exit: completed, paused or aborted
+  session, `KeyboardInterrupt`.
 
-### Validación de hardware "SATANIC"
+**Status.**
+- RFI_REF's state is published in `data/runtime/rfi_ref_status.json`, tied to the same canonical `session_id` Capture
+  already uses (never a second session identity).
+- The watcher (`almita_console_watcher.py`) folds it into `almita_status.json` under the key `rfi_ref`.
+- A missing file, one from an old session, or one without the field (sessions from before this integration) is always
+  read as `DISABLED`, never as an error.
 
-Además del benchmark standalone, se ejecutó una validación de hardware
-adversarial usando las clases reales de producción (`SDRCapture` de MAIN y
-`RFIReferenceMonitor`) contra `rtl_tcp.service` real y un RFI_REF real en
-`127.0.0.1:1235`, deliberadamente diseñada para romper RFI_REF preservando
-MAIN:
+**Console.** The local console (`console/`) adds an **RFI REFERENCE** panel showing state, serial, gain, duty, occupancy,
+clipping, peak and last update. An RFI_REF failure never changes MAIN's session state to `ABORTED`.
 
-- **A (normal):** MAIN+RFI_REF concurrentes — RFI_REF `RUNNING`, 0% clipping,
-  todas las capturas de MAIN válidas.
-- **B (matar RFI_REF a mitad de captura) — criterio obligatorio:** se envió
-  `SIGKILL` únicamente al subproceso propio de RFI_REF mientras MAIN
-  capturaba activamente. MAIN completó sus 6 capturas sin pérdidas ni
-  discontinuidades; RFI_REF pasó a `FAILED` con el error capturado; cero
-  resets USB; `rtl_tcp.service` nunca se tocó.
-- **C (puerto 1235 ocupado por un proceso ajeno):** RFI_REF detectó el
-  ownership ajeno por PID, nunca se conectó ni lo terminó, quedó
-  `UNAVAILABLE`; MAIN completó su sesión con normalidad.
-- **D (V3 ausente, simulado con un serial inexistente):** `rtl_tcp` rechazó
-  cualquier fallback a otro dispositivo ("No matching devices found"),
-  RFI_REF quedó `FAILED` con el diagnóstico real de `rtl_tcp`; MAIN no se vio
-  afectado.
-- **E (backpressure / FFT lento):** con un retardo artificial de FFT
-  (parámetro sólo de prueba, vía `ALMITA_RFI_TEST_FFT_DELAY_S`), RFI_REF
-  descartó su propio trabajo de FFT (bloques `dropped`) en vez de acumular
-  atraso; MAIN mantuvo throughput normal.
-- **F (carga tipo campo completa):** MAIN+RFI_REF junto con
-  `almita_console_watcher.py` y `almita_console_server.py` corriendo en
-  paralelo durante ~150s; MAIN sin pérdidas, `rfi_ref` reflejado en
-  `almita_status.json`.
+### "SATANIC" hardware validation
 
-En todas las fases: `rtl_tcp.service` nunca se reinició ni modificó, ningún
-proceso ajeno fue terminado, y las únicas terminaciones fueron sobre PIDs que
-RFI_REF lanzó él mismo. La evidencia completa (JSON por fase, HDF5 de MAIN,
-logs) se guarda bajo `data/rfi_ref_satanic/<run_id>/` y no se versiona en git.
+Besides the standalone benchmark, an adversarial hardware validation was run with the real production classes (MAIN's
+`SDRCapture` and `RFIReferenceMonitor`) against the real `rtl_tcp.service` and a real RFI_REF on `127.0.0.1:1235`. It was
+designed on purpose to break RFI_REF while preserving MAIN:
 
-Nota de alcance: esta validación de hardware se corrió a nivel SDR/software
-(clases reales `SDRCapture`/`RFIReferenceMonitor`, hardware real MAIN+RFI_REF)
-sin pasar por el loop de puntos con INDI/mount — la integración con el mount
-real (GOTO/tracking) queda cubierta por los tests de integración offline en
-`test_capture_rfi_ref_integration.py`, que sí ejercitan el ciclo de vida
-completo de `execute_observation_plan()` con un telescopio simulado.
+- **A (normal):** MAIN and RFI_REF together. RFI_REF `RUNNING`, 0% clipping, every MAIN capture valid.
+- **B (kill RFI_REF mid-capture), the mandatory criterion:** `SIGKILL` was sent only to RFI_REF's own subprocess while
+  MAIN was actively capturing.
+  - MAIN completed its 6 captures with no losses or discontinuities.
+  - RFI_REF went to `FAILED` with the error recorded.
+  - Zero USB resets; `rtl_tcp.service` was never touched.
+- **C (port 1235 taken by an unrelated process):** RFI_REF detected the foreign ownership by PID, never connected to it
+  or killed it, and stayed `UNAVAILABLE`. MAIN completed its session normally.
+- **D (V3 missing, simulated with a non-existent serial):** `rtl_tcp` refused any fallback to another device ("No
+  matching devices found"). RFI_REF stayed `FAILED` with `rtl_tcp`'s real diagnosis; MAIN was not affected.
+- **E (backpressure / slow FFT):** with an artificial FFT delay (a test-only parameter, via
+  `ALMITA_RFI_TEST_FFT_DELAY_S`), RFI_REF dropped its own FFT work (`dropped` blocks) instead of falling behind. MAIN kept
+  normal throughput.
+- **F (full field-like load):** MAIN and RFI_REF ran with `almita_console_watcher.py` and `almita_console_server.py` for
+  ~150 s. MAIN had no losses, and `rfi_ref` showed up in `almita_status.json`.
 
-## ANTENNA B: tres productos, ninguno un mapa de cielo falso
+In every phase:
+- `rtl_tcp.service` was never restarted or changed;
+- no unrelated process was killed;
+- the only processes ended were PIDs that RFI_REF had launched itself.
 
-RFI_REF (ANTENNA B) es una antena de referencia fija — nunca reproduce la
-geometría de apuntado de MAIN (ANTENNA A). Por eso expone tres productos
-paralelos a los de MAIN, pero honestos sobre lo que realmente son:
+The full evidence (JSON per phase, MAIN's HDF5, logs) is kept under `data/rfi_ref_satanic/<run_id>/` and is not
+versioned in git.
 
-1. **RFI Spectrum** (`data/runtime/rfi_ref_spectrum.json`) — 256 bins,
-   max-pooling desde la misma FFT de ~5% duty (nunca una segunda FFT), eje
-   de frecuencia en Hz absolutos, potencia en dBFS.
-2. **RFI Waterfall** (`data/runtime/rfi_ref_waterfall.json`) — reutiliza el
-   mismo array de 256 bins ya calculado para el spectrum en cada tick de
-   publicación (~2s por defecto, independiente y siempre más lento que la
-   FFT), acumulando una ventana acotada (`waterfall_max_rows`, default 120
-   filas ≈ 4 min) vía `deque(maxlen=...)`. Cada fila: `{"utc", "power_dbfs"}`.
-3. **RFI Occupancy Map** (`rfi_occupancy_map.json`/`.png`, servido junto a
-   `quicklook_map.json` de ANTENNA A bajo `quicklook_products/`) — **no es
-   un mapa de cielo**: superpone un diagnóstico de contaminación RFI sobre
-   la geometría nativa de grilla de MAIN (`rfi_occupancy_map.py`, reutiliza
-   `quicklook_map.load_native_grid_geometry`/`read_cell_status` sin
-   modificarlos). Para cada punto MAIN exitoso, correlaciona por
-   superposición de timestamp (`start_time`/`end_time` de `mosaic.csv`) las
-   muestras de `data/runtime/rfi_ref_history.json` (historial acotado de
-   `{utc, occupancy_fraction, clipping_fraction, peak_dbfs}`, mismo tick de
-   publicación que el waterfall) que caen dentro de esa ventana. Sin
-   interpolación, sin celdas inventadas: un punto sin muestras RFI
-   superpuestas queda ausente (NaN/`null` en el JSON, nunca un 0 falso).
-   Lo construye `quicklook_live.py` (proceso desacoplado, ya existente) en
-   cada `scan_once()` — nunca capture.py, nunca una segunda identidad de
-   sesión.
+**Scope note.** This hardware validation ran at the SDR/software level: the real `SDRCapture` and `RFIReferenceMonitor`
+classes on the real MAIN and RFI_REF hardware, without the point loop with INDI and the mount. Integration with the real
+mount (GOTO/tracking) is covered by the offline integration tests in `test_capture_rfi_ref_integration.py`, which do run
+the whole lifecycle of `execute_observation_plan()` with a simulated telescope.
 
-Los tres productos llevan el `session_id` canónico y se descartan si no
-coincide con la sesión actual (mismo criterio que el spectrum ya validado);
-mientras `RUNNING`/`DEGRADED` también deben ser recientes, y una vez
-`STOPPED` se preserva el último producto válido de esa sesión para
-inspección posterior, sin importar la antigüedad.
+## ANTENNA B: three products, none of them a fake sky map
 
-**Validación de hardware real:** spectrum y waterfall se corrieron contra el
-V3 real (sin mover la montura): 256 bins, 10 filas de waterfall (acotadas
-correctamente), historial acotado, mismo array de frecuencia entre spectrum
-y waterfall (prueba de reuso sin segunda FFT), FFT duty medido ~4.9%, CPU/RAM
-estables, cero resets USB, `rtl_tcp.service` intacto. El occupancy map se
-validó con la geometría y el timing **reales** de una sesión GOTO exitosa
-anterior (9/9 puntos reales) más un historial RFI realista (mismo rango de
-valores medido en hardware real) posicionado dentro de esas ventanas
-temporales reales — 9/9 celdas observadas, PNG generado correctamente,
-corriendo el camino de producción completo (`QuicklookLive._update_rfi_occupancy_map`)
-sin reimplementar ni mockear la lógica.
+RFI_REF (ANTENNA B) is a fixed reference antenna: it never reproduces MAIN's (ANTENNA A's) pointing geometry. So it
+offers three products parallel to MAIN's, honest about what they really are:
+
+1. **RFI Spectrum** (`data/runtime/rfi_ref_spectrum.json`): 256 bins, max-pooled from the same ~5%-duty FFT (never a
+   second FFT), frequency axis in absolute Hz, power in dBFS.
+2. **RFI Waterfall** (`data/runtime/rfi_ref_waterfall.json`). It reuses the 256-bin array already computed for the
+   spectrum at each publish tick. The tick is ~2 s by default, independent of the FFT and always slower than it.
+   - It keeps a bounded window (`waterfall_max_rows`, default 120 rows ≈ 4 min) through `deque(maxlen=...)`.
+   - Each row is `{"utc", "power_dbfs"}`.
+3. **RFI Occupancy Map** (`rfi_occupancy_map.json`/`.png`, served next to ANTENNA A's `quicklook_map.json` under
+   `quicklook_products/`). It is **not a sky map**: it overlays an RFI contamination diagnostic on MAIN's native grid
+   geometry.
+   - Built by `rfi_occupancy_map.py`, which reuses `quicklook_map.load_native_grid_geometry`/`read_cell_status` without
+     changing them.
+   - For each successful MAIN point, it matches by timestamp overlap (`start_time`/`end_time` from `mosaic.csv`) the
+     samples of `data/runtime/rfi_ref_history.json` that fall inside that window.
+   - That history is a bounded list of `{utc, occupancy_fraction, clipping_fraction, peak_dbfs}`, on the same publish
+     tick as the waterfall.
+   - There is no interpolation and no invented cell: a point with no overlapping RFI samples stays absent (NaN/`null` in
+     the JSON, never a false 0).
+   - It is built by `quicklook_live.py` (an existing, decoupled process) at each `scan_once()`. Never by capture.py, and
+     never under a second session identity.
+
+All three products carry the canonical `session_id` and are dropped if it does not match the current session (the same
+rule as the already validated spectrum). While `RUNNING`/`DEGRADED` they must also be recent. Once `STOPPED`, the last
+valid product of that session is kept for later inspection, whatever its age.
+
+**Real hardware validation.**
+- Spectrum and waterfall were run against the real V3, without moving the mount:
+  - 256 bins, 10 waterfall rows (correctly bounded), a bounded history;
+  - the same frequency array in spectrum and waterfall, which proves the reuse without a second FFT;
+  - a measured FFT duty of ~4.9%, stable CPU/RAM, zero USB resets and `rtl_tcp.service` untouched.
+- The occupancy map was validated with the **real** geometry and timing of an earlier successful GOTO session (9/9 real
+  points). The RFI history was realistic, in the same range of values measured on real hardware, and placed inside
+  those real time windows.
+  - Result: 9/9 cells observed and the PNG generated correctly.
+  - It ran the full production path (`QuicklookLive._update_rfi_occupancy_map`) without reimplementing or mocking the
+    logic.

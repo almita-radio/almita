@@ -120,8 +120,8 @@ Commercial modules remain under their manufacturers' terms. Details: [docs/hardw
 | CALIBRATE | [docs/CALIBRATION_SCOPE.md](docs/CALIBRATION_SCOPE.md), [docs/CALIBRATION_MODEL.md](docs/CALIBRATION_MODEL.md), [docs/CALIBRATION_FIRST_TEST_RUNBOOK.md](docs/CALIBRATION_FIRST_TEST_RUNBOOK.md) |
 | REDUCE | [docs/REDUCE_SCOPE.md](docs/REDUCE_SCOPE.md), [docs/REDUCE_MODEL.md](docs/REDUCE_MODEL.md), [docs/REDUCE_PIPELINE.md](docs/REDUCE_PIPELINE.md), [docs/REDUCE_V1_FREEZE.md](docs/REDUCE_V1_FREEZE.md), [runbook](docs/REDUCE_FIRST_RUNBOOK.md) |
 | SCIENCE | [docs/SCIENCE_SCOPE.md](docs/SCIENCE_SCOPE.md), [docs/SCIENCE_MODEL.md](docs/SCIENCE_MODEL.md), [docs/SCIENCE_PIPELINE.md](docs/SCIENCE_PIPELINE.md), [docs/SCIENCE_ACCEPTANCE.md](docs/SCIENCE_ACCEPTANCE.md), [docs/SCIENCE_V1_FREEZE.md](docs/SCIENCE_V1_FREEZE.md), [runbook](docs/SCIENCE_FIRST_RUNBOOK.md) |
-| Web console | [docs/WEB_ALIGNMENT_CALIBRATION.md](docs/WEB_ALIGNMENT_CALIBRATION.md) |
-| Hardware notes (mount model, rtl_tcp service) | [docs/hardware/](docs/hardware/) |
+| Web console | [docs/WEB_ALIGNMENT_CALIBRATION.md](docs/WEB_ALIGNMENT_CALIBRATION.md); the current twelve-page console: [WEB_ARCHITECTURE](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_ARCHITECTURE.md), [WEB_OPERATIONS](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_OPERATIONS.md) (development branch) |
+| Hardware (architecture, build, BOM, RF and wiring, DIY feed, mount model, rtl_tcp service) | [docs/hardware/](docs/hardware/) |
 | Full documentation index | [docs/README.md](docs/README.md) |
 
 ## Status and installation
