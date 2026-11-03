@@ -396,6 +396,9 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.read_mount()})
             if path == "/api/mount/device":
                 return _json_response(self, 200, {"ok": True, "data": mount_device.describe()})
+            if path == "/api/transit/state":
+                import transit_logger
+                return _json_response(self, 200, {"ok": True, "data": transit_logger.service_state()})
             if path == "/api/instrument":
                 probe = (parse_qs(urlsplit(self.path).query).get("probe") or ["0"])[0] == "1"
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.instrument_state(probe=probe)})
@@ -605,6 +608,17 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 body = _read_json_body(self)
                 _log("WARNING", f"req={self._request_id} MOUNT DEVICE -> {str(body.get('device'))[:40]!r} requested")
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.set_mount_device(str(body.get("device", "")))})
+            if path in ("/api/transit/start", "/api/transit/stop"):
+                body = _read_json_body(self)
+                if body.get("confirm") is not True:
+                    raise ValueError("send {confirm: true}")
+                import transit_logger
+                action = path.rsplit("/", 1)[-1]
+                _log("WARNING", f"req={self._request_id} TRANSIT logger {action.upper()} requested")
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": transit_logger.service_action(action)})
+                except RuntimeError as exc:
+                    return _error_response(self, 409, str(exc))
             if path == "/api/sdr/lna":
                 body = _read_json_body(self)
                 if body.get("confirm") is not True or not isinstance(body.get("on"), bool):

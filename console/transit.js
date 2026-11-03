@@ -1,6 +1,6 @@
 // ALMITA TRANSIT (operator 2026-11-02): the Sun drifting through the still antenna's beam. Reads only what
 // transit_logger.py writes (data/runtime/transit_latest.json: the last 180 min) and draws the band power of the last
-// 30, 60 and 180 minutes, with the Sun's altitude dashed on the right axis. Read-only: it starts and moves nothing.
+// 30, 60 and 180 minutes, with the Sun's altitude dashed on the right axis. START / STOP switch the logger's user unit (it never moves the mount).
 (function () {
   "use strict";
   const U = window.AlmitaUI;
@@ -13,7 +13,7 @@
   const css = (name, fallback) => (getComputedStyle(document.documentElement).getPropertyValue(name) || "").trim() || fallback;
   const chile = (ms) => new Date(ms - 3 * 3600e3).toISOString().slice(11, 16);          // Chile, UTC-3
   const kv = (dl, rows) => { dl.textContent = ""; for (const [k, v] of rows) { const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = v; dl.append(dt, dd); } };
-  let doc = null;
+  let doc = null, svc = null, busy = false;
 
   function setup(canvas) {
     const dpr = Math.max(2, window.devicePixelRatio || 1), box = canvas.getBoundingClientRect();
@@ -84,11 +84,14 @@
     const rows = (doc && doc.rows) || [];
     const last = rows[rows.length - 1];
     const age = doc && doc.updated_utc ? (Date.now() - Date.parse(doc.updated_utc)) / 1000 : Infinity;
-    const running = age < 3 * ((doc && doc.every_s) || 10) + 15;
+    // the unit's own state when the server could read it; otherwise how fresh the last sample is
+    const running = svc && svc.active !== null && svc.active !== undefined ? svc.active : age < 3 * ((doc && doc.every_s) || 10) + 15;
     U.setBadge($("state-badge"), running ? "RUNNING" : "STOPPED");
+    $("btn-start").disabled = busy || running;
+    $("btn-stop").disabled = busy || !running;
     const count = (s) => rows.filter((r) => r.status === s).length;
     kv($("state-kv"), [
-      ["LOGGER", running ? `running · last sample ${Math.round(age)} s ago` : (doc ? `no new sample for ${Math.round(age / 60)} min - transit_logger.py not running` : "no data yet - transit_logger.py has not written anything")],
+      ["LOGGER", running ? `running · last sample ${Number.isFinite(age) ? Math.round(age) + " s ago" : "—"}` : `stopped (the SDR is not being used by TRANSIT)${doc ? ` · last sample ${Math.round(age / 60)} min ago` : ""}`],
       ["LAST SAMPLE", last ? `${chile(Date.parse(last.utc))} Chile · ${last.status}${last.power_db !== null ? ` · ${last.power_db.toFixed(3)} dB` : ""}` : "—"],
       ["SUN NOW", last && last.sun_alt_deg !== null ? `alt ${last.sun_alt_deg.toFixed(1)}° · az ${last.sun_az_deg.toFixed(1)}°` : "—"],
       ["GAIN", doc ? `${doc.gain_db} dB fixed · ${doc.seconds} s of IQ every ${doc.every_s} s` : "—"],
@@ -102,8 +105,22 @@
     for (const m of WINDOWS) draw($(`chart-${m}`), rows, m, doc && doc.every_s);
   }
 
+  async function control(action) {
+    busy = true; state();
+    $("ctl-note").textContent = action === "start" ? "starting the logger…" : "stopping the logger (the sample in progress ends first)…";
+    const r = await U.api(`/api/transit/${action}`, { method: "POST", body: { confirm: true }, timeoutMs: 70000 });
+    busy = false;
+    if (r.ok) { svc = r.data.data; $("ctl-note").textContent = `logger ${svc.active ? "started" : "stopped"} (${svc.state})`; }
+    else $("ctl-note").textContent = `${action.toUpperCase()} failed: ${U.errorText(r.error)}`;
+    tick();
+  }
+  $("btn-start").addEventListener("click", () => control("start"));
+  $("btn-stop").addEventListener("click", () => control("stop"));
+
   async function tick() {
     if (document.hidden) return;
+    const s = await U.api("/api/transit/state", { timeoutMs: 15000 });
+    svc = s.ok ? s.data.data : null;
     try {
       const r = await fetch(`${ROOT}/${"transit_latest.json"}`, { cache: "no-store" });
       doc = r.ok ? await r.json() : null;

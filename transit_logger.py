@@ -99,6 +99,38 @@ async def measure(host: str, port: int, gain_db: float, seconds: float) -> Dict[
             pass
 
 
+UNIT = "almita-transit-logger.service"
+
+
+def _systemctl(*args: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def service_state() -> Dict[str, Any]:
+    """The logger's user unit as systemd sees it (the TRANSIT page's START/STOP)."""
+    try:
+        r = _systemctl("is-active", UNIT, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"unit": UNIT, "active": None, "state": "unknown", "error": str(exc)}
+    state = (r.stdout or "").strip() or "unknown"
+    return {"unit": UNIT, "active": state == "active", "state": state}
+
+
+def service_action(action: str) -> Dict[str, Any]:
+    """START / STOP from the TRANSIT page (operator 2026-11-02: "no va a estar todo el rato graficando"). STOP is the
+    unit's KillSignal=SIGINT: the sample in progress ends and the logger exits cleanly."""
+    if action not in ("start", "stop"):
+        raise ValueError("action must be start or stop")
+    try:
+        r = _systemctl(action, UNIT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"systemctl --user {action} {UNIT} did not answer in 60 s")
+    if r.returncode != 0:
+        raise RuntimeError(f"systemctl --user {action} {UNIT} failed: {(r.stderr or r.stdout).strip()[:300]} "
+                           "(installed by scripts/install_notebook.sh)")
+    return {"action": action, **service_state()}
+
+
 def read_window(now: datetime, minutes: int = WINDOW_MIN, out_dir: Path = OUT_DIR) -> List[Dict[str, Any]]:
     """Rows of the last `minutes` from the daily CSVs (today's and, around 00 UTC, yesterday's)."""
     since = now - timedelta(minutes=minutes)
