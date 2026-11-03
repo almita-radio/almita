@@ -16,7 +16,7 @@
   let doc = null, svc = null, busy = false;
   // dB axis: fixed 0-100 (operator 2026-11-03) or AUTO (the window's own range); remembered in this browser
   let scaleFixed = true;
-  try { scaleFixed = localStorage.getItem("almita-transit-scale") !== "auto"; } catch (e) { /* storage blocked: 0-100 */ }
+  try { scaleFixed = localStorage.getItem("almita-transit-axes") !== "auto"; } catch (e) { /* storage blocked: 0-100 */ }
 
   function setup(canvas) {
     const dpr = Math.max(2, window.devicePixelRatio || 1), box = canvas.getBoundingClientRect();
@@ -64,11 +64,14 @@
     // the capture Pi's temperature (the SDR hangs from it), dashed, right axis in °C, its own range
     const tp = pts.filter((r) => r.pi_temp_c !== null && r.pi_temp_c !== undefined);
     if (tp.length) {
-      let tlo = Math.min(...tp.map((r) => r.pi_temp_c)), thi = Math.max(...tp.map((r) => r.pi_temp_c));
-      const tpad = Math.max((thi - tlo) * 0.1, 1); tlo = Math.floor(tlo - tpad); thi = Math.ceil(thi + tpad);
+      let tlo = 0, thi = 100;                                                 // 0-100 °C with the dB axis' 0-100 (default)
+      if (!scaleFixed) {
+        tlo = Math.min(...tp.map((r) => r.pi_temp_c)); thi = Math.max(...tp.map((r) => r.pi_temp_c));
+        const tpad = Math.max((thi - tlo) * 0.1, 1); tlo = Math.floor(tlo - tpad); thi = Math.ceil(thi + tpad);
+      }
       const YT = (c) => padT + (h - padT - padB) * (thi - c) / (thi - tlo);
       ctx.textAlign = "left"; ctx.fillStyle = C.sun;
-      for (let k = 0; k <= 4; k++) { const c = tlo + (thi - tlo) * k / 4; ctx.fillText(`${c.toFixed(1)}°C`, w - padR + 4, YT(c) + 4); }
+      for (let k = 0; k <= 4; k++) { const c = tlo + (thi - tlo) * k / 4; ctx.fillText(`${c.toFixed(scaleFixed ? 0 : 1)}°C`, w - padR + 4, YT(c) + 4); }
       ctx.strokeStyle = C.sun; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2; ctx.beginPath();
       tp.forEach((r, i) => (i && r.t - tp[i - 1].t <= 3 * (everyS || 10) * 1e3 ? ctx.lineTo(X(r.t), YT(r.pi_temp_c)) : ctx.moveTo(X(r.t), YT(r.pi_temp_c))));
       ctx.stroke(); ctx.setLineDash([]);
@@ -126,11 +129,11 @@
     else $("ctl-note").textContent = `${action.toUpperCase()} failed: ${U.errorText(r.error)}`;
     tick();
   }
-  const scaleLabel = () => { $("btn-scale").textContent = scaleFixed ? "dB AXIS: 0–100 · show AUTO" : "dB AXIS: AUTO · show 0–100"; };
+  const scaleLabel = () => { $("btn-scale").textContent = scaleFixed ? "AXES: 0–100 dB / 0–100 °C · show AUTO" : "AXES: AUTO · show 0–100"; };
   scaleLabel();
   $("btn-scale").addEventListener("click", () => {
     scaleFixed = !scaleFixed;
-    try { localStorage.setItem("almita-transit-scale", scaleFixed ? "fixed" : "auto"); } catch (e) { /* not remembered */ }
+    try { localStorage.setItem("almita-transit-axes", scaleFixed ? "fixed" : "auto"); } catch (e) { /* not remembered */ }
     scaleLabel(); render();
   });
   $("btn-start").addEventListener("click", () => control("start"));
