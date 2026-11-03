@@ -21,33 +21,31 @@ shared**.
 - [MOUNT_SLEW_MODEL.md](MOUNT_SLEW_MODEL.md) — measured mount behaviour
 - [RTL_TCP_SYSTEMD.md](RTL_TCP_SYSTEMD.md) — SDR service integration
 
-## Current hardware architecture
+## Current hardware architecture (November 2026)
 
 ```text
-                         ┌──────────────────┐
-                         │  Raspberry Pi 5  │
-                         │                  │
-                         │  INDI / OnStep   │──────► Equatorial mount
-                         │  rtl_tcp MAIN    │
-                         │  rtl_tcp RFI_REF │
-                         │  DS18B20         │
-                         └──────┬─────┬─────┘
-                                │     │
-                 USB / MAIN SDR │     │ USB / RFI SDR
-                                │     │
-                                ▼     ▼
-                     RTL-SDR Blog V4  RTL-SDR Blog V3
-                                ▲     ▲
-                                │     │
-                    Hydrogen LNA│     │Wideband LNA
-                                ▲     ▲
-                                │     │
-                       1420 MHz feed  FM notch filter
-                                ▲     ▲
-                                │     │
-                    ~90 × 60 cm grid  Reference antenna
-                         reflector
+  ┌──────────────────────────────┐   Ethernet (10 m UTP)   ┌──────────────────────────────┐
+  │ Notebook                     │◄──────────────────────► │ Raspberry Pi 4 — capture box │
+  │  web console :8088 (login)   │  rtl_tcp :1234 · INDI   │  (closed metal box)          │
+  │  capture / quick-look / RFI  │  :7624 · agent :8099    │  rtl_tcp MAIN                │
+  │  masks / REDUCE / SCIENCE    │                         │  INDI via KStars/Ekos ───────┼──► OnStep ──► equatorial mount
+  └──────────────────────────────┘                         │  instrument agent (read-only)│
+                                                           └──────────────┬───────────────┘
+                                                                          │ USB
+                                                                          ▼
+                                                                  RTL-SDR Blog V3 (MAIN)
+                                                                          ▲  coax (Bias-T powers the LNA)
+                                                                  Nooelec SAWbird+ H1 LNA
+                                                                          ▲  ~11 cm pigtail
+                                                       DIY dipole feed v1 + 12 cm reflector plate
+                                                                          ▲
+                                                             ~90 × 60 cm grid dish
 ```
+
+Until November 2026 a single Raspberry Pi 5 did everything (and the software still supports that). The Pi was moved away from
+the feed into a metal box because it radiates a 357 kHz comb and narrow lines into the 1420 MHz band. The second chain
+(RFI_REF: reference antenna → FM notch → wideband LNA → RTL-SDR) is supported but currently disconnected, and the DS18B20
+thermometers are off while their harness on the GPIO is an RF source.
 
 ALMITA deliberately uses replaceable modules rather than hiding the instrument
 inside a sealed custom appliance. That makes field repair easier and keeps the

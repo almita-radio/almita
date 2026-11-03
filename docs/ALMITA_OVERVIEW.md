@@ -11,6 +11,10 @@ Contact: **ffridman@gmail.com**
 
 It combines a Raspberry Pi 5, RTL-SDR receivers, an equatorial mount controlled through INDI/OnStep, automated observing, reproducible reduction and science pipelines, and a local web interface designed to work completely offline in the field.
 
+> **Update, November 2026.** Parts of this guide describe the single Raspberry Pi 5 setup with an RTL-SDR Blog V4. The instrument
+> now runs on a notebook plus a Raspberry Pi 4 capture box, with an RTL-SDR Blog V3, a SAWbird+ H1 LNA and a new DIY dipole feed.
+> See [What is new](../README.md#what-is-new-up-to-november-2026) and [hardware/](hardware/README.md) for the current state.
+
 ALMITA is mostly vibe-coded, extensively tested, occasionally threatened with a hammer, and still held together in suspiciously many places by **plastic cable ties**.
 
 This is considered temporary.

@@ -1,5 +1,14 @@
 # ALMITA documentation index
 
+**Current state (November 2026):** see [What is new](../README.md#what-is-new-up-to-november-2026) in the root README —
+notebook + Raspberry Pi 4 capture box, the full web console (STATUS … TRANSIT … SESSIONS), live RFI masks and the DIY feed v1.
+The newest code and its web documents live on the development branch
+[`rfi-masks-v1`](https://github.com/almita-radio/almita/tree/rfi-masks-v1) until they are merged here:
+[WEB_ARCHITECTURE](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_ARCHITECTURE.md),
+[WEB_OPERATIONS](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_OPERATIONS.md),
+[SESSIONS_FILE_CONTRACTS](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/SESSIONS_FILE_CONTRACTS.md),
+[BACKLOG](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/BACKLOG.md).
+
 ## Pipeline documents (current)
 | System | Documents |
 |---|---|
@@ -18,6 +27,8 @@ antenna and gain characterisation, RFI reference receiver). It was the repositor
 [GRID_DISTRIBUTION_CHANGES](observe/GRID_DISTRIBUTION_CHANGES.md), [README_GRID_GENERATOR](observe/README_GRID_GENERATOR.md)
 
 ## Hardware - `hardware/`
+[README](hardware/README.md) (current architecture), [BUILD](hardware/BUILD.md), [BOM](hardware/BOM.md),
+[RF_AND_WIRING](hardware/RF_AND_WIRING.md) (including the computers as RF sources), [MECHANICAL](hardware/MECHANICAL.md) (DIY feed v1),
 [MOUNT_SLEW_MODEL](hardware/MOUNT_SLEW_MODEL.md), [RTL_TCP_SYSTEMD](hardware/RTL_TCP_SYSTEMD.md)
 
 ## History - `history/`

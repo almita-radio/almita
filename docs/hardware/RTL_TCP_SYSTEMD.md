@@ -62,7 +62,7 @@ USB, interfaz ocupada o puerto ya utilizado.
 
 ## RFI_REF: secundario desechable (V3) en paralelo con MAIN
 
-MAIN (`rtl_tcp.service`, RTL-SDR Blog V4, serial `00000001`, `127.0.0.1:1234`)
+MAIN (`rtl_tcp.service`, serial `00000001`, `127.0.0.1:1234`; desde el 2026-10-17 es un RTL-SDR Blog V3 con su EEPROM reprogramada a ese serial, porque el V4 se retiró)
 es la única fuente autoritativa para Capture. Un segundo RTL-SDR (V3/R820T,
 serial `00000002`) puede usarse como referencia de RFI en paralelo ("RFI_REF"),
 pero **nunca** como parte de `rtl_tcp.service` ni de la ruta científica: se

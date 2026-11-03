@@ -25,6 +25,22 @@ For a reproduction, the critical requirements are:
 - repeatable orientation and mounting;
 - weather/strain protection appropriate to the observing environment.
 
+### Current feed: DIY dipole feed v1 (November 2026)
+
+A Y-factor of only about 1 dB (measured 2026-10-18) showed that the old feed lost several dB before the LNA. The replacement,
+modelled with NEC2 before building, is:
+
+- a half-wave dipole made of copper strip inside a 3D-printed (PLA) case, with the elements trimmed on a NanoVNA
+  with the case closed;
+- a short (~11 cm) RG-58 pigtail to an SMA, with the SAWbird+ H1 screwed on outside the case so that a 50 Ω load can be
+  swapped in for calibration;
+- a 12 cm square reflector plate about 45 mm behind the dipole, on the sky side (being fitted in November 2026);
+- the dipole **parallel to the grid bars** (a grid only reflects the field parallel to its bars) and about **24 cm** from the
+  dish vertex. Without the plate the modelled optimum is about 23 cm.
+
+The model predicts a large gain in sensitivity over the old feed. That is a prediction, not a measurement, until the new
+Y-factor and a solar transit are measured.
+
 ALMITA does not claim that replacing the feed with a different geometry leaves
 the beam or calibration unchanged. A changed feed requires new characterization.
 

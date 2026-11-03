@@ -17,8 +17,11 @@ slack for the complete approved motion envelope.
 Connect:
 
 ```text
-1420 MHz feed → Hydrogen LNA → RTL-SDR Blog V4 → Raspberry Pi 5
+dipole feed → SAWbird+ H1 LNA → RTL-SDR Blog V3 → Raspberry Pi 4 (metal box) ⇢ Ethernet ⇢ notebook
 ```
+
+A single Raspberry Pi 5 running everything also works, but keep any computer metres away from the feed (see
+[RF_AND_WIRING.md](RF_AND_WIRING.md#computers-as-rf-sources)).
 
 The current operational receiver settings are 1420.405752 MHz, 2.4 MS/s and
 40.2 dB gain with Bias-T enabled.
@@ -31,7 +34,7 @@ gain-characterization workflow first.
 Connect the independent reference path:
 
 ```text
-reference antenna → FM notch → wideband LNA → secondary RTL-SDR → Raspberry Pi 5
+reference antenna → FM notch → wideband LNA → secondary RTL-SDR → host computer
 ```
 
 The RFI reference is contextual. MAIN remains the science receiver.
@@ -51,6 +54,8 @@ Attach DS18B20 sensors to the receiver/LNA locations of interest and expose
 them through Linux 1-Wire/sysfs.
 
 Sensor identity-to-location mapping belongs in the ALMITA configuration.
+
+Check that the harness does not radiate into the feed (ALMITA's did: see [RF_AND_WIRING.md](RF_AND_WIRING.md#temperature-telemetry)).
 
 ## 6. Install software
 

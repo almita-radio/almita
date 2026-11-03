@@ -6,20 +6,25 @@
 Sky
  │
  ▼
-1420 MHz feed
- │  50 ohm RF
- ▼
-Nooelec Hydrogen LNA
+~90 × 60 cm grid dish
  │
  ▼
-RTL-SDR Blog V4
- │  USB
+DIY dipole feed v1 (copper strip, parallel to the grid bars, ~24 cm from the vertex)
+ │  ~11 cm RG-58 pigtail, SMA
  ▼
-Raspberry Pi 5
- │
+Nooelec SAWbird+ H1 LNA (outside the feed case, so a 50 Ω load can be swapped in)
+ │  coax, LNA powered by the SDR's Bias-T
  ▼
-rtl_tcp → OBSERVE → RAW HDF5
+RTL-SDR Blog V3
+ │  USB (ferrites)
+ ▼
+Raspberry Pi 4 in a closed metal box
+ │  rtl_tcp :1234 over Ethernet
+ ▼
+Notebook: capture → RAW HDF5, live RFI masks, quick-look
 ```
+
+Until November 2026 the SDR hung directly from a Raspberry Pi 5 that also ran everything else; that setup is still supported.
 
 Nominal operating configuration:
 
@@ -33,7 +38,7 @@ The gain value is an experimentally characterized operating point, not a
 universal constant for every possible ALMITA clone. A materially different RF
 chain must repeat gain characterization.
 
-## RFI_REF chain
+## RFI_REF chain (currently disconnected)
 
 ```text
 Local RF environment
@@ -51,7 +56,7 @@ Wideband LNA
 Secondary RTL-SDR
  │  USB
  ▼
-Raspberry Pi 5
+host computer
  │
  ▼
 rtl_tcp → RFI diagnostics
@@ -63,14 +68,17 @@ not become a dependency that can corrupt or block the primary science capture.
 ## Mount/control chain
 
 ```text
-Raspberry Pi 5
+Raspberry Pi 4 (capture box)
  │
- ├─ INDI server
- │    └─ LX200 OnStep driver
+ ├─ KStars / Ekos → INDI server (:7624)
+ │    └─ LX200 OnStep driver (USB serial)
  │          └─ OnStep controller
  │                └─ equatorial mount motors
  │
- └─ ALMITA observation / alignment / bench software
+ └─ instrument agent (:8099, read-only)
+
+Notebook
+ └─ ALMITA observation / alignment / transit software, reaching INDI and rtl_tcp through instrument_forwarder
 ```
 
 Normal science observation does not use arbitrary SYNC operations.
@@ -80,6 +88,16 @@ Normal science observation does not use arbitrary SYNC operations.
 DS18B20 sensors are read over Linux 1-Wire/sysfs and are used for instrument
 telemetry and thermal correlation. Temperature telemetry is deliberately kept
 outside the SDR receive hot path.
+
+In October 2026 the DS18B20 harness on the Pi's GPIO was found to radiate a 357 kHz comb and a forest of narrow lines into
+the feed; a ferrite on it reduced them, and later tests showed that the Pi also radiates the comb through the air by itself. The sensors are off for now, and the capture Pi reports its own SoC temperature
+instead (the TRANSIT page plots it).
+
+## Computers as RF sources
+
+The computers themselves are the worst local interferers measured so far. Keep them metres away from the feed and inside a
+closed metal box, with ferrites on USB, Ethernet and power leads, and check with the local RFI check before every outing.
+A person standing next to the Pi or the feed also brings interference back.
 
 ## Grounding and field wiring
 
