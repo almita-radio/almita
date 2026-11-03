@@ -89,8 +89,9 @@ Every command has `--help`. The long-running services are described under `syste
 **Screenshots of every page:** [docs/WEB_CONSOLE_SCREENSHOTS.md](docs/WEB_CONSOLE_SCREENSHOTS.md).
 
 <p align="center">
-  <img src="docs/screenshots/transit.jpg" alt="TRANSIT page" width="49%">
-  <img src="docs/screenshots/monitor.jpg" alt="MONITOR page" width="49%">
+  <img src="docs/screenshots/observe.jpg" alt="OBSERVE page: the planned region over the HI4PI sky" width="32%">
+  <img src="docs/screenshots/monitor.jpg" alt="MONITOR page" width="32%">
+  <img src="docs/screenshots/transit.jpg" alt="TRANSIT page" width="32%">
 </p>
 
 **RFI work.**
