@@ -129,3 +129,27 @@ def test_agent_reports_the_soc_temperature(tmp_path):
     assert instrument_agent.cpu_temp_c(f) == 61.2
     assert instrument_agent.cpu_temp_c(tmp_path / "missing") is None
     assert "cpu_temp_c" in instrument_agent.health()
+
+
+def test_every_run_is_kept_whole_and_can_be_read_back(tmp_path):
+    import numpy as np
+    rng = np.random.default_rng(1)
+    raw = rng.integers(100, 156, size=2 * 3 * tl.SPECTRUM_NFFT, dtype=np.uint8)
+    sp, fr = tl.spectrum_and_frames(raw)
+    assert sp.shape == (tl.SPECTRUM_NFFT,) and fr.shape == (3,) and np.all(sp > 0)
+    started = datetime(2026, 11, 3, 12, 0, 0, tzinfo=timezone.utc)
+    rec = tl.RunRecord(tmp_path, started, {"started_utc": "2026-11-03T12:00:00Z"}, seconds=4 * tl.SPECTRUM_NFFT / 2.4e6, sample_rate_hz=2.4e6)
+    tuning = {"applied": {"center_frequency_hz": 1420405752, "gain_db": 40.2}, "rtl_agc": "off"}
+    rec.add({"utc": "2026-11-03T12:00:00Z", "status": "VALID", "power_db": 43.5}, sp, fr, tuning)
+    rec.add({"utc": "2026-11-03T12:00:10Z", "status": "SDR_BUSY", "error": "skipped"}, None, None, None)
+    rec.close("2026-11-03T12:00:20Z")
+    d = tmp_path / "20261103T120000Z"
+    meta = json.loads((d / "run.json").read_text())
+    assert meta["samples"] == 2 and meta["frames_per_row"] == 4 and meta["first_tuning"] == tuning
+    spectra = np.fromfile(d / "spectra.f32", "<f4").reshape(-1, tl.SPECTRUM_NFFT)
+    frames = np.fromfile(d / "frames.f32", "<f4").reshape(-1, meta["frames_per_row"])
+    assert np.allclose(spectra[0], sp) and np.isnan(spectra[1]).all()
+    assert np.allclose(frames[0, :3], fr) and np.isnan(frames[0, 3]) and np.isnan(frames[1]).all()
+    rows = (d / "samples.csv").read_text().splitlines()
+    assert rows[0].startswith("index,utc,status") and rows[1].startswith("1,") and rows[2].startswith("2,") and "SDR_BUSY" in rows[2]
+    assert len((d / "tuning.jsonl").read_text().splitlines()) == 2

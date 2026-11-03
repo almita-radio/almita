@@ -14,6 +14,9 @@
   const chile = (ms) => new Date(ms - 3 * 3600e3).toISOString().slice(11, 16);          // Chile, UTC-3
   const kv = (dl, rows) => { dl.textContent = ""; for (const [k, v] of rows) { const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = v; dl.append(dt, dd); } };
   let doc = null, svc = null, busy = false;
+  // dB axis: fixed 0-100 (operator 2026-11-03) or AUTO (the window's own range); remembered in this browser
+  let scaleFixed = true;
+  try { scaleFixed = localStorage.getItem("almita-transit-scale") !== "auto"; } catch (e) { /* storage blocked: 0-100 */ }
 
   function setup(canvas) {
     const dpr = Math.max(2, window.devicePixelRatio || 1), box = canvas.getBoundingClientRect();
@@ -46,14 +49,17 @@
       ctx.textAlign = "center"; ctx.fillText("no samples in this window", w / 2, h / 2);
       return;
     }
-    let lo = Math.min(...good.map((r) => r.power_db)), hi = Math.max(...good.map((r) => r.power_db));
-    const pad = Math.max((hi - lo) * 0.1, 0.05); lo -= pad; hi += pad;
+    let lo = 0, hi = 100;
+    if (!scaleFixed) {
+      lo = Math.min(...good.map((r) => r.power_db)); hi = Math.max(...good.map((r) => r.power_db));
+      const pad = Math.max((hi - lo) * 0.1, 0.05); lo -= pad; hi += pad;
+    }
     const Y = (v) => padT + (h - padT - padB) * (hi - v) / (hi - lo);
     ctx.textAlign = "right";
     for (let k = 0; k <= 4; k++) {
       const v = lo + (hi - lo) * k / 4;
       ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(w - padR, Y(v)); ctx.stroke();
-      ctx.fillText(v.toFixed(2), padL - 6, Y(v) + 4);
+      ctx.fillText(scaleFixed ? v.toFixed(0) : v.toFixed(2), padL - 6, Y(v) + 4);
     }
     // the capture Pi's temperature (the SDR hangs from it), dashed, right axis in °C, its own range
     const tp = pts.filter((r) => r.pi_temp_c !== null && r.pi_temp_c !== undefined);
@@ -120,6 +126,13 @@
     else $("ctl-note").textContent = `${action.toUpperCase()} failed: ${U.errorText(r.error)}`;
     tick();
   }
+  const scaleLabel = () => { $("btn-scale").textContent = scaleFixed ? "dB AXIS: 0–100 · show AUTO" : "dB AXIS: AUTO · show 0–100"; };
+  scaleLabel();
+  $("btn-scale").addEventListener("click", () => {
+    scaleFixed = !scaleFixed;
+    try { localStorage.setItem("almita-transit-scale", scaleFixed ? "fixed" : "auto"); } catch (e) { /* not remembered */ }
+    scaleLabel(); render();
+  });
   $("btn-start").addEventListener("click", () => control("start"));
   $("btn-stop").addEventListener("click", () => control("stop"));
   $("btn-clear").addEventListener("click", async () => {

@@ -9,9 +9,17 @@ It never moves the mount and never keeps the SDR: between samples rtl_tcp is fre
 OBSERVE capture.py, a web job such as ALIGN/CALIBRATE/RFI check) the sample is skipped and logged as SDR_BUSY.
 
 Output:
-  data/transit/transit_<UTC date>.csv  one row per sample, appended as it happens (the record)
+  data/transit/transit_<UTC date>.csv  one row per sample, appended as it happens (what the page draws)
   data/runtime/transit_latest.json     the last WINDOW_MIN minutes, for the TRANSIT page (rewritten every sample)
-The IQ itself is not kept (a 1 s capture is ~5 MB; one every 10 s would be ~40 GB a day).
+  data/transit/runs/<start UTC>/       EVERYTHING of one run (operator 2026-11-03: "guarda toda la info de este
+                                       logger, es importante poder reconstruirla"), enough to recompute the curve
+                                       with any other metric or mask:
+      run.json        configuration, observer, code commit, host, the frequency axis, file layouts
+      samples.csv     every sample (also the skipped/failed ones) with every number measured
+      tuning.jsonl    the full sdr_tuning record of every sample (requested vs acknowledged by rtl_tcp)
+      spectra.f32     one row per sample: mean power spectrum, SPECTRUM_NFFT bins, fftshifted, linear (NaN = no data)
+      frames.f32      one row per sample: total power of each SPECTRUM_NFFT-sample frame (pulses), NaN-padded
+The raw IQ is not kept: 1 s of it is ~4.8 MB, ~1.7 GB an hour at one sample every 10 s.
 Stop with SIGINT.
 """
 from __future__ import annotations
@@ -40,6 +48,86 @@ WINDOW_MIN = 180                       # what the page shows at most
 FIELDS = ("utc", "status", "power_db", "power_lin", "clipping_fraction", "adc_std_codes", "gain_db",
           "sun_alt_deg", "sun_az_deg", "pi_temp_c", "error")
 SDR_PROCESSES = ("capture.py", "local_rfi_check.py", "lobe_transit.py")   # SDR users outside the web job list
+
+
+SPECTRUM_NFFT = 8192                   # same frame length as rfi_mask / REDUCE: 293 Hz bins at 2.4 MS/s
+RUNS_DIR = OUT_DIR / "runs"
+
+
+def spectrum_and_frames(raw: np.ndarray, nfft: int = SPECTRUM_NFFT):
+    """Mean power spectrum (fftshifted, linear, Hann window) and each frame's total power, from interleaved uint8 IQ."""
+    x = np.asarray(raw, dtype=np.uint8).astype(np.float32)
+    z = (x[0::2] - 127.4) + 1j * (x[1::2] - 127.4)
+    m = len(z) // nfft
+    if m < 1:
+        raise ValueError("capture shorter than one frame")
+    p = np.abs(np.fft.fft(z[:m * nfft].reshape(m, nfft) * np.hanning(nfft).astype(np.float32), axis=1)) ** 2
+    return np.fft.fftshift(p.mean(axis=0)).astype(np.float32), p.sum(axis=1).astype(np.float32)
+
+
+class RunRecord:
+    """The complete record of one logger run (one START): see the module docstring."""
+
+    FIELDS = ("index", "utc", "status", "power_db", "power_lin", "clipping_fraction", "adc_std_codes", "adc_mean_i",
+              "adc_mean_q", "gain_db", "center_frequency_hz", "sample_rate_hz", "rtl_agc", "frames", "sun_alt_deg",
+              "sun_az_deg", "pi_temp_c", "error")
+
+    def __init__(self, root: Path, started: datetime, meta: Dict[str, Any], seconds: float, sample_rate_hz: float):
+        self.dir = Path(root) / started.strftime("%Y%m%dT%H%M%SZ")
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.index = 0
+        self.frames_per_row = max(1, int(seconds * sample_rate_hz) // SPECTRUM_NFFT)
+        self.meta = {"schema": "almita.transit_run.v1", **meta, "spectrum_nfft": SPECTRUM_NFFT,
+                     "frames_per_row": self.frames_per_row,
+                     "files": {"samples.csv": "one row per sample, column 'index' = row of the .f32 files + 1",
+                               "spectra.f32": f"float32 little-endian, {SPECTRUM_NFFT} per row, mean |FFT|^2 (Hann), fftshifted; "
+                                              "bin k is center_frequency_hz + (k - nfft/2) * sample_rate_hz / nfft; NaN row = no data",
+                               "frames.f32": f"float32 little-endian, {self.frames_per_row} per row, sum over bins of |FFT|^2 of "
+                                             "each consecutive frame in time order; NaN = no data",
+                               "tuning.jsonl": "sdr_tuning.tune_explicitly record of each sample (requested vs applied)"}}
+        self._write_meta()
+
+    def _write_meta(self) -> None:
+        tmp = self.dir / "run.json.tmp"
+        tmp.write_text(json.dumps(self.meta, indent=2, default=str))
+        tmp.replace(self.dir / "run.json")
+
+    def add(self, row: Dict[str, Any], spectrum: Optional[np.ndarray], frames: Optional[np.ndarray],
+            tuning: Optional[Dict[str, Any]]) -> None:
+        self.index += 1
+        p = self.dir / "samples.csv"
+        new = not p.is_file()
+        with open(p, "a", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=self.FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow({k: ({**row, "index": self.index}).get(k) for k in self.FIELDS})
+        sp = np.full(SPECTRUM_NFFT, np.nan, np.float32) if spectrum is None else np.asarray(spectrum, np.float32)
+        fr = np.full(self.frames_per_row, np.nan, np.float32)
+        if frames is not None:
+            n = min(len(frames), self.frames_per_row)
+            fr[:n] = np.asarray(frames[:n], np.float32)
+        with open(self.dir / "spectra.f32", "ab") as fh:
+            fh.write(sp.astype("<f4").tobytes())
+        with open(self.dir / "frames.f32", "ab") as fh:
+            fh.write(fr.astype("<f4").tobytes())
+        with open(self.dir / "tuning.jsonl", "a") as fh:
+            fh.write(json.dumps({"index": self.index, "utc": row.get("utc"), "tuning": tuning}, default=str) + "\n")
+        if tuning and "first_tuning" not in self.meta:
+            self.meta["first_tuning"] = tuning
+            self._write_meta()
+
+    def close(self, stopped_utc: str) -> None:
+        self.meta.update(stopped_utc=stopped_utc, samples=self.index)
+        self._write_meta()
+
+
+def code_commit() -> Optional[str]:
+    try:
+        r = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def sdr_busy() -> Optional[str]:
@@ -101,9 +189,13 @@ async def measure(host: str, port: int, gain_db: float, seconds: float) -> Dict[
         raw = np.empty(i_.size * 2, dtype=np.uint8)
         raw[0::2], raw[1::2] = i_, q_
         m = band_power(raw)
+        spectrum, frames = spectrum_and_frames(raw)
         return {"power_db": round(m["power_db"], 4), "power_lin": m["power_lin"],
                 "clipping_fraction": m["clipping_fraction"], "adc_std_codes": round(m["adc_std_codes"], 3),
-                "gain_db": tuning["applied"]["gain_db"]}
+                "adc_mean_i": round(float(i_.mean()), 3), "adc_mean_q": round(float(q_.mean()), 3),
+                "gain_db": tuning["applied"]["gain_db"], "center_frequency_hz": tuning["applied"]["center_frequency_hz"],
+                "sample_rate_hz": operating["sample_rate_hz"], "rtl_agc": tuning.get("rtl_agc"), "frames": int(len(frames)),
+                "_spectrum": spectrum, "_frames": frames, "_tuning": tuning}
     finally:
         await sdr.close()
         try:
@@ -244,10 +336,18 @@ def main(argv=None) -> int:
     location = EarthLocation(lat=float(obs["latitude_deg"]) * u.deg, lon=float(obs["longitude_deg"]) * u.deg,
                              height=float(obs.get("elevation_m", 0.0)) * u.m)
     gain = a.gain if a.gain is not None else float(sdr_tuning.operating_config()["gain_db"])
-    started = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    started_dt = datetime.now(timezone.utc)
+    started = started_dt.isoformat().replace("+00:00", "Z")
+    operating = sdr_tuning.operating_config()
+    record = RunRecord(RUNS_DIR, started_dt, {
+        "started_utc": started, "every_s": a.every, "seconds": a.seconds, "gain_db": gain, "rtl_tcp": f"{a.host}:{a.port}",
+        "operating": operating, "observer": obs, "site": cfg.get("site_info"), "host": os.uname().nodename,
+        "code_commit": code_commit(), "power_metric": "lobe_transit.band_power (NFFT 256, running median, DC and edges out)",
+        "pid": os.getpid()}, a.seconds, float(operating["sample_rate_hz"]))
     stop = {"now": False}
     signal.signal(signal.SIGINT, lambda *_: stop.update(now=True))
-    print(f"TRANSIT logger: one {a.seconds:g} s sample every {a.every:g} s, gain {gain:g} dB fixed, rtl_tcp {a.host}:{a.port}", flush=True)
+    print(f"TRANSIT logger: one {a.seconds:g} s sample every {a.every:g} s, gain {gain:g} dB fixed, rtl_tcp {a.host}:{a.port}, "
+          f"full record in {record.dir}", flush=True)
     while not stop["now"]:
         tick = time.monotonic()
         now = datetime.now(timezone.utc)
@@ -271,6 +371,7 @@ def main(argv=None) -> int:
             except Exception as exc:  # noqa: BLE001 - one bad sample must not stop the logger
                 row["status"] = "FAILED"
                 row["error"] = f"{type(exc).__name__}: {exc}"
+        record.add(row, row.pop("_spectrum", None), row.pop("_frames", None), row.pop("_tuning", None))
         append_row(row)
         write_latest(read_window(now), {"updated_utc": row["utc"], "cleared_utc": (lambda c: c and c.isoformat().replace("+00:00", "Z"))(cleared_since()), "started_utc": started, "every_s": a.every,
                                         "seconds": a.seconds, "gain_db": gain, "pid": os.getpid(),
@@ -280,7 +381,8 @@ def main(argv=None) -> int:
               f"{row.get('error') or ''}", flush=True)
         while not stop["now"] and time.monotonic() - tick < a.every:
             time.sleep(0.2)
-    print("TRANSIT logger stopped (SIGINT)", flush=True)
+    record.close(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    print(f"TRANSIT logger stopped (SIGINT) - full record in {record.dir}", flush=True)
     return 0
 
 
