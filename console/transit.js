@@ -26,10 +26,23 @@
     return { ctx, w, h };
   }
 
+  // least-squares straight line through this window's points; slope per hour
+  function trend(pts, key) {
+    if (pts.length < 3) return null;
+    const t0 = pts[0].t, n = pts.length;
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (const r of pts) { const x = (r.t - t0) / 3600e3, y = r[key]; sx += x; sy += y; sxx += x * x; sxy += x * y; }
+    const d = n * sxx - sx * sx;
+    if (!(d > 0)) return null;
+    const slope = (n * sxy - sx * sy) / d, icpt = (sy - slope * sx) / n;
+    return { slope, at: (t) => icpt + slope * (t - t0) / 3600e3, ta: pts[0].t, tb: pts[n - 1].t };
+  }
+  const signed = (v, digits) => `${v >= 0 ? "+" : ""}${v.toFixed(digits)}`;
+
   function draw(canvas, rows, minutes, everyS) {
     const { ctx, w, h } = setup(canvas);
     const C = { bg: css("--inset", "#0d1317"), grid: css("--line", "#2b3942"), text: css("--muted", "#91a2ad"),
-                power: css("--accent", "#65b7d8"), sun: css("--warn", "#e6b85c"), bad: css("--error", "#e36b6b") };
+                power: css("--accent", "#65b7d8"), trend: css("--ok", "#7fd18b"), sun: css("--warn", "#e6b85c"), bad: css("--error", "#e36b6b") };
     ctx.fillStyle = C.bg; ctx.fillRect(0, 0, w, h);
     const padL = 56, padR = 60, padT = 12, padB = 26;
     const t1 = Math.max(doc && doc.updated_utc ? Date.parse(doc.updated_utc) : 0, doc && doc.cleared_utc ? Date.parse(doc.cleared_utc) : 0) || Date.now();
@@ -75,6 +88,13 @@
       ctx.strokeStyle = C.sun; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2; ctx.beginPath();
       tp.forEach((r, i) => (i && r.t - tp[i - 1].t <= 3 * (everyS || 10) * 1e3 ? ctx.lineTo(X(r.t), YT(r.pi_temp_c)) : ctx.moveTo(X(r.t), YT(r.pi_temp_c))));
       ctx.stroke(); ctx.setLineDash([]);
+      const tt = trend(tp, "pi_temp_c");
+      if (tt) {
+        ctx.strokeStyle = C.sun; ctx.lineWidth = 2; ctx.globalAlpha = 0.85; ctx.beginPath();
+        ctx.moveTo(X(tt.ta), YT(tt.at(tt.ta))); ctx.lineTo(X(tt.tb), YT(tt.at(tt.tb))); ctx.stroke(); ctx.globalAlpha = 1;
+        ctx.fillStyle = C.sun; ctx.textAlign = "right";
+        ctx.fillText(`Pi trend ${signed(tt.slope, 2)} °C/h`, w - padR - 6, h - padB - 8);
+      }
     }
     // band power: a line, broken where samples are missing (> 3 sampling intervals apart); clipped samples in red
     const gapMs = 3 * (everyS || 10) * 1e3;
@@ -87,6 +107,14 @@
     for (const r of good) {
       ctx.fillStyle = r.status === "CLIPPED" ? C.bad : C.power;
       ctx.beginPath(); ctx.arc(X(r.t), Y(r.power_db), dot, 0, 2 * Math.PI); ctx.fill();
+    }
+    // trend: least-squares line through the valid samples of this window, slope in dB per hour
+    const tr = trend(good, "power_db");
+    if (tr) {
+      ctx.strokeStyle = C.trend; ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(X(tr.ta), Y(tr.at(tr.ta))); ctx.lineTo(X(tr.tb), Y(tr.at(tr.tb))); ctx.stroke();
+      ctx.fillStyle = C.trend; ctx.textAlign = "left";
+      ctx.fillText(`trend ${signed(tr.slope, 3)} dB/h`, padL + 6, h - padB - 8);
     }
     // the peak of this window
     const top = good.reduce((a, b) => (b.power_db > a.power_db ? b : a));
