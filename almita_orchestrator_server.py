@@ -79,6 +79,8 @@ DEFAULT_RUNTIME_DIR = Path(__file__).resolve().parent / "data" / "runtime"
 STATIC_FILES = {
     "/lobe.html": "lobe.html",
     "/lobe.js": "lobe.js",
+    "/transit.html": "transit.html",
+    "/transit.js": "transit.js",
     "/observe.html": "observe.html",
     "/observe.js": "observe.js",
     "/styles.css": "styles.css",

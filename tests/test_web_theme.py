@@ -9,7 +9,7 @@ import shutil
 
 from tests.test_web_frontend import CONSOLE, chromium, page_harness, result_of
 
-PAGES = ("status", "pipeline", "lobe", "align", "calibrate", "observe", "reduce", "science")   # + MONITOR (index.html) below
+PAGES = ("status", "pipeline", "lobe", "transit", "align", "calibrate", "observe", "reduce", "science")   # + MONITOR (index.html) below
 
 
 def _token_block(css: str, selector: str) -> dict:

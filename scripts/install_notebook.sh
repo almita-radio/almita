@@ -23,6 +23,8 @@ HOST="${1:-192.168.50.254}"
 ME="$(id -un)"
 PY="$ROOT/.venv/bin/python"
 UNITS=(almita-instrument-forwarder almita-observe-api almita-console-watcher almita-system-blackbox almita-rfi-mask-live)
+# installed but NOT enabled or started: run only when the operator wants them (systemctl --user start <unit>)
+ON_DEMAND=(almita-transit-logger)
 
 cd "$ROOT"
 [[ -x "$PY" ]] || { echo "no $PY - create the venv first (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)"; exit 1; }
@@ -46,7 +48,7 @@ fi
 
 echo "== 3. systemd user units"
 mkdir -p "$HOME/.config/systemd/user"
-for u in "${UNITS[@]}"; do
+for u in "${UNITS[@]}" "${ON_DEMAND[@]}"; do
     sed -e "/^User=@USER@$/d" -e "s|@ROOT@|$ROOT|g" -e "s|^WantedBy=multi-user.target|WantedBy=default.target|" \
         -e "s|^After=network-online.target|After=network.target|" -e "/^Wants=network-online.target/d" \
         "$ROOT/systemd/notebook/$u.service" > "$HOME/.config/systemd/user/$u.service"

@@ -1,0 +1,19 @@
+[Unit]
+Description=ALMITA TRANSIT logger - band power every 10 s with the antenna still (Sun drift); never moves the mount, frees the SDR between samples
+After=network-online.target almita-instrument-forwarder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/transit_logger.py
+KillSignal=SIGINT
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

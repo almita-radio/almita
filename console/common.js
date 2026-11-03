@@ -293,6 +293,7 @@
   // Operator's order (2026-10-15): STATUS PIPELINE LOBE ALIGN CALIBRATE OBSERVE MONITOR REDUCE SCIENCE.
   const NAV = [
     { key: "STATUS", href: "/status.html" }, { key: "PIPELINE", href: "/pipeline.html" }, { key: "LOBE", href: "/lobe.html" },
+    { key: "TRANSIT", href: "/transit.html" },
     { key: "ALIGN", href: "/align.html" }, { key: "CALIBRATE", href: "/calibrate.html" }, { key: "OBSERVE", href: "/observe.html" },
     { key: "MONITOR", href: "/" }, { key: "REDUCE", href: "/reduce.html" }, { key: "SCIENCE", href: "/science.html" }, { key: "SESSIONS", href: "/sessions.html" },
     { key: "DESKTOP", href: "/vnc/", newTab: true },   // the Pi's desktop (noVNC) through this port and login - vnc_proxy.py

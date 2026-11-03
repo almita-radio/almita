@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Transit</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DÍA/NOCHE before first paint (common.js U.setTheme); default NOCHE */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
+<body>
+  <header id="almita-header"><h1>TRANSIT</h1></header>
+
+  <main id="app">
+    <section class="panel" aria-labelledby="h-state">
+      <header><h2 id="h-state">LOGGER <span class="muted">(transit_logger.py · antenna still · one sample every 10 s · fixed gain, RTL AGC off · the SDR is free between samples)</span></h2><span id="state-badge" class="badge">—</span></header>
+      <dl class="kv" id="state-kv"></dl>
+    </section>
+
+    <section class="panel" aria-labelledby="h-30">
+      <header><h2 id="h-30">LAST 30 MIN <span class="muted">(band power, dB · dashed: Sun altitude)</span></h2></header>
+      <canvas id="chart-30" class="transit-chart" style="width:100%;height:260px;display:block"></canvas>
+    </section>
+    <section class="panel" aria-labelledby="h-60">
+      <header><h2 id="h-60">LAST 60 MIN</h2></header>
+      <canvas id="chart-60" class="transit-chart" style="width:100%;height:260px;display:block"></canvas>
+    </section>
+    <section class="panel" aria-labelledby="h-180">
+      <header><h2 id="h-180">LAST 180 MIN</h2></header>
+      <canvas id="chart-180" class="transit-chart" style="width:100%;height:260px;display:block"></canvas>
+    </section>
+
+    <div id="error-banner" class="banner connection" hidden></div>
+  </main>
+
+  <footer id="almita-footer"></footer>
+  <script src="common.js"></script>
+  <script src="transit.js"></script>
+</body></html>
