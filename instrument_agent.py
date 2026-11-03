@@ -116,6 +116,14 @@ def ds18_ids(root: Path = Path("/sys/bus/w1/devices")) -> List[str]:
     return sorted(p.name for p in root.glob("28-*")) if root.is_dir() else []
 
 
+def cpu_temp_c(path: Path = Path("/sys/class/thermal/thermal_zone0/temp")) -> Optional[float]:
+    """The capture Pi's SoC temperature (TRANSIT plots it: the SDR sits next to it)."""
+    try:
+        return round(int(path.read_text().strip()) / 1000.0, 1)
+    except (OSError, ValueError):
+        return None
+
+
 def health() -> dict:
     try:
         state = subprocess.run(["systemctl", "is-active", UNIT], capture_output=True, text=True, timeout=5).stdout.strip()
@@ -123,7 +131,8 @@ def health() -> dict:
         state = f"unknown ({exc})"
     return {"agent": "almita-instrument-agent", "hostname": socket.gethostname(),
             "utc": datetime.now(timezone.utc).isoformat(), "rtl_tcp_service": state,
-            "rtlsdr_serials": rtlsdr_serials(), "ds18_ids": ds18_ids(), "nanovna": nanovna()}
+            "rtlsdr_serials": rtlsdr_serials(), "ds18_ids": ds18_ids(), "nanovna": nanovna(),
+            "cpu_temp_c": cpu_temp_c()}
 
 
 class Server(ThreadingHTTPServer):

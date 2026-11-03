@@ -1,6 +1,6 @@
 // ALMITA TRANSIT (operator 2026-11-02): the Sun drifting through the still antenna's beam. Reads only what
 // transit_logger.py writes (data/runtime/transit_latest.json: the last 180 min) and draws the band power of the last
-// 30, 60 and 180 minutes, with the Sun's altitude dashed on the right axis. START / STOP switch the logger's user unit (it never moves the mount).
+// 30, 60 and 180 minutes, with the capture Pi's temperature dashed on the right axis. START / STOP switch the logger's user unit (it never moves the mount).
 (function () {
   "use strict";
   const U = window.AlmitaUI;
@@ -28,7 +28,7 @@
     const C = { bg: css("--inset", "#0d1317"), grid: css("--line", "#2b3942"), text: css("--muted", "#91a2ad"),
                 power: css("--accent", "#65b7d8"), sun: css("--warn", "#e6b85c"), bad: css("--error", "#e36b6b") };
     ctx.fillStyle = C.bg; ctx.fillRect(0, 0, w, h);
-    const padL = 56, padR = 46, padT = 12, padB = 26;
+    const padL = 56, padR = 60, padT = 12, padB = 26;
     const t1 = Math.max(doc && doc.updated_utc ? Date.parse(doc.updated_utc) : 0, doc && doc.cleared_utc ? Date.parse(doc.cleared_utc) : 0) || Date.now();
     const t0 = t1 - minutes * 60e3;
     const pts = rows.map((r) => ({ t: Date.parse(r.utc), ...r })).filter((r) => r.t >= t0 && r.t <= t1);
@@ -55,14 +55,18 @@
       ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(padL, Y(v)); ctx.lineTo(w - padR, Y(v)); ctx.stroke();
       ctx.fillText(v.toFixed(2), padL - 6, Y(v) + 4);
     }
-    // Sun altitude, dashed, right axis 0..90 deg
-    const sun = pts.filter((r) => r.sun_alt_deg !== null);
-    const YS = (a) => padT + (h - padT - padB) * (90 - Math.max(0, Math.min(90, a))) / 90;
-    ctx.textAlign = "left"; ctx.fillStyle = C.sun;
-    for (const a of [0, 30, 60, 90]) ctx.fillText(`${a}°`, w - padR + 6, YS(a) + 4);
-    ctx.strokeStyle = C.sun; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2; ctx.beginPath();
-    sun.forEach((r, i) => (i ? ctx.lineTo(X(r.t), YS(r.sun_alt_deg)) : ctx.moveTo(X(r.t), YS(r.sun_alt_deg))));
-    ctx.stroke(); ctx.setLineDash([]);
+    // the capture Pi's temperature (the SDR hangs from it), dashed, right axis in °C, its own range
+    const tp = pts.filter((r) => r.pi_temp_c !== null && r.pi_temp_c !== undefined);
+    if (tp.length) {
+      let tlo = Math.min(...tp.map((r) => r.pi_temp_c)), thi = Math.max(...tp.map((r) => r.pi_temp_c));
+      const tpad = Math.max((thi - tlo) * 0.1, 1); tlo = Math.floor(tlo - tpad); thi = Math.ceil(thi + tpad);
+      const YT = (c) => padT + (h - padT - padB) * (thi - c) / (thi - tlo);
+      ctx.textAlign = "left"; ctx.fillStyle = C.sun;
+      for (let k = 0; k <= 4; k++) { const c = tlo + (thi - tlo) * k / 4; ctx.fillText(`${c.toFixed(1)}°C`, w - padR + 4, YT(c) + 4); }
+      ctx.strokeStyle = C.sun; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2; ctx.beginPath();
+      tp.forEach((r, i) => (i && r.t - tp[i - 1].t <= 3 * (everyS || 10) * 1e3 ? ctx.lineTo(X(r.t), YT(r.pi_temp_c)) : ctx.moveTo(X(r.t), YT(r.pi_temp_c))));
+      ctx.stroke(); ctx.setLineDash([]);
+    }
     // band power: a line, broken where samples are missing (> 3 sampling intervals apart); clipped samples in red
     const gapMs = 3 * (everyS || 10) * 1e3;
     ctx.strokeStyle = C.power; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.beginPath();
@@ -94,6 +98,7 @@
     kv($("state-kv"), [
       ["LOGGER", running ? `running · last sample ${Number.isFinite(age) ? Math.round(age) + " s ago" : "—"}` : `stopped (the SDR is not being used by TRANSIT)${doc ? ` · last sample ${Math.round(age / 60)} min ago` : ""}`],
       ["LAST SAMPLE", last ? `${chile(Date.parse(last.utc))} Chile · ${last.status}${last.power_db !== null ? ` · ${last.power_db.toFixed(3)} dB` : ""}` : "—"],
+      ["PI TEMPERATURE", last && last.pi_temp_c !== null && last.pi_temp_c !== undefined ? `${last.pi_temp_c.toFixed(1)} °C (the Pi the SDR hangs from)` : "—"],
       ["SUN NOW", last && last.sun_alt_deg !== null ? `alt ${last.sun_alt_deg.toFixed(1)}° · az ${last.sun_az_deg.toFixed(1)}°` : "—"],
       ["GAIN", doc ? `${doc.gain_db} dB fixed · ${doc.seconds} s of IQ every ${doc.every_s} s` : "—"],
       ["LAST 180 MIN", `${rows.length} samples · ${count("VALID")} valid · ${count("CLIPPED")} clipped · ${count("SDR_BUSY")} skipped (SDR busy) · ${count("FAILED")} failed`],

@@ -109,3 +109,23 @@ def test_clear_empties_the_view_but_keeps_the_record(tmp_path):
     tl.append_row(_row(datetime.now(timezone.utc) + timedelta(seconds=2)), out)
     assert len(tl.read_window(datetime.now(timezone.utc) + timedelta(seconds=3), out_dir=out, runtime_dir=rt)) == 1
     assert len(list(out.glob("*.csv"))) == 1 and sum(1 for _ in open(next(out.glob("*.csv")))) == 3   # header + both rows kept
+
+
+def test_a_csv_with_the_old_columns_is_kept_beside_and_still_read(tmp_path):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    day = tmp_path / f"transit_{now:%Y%m%d}.csv"
+    day.write_text("utc,status,power_db,power_lin,clipping_fraction,adc_std_codes,gain_db,sun_alt_deg,sun_az_deg,error\n"
+                   f"{(now - timedelta(minutes=2)).isoformat().replace('+00:00', 'Z')},VALID,43.5,,0,,40.2,10,80,\n")
+    tl.append_row(_row(now - timedelta(minutes=1), pi_temp_c=55.3), tmp_path)
+    assert sorted(p.name for p in tmp_path.glob("*.csv")) == [day.name, day.stem + "_v1.csv"]
+    rows = tl.read_window(now, out_dir=tmp_path, runtime_dir=tmp_path / "rt")
+    assert [(r["power_db"], r["pi_temp_c"]) for r in rows] == [(43.5, None), (40.0, 55.3)]
+
+
+def test_agent_reports_the_soc_temperature(tmp_path):
+    import instrument_agent
+    f = tmp_path / "temp"
+    f.write_text("61234\n")
+    assert instrument_agent.cpu_temp_c(f) == 61.2
+    assert instrument_agent.cpu_temp_c(tmp_path / "missing") is None
+    assert "cpu_temp_c" in instrument_agent.health()

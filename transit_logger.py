@@ -38,7 +38,7 @@ LATEST_NAME = "transit_latest.json"
 CLEARED_NAME = "transit_cleared.json"     # CLEAR on the page: the graphs start after this instant (the CSVs are kept)
 WINDOW_MIN = 180                       # what the page shows at most
 FIELDS = ("utc", "status", "power_db", "power_lin", "clipping_fraction", "adc_std_codes", "gain_db",
-          "sun_alt_deg", "sun_az_deg", "error")
+          "sun_alt_deg", "sun_az_deg", "pi_temp_c", "error")
 SDR_PROCESSES = ("capture.py", "local_rfi_check.py", "lobe_transit.py")   # SDR users outside the web job list
 
 
@@ -54,6 +54,18 @@ def sdr_busy() -> Optional[str]:
     except Exception:  # noqa: BLE001 - no job list: rely on the process check above
         jobs = []
     return f"web job {jobs[0].get('stage')}" if jobs else None
+
+
+def pi_temp_c() -> Optional[float]:
+    """SoC temperature of the Pi the SDR hangs from: the capture Pi through its agent, else this machine."""
+    import instrument_host
+    if instrument_host.remote_host():
+        t = instrument_host.agent_health(timeout=3.0).get("cpu_temp_c")
+        return float(t) if t is not None else None
+    try:
+        return round(int(Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()) / 1000.0, 1)
+    except (OSError, ValueError):
+        return None
 
 
 def sun_altaz(when: datetime, location) -> Dict[str, float]:
@@ -148,10 +160,9 @@ def read_window(now: datetime, minutes: int = WINDOW_MIN, out_dir: Path = OUT_DI
     if cleared and cleared > since:
         since = cleared
     rows: List[Dict[str, Any]] = []
-    for day in sorted({since.date(), now.date()}):
-        p = out_dir / f"transit_{day:%Y%m%d}.csv"
-        if not p.is_file():
-            continue
+    paths = [p for day in sorted({since.date(), now.date()})
+             for p in out_dir.glob(f"transit_{day:%Y%m%d}*.csv")]       # *_vN.csv: the day's rows before a column was added
+    for p in paths:
         with open(p, newline="") as fh:
             for r in csv.DictReader(fh):
                 try:
@@ -161,7 +172,8 @@ def read_window(now: datetime, minutes: int = WINDOW_MIN, out_dir: Path = OUT_DI
                 if t > since or (t == since and not cleared):
                     rows.append({"utc": r["utc"], "status": r.get("status"),
                                  **{k: (float(r[k]) if r.get(k) not in (None, "") else None)
-                                    for k in ("power_db", "clipping_fraction", "sun_alt_deg", "sun_az_deg")}})
+                                    for k in ("power_db", "clipping_fraction", "sun_alt_deg", "sun_az_deg", "pi_temp_c")}})
+    rows.sort(key=lambda r: r["utc"])
     return rows
 
 
@@ -196,6 +208,14 @@ def clear_view(runtime_dir: Path = RUNTIME_DIR) -> Dict[str, Any]:
 def append_row(row: Dict[str, Any], out_dir: Path = OUT_DIR) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     p = out_dir / f"transit_{row['utc'][:10].replace('-', '')}.csv"
+    if p.is_file():
+        with open(p, newline="") as fh:
+            header = next(csv.reader(fh), [])
+        if tuple(header) != FIELDS:                                   # older columns: keep it beside, start a new file
+            k = 1
+            while p.with_name(f"{p.stem}_v{k}.csv").exists():
+                k += 1
+            p.rename(p.with_name(f"{p.stem}_v{k}.csv"))
     new = not p.is_file()
     with open(p, "a", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS)
@@ -236,6 +256,10 @@ def main(argv=None) -> int:
             row.update(sun_altaz(now, location))
         except Exception as exc:  # noqa: BLE001
             row["error"] = f"sun: {exc}"
+        try:
+            row["pi_temp_c"] = pi_temp_c()
+        except Exception:  # noqa: BLE001 - a temperature is never worth a lost sample
+            row["pi_temp_c"] = None
         busy = sdr_busy()
         if busy:
             row["status"] = "SDR_BUSY"
