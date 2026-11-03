@@ -86,6 +86,13 @@ Every command has `--help`. The long-running services are described under `syste
 | SESSIONS | catalog of every session with a sky map of the real pointings, filters and safe deletion |
 | DESKTOP | the capture Pi's desktop (noVNC) behind the same login, so KStars can be seen remotely |
 
+**Screenshots of every page:** [docs/WEB_CONSOLE_SCREENSHOTS.md](docs/WEB_CONSOLE_SCREENSHOTS.md).
+
+<p align="center">
+  <img src="docs/screenshots/transit.jpg" alt="TRANSIT page" width="49%">
+  <img src="docs/screenshots/monitor.jpg" alt="MONITOR page" width="49%">
+</p>
+
 **RFI work.**
 - The local interference was hunted down. A 357 kHz comb and a forest of narrow lines turned out to be radiated by the Raspberry Pi itself and by the
   thermometer harness on its GPIO.
@@ -120,7 +127,7 @@ Commercial modules remain under their manufacturers' terms. Details: [docs/hardw
 | CALIBRATE | [docs/CALIBRATION_SCOPE.md](docs/CALIBRATION_SCOPE.md), [docs/CALIBRATION_MODEL.md](docs/CALIBRATION_MODEL.md), [docs/CALIBRATION_FIRST_TEST_RUNBOOK.md](docs/CALIBRATION_FIRST_TEST_RUNBOOK.md) |
 | REDUCE | [docs/REDUCE_SCOPE.md](docs/REDUCE_SCOPE.md), [docs/REDUCE_MODEL.md](docs/REDUCE_MODEL.md), [docs/REDUCE_PIPELINE.md](docs/REDUCE_PIPELINE.md), [docs/REDUCE_V1_FREEZE.md](docs/REDUCE_V1_FREEZE.md), [runbook](docs/REDUCE_FIRST_RUNBOOK.md) |
 | SCIENCE | [docs/SCIENCE_SCOPE.md](docs/SCIENCE_SCOPE.md), [docs/SCIENCE_MODEL.md](docs/SCIENCE_MODEL.md), [docs/SCIENCE_PIPELINE.md](docs/SCIENCE_PIPELINE.md), [docs/SCIENCE_ACCEPTANCE.md](docs/SCIENCE_ACCEPTANCE.md), [docs/SCIENCE_V1_FREEZE.md](docs/SCIENCE_V1_FREEZE.md), [runbook](docs/SCIENCE_FIRST_RUNBOOK.md) |
-| Web console | [docs/WEB_ALIGNMENT_CALIBRATION.md](docs/WEB_ALIGNMENT_CALIBRATION.md); the current twelve-page console: [WEB_ARCHITECTURE](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_ARCHITECTURE.md), [WEB_OPERATIONS](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_OPERATIONS.md) (development branch) |
+| Web console | [screenshots of every page](docs/WEB_CONSOLE_SCREENSHOTS.md), [docs/WEB_ALIGNMENT_CALIBRATION.md](docs/WEB_ALIGNMENT_CALIBRATION.md); the current twelve-page console: [WEB_ARCHITECTURE](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_ARCHITECTURE.md), [WEB_OPERATIONS](https://github.com/almita-radio/almita/blob/rfi-masks-v1/docs/WEB_OPERATIONS.md) (development branch) |
 | Hardware (architecture, build, BOM, RF and wiring, DIY feed, mount model, rtl_tcp service) | [docs/hardware/](docs/hardware/) |
 | Full documentation index | [docs/README.md](docs/README.md) |
 
