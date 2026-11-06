@@ -69,7 +69,7 @@
       <div class="obs-summary">Point the antenna at the Sun by hand (shadow method), lock the clutches, then CHECK and SYNC: the mount is told
         it points at the Sun's catalogue position (EOD) at that instant. No GOTO is sent; tracking is switched ON after the SYNC.
         Refused with the simulator, while any job or observation runs, if the mount is busy, or if the mount believes it is more
-        than <span id="sun-sync-max">10</span>° away (far more likely a pier-side flip than a pointing error). Evidence saved in data/alignment/MANUAL-SUN-SYNC-*.json.</div>
+        than <span id="sun-sync-max">180</span>° away (no limit: check the pier side yourself). Evidence saved in data/alignment/MANUAL-SUN-SYNC-*.json.</div>
       <dl class="kv" id="sun-sync-kv"></dl>
       <div class="obs-actions">
         <button type="button" id="btn-sun-check">CHECK</button>

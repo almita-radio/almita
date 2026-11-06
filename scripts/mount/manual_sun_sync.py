@@ -86,10 +86,15 @@ async def do_sync(max_sep_deg=10.0, track=True):
     finally:
         await tel.disconnect()
     post = state()
-    record = {"pre": pre, "sync_sent": sent, "sync_ok": ok, "tracking_on_ok": tracking,
+    # tel.sync() only reports that the commands were SENT; OnStep can still refuse the SYNC (2026-11-05: it stayed on
+    # the pole). Accepted = the mount now believes it points within 1 deg of the Sun.
+    sent_ok = ok
+    ok = bool(sent_ok and post.get("separation_deg") is not None and post["separation_deg"] <= 1.0)
+    record = {"pre": pre, "sync_sent": sent, "sync_commands_sent": sent_ok, "sync_ok": ok, "tracking_on_ok": tracking,
               "readback": {"ra_h": ra, "dec_deg": dec}, "post": post,
               "method": "operator pointed by hand (shadow), clutches locked, then SYNC on the Sun EOD"}
     path = ROOT / "data" / "alignment" / f"MANUAL-SUN-SYNC-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)      # a fresh data/ (the notebook) has no data/alignment yet
     path.write_text(json.dumps(record, indent=1))
     record["saved"] = str(path.relative_to(ROOT))
     return record
@@ -119,7 +124,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sh = sub.add_parser("show"); sh.add_argument("--json", action="store_true")
-    s = sub.add_parser("sync"); s.add_argument("--yes", action="store_true"); s.add_argument("--max-sep-deg", type=float, default=10.0)
+    s = sub.add_parser("sync"); s.add_argument("--yes", action="store_true"); s.add_argument("--max-sep-deg", type=float, default=180.0)
     s.add_argument("--no-track", action="store_true"); s.add_argument("--json", action="store_true")
     pw = sub.add_parser("power"); pw.add_argument("--seconds", type=int, default=30)
     a = ap.parse_args()

@@ -236,6 +236,8 @@
   $("mode-solar").addEventListener("click", () => setMode("solar"));
   $("mode-hi").addEventListener("click", () => setMode("hi"));
   // ---- SUN SYNC: the operator pointed the antenna at the Sun by hand; the backend script re-checks every guard itself
+  // the server answers {ok, data: {...}}: U.api returns that whole body, so the fields are one level down (unread until 2026-11-05)
+  const unwrap = (b) => (b && typeof b === "object" && "ok" in b && b.data && typeof b.data === "object" ? b.data : b);
   function sunKv(d) {
     const dl = $("sun-sync-kv"); dl.textContent = "";
     const m = d.mount || {}, s = d.sun_eod || {}, f = (x, n) => (x == null ? "—" : Number(x).toFixed(n));
@@ -248,6 +250,7 @@
     $("sun-sync-result").textContent = "";
     let d;
     try { d = await getJSON("/api/align/sun_sync"); } catch (err) { showError(msg(err)); U.setEnabled($("btn-sun-sync"), false, "CHECK failed"); return; }
+    d = unwrap(d);
     $("sun-sync-max").textContent = d.max_sep_deg;
     sunKv(d);
     const why = (d.blocked || []).slice();
@@ -261,6 +264,7 @@
                         "The mount's position is overwritten (SYNC) and tracking is switched ON.")) return;
     let r;
     try { r = await postJSON("/api/align/sun_sync", { confirm: true }, 120000); } catch (err) { showError(msg(err)); return; }
+    r = unwrap(r);
     U.setEnabled($("btn-sun-sync"), false, "done: CHECK again before another SYNC");
     if (r.refused) { U.setBadge($("sun-sync-badge"), "REFUSED"); $("sun-sync-result").textContent = "REFUSED: " + r.refused; return; }
     U.setBadge($("sun-sync-badge"), r.ok ? "SYNCED" : "FAILED");

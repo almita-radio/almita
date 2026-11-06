@@ -188,7 +188,9 @@ def sync_apply(mode: str, body: Dict[str, Any]) -> Dict[str, Any]:
 # process exits, and this server must never hold it. The script re-checks every guard itself at the instant of the
 # SYNC (simulator, web jobs, an active observation, pipeline processes, the mount lock, separation <= max_sep_deg).
 SUN_SYNC_SCRIPT = Path(__file__).resolve().parent / "scripts" / "mount" / "manual_sun_sync.py"
-SUN_SYNC_MAX_SEP_DEG = 10.0
+# No separation limit (operator 2026-11-05): after power-on the mount believes it is at home, ~75 deg from the Sun, so a
+# 10 deg limit refused every hand-pointed SYNC. 180 deg = any separation; the pier side is the operator's check.
+SUN_SYNC_MAX_SEP_DEG = 180.0
 
 
 def _sun_sync_run(args, timeout: float) -> Dict[str, Any]:
