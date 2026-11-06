@@ -140,7 +140,11 @@ def test_pixel_orientation_x_is_ra_offset_y_is_dec_and_row0_is_south():
     assert ra.shape == dec.shape == (4, 8)
     assert np.all(np.diff(ra, axis=1) > 0)          # x increases -> RA increases (east)
     assert np.all(np.diff(dec, axis=0) > 0)         # y increases -> Dec increases (north); row 0 = southernmost
-    assert np.allclose(dec[:, 0], dec[:, -1]) and np.allclose(ra[0, :], ra[-1, :])      # no accidental transpose/skew
+    # no accidental transpose/skew: the map is mirror-symmetric about its central meridian (x=0 -> RA of the centre).
+    # Since 2026-11-05 pixels sit in the spherical offset frame, so a constant-x column is a great circle, not a
+    # meridian: RA may differ slightly from row to row (~0.02 deg here), Dec stays equal left/right.
+    assert np.allclose(dec[:, 0], dec[:, -1])
+    assert np.allclose((ra[:, 0] + ra[:, -1]) / 2, grid.center_ra_deg)
 
 
 @pytest.mark.parametrize("offset_ra_deg,offset_dec_deg,expect", [
@@ -157,7 +161,10 @@ def test_a_source_at_a_known_offset_lands_on_the_expected_side(offset_ra_deg, of
                                        cutoff=1.5)
     ch = np.argmin(np.abs(cube.velocity_lsrk_m_s))
     image = np.where(cube.valid[ch], cube.relative_intensity[ch], -np.inf)
-    iy, ix = np.unravel_index(np.argmax(image), image.shape)
+    # the bright cell's maximum is a plateau of near-equal pixels that differ only by the 1e-4 noise: take the
+    # plateau's centre, not argmax's noise-driven pick among ties (2026-11-05, after the spherical map frame moved
+    # pixels by ~1e-3 deg and argmax picked another pixel of the same plateau)
+    iy, ix = np.argwhere(image > np.max(image) - 1e-3).mean(axis=0)
     cy, cx = (grid.ny - 1) / 2, (grid.nx - 1) / 2
     axis, sign = expect
     if axis == "x":

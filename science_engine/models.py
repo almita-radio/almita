@@ -139,12 +139,12 @@ class BeamModel:
 
 @dataclass(frozen=True)
 class ScienceGrid:
-    """A local tangent-plane spatial grid (section 16), same projection
-    convention as OBSERVE's own grid_generator.py ("tangent-plane",
-    RA scaled by cos(dec)) - not a full WCS reprojection, appropriate for
-    the modest (few-degree) fields V1 targets. `frame` is always "icrs";
-    Galactic l/b is a documented derived view, never a second storage
-    frame (section 12)."""
+    """A local spatial grid (section 16) in the exact spherical offset frame about (center_ra, center_dec) - the
+    same frame OBSERVE's grid_generator lays its grids out in (spatial.sky_offsets_deg), valid at any declination
+    (2026-11-05; it was a linear dRA*cos(dec0) tangent plane before). `window_x0_deg`/`window_y0_deg` place this
+    grid's pixel window inside that frame (0 = centred on the origin); a tile of a bigger map keeps the parent's
+    origin and only moves its window, so its pixels are exactly the parent's. `frame` is always "icrs";
+    Galactic l/b is a documented derived view, never a second storage frame (section 12)."""
     frame: str
     center_ra_deg: float
     center_dec_deg: float
@@ -153,7 +153,9 @@ class ScienceGrid:
     pixel_scale_deg: float
     nx: int
     ny: int
-    projection: str = "tangent-plane"
+    projection: str = "spherical-offset"
+    window_x0_deg: float = 0.0
+    window_y0_deg: float = 0.0
 
     def __post_init__(self):
         if self.frame != "icrs":
@@ -162,10 +164,13 @@ class ScienceGrid:
             raise ValueError("grid pixel_scale_deg, nx, ny must all be > 0 (not NaN)")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"frame": self.frame, "center_ra_deg": self.center_ra_deg, "center_dec_deg": self.center_dec_deg,
-                "width_deg": self.width_deg, "height_deg": self.height_deg,
-                "pixel_scale_deg": self.pixel_scale_deg, "nx": self.nx, "ny": self.ny,
-                "projection": self.projection}
+        out = {"frame": self.frame, "center_ra_deg": self.center_ra_deg, "center_dec_deg": self.center_dec_deg,
+               "width_deg": self.width_deg, "height_deg": self.height_deg,
+               "pixel_scale_deg": self.pixel_scale_deg, "nx": self.nx, "ny": self.ny,
+               "projection": self.projection}
+        if self.window_x0_deg or self.window_y0_deg:
+            out["window_x0_deg"], out["window_y0_deg"] = self.window_x0_deg, self.window_y0_deg
+        return out
 
 
 @dataclass

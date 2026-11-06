@@ -492,7 +492,7 @@ def mosaic_geometry_summary(filtered_input, base_grid, nodes, point_cell, planne
         "lattice_source": "campaign_plan" if planned else "measured_positions",
         "campaign_plan": planned.campaign_dir if planned else None,
         "rotation_deg": planned.rotation_deg if planned else 0.0,
-        "projection": "science_engine linear tangent plane (x = dRA cos dec0, y = dDec) - shared by A, B and C",
+        "projection": "science_engine spherical offset frame about the board centre (x east, y north; OBSERVE's SkyOffsetFrame) - shared by A, B and C",
         "point_to_planned_target_max_deg": None,
         "point_to_a_cell_node_max_deg": float(np.hypot(x - node[:, 0], y - node[:, 1]).max()),
         "regular_board_offset_max_deg": float(np.hypot(x - regular[:, 0], y - regular[:, 1]).max()),
@@ -527,20 +527,17 @@ TILE_TARGET_BYTES = 256 * 1024 ** 2  # one tile's cube (57 B/voxel): small enoug
 
 
 def _tile_grid(grid, y0: int, y1: int, x0: int, x1: int):
-    """Pixels [y0:y1, x0:x1] of `grid` as a ScienceGrid whose pixel_centers_deg() are those same pixels' centres.
-    pixel_centers_deg() computes ra = centre_ra + x / cos(centre_dec): a tile centred at another dec gets its width
-    scaled by cos(tile dec) / cos(grid dec) and its centre RA shifted by its own x offset / cos(grid dec), so every
-    pixel lands on the full grid's RA/Dec (to float rounding, ~1e-13 deg)."""
+    """Pixels [y0:y1, x0:x1] of `grid` as a ScienceGrid whose pixel_centers_deg() are those same pixels' centres:
+    the tile keeps the parent's projection origin and only moves its pixel window (window_x0/y0_deg), so every
+    pixel lands exactly on the full grid's RA/Dec at any declination."""
     from science_engine.models import ScienceGrid
     xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
     ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
-    cos0 = np.cos(np.radians(grid.center_dec_deg))
-    tile_dec = grid.center_dec_deg + 0.5 * (ys[y0] + ys[y1])
-    x_mid = 0.5 * (xs[x0] + xs[x1])
-    scale = np.cos(np.radians(tile_dec)) / cos0
-    return ScienceGrid(frame=grid.frame, center_ra_deg=float((grid.center_ra_deg + x_mid / cos0) % 360.0),
-                       center_dec_deg=float(tile_dec), width_deg=float((xs[x1] - xs[x0]) * scale),
-                       height_deg=float(ys[y1] - ys[y0]), pixel_scale_deg=grid.pixel_scale_deg, nx=x1 - x0, ny=y1 - y0)
+    return ScienceGrid(frame=grid.frame, center_ra_deg=grid.center_ra_deg, center_dec_deg=grid.center_dec_deg,
+                       width_deg=float(xs[x1] - xs[x0]), height_deg=float(ys[y1] - ys[y0]),
+                       pixel_scale_deg=grid.pixel_scale_deg, nx=x1 - x0, ny=y1 - y0,
+                       window_x0_deg=float(grid.window_x0_deg + 0.5 * (xs[x0] + xs[x1])),
+                       window_y0_deg=float(grid.window_y0_deg + 0.5 * (ys[y0] + ys[y1])))
 
 
 def tile_plan(grid, n_velocity_channels: int, n_points: int, keep_quality_inputs: bool) -> dict[str, Any]:
@@ -753,9 +750,8 @@ def build_mosaic_grid(filtered_input, spacing_deg: float, planned: Optional[Plan
         )
 
     mean_col_pos, mean_row_pos = float(np.mean(col_centroids)), float(np.mean(row_centroids))
-    cos_dec0 = np.cos(np.radians(center_dec0))
-    center_ra = (center_ra0 + mean_col_pos / cos_dec0) % 360.0
-    center_dec = center_dec0 + mean_row_pos
+    from science_engine.spatial import offsets_to_sky_deg
+    center_ra, center_dec = (float(v) for v in offsets_to_sky_deg(mean_col_pos, mean_row_pos, center_ra0, center_dec0))
     grid = ScienceGrid(frame="icrs", center_ra_deg=center_ra, center_dec_deg=center_dec,
                        width_deg=n_cols * spacing_deg, height_deg=n_rows * spacing_deg,
                        pixel_scale_deg=spacing_deg, nx=n_cols, ny=n_rows)
@@ -1382,10 +1378,9 @@ def board_json_payload(built: dict[str, Any]) -> dict[str, Any]:
     vmin, vmax = built["color_vmin"], built["color_vmax"]
     grid, base = built["board_grid"], built["base_grid"]
     nodes, corners = built["cell_nodes_xy"], built["cell_corners_xy"]
-    # a cell's sky position = its lattice node, back through the SAME linear projection pixel_centers_deg uses
-    cos_dec0 = np.cos(np.radians(base.center_dec_deg))
-    cell_ra = (base.center_ra_deg + nodes[..., 0] / cos_dec0) % 360.0
-    cell_dec = base.center_dec_deg + nodes[..., 1]
+    # a cell's sky position = its lattice node, back through the SAME projection pixel_centers_deg uses
+    from science_engine.spatial import offsets_to_sky_deg
+    cell_ra, cell_dec = offsets_to_sky_deg(nodes[..., 0], nodes[..., 1], base.center_ra_deg, base.center_dec_deg)
     cell_point = {rc: idx for idx, rc in built["point_cell"].items()}
     point_by_index = {r["point_index"]: r for r in built["point_rows"]}
 
@@ -1529,7 +1524,7 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         ax.tick_params(labelsize=FS_TICK)
 
     def _local_pixel_centers(grid):
-        """(X, Y) meshgrids of each pixel's own local tangent-plane offset (degrees), SAME linspace convention
+        """(X, Y) meshgrids of each pixel's own offset in the map frame (degrees), SAME linspace convention
         pixel_centers_deg() uses - aligns a contourf/hatch overlay exactly on the imshow array it annotates."""
         xs = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
         ys = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
@@ -1557,8 +1552,8 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
         cax = fig.add_axes(CAX_RECT)
         fig.suptitle(_title(panel), fontsize=FS_TITLE, y=0.975)
         fig.text(0.5, 0.025, "\n".join(textwrap.wrap(caption, 110)), ha="center", va="bottom", fontsize=FS_CAPTION)
-        ax.set_xlabel(f"x = ΔRA·cos(δ0) [deg] from RA {board.center_ra_deg:.2f}° (east →)", fontsize=FS_LABEL)
-        ax.set_ylabel(f"y = ΔDec [deg] from Dec {board.center_dec_deg:.2f}°", fontsize=FS_LABEL)
+        ax.set_xlabel(f"x = offset east [deg] from RA {board.center_ra_deg:.2f}° (east →)", fontsize=FS_LABEL)
+        ax.set_ylabel(f"y = offset north [deg] from Dec {board.center_dec_deg:.2f}°", fontsize=FS_LABEL)
         return fig, ax, cax
 
     def _save(fig, name: str, exts=("png", "svg", "pdf")) -> None:
@@ -1606,8 +1601,8 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
                      + " Read any multi-pixel feature with that in mind - it is not a verified detection.")
     notes.append("## Method\n"
                  f"A: {n_rows}x{n_cols} cells, one per measured pointing (spacing {spatial['mosaic_spacing_deg']:.4g} deg), "
-                 "each drawn as the quadrilateral its pointing occupies in the shared projection x = ΔRA·cos(δ0), "
-                 "y = ΔDec - a wide field's cells are deformed, not squares. An unmeasured cell is transparent, "
+                 "each drawn as the quadrilateral its pointing occupies in the shared projection (the spherical offset "
+                 "frame about the board centre, x east and y north) - a wide field's cells are deformed, not squares. An unmeasured cell is transparent, "
                  "never zero. Only A's cells have a real spectrum (click them in the web page).\n\n"
                  f"B/C: the frozen science_engine build_cube()+integrated_map(), evaluated in tiles, on rasters "
                  f"{cfg.interp_factor_b}x and {cfg.interp_factor_c}x the board pitch over the SAME footprint, centre "
@@ -1703,8 +1698,8 @@ def render_all_maps(built: dict[str, Any], cfg: MapConfig, campaign_id: str, red
             ax.set_facecolor(NO_DATA)
         else:
             _footprint_clip(ax, bc_image, *overlays)
-        ax.set_xlabel("x = ΔRA·cos(δ0) [deg] (east →)", fontsize=FS_LABEL)
-    axes[0].set_ylabel("y = ΔDec [deg]", fontsize=FS_LABEL)
+        ax.set_xlabel("x = offset east [deg] (east →)", fontsize=FS_LABEL)
+    axes[0].set_ylabel("y = offset north [deg]", fontsize=FS_LABEL)
     _colorbar(fig, im, cax, unit_label)
     fig.suptitle(f"A / B / C - same projection, footprint and colour scale · {campaign_id} · "
                  f"{cfg.calibration_level_filter} · {window}", fontsize=FS_TITLE + 1, y=0.97)

@@ -8,7 +8,7 @@ import numpy as np
 
 from science_engine.config import ScienceConfig
 from science_engine.models import BeamModel, ScienceGrid, ScienceInput
-from science_engine.spatial import angular_separation_deg, tangent_plane_offsets_deg
+from science_engine.spatial import angular_separation_deg, offsets_to_sky_deg, tangent_plane_offsets_deg
 
 
 def build_beam_model(config: ScienceConfig) -> BeamModel:
@@ -45,21 +45,18 @@ def build_grid(science_input: ScienceInput, beam: BeamModel, config: ScienceConf
 
     return ScienceGrid(frame="icrs", center_ra_deg=center_ra_deg, center_dec_deg=center_dec_deg,
                        width_deg=width_deg, height_deg=height_deg, pixel_scale_deg=pixel_scale_deg,
-                       nx=nx, ny=ny, projection="tangent-plane")
+                       nx=nx, ny=ny)
 
 
 def pixel_centers_deg(grid: ScienceGrid) -> tuple[np.ndarray, np.ndarray]:
     """Returns (ra_deg, dec_deg) 2D arrays, shape (ny, nx), of each pixel
-    center's real sky coordinates (tangent-plane offset undone)."""
+    center's real sky coordinates (spherical offset undone, spatial.offsets_to_sky_deg)."""
     x_edges = np.linspace(-grid.width_deg / 2, grid.width_deg / 2, grid.nx + 1)
     y_edges = np.linspace(-grid.height_deg / 2, grid.height_deg / 2, grid.ny + 1)
-    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    x_centers = (x_edges[:-1] + x_edges[1:]) / 2 + grid.window_x0_deg
+    y_centers = (y_edges[:-1] + y_edges[1:]) / 2 + grid.window_y0_deg
     xx, yy = np.meshgrid(x_centers, y_centers)  # (ny, nx)
-    cos_dec = np.cos(np.radians(grid.center_dec_deg))
-    ra_deg = grid.center_ra_deg + xx / cos_dec
-    dec_deg = grid.center_dec_deg + yy
-    return np.mod(ra_deg, 360.0), dec_deg
+    return offsets_to_sky_deg(xx, yy, grid.center_ra_deg, grid.center_dec_deg)
 
 
 def point_to_pixel_separations_deg(grid: ScienceGrid, point_ra_deg: float, point_dec_deg: float) -> np.ndarray:

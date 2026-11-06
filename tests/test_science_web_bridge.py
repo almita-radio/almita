@@ -718,9 +718,11 @@ def _wide_campaign(tmp_path, n=20, width_deg=30.0, center_ra_h=4.94, center_dec=
 def test_wide_campaign_cannot_be_clustered_but_builds_from_its_plan(tmp_path):
     from science_web_bridge import load_planned_lattice
     si, spacing = _wide_campaign(tmp_path)
-    with pytest.raises(MosaicShapeError, match="do not form a clean rectangular lattice"):
-        build_mosaic_grid(si, spacing)                      # the old path, even at the plan's own spacing
     planned = load_planned_lattice(si)
+    # 2026-11-05: in the exact spherical map frame this 30 deg lattice clusters cleanly even without its plan
+    # (the old linear dRA*cos(dec0) frame bent its rows and refused it); both paths give the same cells
+    _, clustered_cells, *shape = build_mosaic_grid(si, spacing)
+    assert shape == [20, 20] and clustered_cells == planned.cell_by_point
     spatial = auto_spatial_params(si, cfg_with(), planned)
     assert spatial["mosaic_spacing_source"] == "campaign_plan"
     assert spatial["mosaic_spacing_deg"] == pytest.approx(spacing)
@@ -748,7 +750,7 @@ def test_wide_campaign_a_cells_follow_the_shared_projection_and_the_raster_cover
     base = raster_base_grid(board, corners)
     assert corners.shape == (21, 21, 2)
     assert base.width_deg / 2 >= np.abs(corners[..., 0]).max() and base.height_deg / 2 >= np.abs(corners[..., 1]).max()
-    assert base.nx > board.nx                       # the board's own rectangle would cut the far corners off
+    assert base.nx >= board.nx and base.ny >= board.ny   # widened only if a corner falls outside the board
     assert base.center_ra_deg == board.center_ra_deg and base.center_dec_deg == board.center_dec_deg
     # orientation: x grows with column along every row, y with row along every column
     assert np.all(np.diff(nodes[..., 0], axis=1) > 0) and np.all(np.diff(nodes[..., 1], axis=0) > 0)
@@ -756,7 +758,9 @@ def test_wide_campaign_a_cells_follow_the_shared_projection_and_the_raster_cover
     assert geo["lattice_source"] == "campaign_plan"
     assert geo["point_to_planned_target_max_deg"] < 1e-5
     assert geo["point_to_a_cell_node_max_deg"] < 1e-5        # A draws each point's cell where the point is
-    assert geo["regular_board_offset_max_deg"] > spacing     # ...which a rectangular board would not
+    # a gnomonic lattice is not exactly regular in the spherical offset frame (it was > 1 cell off in the old
+    # linear frame, 2026-11-05: now under one cell); A still draws each cell on its point
+    assert 0 < geo["regular_board_offset_max_deg"] < spacing
     assert all(not cov["uncovered_points"] for cov in geo["raster_coverage"].values())
     # a support radius smaller than the corners' distance to the raster: those points are named, not dropped
     tight = mosaic_geometry_summary(si, base, nodes, point_cell, planned, 1e-3, (2,))
