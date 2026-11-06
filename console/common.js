@@ -583,27 +583,46 @@
     p.start();
     return p;
   };
+  // ------------------------------------------------------------------ logs follow their last line (BL-098)
+  // Every scrolling log box in the console uses ONE rule (operator 2026-11-06: "siempre aparezca visible la última
+  // línea"): on its first fill, or while the operator is at the bottom, it shows the last line after every update;
+  // if the operator scrolled up to read, it holds exactly there until they scroll back down. The box must be
+  // REUSED between polls - a freshly created <pre> starts at the top (the bug REDUCE/SCIENCE had).
+  const NEAR_BOTTOM_PX = 24;    // slack (~1-2 lines) so "at the bottom" survives sub-pixel rounding
+  U.logAtBottom = (el) => el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
+  U.followTail = function (pre, apply) {
+    const follow = pre.dataset.tailFilled !== "1" || U.logAtBottom(pre);
+    const top = pre.scrollTop;
+    apply();
+    pre.dataset.tailFilled = "1";
+    pre.scrollTop = follow ? pre.scrollHeight : top;
+  };
+  // A job's log box inside `container`: the same node while it is the same job (scroll kept), a new one otherwise.
+  U.jobLogPre = function (container, jobId) {
+    let pre = container.querySelector("pre.job-log");
+    if (!pre || pre.dataset.jobId !== String(jobId)) {
+      if (pre) pre.remove();
+      pre = document.createElement("pre");
+      pre.className = "job-log";
+      pre.dataset.jobId = String(jobId);
+    }
+    return pre;
+  };
+
   U.jobPanel = function (container, badge, opts) {
     const o = Object.assign({ onEnd: null, onChange: null, onError: null, stopLabel: "STOP THIS JOB", afterLog: null }, opts || {});
     const st = { jobId: null, poller: null, last: null };
     const afterLogHome = o.afterLog ? o.afterLog.parentNode : null;   // where it goes back to when the panel is cleared
     const fail = (err) => { if (o.onError) o.onError(err); };
-    const NEAR_BOTTOM_PX = 24; // slack (~1-2 lines) so "at the bottom" survives sub-pixel rounding
     function render(j) {
       st.last = j;
-      // The whole panel is rebuilt from scratch on every poll (state/verdict/exit/artifacts can all change), which
-      // used to also recreate the log <pre> as a brand-new node every time - a fresh node always starts at
-      // scrollTop 0, so the log silently jumped to the top on every poll regardless of where the operator had
-      // scrolled to. Capture the outgoing log element's scroll state (as plain values, before it's discarded)
-      // so the new one can be given equivalent behavior: follow the tail while the operator is near the bottom,
-      // hold still if nothing changed, and never drag them away from wherever they scrolled up to read.
+      // The panel is rebuilt on every poll (state/verdict/exit/artifacts can all change) EXCEPT the log <pre> of the
+      // same job: it stays in place (a detached or brand-new node loses its scroll and starts at the top) and
+      // U.followTail keeps its last line visible unless the operator scrolled up to read (BL-098).
       const oldLogPre = container.querySelector(".job-log");
-      const sameJobLog = !!oldLogPre && oldLogPre.dataset.jobId === j.job_id;
+      const keep = oldLogPre && oldLogPre.dataset.jobId === String(j.job_id) ? oldLogPre : null;
       const newLogText = j.log_tail || "";
-      const logTextChanged = !sameJobLog || oldLogPre.textContent !== newLogText;
-      const logWasNearBottom = sameJobLog && oldLogPre.scrollTop + oldLogPre.clientHeight >= oldLogPre.scrollHeight - NEAR_BOTTOM_PX;
-      const logOldScrollTop = sameJobLog ? oldLogPre.scrollTop : 0;
-      container.textContent = "";
+      for (const child of Array.from(container.childNodes)) if (child !== keep) child.remove();
       if (badge) U.setBadge(badge, j.state === "RUNNING" ? "RUNNING" : j.verdict);
       const head = mk("div", "obs-summary");
       head.append(mk("div", "", `job ${j.job_id} · ${j.state} · ${j.verdict} · exit ${j.exit_code === null ? "—" : j.exit_code} · ${U.hms(j.elapsed_s)}`));
@@ -628,19 +647,12 @@
           fail(r.ok ? null : r.error);
         }));
         bar.append(b, mk("span", "obs-summary", "clean stop (SIGINT) · a GOTO in progress may finish · to halt the mount at once use Ekos or the hand controller"));
-        container.appendChild(bar);
+        container.insertBefore(bar, keep);
       }
-      container.appendChild(head);
-      const logPre = mk("pre", "job-log", newLogText);
-      logPre.dataset.jobId = j.job_id;
-      container.appendChild(logPre);
-      if (!logTextChanged) {
-        logPre.scrollTop = logOldScrollTop;              // content identical: never move the scroll
-      } else if (!sameJobLog || logWasNearBottom) {
-        logPre.scrollTop = logPre.scrollHeight;           // new job, or operator was following the tail: keep following
-      } else {
-        logPre.scrollTop = logOldScrollTop;               // operator scrolled up to read history: leave them exactly there
-      }
+      container.insertBefore(head, keep);
+      const logPre = keep || U.jobLogPre(container, j.job_id);
+      if (!keep) container.appendChild(logPre);
+      U.followTail(logPre, () => { if (logPre.textContent !== newLogText) logPre.textContent = newLogText; });
       if (o.afterLog) container.appendChild(o.afterLog);  // the page's own node (e.g. ALIGN's live reading): moved, never rebuilt here
       if (j.artifacts && j.artifacts.length) {
         const list = mk("div", "job-artifacts"), imgs = mk("div", "thumbs");

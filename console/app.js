@@ -471,12 +471,14 @@ function renderActivityLog(activityLog){
   const lines=(activityLog&&activityLog.available&&activityLog.lines)||[];
   panel.hidden=lines.length===0;
   if(!lines.length)return;
-  pre.innerHTML=lines.map(line=>{
+  const html=lines.map(line=>{
     const cls=_logLineClass(line);
     const display=_appendHmsToSummaryLine(line);
     return `<span${cls?` class="${cls}"`:""}>${_escapeHtml(display)}</span>`;
   }).join("\n");
-  pre.scrollTop=pre.scrollHeight;
+  // last line visible, unless the operator scrolled up to read (BL-098, common.js U.followTail)
+  const put=()=>{if(pre.innerHTML!==html)pre.innerHTML=html;};
+  if(window.AlmitaUI&&AlmitaUI.followTail)AlmitaUI.followTail(pre,put);else{put();pre.scrollTop=pre.scrollHeight;}  // MONITOR never breaks for want of common.js
 }
 
 function renderLastSession(lastSession){

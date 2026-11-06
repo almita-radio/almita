@@ -530,12 +530,19 @@
 
   function renderRunJob(j) {
     U.setBadge($("run-badge"), j.state === "RUNNING" ? "RUNNING" : j.verdict);
-    const container = $("job-reduce-run"); container.textContent = "";
-    const head = document.createElement("div"); head.className = "obs-summary";
+    // the head and the log box are kept between polls (a new <pre> starts at the top): U.followTail keeps the last
+    // line visible unless the operator scrolled up to read (BL-098)
+    const container = $("job-reduce-run");
+    const pre = U.jobLogPre(container, j.job_id);
+    let head = container.querySelector(".obs-summary");
+    if (!pre.isConnected) {
+      container.textContent = "";
+      head = document.createElement("div"); head.className = "obs-summary";
+      container.append(head, pre);
+    }
     head.textContent = `job ${j.job_id} · ${j.state} · ${j.verdict} · elapsed ${U.hms(j.elapsed_s)}`;
-    container.appendChild(head);
-    const pre = document.createElement("pre"); pre.className = "job-log"; pre.textContent = j.log_tail || "";
-    container.appendChild(pre);
+    const text = j.log_tail || "";
+    U.followTail(pre, () => { if (pre.textContent !== text) pre.textContent = text; });
   }
 
   // ------------------------------------------------------------------ 6) RESULTS
