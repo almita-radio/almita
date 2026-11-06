@@ -43,7 +43,10 @@ PREFLIGHT_MAX_AGE_MIN = 120.0
 CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "target_dec_degrees", "capture_status", "start_time", "end_time",
                            "duration", "error_message", "data_filename", "session_name"}
 # frozen surface -> (paths, pinned commit): any difference to the pin or to HEAD is reported
-FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "f5e2f65"), ("almita_science.py", "f5e2f65"),
+# science_engine re-pinned from f5e2f65 to 2d62634 (2026-11-06, operator: "arréglala de verdad"): maps in the exact
+# spherical offset frame (OBSERVE's SkyOffsetFrame) instead of the linear dRA*cos(dec0) plane, so wide fields and grids
+# across a pole work; a few-degree field moves < 0.01 deg. Weighting, integration and units unchanged.
+FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "2d62634"), ("almita_science.py", "f5e2f65"),
           # science_forensics re-pinned from 02b8e5a to 7b2eefb (2026-10-13, BL-052): experiment/plan.py's DEFAULT_INSTRUMENT
           # carries the RFI_REF Bias-T ON (antenna B's LNA) and records the campaign's OFF as bias_tee_feature_campaign.
           ("science_forensics", "7b2eefb"), ("almita_science_forensics.py", "8f4b40a"),
