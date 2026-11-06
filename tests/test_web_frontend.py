@@ -1860,3 +1860,43 @@ out.after = [$("cap-host").value, $("cap-detail").textContent];
     assert out["before"][0] == "192.168.50.254" and "rtl_tcp.service: active" in out["before"][1] and "present" in out["before"][1]
     assert out["posted"] == [{"host": "almita-pi4.local", "confirm": True}] and "almita-pi4.local" in out["confirm"]
     assert out["after"][0] == "almita-pi4.local" and "unreachable" in out["after"][1]
+
+
+def test_transit_trend_lines_can_be_hidden_and_the_choice_is_remembered(tmp_path):
+    """TRANSIT (operator 2026-11-05): a button hides the trend lines and their slope labels on every chart; the data stays drawn."""
+    routes = r"""
+localStorage.removeItem("almita-transit-trends");
+const __fetch = window.fetch;
+window.fetch = async (...a) => { const r = await __fetch(...a); r.json = async () => JSON.parse(await r.text()); return r; };
+const __now = Date.now();
+window.__routes["GET /api/transit/state"] = { body: { ok: true, data: { active: true, state: "active" } } };
+window.__routes["GET /runtime/transit_latest.json"] = { body: { updated_utc: new Date(__now).toISOString(), every_s: 10, gain_db: 40.2, seconds: 1,
+  rows: Array.from({ length: 60 }, (_, i) => ({ utc: new Date(__now - (59 - i) * 10000).toISOString(), status: "VALID", power_db: 42 + i * 0.01,
+                                                pi_temp_c: 60 + i * 0.02, sun_alt_deg: 30, sun_az_deg: 90 })) } };
+window.__seen = { labels: [], thick: 0 };
+const P = CanvasRenderingContext2D.prototype, __text = P.fillText, __stroke = P.stroke;
+P.fillText = function (t, ...r) { window.__seen.labels.push(String(t)); return __text.call(this, t, ...r); };
+P.stroke = function (...r) { if (this.lineWidth === 2) window.__seen.thick += 1; return __stroke.apply(this, r); };
+const __snap = () => { const s = window.__seen; window.__seen = { labels: [], thick: 0 };
+  return { trend_labels: s.labels.filter((t) => t.includes("trend")).length, max_labels: s.labels.filter((t) => t.startsWith("max ")).length, thick: s.thick }; };
+window.__snap = __snap;
+"""
+    driver = r"""
+await until(() => window.__seen.labels.some((t) => t.includes("trend")), 4000);
+const redraw = () => { window.__seen = { labels: [], thick: 0 }; window.dispatchEvent(new Event("resize")); return window.__snap(); };
+out.first = { label: $("btn-trend").textContent, pressed: $("btn-trend").getAttribute("aria-pressed"), ...redraw() };
+$("btn-trend").click();
+out.hidden = { label: $("btn-trend").textContent, pressed: $("btn-trend").getAttribute("aria-pressed"), stored: localStorage.getItem("almita-transit-trends"), ...redraw() };
+$("btn-trend").click();
+out.shown = { label: $("btn-trend").textContent, stored: localStorage.getItem("almita-transit-trends"), ...redraw() };
+""".strip()
+    out = run_page(tmp_path, "transit", routes, driver, budget=8000)
+    assert "driver_error" not in out, out.get("driver_error")
+    assert not out["errors"], out["errors"]
+    charts = 3
+    assert out["first"]["label"] == "TREND LINES: ON · hide" and out["first"]["pressed"] == "true"
+    assert out["first"]["trend_labels"] == 2 * charts and out["first"]["thick"] == 2 * charts      # band power + Pi temperature on each chart
+    assert out["hidden"]["label"] == "TREND LINES: OFF · show" and out["hidden"]["pressed"] == "false" and out["hidden"]["stored"] == "off"
+    assert out["hidden"]["trend_labels"] == 0 and out["hidden"]["thick"] == 0
+    assert out["hidden"]["max_labels"] == charts                                                   # the data is still drawn
+    assert out["shown"]["stored"] == "on" and out["shown"]["trend_labels"] == 2 * charts

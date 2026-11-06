@@ -17,6 +17,9 @@
   // dB axis: fixed 0-100 (operator 2026-11-03) or AUTO (the window's own range); remembered in this browser
   let scaleFixed = true;
   try { scaleFixed = localStorage.getItem("almita-transit-axes") !== "auto"; } catch (e) { /* storage blocked: 0-100 */ }
+  // trend lines and their slope labels: shown unless the operator hid them; remembered in this browser (operator 2026-11-05)
+  let showTrends = true;
+  try { showTrends = localStorage.getItem("almita-transit-trends") !== "off"; } catch (e) { /* storage blocked: shown */ }
 
   function setup(canvas) {
     const dpr = Math.max(2, window.devicePixelRatio || 1), box = canvas.getBoundingClientRect();
@@ -89,7 +92,7 @@
       tp.forEach((r, i) => (i && r.t - tp[i - 1].t <= 3 * (everyS || 10) * 1e3 ? ctx.lineTo(X(r.t), YT(r.pi_temp_c)) : ctx.moveTo(X(r.t), YT(r.pi_temp_c))));
       ctx.stroke(); ctx.setLineDash([]);
       const tt = trend(tp, "pi_temp_c");
-      if (tt) {
+      if (tt && showTrends) {
         ctx.strokeStyle = C.sun; ctx.lineWidth = 2; ctx.globalAlpha = 0.85; ctx.beginPath();
         ctx.moveTo(X(tt.ta), YT(tt.at(tt.ta))); ctx.lineTo(X(tt.tb), YT(tt.at(tt.tb))); ctx.stroke(); ctx.globalAlpha = 1;
         ctx.fillStyle = C.sun; ctx.textAlign = "right";
@@ -110,7 +113,7 @@
     }
     // trend: least-squares line through the valid samples of this window, slope in dB per hour
     const tr = trend(good, "power_db");
-    if (tr) {
+    if (tr && showTrends) {
       ctx.strokeStyle = C.trend; ctx.lineWidth = 2; ctx.beginPath();
       ctx.moveTo(X(tr.ta), Y(tr.at(tr.ta))); ctx.lineTo(X(tr.tb), Y(tr.at(tr.tb))); ctx.stroke();
       ctx.fillStyle = C.trend; ctx.textAlign = "left";
@@ -163,6 +166,13 @@
     scaleFixed = !scaleFixed;
     try { localStorage.setItem("almita-transit-axes", scaleFixed ? "fixed" : "auto"); } catch (e) { /* not remembered */ }
     scaleLabel(); render();
+  });
+  const trendLabel = () => { $("btn-trend").textContent = showTrends ? "TREND LINES: ON · hide" : "TREND LINES: OFF · show"; $("btn-trend").setAttribute("aria-pressed", String(showTrends)); };
+  trendLabel();
+  $("btn-trend").addEventListener("click", () => {
+    showTrends = !showTrends;
+    try { localStorage.setItem("almita-transit-trends", showTrends ? "on" : "off"); } catch (e) { /* not remembered */ }
+    trendLabel(); render();
   });
   $("btn-start").addEventListener("click", () => control("start"));
   $("btn-stop").addEventListener("click", () => control("stop"));
