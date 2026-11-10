@@ -424,7 +424,9 @@
     const left = document.querySelector(".science-row-left");
     const panel = document.getElementById("spectral-stack-panel");
     if (!left || !panel) return;
-    // ...but never shorter than the panel's own content (header + the viewport's CSS min-height): with no thumbnails
+    // The row aligns to the top (styles.css), so the column's height is its CONTENT, not a height stretched to this
+    // very panel - stretching made the two feed each other and the panel stayed far taller than the column.
+    // ...and never shorter than the panel's own content (header + the viewport's CSS min-height): with no thumbnails
     // the antenna column is ~130 px and the 3D view spilled over the RFI MASK chart below (operator 2026-11-10). When
     // the row wraps (narrow screen: the panel sits UNDER the column) the panel keeps its natural height.
     const viewport = document.getElementById("spectral-stack-viewport");

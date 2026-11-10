@@ -27,7 +27,7 @@ main{padding:14px;max-width:1400px;margin:auto}
 h2{font-size:11px;letter-spacing:.1em;margin:0;color:var(--heading)}
 .kv{display:grid;grid-template-columns:1fr 1.3fr;gap:5px 10px;padding:11px}
 .kv dt{font-size:10px;letter-spacing:.08em;color:var(--muted);margin:0}
-.kv dd{margin:0;font-family:ui-monospace,monospace}
+.kv dd{margin:0;font-family:ui-monospace,monospace;min-width:0;overflow-wrap:anywhere}   /* long values (a stream URL) wrap inside the panel */
 .compact{margin-top:10px;padding:11px}
 .compact h2{margin-bottom:8px}
 /* MOUNT CAMERA: fixed 3:2 (matches the ESP32-CAM's real 480x320 frame), full tile width, letterboxed - never
@@ -51,7 +51,7 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:var(--heading)}
 .activity-log .log-error{color:var(--error)}
 .activity-log .log-point{color:var(--accent);font-weight:700}
 .activity-log .log-session{color:var(--warn)}
-.science-row{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;margin-top:10px}
+.science-row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-top:10px}   /* the column keeps its own height; JS sizes the 3D panel from it */
 .science-row-left{flex:1 1 480px;min-width:0;display:flex;flex-direction:column}
 .science-row-left .antenna-label:first-child{margin-top:0}
 .science-row-left #quicklook-thumbs,.science-row-left #rfi-thumbs{margin-top:10px}
