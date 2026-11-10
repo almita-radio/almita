@@ -70,6 +70,81 @@ def _emit(payload: Dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
+def _rtl_tcp_process() -> Optional[Dict[str, Any]]:
+    """Which rtl_tcp process is serving MAIN right now (MainPID + ActiveEnterTimestamp of the unit, through the capture
+    Pi's agent when remote). The Y-factor needs the load and the sky from the SAME process: the gain jumps ~1.7 dB
+    across an rtl_tcp restart (2026-10-18). None when it cannot be read."""
+    import instrument_host
+    out: Dict[str, Any] = {}
+    for prop, key in (("MainPID", "main_pid"), ("ActiveEnterTimestamp", "active_enter")):
+        try:
+            r = instrument_host.run(["systemctl", "show", "-p", prop, "--value", sdr_tuning.MAIN_RTL_TCP_UNIT],
+                                    capture_output=True, text=True, timeout=10)
+        except Exception:  # noqa: BLE001 - an unreadable identity is recorded as unknown, never invented
+            return None
+        if r.returncode != 0:
+            return None
+        value = (r.stdout or "").strip()
+        out[key] = int(value) if key == "main_pid" and value.isdigit() else value
+    out["read_utc"] = datetime.now(timezone.utc).isoformat()
+    return out
+
+
+def _load_sensor_id() -> Optional[str]:
+    try:
+        cfg = json.loads((Path(__file__).resolve().parent / "observer_config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return (cfg.get("temperature_sensors") or {}).get("load")
+
+
+def _read_load_temperature() -> Optional[Dict[str, Any]]:
+    """One reading of the DS18 on the 50 ohm load (role "load"), through the capture Pi when remote."""
+    sensor_id = _load_sensor_id()
+    if not sensor_id:
+        return None
+    from temperature_sensors import DS18B20Reader
+    return DS18B20Reader({"load": sensor_id}, warning=lambda m: _progress(m)).read("load")
+
+
+def _compute_y_factor_into(session_dir: Path, state: Dict[str, Any]) -> None:
+    """state["y_factor"]: the receiver Y-factor of this session (calibration_engine.y_factor), or why not yet."""
+    from calibration_engine.acquisition import read_capture_iq
+    from calibration_engine.y_factor import compute_y_factor
+    fifty, fifty_result = state.get("fifty_ohm") or {}, state.get("fifty_ohm_result")
+    bajo = (state.get("hi_references") or {}).get("HI_BAJO")
+    if fifty.get("status") != "DONE" or not fifty_result:
+        state["y_factor"] = {"verdict": "NOT_AVAILABLE", "reason": "the 50 ohm load step was not measured"}
+        return
+    if not bajo:
+        state["y_factor"] = {"verdict": "NOT_AVAILABLE", "reason": "the cold-sky reference (HI BAJO) is not measured yet"}
+        return
+    load_paths = sorted((session_dir / "captures" / "AMBIENT_50R").glob("capture_*.h5"))
+    cold_paths = [Path(p) for p in bajo["capture"]["capture_paths"]]
+    alto = (state.get("hi_references") or {}).get("HI_ALTO")
+
+    def arrays(paths):
+        return [read_capture_iq(str(p))[0] for p in paths]
+
+    def clipped(result):
+        return "CLIPPED" in ((result or {}).get("cross_capture") or {}).get("clipping_statuses", [])
+
+    temp = state.get("load_temperature") or {}
+    try:
+        y = compute_y_factor(
+            arrays(load_paths), arrays(cold_paths), connection_point=fifty.get("connection_point", "LNA_INPUT"),
+            load_temperature_c=temp.get("temperature_c"), load_temperature_source=temp.get("source"),
+            load_tuning=fifty_result.get("tuning"), cold_tuning=bajo["capture"].get("tuning"),
+            load_process=fifty_result.get("rtl_tcp_process"), cold_process=bajo["capture"].get("rtl_tcp_process"),
+            load_clipped=clipped(fifty_result), cold_clipped=clipped(bajo.get("quality_result")),
+            other_sky={"HI_ALTO": arrays([Path(p) for p in alto["capture"]["capture_paths"]])} if alto else None)
+    except (OSError, ValueError, KeyError) as exc:
+        state["y_factor"] = {"verdict": "NOT_AVAILABLE", "reason": f"could not compute: {type(exc).__name__}: {exc}"}
+        return
+    y["computed_utc"] = datetime.now(timezone.utc).isoformat()
+    state["y_factor"] = y
+
+
 def _preserve_previous_attempt(cap_dir: Path, state: Dict[str, Any], label: str) -> None:
     """Files left in `cap_dir` by an earlier, interrupted attempt of this same step are MOVED to
     cap_dir/interrupted-<UTC>/ (never overwritten by the retry's capture_000.h5...) and listed in
@@ -234,6 +309,7 @@ async def _do_50r_capture(session_dir: Path, state: Dict[str, Any], simulate: Op
             await backend.close()
             raise
     iq_arrays = []
+    load_pre = None if simulate else _read_load_temperature()
     try:
         for i in range(cfg.n_captures):
             path = cap_dir / f"capture_{i:03d}.h5"
@@ -253,6 +329,9 @@ async def _do_50r_capture(session_dir: Path, state: Dict[str, Any], simulate: Op
     result = evaluate_reference_captures(iq_arrays, cfg.sample_rate_hz, cfg.center_frequency_hz, cfg)
     if not simulate:
         result["tuning"] = backend.tuning
+        result["rtl_tcp_process"] = _rtl_tcp_process()
+        from calibration_engine.y_factor import load_temperature_record
+        result["load_temperature"] = load_temperature_record(load_pre, _read_load_temperature(), _load_sensor_id())
     return result
 
 
@@ -284,6 +363,12 @@ def cmd_capture_50r(args) -> int:
         raise SystemExit(f"AMBIENT_50R capture {kind} (step stays STABILIZE_50R, nothing recorded as done): {what}") from exc
     state["fifty_ohm"]["status"] = "DONE"
     state["fifty_ohm_result"] = result
+    # the load temperature the Y-factor uses: the DS18 reading, unless the operator declares one (set-load-temperature)
+    if result.get("load_temperature", {}).get("temperature_c") is not None:
+        state["load_temperature"] = {k: result["load_temperature"][k] for k in ("temperature_c", "source", "sensor_id", "drift_c")}
+    else:
+        state["load_temperature"] = {"temperature_c": None, "source": None,
+                                     "reason": (result.get("load_temperature") or {}).get("reason", "simulated capture - no sensor read")}
     state["step"] = WizardStep.RESULT_50R.value
     _save_result_unless_aborted(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
@@ -561,10 +646,14 @@ def cmd_capture_hi(args) -> int:
     quality_result = evaluate_reference_captures(iq_arrays, cfg.sample_rate_hz, cfg.center_frequency_hz, cfg)
     spectral_result = evaluate_hi_spectral_captures(paths)
 
+    if not args.simulate:
+        capture["rtl_tcp_process"] = _rtl_tcp_process()
     state["hi_references"][label] = {
         "candidate": cand, "capture": capture, "quality_result": quality_result, "spectral_result": spectral_result,
         "pre_goto_altitude_check": fresh, "confirmed_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if label == "HI_BAJO":
+        _compute_y_factor_into(session_dir, state)
     state["step"] = (WizardStep.RESULT_HI_ALTO if label == "HI_ALTO" else WizardStep.RESULT_HI_BAJO).value
     _save_result_unless_aborted(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
@@ -615,9 +704,14 @@ def _build_and_write_profile(session_dir: Path, state: Dict[str, Any]):
     limitations = [
         "DRAFT - not reviewed (profile activation is a separate, future, explicit step)",
         "REDUCE may use ONLY this profile's recommended_gain_db and receiver identity",
-        "calibration_level stays OPERATIONAL_RELATIVE - this profile carries NO Y-factor, noise temperature, "
-        "Kelvin or absolute-gain figure of any kind",
+        "calibration_level stays OPERATIONAL_RELATIVE - the receiver Y-factor (conditions.y_factor) is a figure of "
+        "merit of the chain; REDUCE applies no Kelvin or absolute-gain conversion from it",
     ]
+    y = state.get("y_factor") or {}
+    if y.get("verdict") in ("VALID", "Y_ONLY"):
+        limitations.append(f"receiver Y-factor {y['y_db']:.2f} dB ({y['verdict']}: {y['reason']})")
+    elif y:
+        limitations.append(f"receiver Y-factor not available ({y.get('verdict')}: {y.get('reason')})")
     if state["fifty_ohm"] and state["fifty_ohm"]["status"] == "SKIPPED":
         limitations.append("50 ohm reference not tested (skipped)")
     contrast = state.get("spectral_contrast")
@@ -631,7 +725,8 @@ def _build_and_write_profile(session_dir: Path, state: Dict[str, Any]):
         source_calibration_sessions=[state["session_id"]],
         conditions={"references_tested": ([state["fifty_ohm"]["kind"]] if state["fifty_ohm"] and state["fifty_ohm"]["status"] == "DONE" else [])
                                         + [k for k in HI_KINDS if k in state["hi_references"]],
-                   "bias_t_facts": state["bias_t_facts"], "spectral_contrast": contrast},
+                   "bias_t_facts": state["bias_t_facts"], "spectral_contrast": contrast,
+                   "y_factor": state.get("y_factor")},
         recommended_gain_db=cfg["gain_db"], recommended_usable_band=None, known_masks=[],
         warmup_recommendation={"stabilize_seconds": cfg["stabilize_seconds"]}, envelope=envelope,
         limitations=limitations)
@@ -679,12 +774,42 @@ def cmd_finish(args) -> int:
     contrast = compute_spectral_contrast(alto, bajo, significance_threshold=cfg.contrast_significance_threshold,
                                          min_usable_fraction=cfg.rfi_min_usable_band_fraction)
     state["spectral_contrast"] = contrast.to_dict()
+    _compute_y_factor_into(session_dir, state)
     profile_path = _build_and_write_profile(session_dir, state)
     state["profile_path"] = str(profile_path) if profile_path else None
     state["observe_profile"] = _build_observe_profile(session_dir)
     state["step"] = WizardStep.DONE.value
     _save_state(session_dir, state)
     _emit({"session_dir": str(session_dir), "state": state})
+    return 0
+
+
+def cmd_set_load_temperature(args) -> int:
+    """The operator declares the 50 ohm load's temperature (when the DS18 'load' gave none, or to correct it) and the
+    Y-factor is recomputed. Allowed at any step once the load was measured, DONE included; the declaration is kept
+    as such (source "declared by operator"), never presented as a sensor reading."""
+    session_dir = Path(args.session_dir)
+    state = _load_state(session_dir)
+    if (state.get("fifty_ohm") or {}).get("status") != "DONE":
+        raise SystemExit("the 50 ohm load was not measured in this session - there is no load temperature to declare")
+    if not -30.0 <= args.celsius <= 80.0:
+        raise SystemExit(f"{args.celsius} C is not a plausible load temperature (-30..80 C)")
+    previous = state.get("load_temperature")
+    state["load_temperature"] = {"temperature_c": float(args.celsius), "source": "declared by operator",
+                                 "declared_utc": datetime.now(timezone.utc).isoformat(), "replaced": previous}
+    _compute_y_factor_into(session_dir, state)
+    _save_state(session_dir, state)
+    _emit({"session_dir": str(session_dir), "state": state})
+    return 0
+
+
+def cmd_y_factor(args) -> int:
+    """Recompute the Y-factor from the files on disk (also for sessions recorded before it existed)."""
+    session_dir = Path(args.session_dir)
+    state = _load_state(session_dir)
+    _compute_y_factor_into(session_dir, state)
+    _save_state(session_dir, state)
+    _emit({"session_dir": str(session_dir), "y_factor": state["y_factor"]})
     return 0
 
 
@@ -767,6 +892,15 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("finish")
     f.add_argument("--session-dir", required=True)
     f.set_defaults(func=cmd_finish)
+
+    lt = sub.add_parser("set-load-temperature")
+    lt.add_argument("--session-dir", required=True)
+    lt.add_argument("--celsius", required=True, type=float)
+    lt.set_defaults(func=cmd_set_load_temperature)
+
+    yf = sub.add_parser("y-factor")
+    yf.add_argument("--session-dir", required=True)
+    yf.set_defaults(func=cmd_y_factor)
 
     st = sub.add_parser("status")
     st.add_argument("--session-dir", required=True)

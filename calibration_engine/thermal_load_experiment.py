@@ -1,5 +1,8 @@
 """Thermal-load Y-factor / noise-temperature experiment - NOT wired into the active CALIBRATE web wizard.
 
+(2026-11-10: the active wizard now has its OWN receiver Y-factor - 50 ohm load vs the cold sky HI BAJO -
+in calibration_engine/y_factor.py. This HOT/COLD two-load engine is still a separate experiment.)
+
 This is the original physical-reference engine (50 ohm ambient / HOT / COLD, Y-factor, noise temperature)
 that calibrate_reference_wizard.py used before it was rebuilt around a three-reference HI-line spectral-
 contrast procedure (50 ohm / HI ALTO / HI BAJO - see calibration_engine/reference_wizard.py's own module

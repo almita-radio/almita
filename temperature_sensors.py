@@ -37,10 +37,34 @@ def is_plausible_temperature_c(value) -> bool:
     )
 
 
-class DS18B20Reader:
-    """Read explicitly assigned DS18B20 sensors directly from Linux sysfs."""
+SYSFS_W1 = Path("/sys/bus/w1/devices")
 
-    def __init__(self, sensors: Dict[str, str], sysfs_root: Path = Path("/sys/bus/w1/devices"),
+
+def _read_w1_slave(sysfs_root: Path, sensor_id: str) -> str:
+    """The sensor's w1_slave text. With the instrument services on the capture Pi (instrument_host, 2026-11-02 split)
+    the sensors hang off THAT Pi's GPIO, so the real sysfs path is read there through its agent (whose allow-list
+    has exactly this file). Any other root (tests, a copied tree) is read here as before. Raises OSError when
+    absent - the caller's "missing" path."""
+    path = sysfs_root / sensor_id / "w1_slave"
+    if sysfs_root == SYSFS_W1:
+        try:
+            import instrument_host
+            remote = instrument_host.remote_host()
+        except Exception:  # noqa: BLE001 - no instrument config: local sysfs as always
+            remote = None
+        if remote:
+            import subprocess
+            try:
+                return instrument_host.read_bytes(path, timeout=10.0).decode(errors="replace")
+            except subprocess.SubprocessError as exc:     # agent refused / timed out: same as an absent sensor
+                raise OSError(str(exc)) from exc
+    return path.read_text()
+
+
+class DS18B20Reader:
+    """Read explicitly assigned DS18B20 sensors from Linux sysfs (the capture Pi's, when the instrument is remote)."""
+
+    def __init__(self, sensors: Dict[str, str], sysfs_root: Path = SYSFS_W1,
                  warning: Optional[Callable[[str], None]] = None, attempts: int = 2):
         self.sensors = {str(role).lower(): str(sensor_id) for role, sensor_id in sensors.items()}
         # A CRC failure, the -127 sentinel or an implausible value is retried once (each read of w1_slave is a fresh
@@ -73,7 +97,7 @@ class DS18B20Reader:
             "valid": False, "timestamp_utc": timestamp,
         }
         try:
-            lines = (self.sysfs_root / sensor_id / "w1_slave").read_text().splitlines()
+            lines = _read_w1_slave(self.sysfs_root, sensor_id).splitlines()
             if not lines or not lines[0].rstrip().endswith("YES"):
                 raise ValueError("CRC check failed")
             # DATA held low (short / bad contact) reads nine 0x00 bytes, whose CRC-8 is also 0x00, so the kernel says

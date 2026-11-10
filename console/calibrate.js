@@ -531,8 +531,39 @@
       $w("wz-plan-preview-horizon").textContent = preview.horizon && preview.horizon.available ? "" : "OBSTACLES NOT EVALUATED — " + ((preview.horizon || {}).note || "");
     }
 
+    function renderYFactor(state) {
+      const panel = $w("wz-yfactor-panel");
+      const loadDone = state.fifty_ohm && state.fifty_ohm.status === "DONE";
+      panel.hidden = !loadDone || state.step === "ABORTED";
+      if (panel.hidden) return;
+      const lt = state.load_temperature || {};
+      $w("wz-yfactor-load").textContent = lt.temperature_c != null
+        ? `load temperature ${lt.temperature_c.toFixed(1)} °C (${lt.source}${lt.drift_c != null ? `, drift ${lt.drift_c >= 0 ? "+" : ""}${lt.drift_c.toFixed(2)} °C over the captures` : ""})`
+        : `load temperature: NONE — ${lt.reason || "not read"}. Without it Y is computed but no kelvin figures; declare it below if you know it.`;
+      const y = state.y_factor;
+      const banner = $w("wz-yfactor-banner"), detail = $w("wz-yfactor-detail"), list = $w("wz-yfactor-checks");
+      list.textContent = "";
+      if (!y) { banner.textContent = "pending — computed when HI BAJO (the cold sky) is measured"; banner.className = "banner"; banner.style.cssText = "font-weight:700"; detail.textContent = ""; return; }
+      if (y.verdict === "NOT_AVAILABLE") { banner.textContent = `NOT AVAILABLE — ${y.reason}`; banner.className = "banner"; banner.style.cssText = "font-weight:700"; detail.textContent = ""; return; }
+      banner.textContent = `Y = ${y.y_db != null ? y.y_db.toFixed(2) : "—"} dB (${y.y_linear}) · ${y.verdict}`;
+      banner.className = "banner" + (y.verdict === "Y_ONLY" ? " warn" : "");
+      const tone = { VALID: ["var(--ok-bg)", "var(--ok)", "var(--ok-line)"], INVALID: ["var(--fail-bg)", "var(--error)", "var(--fail-line)"] }[y.verdict];
+      banner.style.background = tone ? tone[0] : ""; banner.style.color = tone ? tone[1] : ""; banner.style.borderColor = tone ? tone[2] : "";
+      const parts = [y.reason];
+      if (y.tsys_sky_k != null) {
+        parts.push(`Tsys on the cold sky ≈ ${y.tsys_sky_k.toFixed(0)} K · antenna temperature at the LNA input ≈ ${y.t_ant_at_lna_input_k.toFixed(0)} K (${y.t_rx_assumption})`);
+        parts.push("with T_rx " + y.spread_for_t_rx.map((s) => `${s.t_rx_k} K → Tsys ${s.tsys_sky_k.toFixed(0)} K`).join(", "));
+      }
+      if (y.y_db_per_channel_p10_p50_p90) parts.push(`per-channel Y p10/p50/p90 ${y.y_db_per_channel_p10_p50_p90.join(" / ")} dB`);
+      parts.push("feed v1 model expects Y ≈ 5.5 dB");
+      detail.textContent = parts.join(" · ");
+      for (const c of (y.checks || [])) { const li = document.createElement("li"); li.textContent = `${c.status} · ${c.name}: ${c.detail}`; list.append(li); }
+      for (const w of (y.warnings || [])) { const li = document.createElement("li"); li.textContent = `⚠ ${w}`; list.append(li); }
+    }
+
     function render(state) {
       lastState = state;
+      renderYFactor(state);
       const bt = state.bias_t_facts;
       $w("wizard-biast").textContent = bt ? `BIAS-T: ${bt.note} ${bt.safety}` : "";
       $w("wizard-setup").hidden = true;
@@ -835,6 +866,16 @@
         wzErr(""); render(job.facts);
       } catch (err) { wzErr(`finish failed: ${msg(err)}`); }
     }, "FINISHING…"));
+
+    $w("wz-set-load-temp").addEventListener("click", U.guard($w("wz-set-load-temp"), async () => {
+      const raw = $w("wz-load-temp").value;
+      const c = Number(raw);
+      if (raw === "" || !Number.isFinite(c) || c < -30 || c > 80) { window.alert("Load temperature in °C, between -30 and 80."); return undefined; }
+      try {
+        const job = await wizardAction({ action: "set_load_temperature", session_dir: sessionDir, celsius: c }, 60000);
+        wzErr(""); render(job.facts);
+      } catch (err) { wzErr(`set load temperature failed: ${msg(err)}`); }
+    }, "RECOMPUTING…"));
 
     $w("wz-abort").addEventListener("click", U.guard($w("wz-abort"), async () => {
       if (!confirm("Abort the wizard? Progress already on disk is kept, but the wizard resets."

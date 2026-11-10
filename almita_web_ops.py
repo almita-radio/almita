@@ -824,7 +824,7 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
     if stage in ("calibrate_wizard", "calibrate_wizard_state"):
         action = str(p.get("action", ""))
         valid_actions = {"start", "set_reference", "skip_reference", "capture_50r", "next", "confirm_antenna",
-                         "plan_hi", "approve_hi_plan", "abort", "finish", "status"}
+                         "plan_hi", "approve_hi_plan", "abort", "finish", "status", "set_load_temperature"}
         if action not in valid_actions:
             raise ValueError(f"action must be one of {sorted(valid_actions)}")
         if stage == "calibrate_wizard_state" and action in WIZARD_SDR_ACTIONS:
@@ -888,6 +888,11 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             argv = [PY, "calibrate_reference_wizard.py", "abort", "--session-dir", rel]
         elif action == "finish":
             argv = [PY, "calibrate_reference_wizard.py", "finish", "--session-dir", rel]
+        elif action == "set_load_temperature":
+            celsius = _float(p, "celsius", -30, 80, None)
+            if celsius is None:
+                raise ValueError("celsius is required (the 50 ohm load temperature in C)")
+            argv = [PY, "calibrate_reference_wizard.py", "set-load-temperature", "--session-dir", rel, "--celsius", str(celsius)]
         else:  # status
             argv = [PY, "calibrate_reference_wizard.py", "status", "--session-dir", rel]
         return argv, meta

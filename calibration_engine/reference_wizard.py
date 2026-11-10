@@ -13,10 +13,13 @@ calibration_engine/spectral_contrast.py) - a RELATIVE result. It never computes 
 predicted the line, and never treats the HI4PI column density as anything but orientation for WHERE to point
 (see calibration_engine/hi_reference_selection.py's own docstring on this).
 
-WHAT THIS NEVER COMPUTES: a Y-factor, a noise temperature, kelvin, or an absolute RF gain. calibration_level.py's
-CURRENT_LEVEL stays OPERATIONAL_RELATIVE. The earlier HOT/COLD thermal-load Y-factor engine this module used to
-contain is kept, deliberately separate and NOT wired into this flow, in
-calibration_engine/thermal_load_experiment.py - see that module's own docstring.
+RECEIVER Y-FACTOR (operator 2026-11-10): the same session also gives Y = P(50 ohm load at the LNA input) /
+P(HI BAJO, the cold sky), with the load temperature from its DS18 (role "load") or declared by the operator, and
+from it Tsys and the antenna temperature at the LNA input under a DECLARED LNA noise temperature - see
+calibration_engine/y_factor.py. It is a figure of merit of the chain, recorded in the state and the profile; it
+never feeds REDUCE: calibration_level.py's CURRENT_LEVEL stays OPERATIONAL_RELATIVE and no absolute RF gain or
+flux scale is computed. The HOT/COLD two-load engine (calibration_engine/thermal_load_experiment.py) stays a
+separate, unwired experiment.
 
 SAFETY ORDER (structural, not just a warning): the wizard's own state machine cannot reach ANY HI step (PLAN_HI
 onward) until the 50 OHM step has been settled (done or explicitly skipped) AND the operator has explicitly
