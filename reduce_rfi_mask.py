@@ -92,6 +92,11 @@ class MaskedReduce:
         if m is None:
             return est
         rec = self.points[str(self.current)]
+        if str(est.fft_config.get("estimator", "")).startswith("v2"):
+            # ESTIMATOR v2 underneath (reduce_estimator_v2.py): its spectral kurtosis already left pulses out, per
+            # channel and per block; its segments are block means, not the mask's frames
+            rec.update(pulse_frames_cut=0, pulse_note="pulses handled by ESTIMATOR v2 (spectral kurtosis)")
+            return est
         pulses, seg = m["frame_pulse"], est.segments
         if config.fft_size != rfi_mask.FFT_SIZE or len(pulses) != seg.shape[0]:
             rec.update(pulse_frames_cut=0, pulse_note=f"not cut: mask has {len(pulses)} frames of {rfi_mask.FFT_SIZE}, "

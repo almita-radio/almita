@@ -976,6 +976,10 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             meta["rfi_mask"] = True
             if stage == "reduce":
                 argv += ["--rfi-mask"]
+        if p.get("estimator_v2") is True:          # opt-in ESTIMATOR v2 (reduce_estimator_v2.py); PLAN records it, RUN applies it
+            meta["estimator_v2"] = True
+            if stage == "reduce":
+                argv += ["--estimator-v2"]
         if stage == "reduce":
             _require_fresh_plan("reduce", meta, p)
             if prof:

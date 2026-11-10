@@ -19,10 +19,19 @@ the original HDF5s or almita_reduce.py/reduce_engine.
 estimate, comb/line channels flagged RFI. See reduce_rfi_mask.py: it wraps three reduce_engine functions inside
 this process only, for this RUN only (no reduce_engine file changes), and writes rfi_mask_report.json next to
 the result. Without the flag this RUN is exactly what it was.
+
+--estimator-v2 (opt-in, operator 2026-11-10): Hann 50 % overlap + mean of spectral-kurtosis-clean cells instead of
+non-overlapping Hann + median (~95 % of the integration used instead of ~32 %). See reduce_estimator_v2.py: same
+in-process wrapping, writes estimator_v2_report.json. With both flags the RFI MASK wraps the v2 estimate.
+
+--workers (default auto, operator 2026-11-10): the points are reduced in parallel processes by the same frozen
+reduce_point() before reduce_campaign() runs, which then picks each outcome up (reduce_parallel.py). auto = cores - 1,
+capped by the RAM each point needs; --workers 1 = exactly the old sequential path.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import threading
@@ -56,6 +65,7 @@ class _ProgressFollower(threading.Thread):
         self.counts: Dict[str, int] = {}
         self._offset = 0
         self._events: Optional[Path] = None
+        self.per_point = True                                  # False when reduce_parallel already printed each point
 
     def _find_events(self) -> Optional[Path]:
         if not self.parent.is_dir():
@@ -83,6 +93,10 @@ class _ProgressFollower(threading.Thread):
                 continue
             if ev.get("event") == "POINT_PROCESSED":
                 self.done += 1
+                if not self.per_point:
+                    status = str(ev.get("status") or "?").split(".")[-1]
+                    self.counts[status] = self.counts.get(status, 0) + 1
+                    continue
                 status = str(ev.get("status") or "?").split(".")[-1]
                 self.counts[status] = self.counts.get(status, 0) + 1
                 timing = ev.get("timing") or {}
@@ -144,21 +158,47 @@ def cmd_run(args) -> int:
         [(pt.point_index, pt.resolved_path) for pt in manifest.accepted_points()],
     )
 
+    import os
+    import reduce_parallel
+    if str(args.workers) == "auto":
+        sizes = [os.path.getsize(pt.resolved_path) for pt in manifest.accepted_points()
+                 if pt.resolved_path and os.path.isfile(pt.resolved_path)]
+        workers, workers_why = reduce_parallel.auto_workers(sizes, args.estimator_v2)
+    else:
+        workers, workers_why = max(1, int(args.workers)), f"{max(1, int(args.workers))} worker(s) as asked"
     follower = _ProgressFollower(Path(args.output_root).resolve() / manifest.campaign_id, len(manifest.points))
+    follower.per_point = workers <= 1
     print(f"[REDUCE] starting: {len(manifest.points)} points, velocity frame {args.velocity_frame}"
-          + (", RFI mask ON (pulses cut, comb/lines flagged)" if args.rfi_mask else ""), file=sys.stderr, flush=True)
-    mask_report = None
+          + (", RFI mask ON (pulses cut, comb/lines flagged)" if args.rfi_mask else "")
+          + (", ESTIMATOR v2 ON (50% overlap + mean, spectral kurtosis)" if args.estimator_v2 else "")
+          + (f", in parallel - {workers_why}" if workers > 1 else ""), file=sys.stderr, flush=True)
+    mask_report = v2_report = None
+    parallel = {"workers": workers, "why": workers_why}
     follower.start()
     try:
-        if args.rfi_mask:
-            import reduce_rfi_mask
-            with reduce_rfi_mask.install() as masked:
-                report = reduce_campaign(manifest, config, output_root=args.output_root,
-                                         calibration_profile_path=args.calibration_profile)
-            mask_report = masked.report()
-        else:
+        with contextlib.ExitStack() as stack:
+            if args.estimator_v2:                     # first: the RFI MASK (if on) must wrap the v2 estimate
+                import reduce_estimator_v2
+                v2 = stack.enter_context(reduce_estimator_v2.install())
+            if args.rfi_mask:
+                import reduce_rfi_mask
+                masked = stack.enter_context(reduce_rfi_mask.install())
+            if workers > 1:
+                outcomes, records, pfacts = reduce_parallel.prefetch(
+                    manifest, config, calibration_profile_path=args.calibration_profile, workers=workers,
+                    rfi_mask=args.rfi_mask, estimator_v2=args.estimator_v2)
+                if args.estimator_v2:
+                    v2.points.update(records["v2"])
+                if args.rfi_mask:
+                    masked.points.update(records["mask"])
+                parallel.update(pfacts)
+                parallel["used"] = stack.enter_context(reduce_parallel.use_prefetched(outcomes))
             report = reduce_campaign(manifest, config, output_root=args.output_root,
                                      calibration_profile_path=args.calibration_profile)
+        if args.rfi_mask:
+            mask_report = masked.report()
+        if args.estimator_v2:
+            v2_report = v2.report()
     finally:
         follower.finish()
     record_path = calrecord.write_record(report.output_dir, record)
@@ -170,6 +210,12 @@ def cmd_run(args) -> int:
         mask_path = reduce_rfi_mask.write_report(report.output_dir, mask_report)
         payload["rfi_mask"] = {k: v for k, v in mask_report.items() if k != "per_point"}
         payload["rfi_mask"]["report_path"] = mask_path
+    payload["parallel"] = parallel
+    payload["estimator_v2"] = {"enabled": False}
+    if v2_report is not None:
+        v2_path = reduce_estimator_v2.write_report(report.output_dir, v2_report)
+        payload["estimator_v2"] = {k: v for k, v in v2_report.items() if k != "per_point"}
+        payload["estimator_v2"]["report_path"] = v2_path
     _print(payload, args.json, [
         f"REDUCE {report.status}",
         f"Campaign:        {report.campaign_id}",
@@ -179,11 +225,15 @@ def cmd_run(args) -> int:
         f"Calibration:     {report.calibration_level_counts}",
         f"Velocity:        {report.velocity_frame_counts}",
         f"Runtime:         {report.runtime_seconds:.2f}s",
+        f"Parallel:        {parallel['why']}" + (f" - worker failures: {len(parallel['worker_failures'])}" if parallel.get("worker_failures") else ""),
         f"Output:          {report.output_dir}",
         *([f"Calibration compatibility record: {record_path}"] if record_path else []),
         *([f"RFI mask:        {mask_report['points_masked']}/{mask_report['points']} points masked, "
            f"{mask_report['pulse_frames_cut']} pulse frames cut, median {mask_report['median_fraction_of_band']} "
            f"of the band flagged"] if mask_report else []),
+        *([f"Estimator v2:    {v2_report['estimates_v2']}/{v2_report['estimates']} spectra with 50% overlap + mean, "
+           f"median {v2_report['median_cells_flagged_fraction']} of cells left out by kurtosis, "
+           f"{v2_report['blocks_broadband_flagged']} broadband blocks"] if v2_report else []),
     ])
     return 0 if report.status in ("COMPLETED", "PARTIAL") else 1
 
@@ -197,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--velocity-frame", default="lsrk")
     p.add_argument("--calibration-profile", default=None)
     p.add_argument("--rfi-mask", action="store_true", help="opt-in: cut pulse frames and flag comb/line channels (reduce_rfi_mask.py)")
+    p.add_argument("--estimator-v2", action="store_true",
+                   help="opt-in: Hann 50%% overlap + mean of spectral-kurtosis-clean cells (reduce_estimator_v2.py)")
+    p.add_argument("--workers", default="auto",
+                   help="points reduced at once: auto (cores - 1, capped by RAM) or a number; 1 = sequential (reduce_parallel.py)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_run)
     return parser

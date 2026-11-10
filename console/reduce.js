@@ -32,10 +32,11 @@
   function currentParams() {
     return {
       mode, input: selectedInput, calibration_profile: selectedProfile || null,
-      velocity_frame: $("in-velocity-frame").value, rfi_mask: rfiMaskOn(),
+      velocity_frame: $("in-velocity-frame").value, rfi_mask: rfiMaskOn(), estimator_v2: estimatorV2On(),
     };
   }
   function rfiMaskOn() { return mode !== "capture" && $("in-rfi-mask").checked; }
+  function estimatorV2On() { return mode !== "capture" && $("in-estimator-v2").checked; }
   function paramsEqual(a, b) {
     return !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
   }
@@ -157,6 +158,7 @@
     $("row-capture").hidden = mode !== "capture";
     $("row-campaign").hidden = mode !== "campaign";
     $("row-rfi-mask").hidden = mode !== "campaign";
+    $("row-estimator-v2").hidden = mode !== "campaign";
     selectedInput = mode === "capture" ? $("in-capture").value : $("in-campaign").value;
     onInputChanged();
   }
@@ -327,6 +329,7 @@
   });
   $("in-velocity-frame").addEventListener("change", invalidateDownstream);
   $("in-rfi-mask").addEventListener("change", invalidateDownstream);
+  $("in-estimator-v2").addEventListener("change", invalidateDownstream);
 
   function setBanner(banner, status, text) {
     const ok = status === "COMPATIBLE";
@@ -440,6 +443,7 @@
     const p = { calibration_profile: selectedProfile || undefined, velocity_frame: $("in-velocity-frame").value };
     p[mode === "capture" ? "capture" : "campaign_dir"] = selectedInput;
     if (rfiMaskOn()) p.rfi_mask = true;
+    if (estimatorV2On()) p.estimator_v2 = true;
     return p;
   }
 
@@ -559,7 +563,15 @@
         ? `\nRFI MASK: ${facts.rfi_mask.points_masked}/${facts.rfi_mask.points} points masked (${facts.rfi_mask.from_sidecar} from the run's side-cars, `
           + `${facts.rfi_mask.computed_at_reduce} computed now) · ${facts.rfi_mask.pulse_frames_cut} pulse frames cut · `
           + `median ${U.fixed(100 * (facts.rfi_mask.median_fraction_of_band ?? NaN), 2)} % of the band flagged RFI`
-        : "\nRFI MASK: off");
+        : "\nRFI MASK: off")
+      + (facts.estimator_v2 && facts.estimator_v2.enabled
+        ? `\nESTIMATOR v2: ${facts.estimator_v2.estimates_v2}/${facts.estimator_v2.estimates} spectra with 50 % overlap + mean`
+          + (facts.estimator_v2.estimates_classic_fallback ? ` (${facts.estimator_v2.estimates_classic_fallback} too short: classic)` : "")
+          + ` · median ${U.fixed(100 * (facts.estimator_v2.median_cells_flagged_fraction ?? NaN), 3)} % of cells left out by kurtosis`
+          + ` · ${facts.estimator_v2.blocks_broadband_flagged} broadband blocks`
+        : "\nESTIMATOR v2: off")
+      + (facts.parallel ? `\nCORES: ${facts.parallel.why}` + ((facts.parallel.worker_failures || []).length
+        ? ` · ${facts.parallel.worker_failures.length} point(s) redone sequentially after a worker failed` : "") : "");
     $("results-provenance").textContent = `campaign_id: ${facts.campaign_id}   reduce_session_id: ${facts.session_id}   output: ${job.output_dir || "—"}`;
     $("results-hi-caveat").textContent = "These are INSTRUMENTAL results (relative spectra, masks, quality) — no celestial HI detection or astrophysical claim is made here. That is SCIENCE's job, not REDUCE's.";
 
@@ -567,7 +579,8 @@
     if (job.output_dir) {
       for (const rel of ["manifest.json", "config.json", "provenance.json", "calibration_compatibility_record.json",
         "qc/quality_summary.json", "qc/calibration_summary.json", "qc/velocity_summary.json", "qc/mask_occupancy.json",
-        ...(facts.rfi_mask && facts.rfi_mask.enabled ? ["rfi_mask_report.json"] : [])]) {
+        ...(facts.rfi_mask && facts.rfi_mask.enabled ? ["rfi_mask_report.json"] : []),
+        ...(facts.estimator_v2 && facts.estimator_v2.enabled ? ["estimator_v2_report.json"] : [])]) {
         const a = document.createElement("a"); a.href = `/api/ops/file?path=${encodeURIComponent(job.output_dir + "/" + rel)}`;
         a.target = "_blank"; a.rel = "noopener"; a.textContent = rel; a.style.marginRight = "12px";
         artifacts.appendChild(a);
