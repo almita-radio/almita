@@ -477,7 +477,7 @@ function renderActivityLog(activityLog){
     return `<span${cls?` class="${cls}"`:""}>${_escapeHtml(display)}</span>`;
   }).join("\n");
   // last line visible, unless the operator scrolled up to read (BL-098, common.js U.followTail)
-  const put=()=>{if(pre.innerHTML!==html)pre.innerHTML=html;};
+  const put=()=>{if(pre.innerHTML!==html)pre.innerHTML=html;};  // html: every line already through _escapeHtml (above)
   if(window.AlmitaUI&&AlmitaUI.followTail)AlmitaUI.followTail(pre,put);else{put();pre.scrollTop=pre.scrollHeight;}  // MONITOR never breaks for want of common.js
 }
 
