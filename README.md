@@ -20,7 +20,7 @@ ALMITA is mostly vibe-coded, extensively field-tested, occasionally threatened w
 suspiciously many places by **plastic cable ties**. This is considered temporary. It has also been considered temporary for
 quite some time.
 
-> **Where the newest code is.** `main` holds the documentation, the licenses and the frozen REDUCE/SCIENCE V1 core. The web
+> **Where the newest code is.** `main` holds the documentation, the licenses and the REDUCE/SCIENCE V1 core as it was frozen in October 2026. The web
 > console and everything listed under [What is new](#what-is-new-up-to-november-2026) are developed on the branch
 > [`rfi-masks-v1`](https://github.com/almita-radio/almita/tree/rfi-masks-v1), which builds on `web-polish-v1`. The merge into `main`
 > is pending ([PR #7](https://github.com/almita-radio/almita/pull/7) is the first step).
@@ -38,12 +38,21 @@ astrophysical signals automatically.
 ## Pipeline
 
 ```text
-OBSERVE  ->  REDUCE V1 (frozen)  ->  SCIENCE V1 (frozen)
+OBSERVE  ->  REDUCE v1.1  ->  SCIENCE
 raw I/Q      reduced spectra          beam-aware spatial gridding,
 + metadata   (masks, relative         LSRK velocity cube, relative integrated
 (HDF5)       intensity, LSRK          maps, uncertainty / coverage maps
              velocity, uncertainty)
 ```
+
+**About the versions.** REDUCE and SCIENCE V1 were **frozen in October 2026** as a fixed, verifiable reference
+([REDUCE_V1_FREEZE](docs/REDUCE_V1_FREEZE.md), [SCIENCE_V1_FREEZE](docs/SCIENCE_V1_FREEZE.md)). Since then they were
+reopened on purpose, twice:
+- **REDUCE v1.1** folds frequency-switched captures (9 November 2026).
+- **SCIENCE** draws its maps in an exact spherical frame, so a map can cross the celestial pole (6 November 2026).
+
+Each change was tested and the freeze reference was updated. Other improvements are **opt-in** and wrap the engine without
+changing it. **ESTIMATOR v2** is one of them: a better spectrum estimator *inside* REDUCE, not a REDUCE "version 2".
 
 Supporting systems: **ALIGN** (conservative pointing alignment), **CALIBRATE** (receiver / gain characterisation) and
 **RFI_REF** (an independent second SDR chain that watches the local RF environment without ever interfering with the main capture).
@@ -105,7 +114,9 @@ the Milky Way is next.
 
 ## What is new (up to November 2026)
 
-**Two machines instead of one.** The instrument used to run entirely on a Raspberry Pi 5. In November 2026 it was split:
+**Two machines instead of one.** The instrument used to run entirely on a Raspberry Pi 5, and that Pi 5 turned out to be the
+loudest local interferer: it radiated a 357 kHz comb and a forest of narrow lines into the band. It was retired, and in
+November 2026 the instrument was split:
 - **Capture Pi:** a Raspberry Pi 4 inside a metal box at the dish. It runs `rtl_tcp`, INDI (started from KStars/Ekos on its desktop) and a small
   read-only **instrument agent** (`instrument_agent.py`, port 8099). The agent reports the SDR service, kernel messages, the SoC temperature and the
   USB devices, and nothing else. The CPU clock is fixed at boot.
@@ -124,25 +135,29 @@ the Milky Way is next.
 | CALIBRATE | the calibration wizard (receiver/gain profile with a 50 Ω load) and HI reference zones |
 | OBSERVE | plan and run a sky mosaic: PREFLIGHT, sky map of the grid, coverage drawn with the real 20° beam, auto meridian flip |
 | MONITOR | live spectra, 3D spectral stack, **RFI MASK** panel and the *Unknown Pleasures* art view of the session |
-| REDUCE | REDUCE V1 per capture or per campaign, with an optional **RFI mask** |
-| SCIENCE | SCIENCE V1 cubes and maps |
+| REDUCE | REDUCE per capture or per campaign, with optional **RFI mask** and **ESTIMATOR v2**, on several CPU cores |
+| SCIENCE | cubes and maps, with HI4PI's expected map underneath for comparison |
 | SESSIONS | catalog of every session with a sky map of the real pointings, filters and safe deletion |
 | DESKTOP | the capture Pi's desktop (noVNC) behind the same login, so KStars can be seen remotely |
 
-**Screenshots of every page:** [docs/WEB_CONSOLE_SCREENSHOTS.md](docs/WEB_CONSOLE_SCREENSHOTS.md).
+**Screenshots of every page,** full page, as each one looks when you land on it: [docs/WEB_CONSOLE_SCREENSHOTS.md](docs/WEB_CONSOLE_SCREENSHOTS.md).
 
 <p align="center">
-  <img src="docs/screenshots/observe.jpg" alt="OBSERVE page: the planned region over the HI4PI sky" width="32%">
-  <img src="docs/screenshots/monitor.jpg" alt="MONITOR page" width="32%">
-  <img src="docs/screenshots/transit.jpg" alt="TRANSIT page" width="32%">
+  <a href="docs/site/screenshots/monitor.jpg"><img src="docs/site/screenshots/thumbs/monitor.jpg" alt="MONITOR page" width="32%"></a>
+  <a href="docs/site/screenshots/observe.jpg"><img src="docs/site/screenshots/thumbs/observe.jpg" alt="OBSERVE page: the planned region over the HI4PI sky" width="32%"></a>
+  <a href="docs/site/screenshots/status.jpg"><img src="docs/site/screenshots/thumbs/status.jpg" alt="STATUS page" width="32%"></a>
+  <a href="docs/site/screenshots/pipeline.jpg"><img src="docs/site/screenshots/thumbs/pipeline.jpg" alt="PIPELINE page" width="32%"></a>
+  <a href="docs/site/screenshots/calibrate.jpg"><img src="docs/site/screenshots/thumbs/calibrate.jpg" alt="CALIBRATE page" width="32%"></a>
+  <a href="docs/site/screenshots/align.jpg"><img src="docs/site/screenshots/thumbs/align.jpg" alt="ALIGN page" width="32%"></a>
 </p>
 
 **RFI work.**
-- The local interference was hunted down. A 357 kHz comb and a forest of narrow lines turned out to be radiated by the Raspberry Pi itself and by the
+- The local interference was hunted down. The 357 kHz comb and the forest of narrow lines were radiated by the **Raspberry Pi 5** itself and by the
   thermometer harness on its GPIO.
-- Moving the Pi away from the feed into a closed metal box made the comb disappear.
+- The new capture computer, a **Raspberry Pi 4** in a closed metal box at least 1 m from the feed, does not show the comb. A person standing
+  close to the electronics or the feed still brings some lines back.
 - `rfi_mask.py` / `rfi_mask_live.py` now flag comb teeth, narrow lines and time pulses in every capture as it is recorded.
-- REDUCE can drop those frames and flag those channels (opt-in; the frozen REDUCE engine itself is unchanged).
+- REDUCE can drop those frames and flag those channels (opt-in; the REDUCE engine itself is unchanged).
 
 **Feed and receiver.**
 - MAIN is now an RTL-SDR Blog V3 (the V4 was retired) with a Nooelec SAWbird+ H1 LNA.
@@ -152,7 +167,7 @@ the Milky Way is next.
 **Frequency switching, end to end (development branch).** OBSERVE has a FREQUENCY SWITCHING checkbox; REDUCE folds the
 switched captures; QUICKLOOK and STATUS (HYDROGEN LINE panel) show them live. See [Results so far](#results-so-far).
 
-**REDUCE got faster and cleaner (opt-in, the frozen V1 engine is unchanged):**
+**REDUCE got faster and cleaner (opt-in; these wrap the engine without changing it):**
 - **ESTIMATOR v2:** windows that overlap by half, averaged instead of taking the median, plus *spectral kurtosis* to leave out pulses and bursts only
   where and when they happen. It uses about 95 % of the recorded time instead of about a third. With frequency switching that is the same as 3–4.6× more observing time.
 - **Several CPU cores:** 400 points reduce in about 4 minutes.

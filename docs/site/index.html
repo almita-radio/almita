@@ -61,6 +61,11 @@
     .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
     pre.flow { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; overflow:auto; font-size:.95rem; }
     .note { color:var(--muted); }
+    .shots { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+    .shot { display:block; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; text-decoration:none; color:var(--fg); }
+    .shot img { width:100%; height:auto; display:block; border-bottom:1px solid var(--line); }
+    .shot span { display:block; padding:8px 10px; font-size:.9rem; color:var(--muted); }
+    .shot strong { color:var(--fg); }
     figure { margin:1rem 0 1.4rem; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; }
     figure img { width:100%; height:auto; display:block; }
     figcaption { color:var(--muted); font-size:.92rem; margin-top:.5rem; }
@@ -89,12 +94,16 @@
   </p>
 
   <h2>From antenna to maps: OBSERVE → REDUCE → SCIENCE</h2>
-  <pre class="flow">OBSERVE  →  REDUCE (V1, frozen)  →  SCIENCE (V1, frozen)
+  <pre class="flow">OBSERVE  →  REDUCE v1.1  →  SCIENCE
    ↑ ALIGN · CALIBRATE · RFI_REF supporting systems</pre>
+  <p class="note">REDUCE and SCIENCE V1 were frozen in October 2026 as a fixed, verifiable reference. They were reopened twice
+    on purpose: REDUCE v1.1 folds frequency-switched captures, and SCIENCE maps use an exact spherical frame so they can cross
+    the celestial pole. Other improvements, such as ESTIMATOR v2 (a better spectrum estimator inside REDUCE), are opt-in and
+    leave the engine unchanged.</p>
   <div class="grid">
     <div class="card"><strong>Automated observing</strong><br>Plans sky mosaics, steps the equatorial mount and records raw I/Q with pointing and environment metadata in HDF5.</div>
-    <div class="card"><strong>Deterministic reduction</strong><br>REDUCE V1 produces reproducible Level 1 spectra with masks, LSRK velocity, uncertainty and quality information.</div>
-    <div class="card"><strong>Beam-aware science products</strong><br>SCIENCE V1 grids the spectra into an LSRK velocity cube and relative integrated maps, with uncertainty and coverage maps.</div>
+    <div class="card"><strong>Deterministic reduction</strong><br>REDUCE produces reproducible Level 1 spectra with masks, LSRK velocity, uncertainty and quality information.</div>
+    <div class="card"><strong>Beam-aware science products</strong><br>SCIENCE grids the spectra into an LSRK velocity cube and relative integrated maps, with uncertainty and coverage maps.</div>
     <div class="card"><strong>Relative calibration</strong><br>Receiver gain is characterised first, then kept fixed during a session, so observations can be compared.</div>
     <div class="card"><strong>Live RFI masks</strong><br>Every capture is checked as it is recorded: comb teeth, narrow lines and time pulses are flagged, never filled in, and REDUCE can leave them out.</div>
     <div class="card"><strong>Web console</strong><br>Twelve pages behind a login, from STATUS and PREFLIGHT to OBSERVE, MONITOR, REDUCE, SCIENCE, SESSIONS and a remote desktop of the capture Pi.</div>
@@ -132,20 +141,40 @@
 
   <h2>What is new (November 2026)</h2>
   <ul>
-    <li><strong>Two machines.</strong> A Raspberry Pi 4 in a closed metal box runs the SDR server and INDI at the dish. A notebook runs the
-      web console, captures and processing. The Pi had turned out to be the loudest local interferer: it radiated a 357 kHz comb and a
-      forest of narrow lines into the band. In the box, the comb is gone.</li>
+    <li><strong>Two machines.</strong> Everything used to run on a Raspberry Pi 5, and that Pi 5 turned out to be the loudest local
+      interferer: it radiated a 357 kHz comb and a forest of narrow lines into the band. It was retired. Now a Raspberry Pi 4 in a closed
+      metal box, at least 1 m from the feed, runs the SDR server and INDI at the dish, and its band is free of that comb. A notebook runs the
+      web console, captures and processing.</li>
     <li><strong>The web console grew to twelve pages:</strong> STATUS, PIPELINE, LOBE, TRANSIT, ALIGN, CALIBRATE, OBSERVE, MONITOR, REDUCE, SCIENCE,
       SESSIONS and DESKTOP. There is one port and a login, a day/night theme for sunlight, a real-mount / simulator switch and a STOP MOUNT button.</li>
     <li><strong>RFI masks</strong> live in MONITOR, as an opt-in in REDUCE, and in an <em>Unknown Pleasures</em> art view of each session.</li>
     <li><strong>A new DIY feed:</strong> a copper-strip dipole with a reflector plate, modelled with NEC2. It replaced a feed that lost several dB before the LNA.</li>
     <li><strong>TRANSIT:</strong> a simple 10-second logger and page to watch the Sun drift through the beam.</li>
     <li><strong>Frequency switching, end to end:</strong> a checkbox in OBSERVE, folding in REDUCE, and live views in QUICKLOOK and STATUS.</li>
-    <li><strong>A better REDUCE</strong> (opt-in, the frozen engine is unchanged): overlapping windows, averaged, with spectral kurtosis against pulses.
+    <li><strong>A better REDUCE</strong> (opt-in; the engine itself is unchanged): overlapping windows, averaged, with spectral kurtosis against pulses.
       It uses ~95 % of the recorded time instead of about a third. It also runs on several CPU cores and masks a list of known local carriers.</li>
     <li><strong>CALIBRATE measures the Y-factor</strong> (50 Ω load against cold sky) and the system temperature. On 5 November it gave Y = 1.53 dB.</li>
     <li><strong>SCIENCE shows what HI4PI expects</strong> for the same area and beam directly under ALMITA's own maps.</li>
   </ul>
+
+  <h2>The web console</h2>
+  <p>Twelve pages behind one login, shown as each one looks when you land on it. Tap a page for the full screenshot.
+    Network addresses are hidden and the mount camera is blurred; the data is a frequency-switching bench test with the mount
+    on its simulator.</p>
+  <div class="shots">
+    <a class="shot" href="screenshots/monitor.jpg"><img src="screenshots/thumbs/monitor.jpg" width="480" height="300" loading="lazy" alt="MONITOR page: live view of a run: sky map, 3D spectral stack, RFI masks, Unknown Pleasures"><span><strong>MONITOR</strong> · live view of a run: sky map, 3D spectral stack, RFI masks, Unknown Pleasures</span></a>
+    <a class="shot" href="screenshots/status.jpg"><img src="screenshots/thumbs/status.jpg" width="480" height="300" loading="lazy" alt="STATUS page: instrument health, LNA power, RFI check, hydrogen-line test"><span><strong>STATUS</strong> · instrument health, LNA power, RFI check, hydrogen-line test</span></a>
+    <a class="shot" href="screenshots/pipeline.jpg"><img src="screenshots/thumbs/pipeline.jpg" width="480" height="300" loading="lazy" alt="PIPELINE page: the whole chain end to end"><span><strong>PIPELINE</strong> · the whole chain end to end</span></a>
+    <a class="shot" href="screenshots/observe.jpg"><img src="screenshots/thumbs/observe.jpg" width="480" height="300" loading="lazy" alt="OBSERVE page: plan a sky mosaic over the HI4PI map"><span><strong>OBSERVE</strong> · plan a sky mosaic over the HI4PI map</span></a>
+    <a class="shot" href="screenshots/calibrate.jpg"><img src="screenshots/thumbs/calibrate.jpg" width="480" height="300" loading="lazy" alt="CALIBRATE page: receiver profile and Y-factor"><span><strong>CALIBRATE</strong> · receiver profile and Y-factor</span></a>
+    <a class="shot" href="screenshots/align.jpg"><img src="screenshots/thumbs/align.jpg" width="480" height="300" loading="lazy" alt="ALIGN page: pointing alignment on the Sun or on HI"><span><strong>ALIGN</strong> · pointing alignment on the Sun or on HI</span></a>
+    <a class="shot" href="screenshots/lobe.jpg"><img src="screenshots/thumbs/lobe.jpg" width="480" height="300" loading="lazy" alt="LOBE page: beam from a solar transit"><span><strong>LOBE</strong> · beam from a solar transit</span></a>
+    <a class="shot" href="screenshots/transit.jpg"><img src="screenshots/thumbs/transit.jpg" width="480" height="300" loading="lazy" alt="TRANSIT page: the Sun through a still antenna"><span><strong>TRANSIT</strong> · the Sun through a still antenna</span></a>
+    <a class="shot" href="screenshots/reduce.jpg"><img src="screenshots/thumbs/reduce.jpg" width="480" height="300" loading="lazy" alt="REDUCE page: raw captures to spectra"><span><strong>REDUCE</strong> · raw captures to spectra</span></a>
+    <a class="shot" href="screenshots/science.jpg"><img src="screenshots/thumbs/science.jpg" width="480" height="300" loading="lazy" alt="SCIENCE page: cubes and maps"><span><strong>SCIENCE</strong> · cubes and maps</span></a>
+    <a class="shot" href="screenshots/sessions.jpg"><img src="screenshots/thumbs/sessions.jpg" width="480" height="300" loading="lazy" alt="SESSIONS page: catalog of every session"><span><strong>SESSIONS</strong> · catalog of every session</span></a>
+    <a class="shot" href="screenshots/desktop.jpg"><img src="screenshots/thumbs/desktop.jpg" width="480" height="300" loading="lazy" alt="DESKTOP page: the capture Pi's own desktop"><span><strong>DESKTOP</strong> · the capture Pi's own desktop</span></a>
+  </div>
 
   <h2>Hardware</h2>
   <p>
