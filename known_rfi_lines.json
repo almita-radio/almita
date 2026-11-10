@@ -1,0 +1,12 @@
+{
+  "schema": "almita.known_rfi_lines.v1",
+  "what": "Fixed RF carriers masked by REDUCE's RFI MASK (opt-in, reduce_rfi_mask.py) on every capture, frequency-switched or not: bins within frequency_hz +/- half_width_hz get MaskFlag.KNOWN_SPUR (flagged, never filled). Add a line only after it was seen in many captures.",
+  "lines": [
+    {
+      "frequency_hz": 1420039850.0,
+      "half_width_hz": 1500.0,
+      "first_seen": "2026-11-02",
+      "evidence": "2026-11-10 bench FS run (400 points, LNA without antenna): in 400/400 points, peak +70..+340 %, centre 1420.03954-1420.04013 MHz, wings to +/-1 kHz. Steady carrier: spectral kurtosis does not flag it. Origin unknown (internal / near field). Sits at ~+77 km/s topocentric."
+    }
+  ]
+}

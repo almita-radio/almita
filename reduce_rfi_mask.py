@@ -7,6 +7,12 @@ What it does, per point, with the capture's rfi_mask.py result (rfi_mask.py's mo
     remaining frames with REDUCE's own combine mode.
   - COMB / LINE: those channels get MaskFlag.RFI in REDUCE's mask - flagged, never filled (NATIVE_GRID). The baseline
     fit and the stacking already leave out any bin with a flag.
+  - KNOWN LINES (2026-11-10): fixed carriers listed in known_rfi_lines.json get MaskFlag.KNOWN_SPUR on every capture.
+    A steady carrier looks like noise to spectral kurtosis and may be too weak for rfi_mask.py in one capture, but
+    it is there every time (1420.0398 MHz: 400/400 points of the 2026-11-10 bench run).
+  - FREQUENCY-SWITCHED captures (BL-100): the side-car's single-LO frames and channels do not map onto two LOs, so
+    PULSE/COMB/LINE are not applied; the known lines are flagged on the folded spectrum (reduce_engine/fswitch_fold.py
+    never calls build_mask, so it is done on the fold's output).
 The mask comes from the side-car rfi_mask_live.py wrote during the run (data/mosaic/<grid>/data/rfi_mask/<session>/
 <stem>.rfimask.npz); a capture without one is analysed now with rfi_mask.analyze_capture (nothing is written, and
 lines "known" from earlier captures of the session are not available then - the report says which source was used).
@@ -22,13 +28,31 @@ import contextlib
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
 import rfi_mask
 
 REPORT_NAME = "rfi_mask_report.json"
+KNOWN_LINES_PATH = Path(__file__).resolve().parent / "known_rfi_lines.json"
+
+
+def load_known_lines(path: Path = KNOWN_LINES_PATH) -> List[Tuple[float, float]]:
+    """[(frequency_hz, half_width_hz)] from known_rfi_lines.json; a missing file is no lines."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return []
+    return [(float(ln["frequency_hz"]), float(ln["half_width_hz"])) for ln in data.get("lines", [])]
+
+
+def known_line_bins(frequency_hz: np.ndarray, lines: List[Tuple[float, float]]) -> np.ndarray:
+    f = np.asarray(frequency_hz, float)
+    bad = np.zeros(f.size, bool)
+    for fc, hw in lines:
+        bad |= np.abs(f - fc) <= hw
+    return bad
 
 
 def sidecar_path(capture: Path) -> Path:
@@ -53,9 +77,11 @@ def load_mask(capture: Path) -> Dict[str, Any]:
 class MaskedReduce:
     """Wraps the frozen pipeline's read/estimate/mask for one RUN and keeps a per-point report."""
 
-    def __init__(self, loader=load_mask):
+    def __init__(self, loader=load_mask, known_lines: Optional[List[Tuple[float, float]]] = None):
         self.loader = loader
+        self.known_lines = load_known_lines() if known_lines is None else list(known_lines)
         self.current: Optional[Path] = None
+        self.switched_current: Optional[Path] = None
         self.current_mask: Optional[Dict[str, Any]] = None
         self.points: Dict[str, Dict[str, Any]] = {}
 
@@ -75,15 +101,16 @@ class MaskedReduce:
         return None if self.current_mask.get("failed") else self.current_mask
 
     def read_capture(self, original, path, *a, **k):
-        self.current, self.current_mask = Path(path), None
+        self.current, self.current_mask, self.switched_current = Path(path), None, None
         out = original(path, *a, **k)
         attrs = out[1] if isinstance(out, tuple) and len(out) > 1 else {}
         if isinstance(attrs, dict) and attrs.get("fswitch_segments_json") is not None:
             # BL-100: a frequency-switched capture - its frames and channels are two LOs, not the mask's single-LO grid,
             # so the mask cannot be mapped onto it: it is reduced unmasked, and the report says so
             self.points[str(self.current)] = {"capture": str(self.current), "applied": False,
-                                              "reason": "frequency-switched capture: RFI mask not applicable"}
-            self.current = None
+                                              "reason": "frequency-switched capture: side-car mask not applicable "
+                                                        "(two LOs); known lines flagged on the folded spectrum"}
+            self.switched_current, self.current = self.current, None
         return out
 
     def estimate_spectrum(self, original, iq_bytes, *, sample_rate_hz, center_frequency_hz, config):
@@ -117,6 +144,12 @@ class MaskedReduce:
     def build_mask(self, original, frequency_hz, psd, **k):
         from reduce_engine.models import MaskFlag
         result = original(frequency_hz, psd, **k)
+        if self.current is not None and self.known_lines:
+            known = known_line_bins(frequency_hz, self.known_lines)
+            result.mask[known] |= MaskFlag.KNOWN_SPUR.value
+            self._mask_for_current()
+            if str(self.current) in self.points:
+                self.points[str(self.current)]["known_line_bins_flagged"] = int(known.sum())
         m = self._mask_for_current()
         if m is None:
             return result
@@ -136,6 +169,16 @@ class MaskedReduce:
                    fraction_of_band=round(float(bad.mean()), 5))
         return result
 
+    def switched_spectrum(self, original, iq, attrs, config):
+        from reduce_engine.models import MaskFlag
+        sw = original(iq, attrs, config)
+        if self.switched_current is not None and self.known_lines:
+            known = known_line_bins(sw.frequency_hz, self.known_lines)
+            sw.mask[known] |= MaskFlag.KNOWN_SPUR.value
+            rec = self.points.setdefault(str(self.switched_current), {"capture": str(self.switched_current), "applied": False})
+            rec["known_line_bins_flagged"] = int(known.sum())
+        return sw
+
     def report(self) -> Dict[str, Any]:
         pts = list(self.points.values())
         applied = [p for p in pts if p.get("applied")]
@@ -147,23 +190,28 @@ class MaskedReduce:
                 "median_fraction_of_band": (float(np.median([p["fraction_of_band"] for p in applied if "fraction_of_band" in p]))
                                             if any("fraction_of_band" in p for p in applied) else None),
                 "pulse_frames_cut": int(sum(p.get("pulse_frames_cut", 0) for p in applied)),
+                "known_lines_hz": [fc for fc, _ in self.known_lines],
+                "points_known_lines_flagged": sum(1 for p in pts if p.get("known_line_bins_flagged")),
+                "known_line_bins_flagged": int(sum(p.get("known_line_bins_flagged", 0) for p in pts)),
                 "per_point": pts}
 
 
 @contextlib.contextmanager
-def install(loader=load_mask) -> Iterator[MaskedReduce]:
-    """Wrap the frozen pipeline's three functions for the duration of one RUN in this process; always restored."""
-    from reduce_engine import masks as masks_mod, pipeline, spectral as spectral_mod
-    mr = MaskedReduce(loader)
-    saved = (pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask)
-    orig_read, orig_est, orig_mask = saved
+def install(loader=load_mask, known_lines: Optional[List[Tuple[float, float]]] = None) -> Iterator[MaskedReduce]:
+    """Wrap the frozen pipeline's four functions for the duration of one RUN in this process; always restored."""
+    from reduce_engine import fswitch_fold, masks as masks_mod, pipeline, spectral as spectral_mod
+    mr = MaskedReduce(loader, known_lines)
+    saved = (pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask, fswitch_fold.switched_spectrum)
+    orig_read, orig_est, orig_mask, orig_sw = saved
     pipeline.read_capture = lambda path, *a, **k: mr.read_capture(orig_read, path, *a, **k)
     spectral_mod.estimate_spectrum = lambda *a, **k: mr.estimate_spectrum(orig_est, *a, **k)
     masks_mod.build_mask = lambda *a, **k: mr.build_mask(orig_mask, *a, **k)
+    fswitch_fold.switched_spectrum = lambda *a, **k: mr.switched_spectrum(orig_sw, *a, **k)
     try:
         yield mr
     finally:
-        pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask = saved
+        (pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask,
+         fswitch_fold.switched_spectrum) = saved
 
 
 def write_report(output_dir: str, report: Dict[str, Any]) -> str:

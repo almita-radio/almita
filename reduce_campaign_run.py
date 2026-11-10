@@ -174,6 +174,7 @@ def cmd_run(args) -> int:
           + (f", in parallel - {workers_why}" if workers > 1 else ""), file=sys.stderr, flush=True)
     mask_report = v2_report = None
     parallel = {"workers": workers, "why": workers_why}
+    run_started = time.monotonic()
     follower.start()
     try:
         with contextlib.ExitStack() as stack:
@@ -203,7 +204,10 @@ def cmd_run(args) -> int:
         follower.finish()
     record_path = calrecord.write_record(report.output_dir, record)
 
+    wall_seconds = round(time.monotonic() - run_started, 2)
     payload = dict(report.__dict__)
+    # the engine's runtime_seconds only times its own loop: with prefetched points that is just the assembly
+    payload["wall_seconds"] = wall_seconds
     payload["calibration_compatibility_record_path"] = record_path
     payload["rfi_mask"] = {"enabled": False}
     if mask_report is not None:
@@ -224,13 +228,16 @@ def cmd_run(args) -> int:
         f"Rejected:        {report.points_rejected}",
         f"Calibration:     {report.calibration_level_counts}",
         f"Velocity:        {report.velocity_frame_counts}",
-        f"Runtime:         {report.runtime_seconds:.2f}s",
+        f"Runtime:         {wall_seconds:.2f}s"
+        + (f" (the engine's own loop {report.runtime_seconds:.2f}s: points were reduced by the workers beforehand)"
+           if workers > 1 else ""),
         f"Parallel:        {parallel['why']}" + (f" - worker failures: {len(parallel['worker_failures'])}" if parallel.get("worker_failures") else ""),
         f"Output:          {report.output_dir}",
         *([f"Calibration compatibility record: {record_path}"] if record_path else []),
         *([f"RFI mask:        {mask_report['points_masked']}/{mask_report['points']} points masked, "
            f"{mask_report['pulse_frames_cut']} pulse frames cut, median {mask_report['median_fraction_of_band']} "
-           f"of the band flagged"] if mask_report else []),
+           f"of the band flagged, known lines flagged in {mask_report['points_known_lines_flagged']} points"]
+          if mask_report else []),
         *([f"Estimator v2:    {v2_report['estimates_v2']}/{v2_report['estimates']} spectra with 50% overlap + mean, "
            f"median {v2_report['median_cells_flagged_fraction']} of cells left out by kurtosis, "
            f"{v2_report['blocks_broadband_flagged']} broadband blocks"] if v2_report else []),

@@ -76,11 +76,12 @@ def test_a_point_whose_mask_cannot_be_read_is_reduced_unmasked_and_reported():
 
 
 def test_install_wraps_only_inside_and_restores_the_frozen_functions():
-    from reduce_engine import masks, pipeline, spectral
-    before = (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask)
+    from reduce_engine import fswitch_fold, masks, pipeline, spectral
+    funcs = lambda: (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask, fswitch_fold.switched_spectrum)
+    before = funcs()
     with rrm.install(loader=lambda p: None):
-        assert (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask) != before
-    assert (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask) == before
+        assert all(x is not y for x, y in zip(funcs(), before))
+    assert funcs() == before
 
 
 def test_web_reduce_passes_rfi_mask_only_when_asked(monkeypatch, tmp_path):
@@ -97,3 +98,38 @@ def test_web_reduce_passes_rfi_mask_only_when_asked(monkeypatch, tmp_path):
         assert argv[1] == "reduce_campaign_run.py" and "--rfi-mask" in argv and meta["rfi_mask"] is True
     finally:
         camp.rmdir()
+
+
+def test_known_lines_file_is_read_and_flags_known_spur_on_a_plain_capture(tmp_path):
+    f = tmp_path / "known.json"
+    f.write_text('{"lines": [{"frequency_hz": 1420003000.0, "half_width_hz": 400.0}]}')
+    lines = rrm.load_known_lines(f)
+    assert lines == [(1420003000.0, 400.0)] and rrm.load_known_lines(tmp_path / "missing.json") == []
+    mr = rrm.MaskedReduce(loader=lambda path: _mask(np.zeros(FRAMES, bool), np.zeros(N, np.int8)), known_lines=lines)
+    mr.read_capture(lambda p: ("iq", {}), "a.h5")
+    est = _estimate(np.ones((FRAMES, N)))
+    res = mr.build_mask(lambda f, p, **k: SimpleNamespace(mask=np.zeros(N, np.int64)), est.frequency_hz, est.psd)
+    assert np.nonzero(res.mask & MaskFlag.KNOWN_SPUR.value)[0].tolist() == [9, 10, 11]   # 2.7, 3.0, 3.3 kHz
+    assert not (res.mask & MaskFlag.RFI.value).any()
+    assert mr.report()["points_known_lines_flagged"] == 1
+
+
+def test_a_switched_capture_gets_the_known_lines_on_its_folded_spectrum():
+    from reduce_engine import fswitch_fold
+    from reduce_engine.fswitch_fold import FswitchSpectrum
+    rf = 1.4204e9 + (np.arange(N) - N // 2) * 300.0
+    fake = FswitchSpectrum(rf, np.zeros(N), np.ones(N), np.zeros(N, np.int64), 0.0, {})
+    seen = {}
+
+    def frozen_fold(iq, attrs, config):
+        seen["called"] = True
+        return fake
+    mr = rrm.MaskedReduce(loader=lambda p: None, known_lines=[(rf[40], 350.0)])
+    mr.read_capture(lambda p: ("iq", {"fswitch_segments_json": "[]"}), "s.h5")
+    assert mr.current is None                               # side-car mask is not applied to two LOs...
+    out = mr.switched_spectrum(frozen_fold, None, {}, None)
+    assert seen and np.nonzero(out.mask & MaskFlag.KNOWN_SPUR.value)[0].tolist() == [39, 40, 41]   # ...known lines are
+    rec = mr.report()["per_point"][0]
+    assert rec["applied"] is False and rec["known_line_bins_flagged"] == 3
+    with rrm.install(loader=lambda p: None):
+        assert fswitch_fold.switched_spectrum is not frozen_fold

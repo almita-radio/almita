@@ -145,6 +145,7 @@ class EstimatorV2:
         self.points: Dict[str, Dict[str, Any]] = {}
         self._last_psd = None
         self._last_rfi = None
+        self._recent: list = []        # (lo_hz, frequency_hz, rfi_channels) of each estimate since the last fold/read
 
     def _rec(self) -> Dict[str, Any]:
         key = self.current or "unknown capture"
@@ -152,6 +153,7 @@ class EstimatorV2:
 
     def read_capture(self, original, path, *a, **k):
         self.current = str(path)
+        self._recent = []
         return original(path, *a, **k)
 
     def estimate_spectrum(self, original, iq_bytes, *, sample_rate_hz, center_frequency_hz, config):
@@ -166,6 +168,7 @@ class EstimatorV2:
             if not rec["estimates"] or rec["estimates"][-1].get("applied", True):
                 rec["estimates"].append({"applied": False, "reason": "capture too short for kurtosis blocks - classic estimate"})
             self._last_psd = self._last_rfi = None
+            self._recent.append((float(center_frequency_hz), None, None))
             return original(iq_bytes, sample_rate_hz=sample_rate_hz, center_frequency_hz=center_frequency_hz, config=config)
         rec["estimates"].append({"applied": True, "center_frequency_hz": float(center_frequency_hz), **r["stats"]})
         fft_config = {"fft_size": int(config.fft_size), "window": "Hann (numpy.hanning), 50% overlap",
@@ -177,7 +180,33 @@ class EstimatorV2:
         est = SpectralEstimate(frequency_hz=r["frequency_hz"], psd=r["psd"], segments=r["segments"],
                                clipping_fraction=_clipping_fraction(iq_bytes), fft_config=fft_config)
         self._last_psd, self._last_rfi = est.psd, r["rfi_channels"]
+        self._recent.append((float(center_frequency_hz), np.asarray(r["frequency_hz"], float), r["rfi_channels"]))
         return est
+
+    def switched_spectrum(self, original, iq, attrs, config):
+        """A frequency-switched capture (reduce_engine/fswitch_fold.py, frozen) never goes through build_mask, so the
+        channels kurtosis flagged at LO A and LO B would be lost in the fold. Here they are carried over: every folded
+        bin computed from a flagged baseband channel (through either image) gets MaskFlag.RFI."""
+        from reduce_engine.models import MaskFlag
+        self._recent = []
+        sw = original(iq, attrs, config)
+        flagged = [(lo, f, rfi) for lo, f, rfi in self._recent if rfi is not None]
+        self._recent = []
+        if not flagged:
+            return sw
+        lo0, f0, _ = flagged[0]
+        bb = f0 - lo0
+        bad_bb = np.zeros(bb.size, bool)
+        for lo, f, rfi in flagged:
+            if f.shape == bb.shape and np.allclose(f - lo, bb, rtol=0, atol=1.0):
+                bad_bb |= rfi
+        los = [float(attrs["fswitch_f_a_hz"]), float(attrs["fswitch_f_b_hz"])]
+        bad = folded_bins_touching(np.asarray(sw.frequency_hz, float), los, bb, bad_bb)
+        sw.mask[bad] |= MaskFlag.RFI.value
+        rec = self._rec()
+        rec["fswitch_baseband_channels_flagged"] = int(bad_bb.sum())
+        rec["fswitch_folded_bins_flagged"] = int(bad.sum())
+        return sw
 
     def build_mask(self, original, frequency_hz, psd, **k):
         from reduce_engine.models import MaskFlag
@@ -204,24 +233,45 @@ class EstimatorV2:
                 "median_cells_flagged_fraction": med("cells_flagged_fraction"),
                 "blocks_broadband_flagged": int(sum(e["blocks_broadband_flagged"] for e in applied)),
                 "median_channels_rfi": med("channels_rfi"),
+                "fswitch_points": sum(1 for p in pts if "fswitch_folded_bins_flagged" in p),
+                "fswitch_folded_bins_flagged": int(sum(p.get("fswitch_folded_bins_flagged", 0) for p in pts)),
                 "per_point": pts}
+
+
+def folded_bins_touching(rf_hz: np.ndarray, los_hz: List[float], bb_hz: np.ndarray, bad_bb: np.ndarray) -> np.ndarray:
+    """Folded bins (RF axis) whose value was interpolated from a flagged baseband channel through any of the LOs:
+    fswitch_fold reads the switched spectrum at rf - lo for each LO, linearly between the two nearest channels."""
+    out = np.zeros(rf_hz.size, bool)
+    if not bad_bb.any():
+        return out
+    step = float(bb_hz[1] - bb_hz[0])
+    for lo in los_hz:
+        x = (rf_hz - lo - bb_hz[0]) / step
+        i0 = np.floor(x + 1e-6).astype(int)
+        frac = x - i0
+        for idx, use in ((i0, np.ones(x.size, bool)), (i0 + 1, frac > 1e-6)):
+            ok = use & (idx >= 0) & (idx < bb_hz.size)
+            out[ok] |= bad_bb[idx[ok]]
+    return out
 
 
 @contextlib.contextmanager
 def install() -> Iterator[EstimatorV2]:
     """Wrap the frozen pipeline's three functions for the duration of one RUN in this process; always restored.
     Install it BEFORE reduce_rfi_mask.install() so the RFI MASK wraps this estimate, not the classic one."""
-    from reduce_engine import masks as masks_mod, pipeline, spectral as spectral_mod
+    from reduce_engine import fswitch_fold, masks as masks_mod, pipeline, spectral as spectral_mod
     ev = EstimatorV2()
-    saved = (pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask)
-    orig_read, orig_est, orig_mask = saved
+    saved = (pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask, fswitch_fold.switched_spectrum)
+    orig_read, orig_est, orig_mask, orig_sw = saved
     pipeline.read_capture = lambda path, *a, **k: ev.read_capture(orig_read, path, *a, **k)
     spectral_mod.estimate_spectrum = lambda *a, **k: ev.estimate_spectrum(orig_est, *a, **k)
     masks_mod.build_mask = lambda *a, **k: ev.build_mask(orig_mask, *a, **k)
+    fswitch_fold.switched_spectrum = lambda *a, **k: ev.switched_spectrum(orig_sw, *a, **k)
     try:
         yield ev
     finally:
-        pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask = saved
+        (pipeline.read_capture, spectral_mod.estimate_spectrum, masks_mod.build_mask,
+         fswitch_fold.switched_spectrum) = saved
 
 
 def write_report(output_dir: str, report: Dict[str, Any]) -> str:

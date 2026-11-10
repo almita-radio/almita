@@ -563,13 +563,20 @@
         ? `\nRFI MASK: ${facts.rfi_mask.points_masked}/${facts.rfi_mask.points} points masked (${facts.rfi_mask.from_sidecar} from the run's side-cars, `
           + `${facts.rfi_mask.computed_at_reduce} computed now) · ${facts.rfi_mask.pulse_frames_cut} pulse frames cut · `
           + `median ${U.fixed(100 * (facts.rfi_mask.median_fraction_of_band ?? NaN), 2)} % of the band flagged RFI`
+          + ((facts.rfi_mask.known_lines_hz || []).length
+            ? ` · known lines ${facts.rfi_mask.known_lines_hz.map((f) => U.fixed(f / 1e6, 4)).join(", ")} MHz flagged in ${facts.rfi_mask.points_known_lines_flagged} points`
+            : "")
         : "\nRFI MASK: off")
       + (facts.estimator_v2 && facts.estimator_v2.enabled
         ? `\nESTIMATOR v2: ${facts.estimator_v2.estimates_v2}/${facts.estimator_v2.estimates} spectra with 50 % overlap + mean`
           + (facts.estimator_v2.estimates_classic_fallback ? ` (${facts.estimator_v2.estimates_classic_fallback} too short: classic)` : "")
           + ` · median ${U.fixed(100 * (facts.estimator_v2.median_cells_flagged_fraction ?? NaN), 3)} % of cells left out by kurtosis`
           + ` · ${facts.estimator_v2.blocks_broadband_flagged} broadband blocks`
+          + (facts.estimator_v2.fswitch_points
+            ? ` · ${facts.estimator_v2.fswitch_folded_bins_flagged} folded bins flagged in ${facts.estimator_v2.fswitch_points} switched points`
+            : "")
         : "\nESTIMATOR v2: off")
+      + (facts.wall_seconds != null ? `\nRUN TIME: ${U.fixed(facts.wall_seconds, 1)} s` : "")
       + (facts.parallel ? `\nCORES: ${facts.parallel.why}` + ((facts.parallel.worker_failures || []).length
         ? ` · ${facts.parallel.worker_failures.length} point(s) redone sequentially after a worker failed` : "") : "");
     $("results-provenance").textContent = `campaign_id: ${facts.campaign_id}   reduce_session_id: ${facts.session_id}   output: ${job.output_dir || "—"}`;

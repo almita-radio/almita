@@ -128,11 +128,12 @@ def test_rfi_mask_steps_aside_for_pulses_on_top_of_v2():
 
 
 def test_install_wraps_only_inside_and_restores_the_frozen_functions():
-    from reduce_engine import masks, pipeline, spectral
-    before = (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask)
+    from reduce_engine import fswitch_fold, masks, pipeline, spectral
+    funcs = lambda: (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask, fswitch_fold.switched_spectrum)
+    before = funcs()
     with v2.install():
-        assert (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask) != before
-    assert (pipeline.read_capture, spectral.estimate_spectrum, masks.build_mask) == before
+        assert all(x is not y for x, y in zip(funcs(), before))
+    assert funcs() == before
 
 
 def test_web_reduce_passes_estimator_v2_only_when_asked(monkeypatch):
@@ -158,3 +159,47 @@ def test_reduce_page_has_the_checkbox():
     html = (root / "console" / "reduce.html").read_text()
     js = (root / "console" / "reduce.js").read_text()
     assert 'id="in-estimator-v2"' in html and "estimator_v2" in js and "estimator_v2_report.json" in js
+
+
+def test_folded_bins_touching_maps_a_baseband_channel_through_each_lo():
+    bb = (np.arange(100) - 50) * 1000.0
+    bad = np.zeros(100, bool)
+    bad[70] = True                                           # baseband +20 kHz
+    rf = 1e9 + bb
+    out = v2.folded_bins_touching(rf, [1e9 - 10e3, 1e9 + 30e3], bb, bad)
+    # rf - lo == +20 kHz  ->  rf = 1e9 + 10 kHz (bin 60) and 1e9 + 50 kHz (bin 100: outside)
+    assert np.nonzero(out)[0].tolist() == [60]
+    half = v2.folded_bins_touching(rf, [1e9 - 10.5e3], bb, bad)   # half a bin off: both neighbours interpolate it
+    assert np.nonzero(half)[0].tolist() == [59, 60]
+
+
+def test_a_switched_capture_keeps_the_kurtosis_flags_through_the_fold():
+    """End to end through the frozen fold: an on/off carrier seen by both LOs ends up flagged RFI at its RF
+    frequency in the folded spectrum (before 2026-11-10 the fold dropped v2's flags)."""
+    import json
+    from reduce_engine import fswitch_fold
+    delta, n_lo = 600e3, 2 ** 21
+    f_a, f_b = F0 - delta, F0 + delta
+    fc = F0 + 100e3 + 0.3 * RATE / 8192                     # inside the folded band, between bins
+    pieces = []
+    for k, lo in enumerate((f_a, f_b)):
+        t = np.arange(n_lo) / RATE
+        z = _noise(n_lo, seed=20 + k)
+        on = np.arange(n_lo) < int(0.7 * n_lo)                  # on 70 % of the time, then off
+        z = z + on * 3.0 * np.exp(2j * np.pi * (fc - lo) * t)
+        pieces.append(_iq(z))
+    iq = np.concatenate(pieces)
+    attrs = {"sample_rate_hz": RATE, "center_frequency_hz": F0, "fswitch_f_a_hz": f_a, "fswitch_f_b_hz": f_b,
+             "fswitch_segments_json": json.dumps([{"lo_hz": f_a, "start_sample": 0, "n_samples": n_lo},
+                                                  {"lo_hz": f_b, "start_sample": n_lo, "n_samples": n_lo}])}
+    plain = fswitch_fold.switched_spectrum(iq, attrs, ReduceConfig())
+    assert not (plain.mask & MaskFlag.RFI.value).any()       # the frozen fold alone flags nothing
+    with v2.install() as ev:
+        ev.current = "s.h5"
+        sw = fswitch_fold.switched_spectrum(iq, attrs, ReduceConfig())
+    flagged = np.nonzero(sw.mask & MaskFlag.RFI.value)[0]
+    near = np.argsort(np.abs(sw.frequency_hz - fc))[:2]
+    assert set(near.tolist()) <= set(flagged.tolist()) and flagged.size <= 12
+    assert np.all(np.abs(sw.frequency_hz[flagged] - fc) < 5e3)
+    rec = ev.points["s.h5"]
+    assert rec["fswitch_folded_bins_flagged"] == flagged.size and ev.report()["fswitch_points"] == 1
