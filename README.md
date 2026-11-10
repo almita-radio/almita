@@ -60,6 +60,49 @@ Supporting systems: **ALIGN** (conservative pointing alignment), **CALIBRATE** (
 
 Every command has `--help`. The long-running services are described under `systemd/`.
 
+## Results so far
+
+### First 21 cm hydrogen detection (5 November 2026)
+
+On its first night on a rooftop, in a 5 × 5 mosaic around galactic longitude l ≈ +20°, ALMITA saw the hydrogen line where
+the HI4PI all-sky survey says it should be. For the six pointings inside the reference cube, the measured line has the shape
+HI4PI predicts for the **same pointing, the same 20° beam and the same instant** (shape correlation +0.43 to +0.77). The
+same test with the velocity axis flipped fails, so the line sits on the correct side. The peak velocity follows the predicted
+one from point to point.
+
+<p align="center">
+  <img src="docs/site/results/hi_detection_20261105.png" alt="Six measured 21 cm spectra (blue) against the HI4PI prediction for the same pointing, beam and instant (black)" width="100%">
+</p>
+
+What this is **not** yet:
+- **Not a calibrated measurement.** The spectra are relative: each one is divided by an off-plane reference taken minutes
+  earlier, and the receiver's ripple of ±2–6 % that remains is larger than everything except the line itself.
+- **Not yet repeated.**
+- **Peaks sit 3–6 km/s above HI4PI's.** This is not explained yet.
+- **An earlier strip the same night (l = +10…+30°) showed nothing.** That is still an open question.
+
+That leftover ripple is why the next step was frequency switching.
+
+### Frequency switching (November 2026)
+
+The receiver's own band shape is ±15 %, and it drifts. Dividing by another pointing minutes later leaves waves of a few
+percent: the hydrogen line is only ~4–14 % on top of the system's own noise. With **frequency switching**, the SDR alternates
+its tuning between 1420.406 MHz ∓ 0.6 MHz every 2 s (pausing 0.15 s per change, 95 % of the time recording). The
+hydrogen line moves with the tuning; the receiver's shape does not. (A − B) / B cancels the shape, and the two copies of
+the line are folded back together.
+
+<p align="center">
+  <img src="docs/site/results/frequency_switching_bench.png" alt="Bench test: receiver band shape of ±14.6 % (top) versus 0.29 % noise in one 10 s switched pointing and 0.06 % residual in the mean of 400" width="80%">
+</p>
+
+This is a **bench test** with the LNA and the SDR but no antenna, so no sky signal is expected. On 400 pointings of 10 s each:
+- the noise of one pointing is **0.29 %** (about 4 km/s resolution), close to the theoretical limit;
+- what is left of the receiver in the mean of all 400 is **0.06 % rms**.
+
+A steady local carrier at 1420.040 MHz sat inside the band in every pointing. It is now on a fixed list of known lines and is
+masked. Its origin, somewhere in the local electronics, is still being hunted. The first open-sky test with switching across
+the Milky Way is next.
+
 ## What is new (up to November 2026)
 
 **Two machines instead of one.** The instrument used to run entirely on a Raspberry Pi 5. In November 2026 it was split:
@@ -104,10 +147,26 @@ Every command has `--help`. The long-running services are described under `syste
 **Feed and receiver.**
 - MAIN is now an RTL-SDR Blog V3 (the V4 was retired) with a Nooelec SAWbird+ H1 LNA.
 - A Y-factor of only ~1 dB on 2026-10-18 led to a new DIY feed: a copper-strip dipole in a 3D-printed case, modelled with NEC2.
-- A 12 cm reflector plate is being fitted, with the dipole about 24 cm from the dish vertex and parallel to the grid bars.
+- The 12 cm reflector plate is now fitted. A Pawsey balun, which keeps current off the outside of the coax, comes next, and with it a second version of the feed.
 
-**Still pending.** The new chain has **not yet detected HI**. Results stay relative and instrumental, the beam is still provisional, and the next steps are
-a solar transit (TRANSIT / LOBE), a new calibration profile with the boxed capture Pi, and outings under open sky.
+**Frequency switching, end to end (development branch).** OBSERVE has a FREQUENCY SWITCHING checkbox; REDUCE folds the
+switched captures; QUICKLOOK and STATUS (HYDROGEN LINE panel) show them live. See [Results so far](#results-so-far).
+
+**REDUCE got faster and cleaner (opt-in, the frozen V1 engine is unchanged):**
+- **ESTIMATOR v2:** windows that overlap by half, averaged instead of taking the median, plus *spectral kurtosis* to leave out pulses and bursts only
+  where and when they happen. It uses about 95 % of the recorded time instead of about a third. With frequency switching that is the same as 3–4.6× more observing time.
+- **Several CPU cores:** 400 points reduce in about 4 minutes.
+- **Known RFI lines:** a short, editable list of steady local carriers is masked, frequency-switched captures included.
+
+**CALIBRATE measures the receiver's Y-factor** (50 Ω load against cold sky) and, with the load temperature, the system temperature.
+On 2026-11-05 it gave Y = 1.53 dB. Turning the relative spectra into Kelvin is the next step.
+
+**SCIENCE draws what HI4PI expects** for the same area and beam directly under ALMITA's own maps, so shapes can be compared at a glance.
+Maps across the celestial pole now use an exact spherical frame.
+
+**Still pending.** Results stay relative and instrumental, the beam is still provisional, and the hydrogen detection above
+has to be repeated. Next: an open-sky night with frequency switching across the Milky Way, solar alignment, a Y-factor with
+the current feed, and the Pawsey balun.
 
 ## Hardware (short)
 

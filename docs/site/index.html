@@ -61,6 +61,9 @@
     .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
     pre.flow { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; overflow:auto; font-size:.95rem; }
     .note { color:var(--muted); }
+    figure { margin:1rem 0 1.4rem; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; }
+    figure img { width:100%; height:auto; display:block; }
+    figcaption { color:var(--muted); font-size:.92rem; margin-top:.5rem; }
     footer { margin-top:2.5rem; padding-top:1rem; border-top:1px solid var(--line); color:var(--muted); font-size:.95rem; }
   </style>
 </head>
@@ -99,6 +102,34 @@
     <div class="card"><strong>Offline operation</strong><br>Everything runs locally on a notebook and a Raspberry Pi; no internet connection is needed to observe.</div>
   </div>
 
+  <h2>First results</h2>
+  <h3>First 21 cm hydrogen detection · 5 November 2026</h3>
+  <p>
+    On its first night on a rooftop, in a 5 × 5 mosaic around galactic longitude l ≈ +20°, ALMITA saw the hydrogen line where the
+    HI4PI all-sky survey says it should be. For the six pointings inside the reference cube, the measured line has the shape HI4PI predicts
+    for the same pointing, the same 20° beam and the same instant (shape correlation +0.43 to +0.77). With the velocity axis flipped,
+    the match fails.
+  </p>
+  <figure>
+    <a href="results/hi_detection_20261105.png"><img src="results/hi_detection_20261105.png" width="2250" height="1230" loading="lazy"
+         alt="Six measured 21 cm spectra in blue against the HI4PI prediction for the same pointing, beam and instant in black"></a>
+    <figcaption>Blue: ALMITA, relative to an off-plane reference. Black: HI4PI predicted for the same pointing, beam and instant.
+      One night, not yet repeated and not calibrated. The ±2–6 % waves around the line are the receiver, not the sky. The peaks
+      sit 3–6 km/s above HI4PI's, which is not yet explained, and an earlier strip at l = +10…+30° showed nothing.</figcaption>
+  </figure>
+  <h3>Frequency switching · November 2026</h3>
+  <p>
+    Those waves are the receiver's own band shape, which is ±15 % and drifts. With frequency switching the SDR alternates its tuning
+    by ±0.6 MHz every 2 s: the hydrogen line moves with the tuning, the receiver's shape does not, and (A − B) / B cancels the shape.
+  </p>
+  <figure>
+    <a href="results/frequency_switching_bench.png"><img src="results/frequency_switching_bench.png" width="1112" height="1220" loading="lazy"
+         alt="Bench test: receiver band shape of ±14.6 % versus 0.29 % noise in one switched 10 s pointing and 0.06 % in the mean of 400"></a>
+    <figcaption>Bench test with the LNA and the SDR but no antenna, so no sky signal is expected. One 10 s pointing: 0.29 % noise. Mean of
+      400 pointings: 0.06 % rms left of the receiver. A steady local carrier at 1420.040 MHz is masked. The first open-sky test across the
+      Milky Way is next. Tap a figure for full size.</figcaption>
+  </figure>
+
   <h2>What is new (November 2026)</h2>
   <ul>
     <li><strong>Two machines.</strong> A Raspberry Pi 4 in a closed metal box runs the SDR server and INDI at the dish. A notebook runs the
@@ -109,20 +140,26 @@
     <li><strong>RFI masks</strong> live in MONITOR, as an opt-in in REDUCE, and in an <em>Unknown Pleasures</em> art view of each session.</li>
     <li><strong>A new DIY feed:</strong> a copper-strip dipole with a reflector plate, modelled with NEC2. It replaced a feed that lost several dB before the LNA.</li>
     <li><strong>TRANSIT:</strong> a simple 10-second logger and page to watch the Sun drift through the beam.</li>
+    <li><strong>Frequency switching, end to end:</strong> a checkbox in OBSERVE, folding in REDUCE, and live views in QUICKLOOK and STATUS.</li>
+    <li><strong>A better REDUCE</strong> (opt-in, the frozen engine is unchanged): overlapping windows, averaged, with spectral kurtosis against pulses.
+      It uses ~95 % of the recorded time instead of about a third. It also runs on several CPU cores and masks a list of known local carriers.</li>
+    <li><strong>CALIBRATE measures the Y-factor</strong> (50 Ω load against cold sky) and the system temperature. On 5 November it gave Y = 1.53 dB.</li>
+    <li><strong>SCIENCE shows what HI4PI expects</strong> for the same area and beam directly under ALMITA's own maps.</li>
   </ul>
 
   <h2>Hardware</h2>
   <p>
     An RTL-SDR Blog V3 as the science receiver with a Nooelec SAWbird+ H1 LNA, a DIY 1420 MHz dipole feed on a modified grid
     reflector of about 90 × 60 cm, an equatorial mount with an OnStep controller and INDI, a Raspberry Pi 4 capture box and a
-    notebook. A second, independent RTL-SDR chain for RFI reference is supported but currently disconnected. The hardware is
+    notebook. The reflector plate of the feed is fitted; a Pawsey balun comes next. A second, independent RTL-SDR chain for RFI reference is supported but currently disconnected. The hardware is
     accessible, experimental and repairable. Until November 2026 everything ran on a single Raspberry Pi 5.
   </p>
 
   <h2>Scientific honesty</h2>
   <p>
     Current HI measurements are <strong>relative and instrumental</strong>: ALMITA does not claim an absolute calibration,
-    and the new receiving chain <strong>has not detected HI yet</strong>. Next come a solar transit, a new calibration profile and outings under open sky.
+    and the first hydrogen detection (above) is a <strong>single night that still has to be repeated</strong>. Next come an open-sky night with
+    frequency switching across the Milky Way, solar alignment, a Y-factor with the current feed and a Pawsey balun.
     The antenna beam used for mapping is an <strong>operator-configured, provisional model</strong> until a proper beam
     characterisation is done, and no astrophysical interpretation is automated. Results are those of an experimental
     amateur instrument, not of a professional observatory.
