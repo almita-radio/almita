@@ -55,7 +55,7 @@ h2{font-size:11px;letter-spacing:.1em;margin:0;color:var(--heading)}
 .science-row-left{flex:1 1 480px;min-width:0;display:flex;flex-direction:column}
 .science-row-left .antenna-label:first-child{margin-top:0}
 .science-row-left #quicklook-thumbs,.science-row-left #rfi-thumbs{margin-top:10px}
-.spectral-stack-panel{flex:1 1 460px;min-width:340px;background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column}
+.spectral-stack-panel{flex:1 1 460px;min-width:340px;background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 .spectral-stack-panel>header{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--line)}
 .spectral-stack-subtitle{display:block;font-size:10px;letter-spacing:.1em;color:var(--muted);margin-top:2px}
 .spectral-stack-viewport{position:relative;flex:1;min-height:260px;background:var(--viewport-bg)}

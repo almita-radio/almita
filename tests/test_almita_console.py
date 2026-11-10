@@ -1308,10 +1308,13 @@ def test_64_spectral_stack_panel_height_pinned_to_antenna_column(tmp_path):
     panel far taller than the antenna column, with a big empty area) - the
     panel's height is now set explicitly in JS from the antenna column's
     own measured height, verified here as a real non-empty pixel value."""
-    html = dom(console_root(tmp_path, status=status_fixture("RUNNING")))
-    match = re.search(r'id="spectral-stack-panel"[^>]*style="height: (\d+)px;"', html)
+    root = console_root(tmp_path, status=status_fixture("RUNNING"))
+    html = dom(root, extra_flags=("--window-size=1400,1000",))         # side by side: pinned, never below its content
+    match = re.search(r'id="spectral-stack-panel"[^>]*style="height: ([\d.]+)px;"', html)
     assert match, html
-    assert int(match.group(1)) > 0
+    assert float(match.group(1)) >= 260                                 # 2026-11-10: header + the 3D view's min-height
+    narrow = dom(root, extra_flags=("--window-size=800,1000",))         # stacked: natural height, nothing pinned
+    assert re.search(r'id="spectral-stack-panel" class="spectral-stack-panel">', narrow), narrow
 
 
 # ---------------------------------------------------------------- activity log (orchestrator_capture.log tail)

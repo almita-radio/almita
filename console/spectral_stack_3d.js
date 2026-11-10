@@ -424,9 +424,20 @@
     const left = document.querySelector(".science-row-left");
     const panel = document.getElementById("spectral-stack-panel");
     if (!left || !panel) return;
-    const apply = () => { panel.style.height = `${left.getBoundingClientRect().height}px`; };
+    // ...but never shorter than the panel's own content (header + the viewport's CSS min-height): with no thumbnails
+    // the antenna column is ~130 px and the 3D view spilled over the RFI MASK chart below (operator 2026-11-10). When
+    // the row wraps (narrow screen: the panel sits UNDER the column) the panel keeps its natural height.
+    const viewport = document.getElementById("spectral-stack-viewport");
+    const header = panel.querySelector("header");
+    const apply = () => {
+      const wrapped = panel.getBoundingClientRect().top >= left.getBoundingClientRect().bottom - 1;
+      if (wrapped) { panel.style.height = ""; return; }
+      const vMin = viewport ? parseFloat(getComputedStyle(viewport).minHeight) || 0 : 0;
+      const floor = (header ? header.getBoundingClientRect().height : 0) + vMin + 2;   // + panel borders
+      panel.style.height = `${Math.max(left.getBoundingClientRect().height, floor)}px`;
+    };
     apply();
-    if (typeof ResizeObserver !== "undefined") new ResizeObserver(apply).observe(left);
+    if (typeof ResizeObserver !== "undefined") { const ro = new ResizeObserver(apply); ro.observe(left); ro.observe(panel.parentElement); }
     else window.addEventListener("resize", apply);
   }
 
