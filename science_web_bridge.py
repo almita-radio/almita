@@ -1897,6 +1897,14 @@ def cmd_run(args) -> int:
 
     _progress("rendering figures (A, B, C, uncertainty, exports)")
     exports, unc_kind = render_all_maps(built, cfg, filtered.campaign_id, filtered.reduce_session_id, maps_dir)
+    # BL-099: what HI4PI says this same area should look like, in the same frame/angle/extent - shown right under
+    # the A/B/C combined export. Comparison only; a missing HI4PI file is reported, never an error.
+    _progress("HI4PI expected map in the same frame (comparison only)")
+    import hi4pi_expected
+    hi4pi = hi4pi_expected.expected_products(built, cfg, maps_dir)
+    if hi4pi.get("status") == "OK":
+        exports["map_hi4pi_expected"] = hi4pi["files"]
+    _progress(f"HI4PI expected: {hi4pi.get('status')}" + (f" ({hi4pi.get('reason')})" if hi4pi.get("reason") else ""))
     _progress("writing points.csv, board.json and the manifest")
     spatial_confidence = spatial_confidence_summary(built)
 
@@ -1951,6 +1959,7 @@ def cmd_run(args) -> int:
         "loo_cross_validation": built["loo_cross_validation"],
         "bc_exact_coordinate_consistency": built["bc_exact_coordinate_consistency"],
         "thermal_drift": thermal,
+        "hi4pi_expected": hi4pi,
         "exports": exports, "points_csv": "points.csv",
         "started_utc": t0.isoformat(), "ended_utc": datetime.now(timezone.utc).isoformat(),
         "status": "COMPLETED",

@@ -407,6 +407,20 @@
       const combinedUrl = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_abc_combined.png")}`;
       $("img-abc-combined").src = combinedUrl; $("link-abc-combined").href = combinedUrl;
     }
+    // BL-099: HI4PI expected in the same frame, right under the A/B/C (comparison of SHAPES only)
+    const hi = manifest.hi4pi_expected || null;
+    const hiOk = !!(hi && hi.status === "OK" && (manifest.exports || {}).map_hi4pi_expected);
+    $("link-hi4pi").hidden = !hiOk;
+    if (hiOk) {
+      const hiUrl = `/api/ops/file?path=${encodeURIComponent(od + "/maps/map_hi4pi_expected.png")}`;
+      $("img-hi4pi").src = hiUrl; $("link-hi4pi").href = hiUrl;
+      $("hi4pi-note").textContent = `HI4PI through a ${hi.beam_fwhm_deg}° beam · shape vs measured A: `
+        + (hi.correlation_with_a === null || hi.correlation_with_a === undefined ? "n/a" : `r = ${Number(hi.correlation_with_a).toFixed(2)} (${hi.n_points_compared} points)`)
+        + ` · units ${hi.units} - compare shapes, not values. ${hi.velocity_note || ""}`;
+    } else {
+      $("hi4pi-note").textContent = hi ? `HI4PI comparison not drawn: ${hi.status}${hi.reason ? " - " + hi.reason : ""}`
+                                       : "HI4PI comparison not available for this run (made before BL-099).";
+    }
 
     const artifacts = $("results-artifacts"); artifacts.textContent = "";
     const files = ["manifest.json", "config.json", "provenance.json", "points.csv", "maps/board.json"];
