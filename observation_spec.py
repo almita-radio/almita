@@ -168,11 +168,18 @@ def _validate_grid(raw: dict) -> dict:
 
 def _validate_capture(raw: dict) -> dict:
     where = "capture"
-    _require_keys(raw, ("seconds", "settle_seconds"), where)
-    return {
+    _require_keys(raw, ("seconds", "settle_seconds", "frequency_switching"), where)
+    out = {
         "seconds": _num(raw, "seconds", where, min_value=0.1),
         "settle_seconds": _num(raw, "settle_seconds", where, min_value=0.0),
     }
+    # BL-100 (operator 2026-11-09): optional frequency switching (capture.py --fswitch). Only written when true, so
+    # an unswitched spec resolves - and hashes - exactly as before.
+    if _bool(raw, "frequency_switching", where, required=False, default=False):
+        _require(out["seconds"] >= 4.0, f"{where}.seconds: frequency switching needs at least 4 s per point "
+                                         "(one A and one B dwell of 2 s)")
+        out["frequency_switching"] = True
+    return out
 
 
 def _validate_main(raw: dict) -> dict:
@@ -228,7 +235,7 @@ def _validate_rfi_ref(raw: dict) -> dict:
     return {"enabled": enabled, "serial": serial, "gain_db": gain_db, "bias_tee": bias_tee}
 
 
-def _validate_quicklook(raw: dict) -> dict:
+def _validate_quicklook(raw: dict, frequency_switching: bool = False) -> dict:
     where = "quicklook"
     allowed = ("enabled", "native_grid", "interpolated_preview", "calibration_profile_path")
     _require_keys(raw, allowed, where)
@@ -236,7 +243,7 @@ def _validate_quicklook(raw: dict) -> dict:
     native_grid = _bool(raw, "native_grid", where, required=False, default=True)
     interpolated_preview = _bool(raw, "interpolated_preview", where, required=False, default=False)
     calibration_profile_path = _str(raw, "calibration_profile_path", where, required=False, default=None)
-    if enabled:
+    if enabled and not frequency_switching:   # BL-100: a switched capture is folded without any profile
         _require(calibration_profile_path is not None,
                   f"{where}.calibration_profile_path: required when quicklook.enabled=true")
     return {
@@ -271,14 +278,15 @@ def validate_spec_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
     missing = _ALLOWED_TOP_LEVEL - set(raw.keys())
     _require(not missing, f"observation spec: missing top-level section(s) {sorted(missing)}")
 
+    capture = _validate_capture(raw["capture"])
     return {
         "schema_version": SCHEMA_VERSION,
         "session": _validate_session(raw["session"]),
         "grid": _validate_grid(raw["grid"]),
-        "capture": _validate_capture(raw["capture"]),
+        "capture": capture,
         "main": _validate_main(raw["main"]),
         "rfi_ref": _validate_rfi_ref(raw["rfi_ref"]),
-        "quicklook": _validate_quicklook(raw["quicklook"]),
+        "quicklook": _validate_quicklook(raw["quicklook"], bool(capture.get("frequency_switching"))),
         "console": _validate_console(raw["console"]),
         "execution": _validate_execution(raw["execution"]),
     }

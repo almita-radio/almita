@@ -38,7 +38,8 @@ OPS_DIR = ROOT / "data" / "runtime" / "web_ops"
 PY = sys.executable
 DATA = ROOT / "data"
 SERVE_ROOTS = {"mosaic": DATA / "mosaic", "reduced": DATA / "reduced", "science": DATA / "science", "alignment": DATA / "alignment",
-               "calibration": DATA / "calibration", "web_ops": OPS_DIR, "lobe": DATA / "lobe"}
+               "calibration": DATA / "calibration", "web_ops": OPS_DIR, "lobe": DATA / "lobe",
+               "fswitch": DATA / "fswitch"}
 SERVE_SUFFIXES = {".png": "image/png", ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain", ".log": "text/plain", ".md": "text/plain",
                   ".svg": "image/svg+xml", ".pdf": "application/pdf"}
 MAX_SERVE_BYTES = 25 * 1024 * 1024
@@ -568,7 +569,10 @@ STAGES: Dict[str, Dict[str, Any]] = {
     # LOBE: the beam from a solar transit (lobe_transit.py). Real GOTO + real MAIN captures: the same real-preflight
     # and typed-MOVE gate as ALIGN's RUN, plus a valid real solar ALIGN (lobe_alignment()), checked in build_command.
     "lobe": {"physical": True, "resources": ("mount", "sdr")},
+    # STATUS · HYDROGEN LINE (frequency switching, fswitch.py, BL-100): MAIN only, the antenna stays where it is.
+    "fswitch": {"physical": False, "resources": ("sdr",)},
 }
+FSWITCH_CYCLES = (6, 12, 24, 48)          # ~25 s, ~50 s, ~100 s, ~200 s (95 % of the time recording)
 
 
 def _float(p: Dict[str, Any], key: str, lo: float, hi: float, default: Optional[float] = None) -> Optional[float]:
@@ -1091,6 +1095,17 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             argv += ["--output-root", str(SERVE_ROOTS["science"].relative_to(ROOT))]
             _require_fresh_plan("science_heatmaps", meta, p)
         return argv, meta
+    if stage == "fswitch":
+        cycles = int(p.get("cycles", 24))
+        if cycles not in FSWITCH_CYCLES:
+            raise ValueError(f"cycles must be one of {FSWITCH_CYCLES}")
+        import transit_logger
+        held = transit_logger.sdr_process_busy()                  # processes started outside the web (capture.py, a manual fswitch...)
+        if held:
+            raise OpsBlocked(f"MAIN is in use by {held}")
+        out = f"data/fswitch/WEB-{stamp}"
+        return ([PY, "fswitch.py", "--cycles", str(cycles), "--out-dir", out, "--web-job", job_id],
+                {"output_dir": out, "cycles": cycles})
     if stage == "lobe":
         mode = str(p.get("mode", "drift"))
         if mode not in ("drift", "scan"):
@@ -1371,6 +1386,27 @@ def set_lna_power(on: bool) -> Dict[str, Any]:
     return lna_power_state()
 
 
+# ------------------------------------------------------------------ HYDROGEN LINE from STATUS (frequency switching, BL-100)
+def _r2(v: Any, nd: int = 2) -> Any:
+    return round(float(v), nd) if isinstance(v, (int, float)) else None
+
+
+def fswitch_state() -> Dict[str, Any]:
+    """The newest frequency-switching result (web or manual; the settling measurements are not results) and the
+    cycle choices. Read-only."""
+    root = SERVE_ROOTS["fswitch"]
+    runs = sorted((d for d in root.iterdir() if d.is_dir() and not d.name.startswith("settle_") and (d / "folded.json").is_file()),
+                  key=lambda d: (d / "folded.json").stat().st_mtime) if root.is_dir() else []
+    last = None
+    if runs:
+        d = runs[-1]
+        last = _read_json(d / "folded.json")
+        if last is not None:
+            last["dir"] = str(d.relative_to(ROOT))
+            last["png"] = str((d / "fswitch.png").relative_to(ROOT)) if (d / "fswitch.png").is_file() else None
+    return {"last": last, "cycles": list(FSWITCH_CYCLES), "default_cycles": 24, "seconds_per_cycle": 4.2}
+
+
 # ------------------------------------------------------------------ LOCAL RFI CHECK from STATUS (operator 2026-10-29)
 def rfi_check_state() -> Dict[str, Any]:
     import local_rfi_check
@@ -1390,6 +1426,10 @@ def run_rfi_check(gain_db: float) -> Dict[str, Any]:
     held = busy_reason(("sdr",))
     if held:
         raise OpsBlocked(f"cannot check now: {held}")
+    import transit_logger
+    held = transit_logger.sdr_process_busy()
+    if held:
+        raise OpsBlocked(f"cannot check now: MAIN is in use by {held}")
     held = observation_orchestrator.active_campaign_reason(observation_orchestrator.get_status().get("orchestrator") or {})
     if held:
         raise OpsBlocked(f"cannot check now: an observation is active - {held}")
@@ -1861,6 +1901,19 @@ def classify(j: Dict[str, Any]) -> Dict[str, Any]:
                 out["verdict"] = "PASS" if status == "COMPLETED" else "FAIL"
                 out["detail"] = (f"SCIENCE HEATMAPS {status} - {blob.get('n_points_used')} point(s) used, "
                                  f"calibration_level_filter={blob.get('calibration_level_filter')}")
+    if stage == "fswitch":
+        out["output_dir"] = (j.get("meta") or {}).get("output_dir")
+        run = _read_json(ROOT / out["output_dir"] / "run.json") if out["output_dir"] else None
+        if run:
+            r, eff, ack = run.get("result") or {}, run.get("efficiency") or {}, run.get("lo_acknowledged") or {}
+            out["facts"] = {"band_shape_pct": _r2(r.get("ripple_band_shape_pct")), "off_line_rms_pct": _r2(r.get("off_line_rms_pct"), 3),
+                            "line_window_pct": _r2(r.get("line_excess_pct"), 3), "recording_fraction": eff.get("fraction"),
+                            "both_LOs_acknowledged": bool(ack.get("f_a") and ack.get("f_b"))}
+            if state == "EXITED":
+                ok = j.get("exit_code") == 0 and out["facts"]["both_LOs_acknowledged"]
+                out["verdict"] = "PASS" if ok else "FAIL"
+                out["detail"] = (f"folded spectrum ±{out['facts']['off_line_rms_pct']} % off the line (receiver band shape "
+                                 f"±{out['facts']['band_shape_pct']} %)" if ok else "run finished without both LOs acknowledged")
     if stage == "lobe":
         out["output_dir"] = (j.get("meta") or {}).get("output_dir")
         res = _read_json(ROOT / out["output_dir"] / "lobe_result.json") if out["output_dir"] else None

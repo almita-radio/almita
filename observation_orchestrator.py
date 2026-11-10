@@ -260,6 +260,8 @@ def _capture_args(plan: Dict[str, Any], runtime_dir: str, device_name: Optional[
     if device_name:
         # without it capture.py takes the session observer_config.json's hardware.telescope (the real mount)
         args += ["--device", device_name]
+    if plan["requested"]["capture"].get("frequency_switching"):
+        args.append("--fswitch")      # BL-100: every point frequency-switched (capture.py --fswitch)
     if plan["rfi_ref"]["enabled"]:
         args += [
             "--rfi-ref-enabled",
@@ -272,10 +274,12 @@ def _capture_args(plan: Dict[str, Any], runtime_dir: str, device_name: Optional[
 
 
 def _quicklook_args(plan: Dict[str, Any], session_dir: str, output_dir: str, runtime_dir: str) -> List[str]:
+    profile = plan["quicklook"].get("calibration_profile_path")
     return [
         sys.executable, str(Path(__file__).resolve().parent / "quicklook_live.py"),
         "--session-dir", session_dir,
-        "--calibration-profile", plan["quicklook"]["calibration_profile_path"],
+        # BL-100: a frequency-switched run may have no profile (QUICKLOOK folds the switched captures without one)
+        *(["--calibration-profile", profile] if profile else []),
         "--output-dir", output_dir,
         "--runtime-dir", runtime_dir,
     ]

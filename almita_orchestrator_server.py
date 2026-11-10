@@ -406,6 +406,8 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.lna_power_state()})
             if path == "/api/sdr/rfi_check":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.rfi_check_state()})
+            if path == "/api/sdr/fswitch":
+                return _json_response(self, 200, {"ok": True, "data": almita_web_ops.fswitch_state()})
             if path == "/api/ops/campaigns":
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.campaigns()})
             if path == "/api/ops/reduce/captures":

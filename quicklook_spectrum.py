@@ -291,6 +291,135 @@ def generate_quicklook(
     return document, arrays
 
 
+def is_switched_capture(source_hdf5: str | Path) -> bool:
+    """A frequency-switched capture (capture.py --fswitch, BL-100) carries its segment table as an attribute."""
+    try:
+        with h5py.File(source_hdf5, "r") as capture:
+            return "fswitch_segments_json" in capture.attrs
+    except OSError:
+        return False
+
+
+SWITCHED_DISPLAY_SMOOTH_HZ = 20e3     # display only (~4 km/s): the stored arrays stay at the native channel width
+
+
+def _write_switched_velocity_plot(output: Path, document: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+    """Replaces quicklook_fractional_excess.png for a switched capture: folded excess (%) against topocentric radial
+    velocity, native channels faint and a 20 kHz running mean on top - with 293 Hz channels and a few seconds the
+    native channels are noise-dominated, while the HI line is tens of kHz wide."""
+    f = arrays["frequency_hz"]; valid = arrays["valid_mask"]; t = arrays["fractional_excess"] * 100.0
+    v = (HI_REST_HZ - f) / HI_REST_HZ * 299792.458
+    width = max(1, int(round(SWITCHED_DISPLAY_SMOOTH_HZ / float(np.median(np.diff(f))))))
+    kernel = np.ones(width)
+    num = np.convolve(np.where(valid, t, 0.0), kernel, "same"); den = np.convolve(valid.astype(float), kernel, "same")
+    smooth = np.where(den >= width / 2, num / np.maximum(den, 1), np.nan)
+    figure, axis = plt.subplots(figsize=(12, 6))
+    axis.plot(v[valid], t[valid], linewidth=0.4, color="tab:gray", alpha=0.35, label="native channels")
+    axis.plot(v, smooth, linewidth=1.6, color="tab:purple", label=f"running mean {SWITCHED_DISPLAY_SMOOTH_HZ / 1e3:.0f} kHz (display only)")
+    axis.axhline(0, color="black", linewidth=0.6)
+    axis.axvline(0, color="tab:green", linestyle="--", linewidth=1, label="HI rest (0 km/s topocentric)")
+    finite = smooth[np.isfinite(smooth)]
+    if finite.size:
+        lim = max(0.2, 1.5 * float(np.max(np.abs(np.percentile(finite, [0.5, 99.5])))))
+        axis.set_ylim(-lim, lim)
+    axis.set_xlim(float(np.nanmin(v)), float(np.nanmax(v)))
+    axis.set(xlabel="Radial velocity, topocentric (km/s)", ylabel="Folded excess (% of system level)",
+             title="ALMITA — Quicklook · FREQUENCY SWITCHED (folded, no calibration profile)")
+    axis.text(0.01, 0.01, f"UTC {document['capture_utc']}   duration {document['capture_duration_seconds']:.1f} s   "
+              f"LO {document['fswitch'].get('f_a_hz', 0) / 1e6:.4f} / {document['fswitch'].get('f_b_hz', 0) / 1e6:.4f} MHz",
+              transform=axis.transAxes, fontsize=8)
+    axis.grid(True, alpha=0.3); axis.legend(fontsize=8, loc="upper right")
+    figure.tight_layout(); figure.savefig(output / "quicklook_fractional_excess.png", dpi=150); plt.close(figure)
+
+
+def generate_quicklook_switched(source_hdf5: str | Path, output_dir: str | Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    """QUICKLOOK of a frequency-switched capture (BL-100, operator 2026-11-09): the folded spectrum REDUCE itself
+    computes (reduce_engine.fswitch_fold), so no calibration profile is needed - the switching cancels the band shape.
+    Same document keys and PNGs as generate_quicklook(); the axis is the folded band (f0 +/- 0.4 MHz)."""
+    total_start = time.perf_counter()
+    source = Path(source_hdf5)
+    if source.name.endswith(".part") or not source.is_file():
+        raise QuicklookError(f"source HDF5 not usable: {source}")
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    sha_before = _sha256(source)
+    capture_metadata = _capture_metadata(source)
+    from reduce_engine import fswitch_fold
+    from reduce_engine.config import ReduceConfig
+    from reduce_engine.ingest import read_capture
+    started = time.perf_counter()
+    iq, attrs = read_capture(source)
+    sw = fswitch_fold.switched_spectrum(iq, attrs, ReduceConfig())
+    del iq
+    fold_seconds = time.perf_counter() - started
+    valid = np.isfinite(sw.fractional) & np.isfinite(sw.uncertainty) & (sw.mask == 0)
+    fractional = np.where(valid, sw.fractional, 0.0)
+    uncertainty = np.where(valid, sw.uncertainty, 0.0)
+    arrays = {
+        "frequency_hz": np.asarray(sw.frequency_hz, float),
+        "relative_psd_db": 10.0 * np.log10(np.clip(1.0 + fractional, 1e-6, None)),
+        "fractional_excess": fractional, "fractional_uncertainty": uncertainty, "valid_mask": valid,
+        "dc_mask": np.zeros(valid.size, bool), "spur_mask": np.zeros(valid.size, bool),
+    }
+    residual = fractional[valid]
+    median = float(np.median(residual)) if residual.size else 0.0
+    gain_value = capture_metadata.get("gain_requested_db", capture_metadata.get("gain"))
+    try:
+        gain_db = float(gain_value)
+    except (TypeError, ValueError):
+        gain_db = float("nan")
+    document = {
+        "schema_version": SCHEMA_VERSION, "status": "SUCCESS", "source_hdf5": str(source),
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "capture_utc": capture_metadata.get("capture_start_utc", capture_metadata.get("created_at")),
+        "environment": capture_metadata.get("environment", "UNKNOWN"),
+        "astronomical_interpretation": "NOT_PERMITTED" if capture_metadata.get("environment") == "INDOOR_DEPARTMENT" else "NOT_ASSERTED",
+        "calibration_level": "UNCALIBRATED", "absolute_calibration": False,
+        "frequency_switched": True, "fswitch": {k: v for k, v in sw.info.items() if k != "fft"},
+        "calibration_profile": None,
+        "compatibility": {"status": "NOT_APPLICABLE_FREQUENCY_SWITCHED",
+                          "reason": "frequency switching cancels the band shape: no calibration profile is used"},
+        "center_frequency_hz": int(capture_metadata["center_frequency_hz"]),
+        "sample_rate_hz": int(capture_metadata["sample_rate_hz"]),
+        "gain_db": gain_db,
+        "capture_duration_seconds": float(capture_metadata.get("duration_seconds", capture_metadata.get("capture_time_seconds", 0))),
+        "fft_size": int(sw.info.get("fft", {}).get("fft_size", 0) or 0),
+        "processing": {"sample_fraction": 1.0, "sample_selection": "FULL_CAPTURE_FREQUENCY_SWITCHED_FOLD (reduce_engine.fswitch_fold)",
+                       "reference_scale_mode": "none", "autoscale_percentiles": [1.0, 99.0]},
+        "frequency_hz": arrays["frequency_hz"].tolist(), "relative_psd_db": arrays["relative_psd_db"].tolist(),
+        "fractional_excess": fractional.tolist(), "fractional_uncertainty": uncertainty.tolist(),
+        "valid_mask": valid.tolist(), "dc_mask": arrays["dc_mask"].tolist(), "spur_mask": arrays["spur_mask"].tolist(),
+        "masked_fraction": float(1.0 - np.mean(valid)),
+        "quicklook_metrics": {
+            "valid_fraction": float(np.mean(valid)), "masked_fraction": float(1.0 - np.mean(valid)),
+            "median_fractional_excess": median,
+            "robust_sigma_fractional_excess": float(1.4826 * np.median(np.abs(residual - median))) if residual.size else None,
+            "max_positive_fractional_excess": float(np.max(residual)) if residual.size else None,
+            "min_fractional_excess": float(np.min(residual)) if residual.size else None,
+        },
+        "known_limitations": ["frequency-switched: folded band f0 +/- 0.4 MHz (+/-84 km/s topocentric) only",
+                              "relative only (fraction of the system level), no calibration profile",
+                              "no spectral feature is identified as astronomical HI",
+                              "indoor captures permit no astronomical interpretation"],
+        "performance": {"hdf5_read_and_calibration_seconds": fold_seconds, "json_serialization_seconds": None,
+                        "png_generation_seconds": None, "total_seconds": None, "peak_rss_mib": None, "json_bytes": None,
+                        "spectrum_png_bytes": None, "fractional_png_bytes": None},
+        "integrity": {"source_hdf5_sha256": sha_before, "unchanged": None},
+    }
+    png_start = time.perf_counter()
+    _write_plots(output, document, arrays, capture_metadata)
+    _write_switched_velocity_plot(output, document, arrays)
+    document["performance"]["png_generation_seconds"] = time.perf_counter() - png_start
+    document["integrity"]["unchanged"] = sha_before == _sha256(source)
+    document["performance"]["total_seconds"] = time.perf_counter() - total_start
+    document["performance"]["peak_rss_mib"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    json_path = output / "quicklook_spectrum.json"
+    json_path.write_text(json.dumps(document, separators=(",", ":")))
+    document["performance"]["json_bytes"] = json_path.stat().st_size
+    json_path.write_text(json.dumps(document, separators=(",", ":")))
+    return document, arrays
+
+
 def validate_against_calibration_foundation(
     document: dict[str, Any], arrays: dict[str, np.ndarray], source_hdf5: str | Path,
     calibration_profile: str | Path,

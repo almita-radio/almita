@@ -76,7 +76,15 @@ class MaskedReduce:
 
     def read_capture(self, original, path, *a, **k):
         self.current, self.current_mask = Path(path), None
-        return original(path, *a, **k)
+        out = original(path, *a, **k)
+        attrs = out[1] if isinstance(out, tuple) and len(out) > 1 else {}
+        if isinstance(attrs, dict) and attrs.get("fswitch_segments_json") is not None:
+            # BL-100: a frequency-switched capture - its frames and channels are two LOs, not the mask's single-LO grid,
+            # so the mask cannot be mapped onto it: it is reduced unmasked, and the report says so
+            self.points[str(self.current)] = {"capture": str(self.current), "applied": False,
+                                              "reason": "frequency-switched capture: RFI mask not applicable"}
+            self.current = None
+        return out
 
     def estimate_spectrum(self, original, iq_bytes, *, sample_rate_hz, center_frequency_hz, config):
         est = original(iq_bytes, sample_rate_hz=sample_rate_hz, center_frequency_hz=center_frequency_hz, config=config)

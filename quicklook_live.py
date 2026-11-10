@@ -24,7 +24,7 @@ from quicklook_map import (MapError, build_native_grid_document, find_grid_direc
 from quicklook_map_interpolated_preview import (build_interpolated_preview_document,
                                                 write_interpolated_preview_png)
 from quicklook_session_waterfall import update_session_waterfall
-from quicklook_spectrum import generate_quicklook
+from quicklook_spectrum import generate_quicklook, generate_quicklook_switched, is_switched_capture
 from quicklook_waterfall import generate_waterfall
 from rfi_occupancy_map import (build_rfi_occupancy_map_document, correlate_rfi_with_points,
                                read_point_timing, read_rfi_history, write_rfi_occupancy_png)
@@ -123,7 +123,10 @@ class QuicklookLive:
         # Console announcement is opt-in (None by default): direct construction
         # (e.g. in tests) never writes outside of what the caller controls.
         self.runtime_dir=Path(runtime_dir) if runtime_dir else None
-        self.profile_path=Path(profile_path); self.profile=load_calibration_profile(profile_path)
+        # BL-100: a frequency-switched session needs no profile (the switching cancels the band shape); without one,
+        # an unswitched capture is skipped as NO_PROFILE instead of failing the whole Quicklook
+        self.profile_path=Path(profile_path) if profile_path else None
+        self.profile=load_calibration_profile(profile_path) if profile_path else None
         self.poll_interval=float(poll_interval); self.session_id=resolve_session_id(self.session_dir)
         self.state_path=self.output/"quicklook_live_state.json"; self.status_path=self.output/"quicklook_live_status.json"
         self.log_path=self.output/"quicklook_live.log"; self.state=load_state(self.state_path,self.session_id)
@@ -230,6 +233,12 @@ class QuicklookLive:
         point_id=row["point_id"]; started=time.perf_counter(); point_dir=self.output/"points"/point_id
         point_dir.mkdir(parents=True,exist_ok=True); _log(self.log_path,"NEW SUCCESS",point_id)
         source_hash_before=sha256(source)
+        if is_switched_capture(source):
+            return self._process_switched(row,source,point_id,point_dir,started,source_hash_before)
+        if self.profile is None:
+            self.state["points"][point_id]={"result":"NO_PROFILE","reason":"no calibration profile and the capture is not frequency-switched",
+              "source_hdf5":str(source),"fingerprint":_fingerprint(source),"products":{}}
+            _log(self.log_path,"SKIP NO_PROFILE",point_id);return
         compatibility=check_calibration_compatibility(self.profile,source)
         if compatibility["status"]!="COMPATIBLE":
             self.state["points"][point_id]={"result":compatibility["status"],"reason":compatibility["reason"],
@@ -282,6 +291,48 @@ class QuicklookLive:
           "total_seconds":time.perf_counter()-started}
         self.performance.append(record);self.state["performance_history"].append(record)
 
+    def _process_switched(self,row,source,point_id,point_dir,started,source_hash_before)->None:
+        """BL-100: the folded spectrum (no profile, no per-point waterfall); map value = mean excess over the central
+        +/-250 kHz (~+/-53 km/s topocentric), where the Galactic HI is."""
+        spectrum_start=time.perf_counter();_log(self.log_path,"PROCESS SPECTRUM (FREQUENCY SWITCHED)",point_id)
+        spectrum,arrays=generate_quicklook_switched(source,point_dir/"spectrum")
+        spectrum_seconds=time.perf_counter()-spectrum_start
+        frequency=np.asarray(arrays["frequency_hz"]);usable=np.asarray(arrays["valid_mask"],dtype=bool)
+        f0=float(spectrum["center_frequency_hz"])
+        win=usable&(np.abs(frequency-f0)<=250e3)
+        values=np.asarray(arrays["fractional_excess"])[win];unc=np.asarray(arrays["fractional_uncertainty"])[win]
+        n_win=int((np.abs(frequency-f0)<=250e3).sum())
+        metric={"map_value":float(values.mean()) if values.size else float("nan"),
+                "map_uncertainty":float(np.sqrt(np.sum(unc**2))/max(values.size,1)),
+                "valid_fraction":values.size/max(n_win,1),"masked_fraction":1-values.size/max(n_win,1)}
+        try:
+            update_session_waterfall(self.output,session_id=self.session_id,point_id=point_id,
+              frequency_hz=frequency,relative_db=arrays["relative_psd_db"],valid_mask=usable)
+        except Exception:
+            _log(self.log_path,"SESSION WATERFALL FAILED",point_id)
+        del arrays,frequency,usable;gc.collect()
+        map_point=None;warning=None
+        try:
+            ra=float(row["ra_deg"]);dec=float(row["dec_deg"]);source_kind=row.get("coordinate_source") or "UNKNOWN"
+            if not (0<=ra<360 and -90<=dec<=90) or not np.isfinite(metric["map_value"]): raise ValueError
+            map_point={"ra_deg":ra,"dec_deg":dec,"coordinate_source":source_kind,**metric}
+        except (ValueError,KeyError): warning="MISSING_POSITION_METADATA"
+        pub=time.perf_counter()
+        for src,dest in {"spectrum/quicklook_spectrum.json":"latest_spectrum.json","spectrum/quicklook_spectrum.png":"latest_spectrum.png",
+                         "spectrum/quicklook_fractional_excess.png":"latest_fractional_excess.png"}.items():
+            atomic_copy(point_dir/src,self.output/dest)
+        publication_seconds=time.perf_counter()-pub
+        self.state["points"][point_id]={"result":"PROCESSED","frequency_switched":True,"source_hdf5":str(source),"fingerprint":_fingerprint(source),
+          "products":{"spectrum_json":str(point_dir/"spectrum/quicklook_spectrum.json"),
+            "spectrum_png":str(point_dir/"spectrum/quicklook_spectrum.png"),
+            "fractional_excess_png":str(point_dir/"spectrum/quicklook_fractional_excess.png")},
+          "map_point":map_point,"warning":warning,"environment":row.get("environment") or spectrum.get("environment","UNKNOWN"),
+          "source_sha256":source_hash_before,"source_unchanged":source_hash_before==sha256(source),"processed_utc":utcnow()}
+        map_seconds=self._update_map();self.state["last_success_point"]=point_id
+        record={"point_id":point_id,"spectrum_seconds":spectrum_seconds,"waterfall_seconds":0.0,"session_waterfall_seconds":0.0,
+          "map_seconds":map_seconds,"publication_seconds":publication_seconds,"total_seconds":time.perf_counter()-started}
+        self.performance.append(record);self.state["performance_history"].append(record)
+
     def scan_once(self)->dict[str,Any]:
         discovery=time.perf_counter(); rows=read_manifest(self.session_dir); discovery_seconds=time.perf_counter()-discovery
         seen_ids={}; queue=[]
@@ -327,7 +378,7 @@ class QuicklookLive:
         environment=environments.pop() if len(environments)==1 else ("UNKNOWN" if not environments else "MIXED_OR_UNKNOWN")
         status={"schema_version":"1.0","status":"DEGRADED" if errors or skipped or warnings or backlog_initial>1 else ("OK" if processed else "IDLE"),
           "session_id":self.session_id,"created_utc":self.state["created_utc"],"updated_utc":utcnow(),
-          "poll_interval_seconds":self.poll_interval,"calibration_profile":str(self.profile_path.with_suffix("")),
+          "poll_interval_seconds":self.poll_interval,"calibration_profile":str(self.profile_path.with_suffix("")) if self.profile_path else None,
           "calibration_level":"RELATIVE_INSTRUMENTAL","absolute_calibration":False,"environment":environment,
           "astronomical_interpretation":"NOT_PERMITTED" if environment=="INDOOR_DEPARTMENT" else "NOT_ASSERTED",
           "points_seen":len(rows),"points_success":sum(r.get("status","").upper()=="SUCCESS" for r in rows),
@@ -396,7 +447,7 @@ class QuicklookLive:
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--session-dir",required=True);parser.add_argument("--calibration-profile",required=True)
+    parser.add_argument("--session-dir",required=True);parser.add_argument("--calibration-profile",default=None,help="required unless the session is frequency-switched (BL-100)")
     parser.add_argument("--output-dir",required=True);parser.add_argument("--poll-interval",type=float,default=1.0)
     parser.add_argument("--once",action="store_true")
     parser.add_argument("--runtime-dir",default=DEFAULT_RUNTIME_DIR,

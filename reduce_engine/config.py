@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
-PIPELINE_VERSION = "reduce-v1.0"
+PIPELINE_VERSION = "reduce-v1.1"   # v1.1 (2026-11-09, BL-100): frequency-switched captures folded; others unchanged
 
 
 @dataclass(frozen=True)

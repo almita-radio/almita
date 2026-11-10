@@ -47,7 +47,8 @@ CLEARED_NAME = "transit_cleared.json"     # CLEAR on the page: the graphs start 
 WINDOW_MIN = 180                       # what the page shows at most
 FIELDS = ("utc", "status", "power_db", "power_lin", "clipping_fraction", "adc_std_codes", "gain_db",
           "sun_alt_deg", "sun_az_deg", "pi_temp_c", "error")
-SDR_PROCESSES = ("capture.py", "local_rfi_check.py", "lobe_transit.py")   # SDR users outside the web job list
+SDR_PROCESSES = ("capture.py", "local_rfi_check.py", "lobe_transit.py",    # SDR users outside the web job list
+                 "fswitch.py", "fswitch_settle.py")
 
 
 SPECTRUM_NFFT = 8192                   # same frame length as rfi_mask / REDUCE: 293 Hz bins at 2.4 MS/s
@@ -130,15 +131,26 @@ def code_commit() -> Optional[str]:
         return None
 
 
-def sdr_busy() -> Optional[str]:
-    """Who else is using the SDR right now, or None."""
+def sdr_process_busy() -> Optional[str]:
+    """An SDR-using program started outside the web job list (capture.py, a manual fswitch.py...), never this process."""
+    me = os.getpid()
     for name in SDR_PROCESSES:
         r = subprocess.run(["pgrep", "-f", f"python[0-9.]* .*{name}"], capture_output=True, text=True)
-        if r.returncode == 0:
+        pids = (r.stdout or "").split()
+        if r.returncode == 0 and (not pids or any(int(p) != me for p in pids)):
             return name
+    return None
+
+
+def sdr_busy(ignore_job_id: Optional[str] = None) -> Optional[str]:
+    """Who else is using the SDR right now, or None. The calling process never counts as "else" (fswitch.py asks
+    this about itself), nor does the web job it runs under (ignore_job_id)."""
+    held = sdr_process_busy()
+    if held:
+        return held
     try:
         import almita_web_ops
-        jobs = almita_web_ops.running_jobs()
+        jobs = [j for j in almita_web_ops.running_jobs() if ignore_job_id is None or j.get("job_id") != ignore_job_id]
     except Exception:  # noqa: BLE001 - no job list: rely on the process check above
         jobs = []
     return f"web job {jobs[0].get('stage')}" if jobs else None

@@ -122,7 +122,8 @@ class CaptureExecutor:
                  rfi_ref_gain_db: float = 25.0,
                  rfi_ref_port: int = 1235,
                  rfi_ref_serial: str = "00000002",
-                 rfi_ref_bias_tee: bool = False):
+                 rfi_ref_bias_tee: bool = False,
+                 frequency_switching: bool = False):
         """
         Initialize capture executor
 
@@ -174,6 +175,9 @@ class CaptureExecutor:
         if input_topology not in INPUT_TOPOLOGIES.values():
             raise ValueError(f"unsupported input topology: {input_topology}")
         self.bias_tee_enabled = bool(bias_tee_enabled)
+        # BL-100 (operator 2026-11-09: "descongela y aplica"): each point frequency-switched (fswitch_capture.py,
+        # ABBA around sdr_freq) instead of one capture at sdr_freq. Off by default: an unswitched run is unchanged.
+        self.frequency_switching = bool(frequency_switching)
         self.sdr = None
         self.sdr_tuning = None   # sdr_tuning record of the explicit tuning (requested / applied / evidence)
 
@@ -1410,7 +1414,11 @@ class CaptureExecutor:
             last_capture_utc=None, session_root=None, quicklook_root=None, error=None,
             mount_device=self.device_name,
             settle_seconds=settle_time, capture_seconds=capture_time,
+            frequency_switching=self.frequency_switching,
         )
+        if self.frequency_switching:
+            self.log("FSWITCH    every point frequency-switched: LO "
+                     f"{(self.sdr_freq - 600e3) / 1e6:.4f} / {(self.sdr_freq + 600e3) / 1e6:.4f} MHz (ABBA)", force=True)
 
         self._live_timing_csv_path = (
             self.csv_path.parent / f"capture_timing_{self.session_id}.csv"
@@ -2102,12 +2110,20 @@ class CaptureExecutor:
                     self.sdr.timing_callback = sdr_timing_callback
                     self._mark("CAPTURE", point_num)
                     try:
-                        sdr_metrics = await self.sdr.capture(
-                            duration=capture_time,
-                            output_file=str(data_path),
-                            sample_rate=self.sdr_sample_rate,
-                            metadata=capture_metadata
-                        )
+                        if self.frequency_switching:
+                            import fswitch_capture
+                            sdr_metrics = await fswitch_capture.capture_point(
+                                self.sdr, f0_hz=int(self.sdr_freq), sample_rate=self.sdr_sample_rate,
+                                gain_db=float(self.sdr_gain_db), duration_s=capture_time,
+                                output_file=str(data_path), metadata=capture_metadata,
+                                log=lambda m: self.log(m, force=True))
+                        else:
+                            sdr_metrics = await self.sdr.capture(
+                                duration=capture_time,
+                                output_file=str(data_path),
+                                sample_rate=self.sdr_sample_rate,
+                                metadata=capture_metadata
+                            )
                     finally:
                         self.sdr.timing_callback = previous_timing_callback
                     capture_hdf_wall_sec = time.perf_counter() - capture_wall_clock
@@ -2602,6 +2618,9 @@ Useful for re-observations or after fixing equipment issues.
                         help='RFI_REF disposable rtl_tcp port (default: 1235)')
     parser.add_argument('--rfi-ref-serial', default='00000002',
                         help='RFI_REF RTL-SDR device serial (default: 00000002)')
+    parser.add_argument('--fswitch', action='store_true',
+                        help='Frequency switching (BL-100): every point recorded ABBA with the LO at sdr-freq -/+ 600 kHz '
+                             '(fswitch_capture.py); REDUCE folds it. Default: off (one capture at sdr-freq)')
     parser.add_argument('--rfi-ref-bias-t', action='store_true',
                         help='Enable bias-tee on the RFI_REF RTL-SDR (V3-only GPIO bias-tee, powers an '
                              'in-line LNA on antenna B; independent of MAIN\'s bias-tee). Default: disabled')
@@ -2697,6 +2716,7 @@ Useful for re-observations or after fixing equipment issues.
             rfi_ref_port=args.rfi_ref_port,
             rfi_ref_serial=args.rfi_ref_serial,
             rfi_ref_bias_tee=args.rfi_ref_bias_t,
+            frequency_switching=args.fswitch,
         )
         executor.compact_console = not executor.verbose
 
@@ -2727,6 +2747,7 @@ Useful for re-observations or after fixing equipment issues.
             rfi_ref_port=args.rfi_ref_port,
             rfi_ref_serial=args.rfi_ref_serial,
             rfi_ref_bias_tee=args.rfi_ref_bias_t,
+            frequency_switching=args.fswitch,
         )
         executor.compact_console = not executor.verbose
 

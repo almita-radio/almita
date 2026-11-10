@@ -351,4 +351,92 @@
     return true;
   }, { intervalMs: 60000 });                      // last 6 h + table, every minute (one sample a minute)
   tempPoller1h.start(); tempPoller6h.start();
+
+  // ---------------------------------------------------------------- HYDROGEN LINE · FREQUENCY SWITCHING (BL-100)
+  // fswitch.py as a web job (resources: MAIN only). The chart is the folded, baselined spectrum on the velocity axis:
+  // a flat trace at the noise level off the line; hydrogen shows as a bump inside the shaded window.
+  let hi = null, hiGeom = null;
+  function drawHi() {
+    const c = $("hi-chart"), r = hi && hi.last;
+    const dpr = U.pixelRatio(), w = c.clientWidth || 800, h = 260;
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    ctx.font = "11px ui-monospace,monospace";
+    if (!r || !r.v_kms || !r.v_kms.length) { ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.fillText(hi ? "no run yet: press RUN SWITCHING" : "loading…", 12, 24); hiGeom = null; return; }
+    const v = r.v_kms, t = r.folded_pct, win = r.line_window_kms || [-30, 40];
+    const v0 = Math.min(...v), v1 = Math.max(...v);
+    const span = Math.max(0.5, Math.ceil(Math.max(...t.map(Math.abs)) * 4) / 4);
+    const lo = -span, hi_ = span;
+    const padL = 48, padR = 12, padT = 10, padB = 24;
+    const x = (u) => padL + ((u - v0) / (v1 - v0)) * (w - padL - padR);
+    const y = (u) => padT + (1 - (Math.max(lo, Math.min(hi_, u)) - lo) / (hi_ - lo)) * (h - padT - padB);
+    ctx.fillStyle = U.cssRgba("--warn", U.isDay() ? 0.16 : 0.12, "#e6b85c");                // where HI is expected
+    ctx.fillRect(x(win[0]), padT, x(win[1]) - x(win[0]), h - padT - padB);
+    ctx.strokeStyle = U.cssRgba("--muted", U.isDay() ? 0.3 : 0.18, "#91a2ad"); ctx.fillStyle = U.cssVar("--muted", "#91a2ad"); ctx.lineWidth = 1;
+    const step = span > 2 ? 1 : span > 1 ? 0.5 : 0.25;
+    for (let u = -Math.floor(span / step) * step; u <= span + 1e-9; u += step) {
+      ctx.beginPath(); ctx.moveTo(padL, y(u)); ctx.lineTo(w - padR, y(u)); ctx.stroke();
+      ctx.textAlign = "right"; ctx.fillText(`${u > 0 ? "+" : ""}${u.toFixed(2)}%`, padL - 4, y(u) + 4);
+    }
+    ctx.textAlign = "center";
+    const tick = w < 700 ? 100 : 50;
+    for (let k = Math.ceil(v0 / tick); k * tick <= v1; k++) ctx.fillText(`${k * tick}`, x(k * tick), h - 6);
+    ctx.textAlign = "left"; ctx.fillText("km/s (topocentric)", w - padR - 120, h - padB - 4);
+    ctx.strokeStyle = U.dataColor("#3987e5"); ctx.lineWidth = 1.2; ctx.beginPath();
+    v.forEach((u, i) => { const px = x(u), py = y(t[i]); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.stroke();
+    hiGeom = { x, v0, v1, padL, padR, w, v, t };
+  }
+  function renderHi(d) {
+    hi = d;
+    const r = d.last, s = r && r.summary, res = s && s.result;
+    const sel = $("hi-cycles");
+    if (!sel.options.length) {
+      for (const n of d.cycles) sel.add(new Option(`${n} cycles · ~${Math.round(n * d.seconds_per_cycle)} s`, String(n)));
+      sel.value = String(d.default_cycles);
+    }
+    if (!res) { U.setBadge($("hi-badge"), "NO RUN YET"); $("hi-detail").textContent = "No frequency-switching run recorded yet."; drawHi(); return; }
+    const ack = s.lo_acknowledged || {}, eff = s.efficiency || {};
+    U.setBadge($("hi-badge"), ack.f_a && ack.f_b ? "PASS" : "FAIL");
+    $("hi-detail").textContent =
+      `receiver band shape ±${res.ripple_band_shape_pct.toFixed(1)} % → folded ±${res.off_line_rms_pct.toFixed(2)} % off the line · `
+      + `line window ${res.line_excess_pct >= 0 ? "+" : ""}${res.line_excess_pct.toFixed(2)} %\n`
+      + `${res.n_a}+${res.n_b} × ${s.dwell_s} s · LO ${(s.f_a_hz / 1e6).toFixed(4)} / ${(s.f_b_hz / 1e6).toFixed(4)} MHz `
+      + `${ack.f_a && ack.f_b ? "(both acknowledged by rtl_tcp)" : "(NOT both acknowledged)"} · gain ${s.gain_db} dB · `
+      + `ADC rms ${s.adc_rms_range ? s.adc_rms_range[0].toFixed(1) : "?"}`
+      + (eff.fraction ? ` · ${Math.round(100 * eff.fraction)} % of the time recording` : "")
+      + `\n${U.utc(s.started_utc)} · ${r.dir}`
+      + "\nthe antenna position is not recorded here: read it as wherever it was pointing";
+    drawHi();
+  }
+  async function loadHi() {
+    const r = await U.api("/api/sdr/fswitch", { timeoutMs: 15000 });
+    if (r.ok) renderHi(r.data.data);
+  }
+  const hiJob = U.jobPanel($("hi-job"), null, {
+    stopLabel: "STOP SWITCHING",
+    onEnd: () => { loadHi(); },
+    onError: (err) => { if (err) window.alert("SWITCHING NOT RUN: " + U.errorText(err)); },
+  });
+  $("btn-hi").addEventListener("click", U.guard($("btn-hi"), async () => {
+    const n = Number($("hi-cycles").value), secs = Math.round(n * ((hi && hi.seconds_per_cycle) || 4.2));
+    if (!window.confirm(`Run frequency switching now?\n\nMAIN records ~${secs} s, alternating its tuning 600 kHz below and above the line (the LNA is switched on). The mount is not moved: point the antenna first. Refused while anything else uses MAIN.`)) return;
+    await hiJob.start("fswitch", { cycles: n });
+  }, "STARTING…"));
+  $("hi-chart").addEventListener("mousemove", (ev) => {
+    const g = hiGeom, tip = $("hi-tip");
+    if (!g) { tip.hidden = true; return; }
+    const mx = U.pointerXY(ev, $("hi-chart")).x;
+    if (mx < g.padL || mx > g.w - g.padR) { tip.hidden = true; return; }
+    const vq = g.v0 + ((mx - g.padL) / (g.w - g.padL - g.padR)) * (g.v1 - g.v0);
+    let best = 0;
+    for (let i = 1; i < g.v.length; i++) if (Math.abs(g.v[i] - vq) < Math.abs(g.v[best] - vq)) best = i;
+    tip.textContent = `${g.v[best].toFixed(1)} km/s\n${g.t[best] >= 0 ? "+" : ""}${g.t[best].toFixed(3)} %`;
+    tip.style.left = Math.min(mx + 12, g.w - 150) + "px"; tip.hidden = false;
+  });
+  $("hi-chart").addEventListener("mouseleave", () => { $("hi-tip").hidden = true; });
+  U.onThemeChange(drawHi);
+  window.addEventListener("resize", drawHi);
+  loadHi();
+  hiJob.recover("fswitch", { runningOnly: true });                 // a reload re-adopts a run in progress (to see and STOP it)
 })();

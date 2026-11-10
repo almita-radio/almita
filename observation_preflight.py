@@ -278,7 +278,7 @@ def _rfi_ref_check(rfi_ref_cfg: Dict[str, Any], port: int) -> Dict[str, Any]:
 CALIBRATION_ROOT = Path(__file__).resolve().parent / "data" / "calibration"
 
 
-def _quicklook_check(quicklook_cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _quicklook_check(quicklook_cfg: Dict[str, Any], frequency_switching: bool = False) -> Dict[str, Any]:
     """With QUICKLOOK enabled, quicklook_live is started with exactly this path and loads it at once, so a path
     the server cannot use BLOCKs here (it used to be a WARNING, and the run then started with a Quicklook that
     could only fail). Same validation as the web selector (calibration_profile_catalog.validate_profile_path):
@@ -287,6 +287,9 @@ def _quicklook_check(quicklook_cfg: Dict[str, Any]) -> Dict[str, Any]:
         return _check("Quicklook", "QUICKLOOK", OPTIONAL, PASS, "disabled by request; not checked")
     import calibration_profile_catalog
     profile_path = quicklook_cfg.get("calibration_profile_path")
+    if not profile_path and frequency_switching:
+        return _check("Quicklook", "QUICKLOOK", OPTIONAL, PASS,
+                      "frequency switching: the switched captures are folded without a calibration profile")
     try:
         found = calibration_profile_catalog.validate_profile_path(profile_path, CALIBRATION_ROOT, CALIBRATION_ROOT.parent.parent)
     except calibration_profile_catalog.ProfilePathError as exc:
@@ -310,7 +313,8 @@ def planned_profile_compatibility(profile: Dict[str, Any], main_cfg: Dict[str, A
     )
 
 
-def _quicklook_calibration_match_check(quicklook_cfg: Dict[str, Any], main_cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _quicklook_calibration_match_check(quicklook_cfg: Dict[str, Any], main_cfg: Dict[str, Any],
+                                      frequency_switching: bool = False) -> Dict[str, Any]:
     """REQUIRED (can BLOCK): compares the PLANNED capture's own frequency/sample rate/gain/topology against the
     selected calibration profile - using calibration_foundation.check_calibration_compatibility_values(), the
     EXACT SAME decision function Quicklook itself calls once real captures start arriving - so this can never
@@ -323,6 +327,9 @@ def _quicklook_calibration_match_check(quicklook_cfg: Dict[str, Any], main_cfg: 
     if not quicklook_cfg.get("enabled"):
         return _check("Quicklook / calibration match", "QUICKLOOK", OPTIONAL, PASS, "quicklook disabled; not checked")
     profile_path = quicklook_cfg.get("calibration_profile_path")
+    if not profile_path and frequency_switching:
+        return _check("Quicklook / calibration match", "QUICKLOOK", OPTIONAL, PASS,
+                      "frequency switching: no calibration profile to match")
     try:
         profile = calibration_foundation.load_calibration_profile(profile_path)
     except Exception:
@@ -514,8 +521,9 @@ async def run_plan_preflight(resolved_plan: Dict[str, Any], *, host: str = "loca
     checks.append(_main_port_check(sdr_host, sdr_port))
     checks.append(await _main_sdr_presence_check(sdr_host, sdr_port))
     checks.append(_rfi_ref_check(resolved_plan["rfi_ref"], resolved_plan["rfi_ref"].get("port", 1235)))
-    checks.append(_quicklook_check(resolved_plan["quicklook"]))
-    checks.append(_quicklook_calibration_match_check(resolved_plan["quicklook"], resolved_plan["main"]))
+    fs = bool(((resolved_plan.get("requested") or {}).get("capture") or {}).get("frequency_switching"))
+    checks.append(_quicklook_check(resolved_plan["quicklook"], fs))
+    checks.append(_quicklook_calibration_match_check(resolved_plan["quicklook"], resolved_plan["main"], fs))
     checks.append(_console_check())
     checks.extend(_software_check(resolved_plan))
 
@@ -566,8 +574,9 @@ async def run_execution_preflight(resolved_plan: Dict[str, Any], *, host: str = 
     checks.extend(_system_checks(resolved_plan.get("observer_config")))
     checks.append(_disk_check(Path(resolved_plan["grid_session_dir"]), resolved_plan["storage"]["required_bytes"]))
     checks.append(_rfi_ref_check(resolved_plan["rfi_ref"], resolved_plan["rfi_ref"].get("port", 1235)))
-    checks.append(_quicklook_check(resolved_plan["quicklook"]))
-    checks.append(_quicklook_calibration_match_check(resolved_plan["quicklook"], resolved_plan["main"]))
+    fs = bool(((resolved_plan.get("requested") or {}).get("capture") or {}).get("frequency_switching"))
+    checks.append(_quicklook_check(resolved_plan["quicklook"], fs))
+    checks.append(_quicklook_calibration_match_check(resolved_plan["quicklook"], resolved_plan["main"], fs))
     checks.append(_console_check())
     checks.extend(_software_check(resolved_plan))
 

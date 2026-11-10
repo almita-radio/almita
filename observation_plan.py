@@ -89,10 +89,22 @@ def _observer_location(observer_config: Dict[str, Any]) -> Tuple[EarthLocation, 
     return location, {"latitude_deg": lat, "longitude_deg": lon, "elevation_m": elevation}
 
 
-def estimate_duration(num_points: int, capture_s: float, settle_s: float) -> Dict[str, Any]:
+FSWITCH_SEGMENT_OVERHEAD_SEC = 0.16   # per LO change: retune + measured 0.15 s pause (fswitch run 2026-11-09: 0.145 + 0.013)
+
+
+def fswitch_overhead_seconds(capture_s: float) -> float:
+    """Extra wall time of one frequency-switched point (BL-100): ABBA with 2 s dwells has cycles+1 LO changes, plus
+    the retune back to the nominal centre."""
+    cycles = max(1, int(round(capture_s / 4.0)))
+    return (cycles + 2) * FSWITCH_SEGMENT_OVERHEAD_SEC
+
+
+def estimate_duration(num_points: int, capture_s: float, settle_s: float,
+                      frequency_switching: bool = False) -> Dict[str, Any]:
     """Estimate total session duration. Returns estimated/conservative seconds + assumptions."""
-    per_point_estimated = capture_s + settle_s + MEASURED_OVERHEAD_MEDIAN_SEC
-    per_point_conservative = (capture_s + settle_s + MEASURED_OVERHEAD_P90_SEC) * CONSERVATIVE_SAFETY_FACTOR
+    fs_extra = fswitch_overhead_seconds(capture_s) if frequency_switching else 0.0
+    per_point_estimated = capture_s + settle_s + fs_extra + MEASURED_OVERHEAD_MEDIAN_SEC
+    per_point_conservative = (capture_s + settle_s + fs_extra + MEASURED_OVERHEAD_P90_SEC) * CONSERVATIVE_SAFETY_FACTOR
     # Planning value (operator, 2026-10-15): the mean of the projected and the conservative pace - real campaigns keep
     # to the projection closely, the conservative one over-reserves sky. It schedules the altitude predictions and the
     # sky-window check; the conservative figure stays reported as the outer bound.
@@ -112,7 +124,7 @@ def estimate_duration(num_points: int, capture_s: float, settle_s: float) -> Dic
             "on top of the p90 overhead.",
             "does not model unusually long slews between distant grid corners; assumes roughly uniform "
             "per-point pacing across the session.",
-        ],
+        ] + ([f"frequency switching adds {fs_extra:.1f}s per point (LO changes, measured 0.16 s each)"] if fs_extra else []),
     }
 
 
@@ -419,7 +431,8 @@ def estimate_observation(spec: Dict[str, Any], *, observer_config_path: str = "o
     (sky_window). A planning failure comes back as
     feasible=False with PLAN's own message instead of an exception."""
     duration = estimate_duration(spec["grid"]["rows"] * spec["grid"]["cols"],
-                                 spec["capture"]["seconds"], spec["capture"]["settle_seconds"])
+                                 spec["capture"]["seconds"], spec["capture"]["settle_seconds"],
+                                 frequency_switching=bool(spec["capture"].get("frequency_switching")))
     out: Dict[str, Any] = {"duration": duration, "requested_point_count": spec["grid"]["rows"] * spec["grid"]["cols"]}
     try:
         r = _resolve_grid(spec, observer_config_path, now, duration)
@@ -484,7 +497,8 @@ def plan_observation(spec: Dict[str, Any], *, observer_config_path: str = "obser
     observation_resolved.json inside the newly created grid session dir).
     """
     duration = estimate_duration(spec["grid"]["rows"] * spec["grid"]["cols"],
-                                  spec["capture"]["seconds"], spec["capture"]["settle_seconds"])
+                                  spec["capture"]["seconds"], spec["capture"]["settle_seconds"],
+                                 frequency_switching=bool(spec["capture"].get("frequency_switching")))
     r = _resolve_grid(spec, observer_config_path, now, duration)
     observer_config, grid_spec, t0 = r["observer_config"], r["grid_spec"], r["t0"]
     points, metadata, predictions = r["points"], r["metadata"], r["predictions"]

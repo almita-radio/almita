@@ -684,6 +684,60 @@ class SDRCapture:
         else:
             return await self._capture_network(duration, output_file, sample_rate, metadata)
     
+    async def capture_iq(self, duration: float, sample_rate: int = 2400000) -> np.ndarray:
+        """Network mode: the next duration*sample_rate I/Q samples as interleaved uint8, in memory, no HDF5.
+
+        For callers that only need the samples and compute their own product (fswitch.py, 2026-11-09: writing,
+        validating and re-reading an HDF5 per segment cost ~0.6 s of every 4 s). The same sole consumer, the same
+        bounded buffer and the same wall/stall/throughput guards as capture(); nothing in capture() changes."""
+        if self.mode != "network":
+            raise RuntimeError("capture_iq() is for rtl_tcp (network) mode")
+        import numpy as np
+        expected_bytes = int(duration * sample_rate) * 2
+        iq_data = bytearray(expected_bytes)
+        start = time.monotonic()
+        max_wall = (self.max_capture_wall_override if self.max_capture_wall_override is not None
+                    else max(duration * 2.0, duration + 15.0))
+        self._ensure_consumer_started()
+        with self._consumer_condition:
+            if self.consumer_state == "FAILED":
+                raise SDRDisconnected(self.last_error or "rtl_tcp consumer failed")
+            if self._active_capture is not None:
+                raise RuntimeError("an SDR capture is already active")
+            self.generation += 1
+            request = {"generation": self.generation, "expected": expected_bytes, "received": 0, "buffer": iq_data,
+                       "started": start, "last_byte": start, "done": False, "error": None}
+            self._active_capture = request
+            self.consumer_state = "CAPTURE"
+        try:
+            while True:
+                await asyncio.sleep(0.02)
+                with self._consumer_condition:
+                    done, error, got = request["done"], request["error"], request["received"]
+                if error is not None:
+                    raise error
+                if done:
+                    break
+                elapsed = time.monotonic() - start
+                if elapsed >= max_wall:
+                    raise self._network_error(SDRWallTimeout, "capture exceeded wall deadline", request)
+                if elapsed >= self.throughput_grace and got / elapsed < sample_rate * 2 * self.throughput_ratio:
+                    raise self._network_error(
+                        SDRThroughputTooLow,
+                        f"effective throughput {got / elapsed:.1f} B/s below {sample_rate * 2 * self.throughput_ratio:.1f} B/s",
+                        request)
+        except BaseException as exc:
+            with self._consumer_condition:
+                if self._active_capture is request:
+                    self._active_capture = None
+                    if self.consumer_state != "FAILED":
+                        self.consumer_state = "DISCARD"
+                    request["done"] = True
+                    request["error"] = exc
+                    self._consumer_condition.notify_all()
+            raise
+        return np.frombuffer(iq_data, dtype=np.uint8)
+
     async def _capture_usb(self, duration: float, output_file: str,
                           sample_rate: int) -> CaptureMetrics:
         """Capture from USB RTL-SDR - read_samples() captures in real time"""

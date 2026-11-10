@@ -25,6 +25,7 @@ from reduce_engine.ingest import CampaignManifest, PointRecord, metadata_field, 
 from reduce_engine.models import CaptureRef, MaskFlag, MasterSpectrum
 from reduce_engine.provenance import build_run_provenance, close_run_provenance
 from reduce_engine.storage import ReduceSession
+from reduce_engine import fswitch_fold   # BL-100: frequency-switched captures (fswitch_capture.py)
 
 
 class PointStatus:
@@ -54,6 +55,8 @@ def reduce_point(point: PointRecord, manifest: CampaignManifest, config: ReduceC
     try:
         with _stage("ingest"):
             iq, attrs = read_capture(point.resolved_path)
+        if fswitch_fold.is_switched(attrs):           # BL-100: a frequency-switched capture (fswitch_capture.py)
+            return _reduce_switched_point(point, manifest, config, iq, attrs, timing, _stage)
         with _stage("spectral_estimate"):
             estimate = spectral_mod.estimate_spectrum(
                 iq, sample_rate_hz=float(attrs["sample_rate_hz"]),
@@ -147,6 +150,57 @@ def reduce_point(point: PointRecord, manifest: CampaignManifest, config: ReduceC
         return PointOutcome(point.point_index, PointStatus.COMPLETED, None, master, timing)
     except Exception as error:  # noqa: BLE001 - a point failure must never abort the campaign
         return PointOutcome(point.point_index, PointStatus.FAILED, f"{type(error).__name__}: {error}", None, timing)
+
+
+def _reduce_switched_point(point, manifest, config, iq, attrs, timing, _stage) -> PointOutcome:
+    """BL-100: the same stages as reduce_point from VELOCITY on, fed by fswitch_fold's folded
+    spectrum instead of SPECTRAL ESTIMATE -> MASK -> CALIBRATION -> BASELINE (switching replaces the reference
+    division and the baseline is fitted on the switched spectrum). Calibration level stays UNCALIBRATED: no
+    profile is applied, the value is the fractional excess over the system's own level, as in the uncalibrated
+    path of reduce_point."""
+    with _stage("spectral_estimate"):
+        sw = fswitch_fold.switched_spectrum(iq, attrs, config)
+    with _stage("velocity"):
+        velocity_result = velocity_mod.compute_velocity_axis(
+            sw.frequency_hz, rest_frequency_hz=config.hi_rest_frequency_hz, frame=config.velocity_frame,
+            timestamp_utc=metadata_field(attrs, "capture_start_utc"),
+            observer_latitude_deg=(manifest.observer.get("observer", {}) or {}).get("latitude_deg", "UNKNOWN"),
+            observer_longitude_deg=(manifest.observer.get("observer", {}) or {}).get("longitude_deg", "UNKNOWN"),
+            observer_elevation_m=(manifest.observer.get("observer", {}) or {}).get("elevation_m", "UNKNOWN"),
+            ra_hours=point.ra_hours if point.ra_hours is not None else "UNKNOWN",
+            dec_degrees=point.dec_degrees if point.dec_degrees is not None else "UNKNOWN")
+    with _stage("resample"):
+        resampled = resample_mod.resample_to_common_grid([sw.frequency_hz], [sw.fractional], [sw.uncertainty], [sw.mask])
+    with _stage("average"):
+        stacked = averaging.stack_spectra(resampled.values, resampled.uncertainties, resampled.masks,
+                                          method=config.averaging_method, sigma_clip_threshold=config.sigma_clip_threshold)
+    integration_time_raw = attrs.get("duration_seconds", attrs.get("capture_time_seconds"))
+    integration_time = float(integration_time_raw) if integration_time_raw is not None else 0.0
+    with _stage("quality"):
+        quality_report = quality_mod.assess_quality(
+            mask=stacked.mask, n_contributing=stacked.n_contributing, clipping_fraction=sw.clipping_fraction,
+            calibration_level="UNCALIBRATED", calibration_compatibility_status="NOT_APPLICABLE_FREQUENCY_SWITCHED",
+            baseline_fit_quality_rms_fraction=sw.info["baseline_fit_rms_fraction"],
+            velocity_frame=velocity_result.frame, integration_time_known=integration_time_raw is not None)
+        quality_report.metrics.update({"frequency_switched": True, **{f"fswitch_{k}": v for k, v in sw.info.items()
+                                                                      if k not in ("fft",)}})
+    capture_ref = CaptureRef.from_capture_file(
+        point.resolved_path, campaign_id=manifest.campaign_id, point_index=point.point_index,
+        capture_id=str(attrs.get("final_filename", point.resolved_path.name)),
+        timestamp_utc=str(metadata_field(attrs, "capture_start_utc")),
+        receiver=str(metadata_field(attrs, "instrument_topology", "rf_input")))
+    master = MasterSpectrum(
+        campaign_id=manifest.campaign_id, point_index=point.point_index,
+        ra_hours=point.ra_hours, dec_degrees=point.dec_degrees,
+        timestamp_start_utc=str(metadata_field(attrs, "capture_start_utc")),
+        timestamp_end_utc=str(metadata_field(attrs, "capture_completed_at")),
+        frequency_hz=resampled.frequency_hz, velocity_lsrk_m_s=velocity_result.velocity_m_s,
+        velocity_frame=velocity_result.frame, relative_intensity=stacked.value,
+        uncertainty=stacked.uncertainty, mask=stacked.mask, n_contributing=stacked.n_contributing,
+        integration_time_seconds=integration_time, quality=quality_report,
+        calibration_level="UNCALIBRATED", calibration_profile_id=None, calibration_profile_hash=None,
+        capture_refs=[capture_ref])
+    return PointOutcome(point.point_index, PointStatus.COMPLETED, None, master, timing)
 
 
 class _Timer:

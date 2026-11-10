@@ -48,11 +48,14 @@
         min_altitude_deg: Number($("f-min-alt").value), traversal: "SERPENTINE",
         rotation_deg: $("f-rotation").value === "" ? 0 : Number($("f-rotation").value),
       },
-      capture: { seconds: Number($("f-capture").value), settle_seconds: Number($("f-settle").value) },
+      // BL-100: frequency_switching only when ticked, so an unswitched spec is exactly what it was before
+      capture: Object.assign({ seconds: Number($("f-capture").value), settle_seconds: Number($("f-settle").value) },
+                             $("f-fswitch").checked ? { frequency_switching: true } : {}),
       main: { center_frequency_hz: Number($("f-freq").value), sample_rate: Number($("f-rate").value), gain_db: Number($("f-gain").value), bias_tee: true },
       rfi_ref: { enabled: $("f-rfi-enabled").checked, serial: "00000002", gain_db: Number($("f-rfi-gain").value), bias_tee: $("f-rfi-bias-tee").checked },
       quicklook: { enabled: $("f-ql-enabled").checked, native_grid: $("f-ql-native").checked, interpolated_preview: $("f-ql-interp").checked,
-                   calibration_profile_path: $("f-ql-cal").value || null },
+                   // BL-100: with frequency switching QUICKLOOK folds the captures without a profile - none is sent
+                   calibration_profile_path: $("f-fswitch").checked ? null : ($("f-ql-cal").value || null) },
       console: { enabled: $("f-console-enabled").checked },
       execution: { unattended: true },
     };
@@ -225,6 +228,7 @@
       `Angle               ${U.deg(r.rotation_deg || 0, 1)} (position angle of the grid's up axis, North through East)`,
       `Spacing             ${U.deg(r.spacing_deg, 3)}`,
       `Capture / settle    ${U.num(cap.seconds, 2, "s")} / ${U.num(cap.settle_seconds, 2, "s")}`,
+      `Freq. switching     ${cap.frequency_switching ? "ON  (LO -600 / +600 kHz, ABBA; spectrum ±84 km/s around the line)" : "OFF"}`,
       "",
       `RFI_REF             ${plan.rfi_ref && plan.rfi_ref.enabled ? "ENABLED" : "DISABLED"}`,
       `  Bias-T            ${plan.rfi_ref && plan.rfi_ref.enabled ? (plan.rfi_ref.bias_tee ? "ON" : "OFF") : "N/A"}`,
@@ -253,6 +257,7 @@
       `MAIN center         ${U.mhz(main.center_frequency_hz)}`,
       `MAIN sample rate    ${U.msps(main.sample_rate)}`,
       `MAIN gain           ${U.num(main.gain_db, 1, "dB")}   Bias-T ${main.bias_tee === false ? "OFF" : "ON"}`,
+      `Freq. switching     ${cap.frequency_switching ? "ON (every point ABBA, LO -600 / +600 kHz)" : "OFF"}`,
       `Estimated duration  ${U.hms(dur.estimated_seconds)} (conservative ${U.hms(dur.conservative_seconds)})`,
       "",
       "MOUNT: it WILL slew (GOTO) to every point and tracking will be enabled.",
