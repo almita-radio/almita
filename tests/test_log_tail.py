@@ -44,6 +44,30 @@ out.again = bottom();
     assert out["grown"] is True and out["held"] == 0 and out["again"] is True
 
 
+def test_a_box_filled_while_hidden_shows_its_last_line_once_it_appears(tmp_path):
+    """Operator 2026-11-10: "siempre viendo ... la última línea". A log filled inside a hidden step/panel has no height
+    then; when it is shown - even after its job ended and no poll comes again - its last line is in view. A box the
+    operator had scrolled up in stays where they left it across a hide/show."""
+    out = _run(tmp_path, LINES + r"""
+const U = window.AlmitaUI;
+const frame = () => new Promise((r) => setTimeout(r, 1300));
+$("box").hidden = true;
+const pre = document.createElement("pre"); pre.className = "job-log"; $("box").appendChild(pre);
+U.followTail(pre, () => { pre.textContent = lines(0, 200); });
+U.followTail(pre, () => { pre.textContent = lines(0, 240); });       // last poll: the job ends while hidden
+$("box").hidden = false;
+await frame();
+out.shown = { bottom: U.logAtBottom(pre), scrolls: pre.scrollHeight > pre.clientHeight };
+pre.scrollTop = 0; pre.dispatchEvent(new Event("scroll")); await frame();   // the operator scrolls up to read...
+$("box").hidden = true; await frame();
+U.followTail(pre, () => { pre.textContent = lines(0, 280); });        // ...a poll arrives while it is hidden
+$("box").hidden = false; await frame();
+out.held = pre.scrollTop;
+""")
+    assert out["shown"] == {"bottom": True, "scrolls": True}
+    assert out["held"] == 0
+
+
 def test_job_log_box_is_reused_for_the_same_job_and_replaced_for_another(tmp_path):
     out = _run(tmp_path, r"""
 const U = window.AlmitaUI;

@@ -590,11 +590,34 @@
   // REUSED between polls - a freshly created <pre> starts at the top (the bug REDUCE/SCIENCE had).
   const NEAR_BOTTOM_PX = 24;    // slack (~1-2 lines) so "at the bottom" survives sub-pixel rounding
   U.logAtBottom = (el) => el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
+  // A box filled while it is not displayed (a hidden step, a collapsed panel) has no height, so "the bottom" cannot be
+  // set then: the operator's choice (follow / reading higher up) is remembered in data-tail-follow and a
+  // ResizeObserver (plus a 1 s backstop) puts the last line in view as soon as the box gets a size - even if its job ended meanwhile and no
+  // poll will come again (operator 2026-11-10: "siempre viendo ... la última línea en aparecer").
+  const shown = (el) => el.clientHeight > 0;
+  function watchTail(pre) {
+    pre.addEventListener("scroll", () => { if (shown(pre)) pre.dataset.tailFollow = U.logAtBottom(pre) ? "1" : "0"; }, { passive: true });
+    // only on the hidden -> shown edge: while the box is on screen, scrolling is the operator's alone
+    let wasShown = shown(pre);
+    const onAppear = () => {
+      const now = shown(pre);
+      if (now && !wasShown && pre.dataset.tailFollow !== "0") pre.scrollTop = pre.scrollHeight;
+      wasShown = now;
+    };
+    if (window.ResizeObserver) new ResizeObserver(onAppear).observe(pre);       // at once, when the browser lays it out
+    const backstop = setInterval(() => {                                         // and a 1 s backstop that needs no layout event
+      if (!pre.isConnected && pre.dataset.tailFilled === "1") { clearInterval(backstop); return; }   // box replaced: done
+      onAppear();
+    }, 1000);
+  }
   U.followTail = function (pre, apply) {
-    const follow = pre.dataset.tailFilled !== "1" || U.logAtBottom(pre);
+    const first = pre.dataset.tailFilled !== "1";
+    if (first) watchTail(pre);
+    const follow = first || (shown(pre) ? U.logAtBottom(pre) : pre.dataset.tailFollow !== "0");
     const top = pre.scrollTop;
     apply();
     pre.dataset.tailFilled = "1";
+    pre.dataset.tailFollow = follow ? "1" : "0";
     pre.scrollTop = follow ? pre.scrollHeight : top;
   };
   // A job's log box inside `container`: the same node while it is the same job (scroll kept), a new one otherwise.
