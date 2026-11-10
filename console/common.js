@@ -632,6 +632,15 @@
     return pre;
   };
 
+  // A job fact as one readable line: a long list (e.g. the 400 file signatures of a REDUCE PLAN) is summarised and a
+  // huge object cut - the panel is for reading; the full value stays in the job's own result files (2026-11-10).
+  const FACT_LIST_MAX = 8, FACT_TEXT_MAX = 600;
+  U.factText = function (v) {
+    if (Array.isArray(v) && v.length > FACT_LIST_MAX) return `${v.length} items (full list in the job's result files)`;
+    const t = typeof v === "object" ? JSON.stringify(v) : String(v);
+    return t.length > FACT_TEXT_MAX ? `${t.slice(0, FACT_TEXT_MAX)}… (${t.length} characters; full value in the job's result files)` : t;
+  };
+
   U.jobPanel = function (container, badge, opts) {
     const o = Object.assign({ onEnd: null, onChange: null, onError: null, stopLabel: "STOP THIS JOB", afterLog: null }, opts || {});
     const st = { jobId: null, poller: null, last: null };
@@ -655,7 +664,7 @@
       for (const k of Object.keys(f)) {
         const v = f[k];
         if (v === null || v === undefined || v === "") continue;
-        head.append(mk("div", "muted", `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`));
+        head.append(mk("div", "muted", `${k}: ${U.factText(v)}`));
       }
       if (j.state === "RUNNING") {
         // The stop control comes FIRST and is styled as the page's danger action: while a real job runs (it may be

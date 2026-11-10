@@ -113,3 +113,16 @@ def test_reduce_science_and_monitor_logs_use_the_shared_rule():
     app = (CONSOLE / "app.js").read_text()
     assert "AlmitaUI.followTail(pre,put)" in app
     assert (ROOT / "docs" / "BACKLOG.md").read_text().count("BL-098") >= 1
+
+
+def test_job_panel_summarises_long_facts(tmp_path):
+    """A REDUCE PLAN's 400 file signatures made PIPELINE ~7000 px tall: long lists are counted, huge values cut."""
+    out = _run(tmp_path, r"""
+const U = window.AlmitaUI;
+out.list = U.factText(Array.from({ length: 400 }, (_, i) => ({ path: "p" + i })));
+out.short = U.factText([1, 2, 3]);
+out.big = U.factText({ x: "y".repeat(5000) }).length;
+out.plain = U.factText("COMPLETED");
+""")
+    assert out["list"].startswith("400 items") and out["short"] == "[1,2,3]" and out["plain"] == "COMPLETED"
+    assert out["big"] < 700
