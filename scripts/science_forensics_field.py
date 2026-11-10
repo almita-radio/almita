@@ -46,7 +46,10 @@ CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "tar
 # science_engine re-pinned from f5e2f65 to 2d62634 (2026-11-06, operator: "arréglala de verdad"): maps in the exact
 # spherical offset frame (OBSERVE's SkyOffsetFrame) instead of the linear dRA*cos(dec0) plane, so wide fields and grids
 # across a pole work; a few-degree field moves < 0.01 deg. Weighting, integration and units unchanged.
-FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "2d62634"), ("almita_science.py", "f5e2f65"),
+# reduce_engine re-pinned from 2afc4c5 to 6d0ea46 (2026-11-10, operator: "descongela y aplica" 2026-11-09, BL-100):
+# fswitch_fold.py + a branch in reduce_point for frequency-switched captures (segment table) - reduce-v1.1.
+# Ordinary captures go through the unchanged path.
+FROZEN = (("reduce_engine", "6d0ea46"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "2d62634"), ("almita_science.py", "f5e2f65"),
           # science_forensics re-pinned from 02b8e5a to 7b2eefb (2026-10-13, BL-052): experiment/plan.py's DEFAULT_INSTRUMENT
           # carries the RFI_REF Bias-T ON (antenna B's LNA) and records the campaign's OFF as bias_tee_feature_campaign.
           ("science_forensics", "7b2eefb"), ("almita_science_forensics.py", "8f4b40a"),
@@ -63,14 +66,20 @@ FROZEN = (("reduce_engine", "2afc4c5"), ("almita_reduce.py", "2afc4c5"), ("scien
           # capture.py re-pinned from 72fd7cf to f099e6b (2026-11-02, operator: "dale con todo"): ADC saturation alarm -
           # an ADC SATURATION log line and last_adc_* / points_adc_clipped in the session announcement. Acquisition loop,
           # spectral path and HDF5 format unchanged.
-          ("capture.py", "f099e6b"),
+          # capture.py re-pinned from f099e6b to 6d0ea46 (2026-11-10, same BL-100 authorisation): --fswitch (default off)
+          # records each point ABBA via fswitch_capture; without the option the acquisition loop, spectral path and
+          # HDF5 format are unchanged.
+          ("capture.py", "6d0ea46"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
           # observation_spec.py re-pinned from 7b2eefb to e4b0a0b (2026-10-15): operator-ordered grid ANGLE - an optional
           # grid.rotation_deg, default 0. An unrotated spec validates to the same values plus rotation_deg=0.
           # observation_orchestrator.py re-pinned from 0148b78 to 8b0659e (2026-10-20, same authorisation): passes the
           # selected mount (--device) and starts QUICKLOOK on a late session announcement. The capture path is unchanged.
-          ("observation_orchestrator.py", "8b0659e"), ("observation_spec.py", "e4b0a0b"))
+          # observation_orchestrator.py re-pinned from 8b0659e and observation_spec.py from e4b0a0b to 6d0ea46 (2026-11-10,
+          # BL-100): optional capture.frequency_switching (written only when true, so an unswitched spec hashes the same),
+          # passed on as --fswitch; QUICKLOOK may run without a profile only when switching.
+          ("observation_orchestrator.py", "6d0ea46"), ("observation_spec.py", "6d0ea46"))
 DEFAULT_WINDOW = (150857.0, 5607.0)          # candidate LSRK window (m/s) of the feature campaign
 MIN_ALT_DEG, HA_MARGIN_H = 30.0, 0.25        # same values the plan/`windows` use
 ENDPOINTS = {"MAIN rtl_tcp": 1234, "INDI": 7624}

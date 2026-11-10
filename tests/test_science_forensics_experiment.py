@@ -343,7 +343,8 @@ def test_experiment_modules_do_not_import_hardware_network_or_raw():
 
 def test_frozen_modules_untouched():
     # science_engine re-pinned 2026-11-06 (spherical offset map frame, operator-authorised) - see science_forensics_field.FROZEN
-    frozen = {"reduce_engine": "2afc4c5", "science_engine": "2d62634"}
+    # reduce_engine re-pinned 2026-11-10 to 6d0ea46 (frequency-switching fold, BL-100, operator-authorised)
+    frozen = {"reduce_engine": "6d0ea46", "science_engine": "2d62634"}
     for path, commit in frozen.items():
         out = subprocess.run(["git", "diff", "--name-only", commit, "--", path], cwd=ROOT, capture_output=True, text=True)
         if out.returncode != 0:
