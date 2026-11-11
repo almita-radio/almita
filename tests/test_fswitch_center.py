@@ -227,3 +227,41 @@ out.caps = posts;
     assert out["caps"][0] == {"seconds": 10, "settle_seconds": 2, "frequency_switching": True}
     assert out["caps"][1]["frequency_switching_center"] == "auto"
     assert out["caps"][2]["frequency_switching_center"] == 270
+
+
+# ------------------------------------------------------------------ STATUS · HYDROGEN LINE (fswitch.py)
+def test_fswitch_py_finds_a_line_at_a_shifted_topocentric_centre():
+    import fswitch as F
+    rate, d = 2.4e6, 600e3
+    bb = F.baseband_hz(F.NFFT, rate)
+    shape = 1 + 0.12 * np.sin(2 * np.pi * bb / 900e3)
+    centre = 270.0
+    f0 = REST * (1 - centre / C)
+    line_rf = REST * (1 - 265.0 / C)                                              # an LMC-like line at +265
+    rng = np.random.default_rng(4)
+    specs, los = [], []
+    for li, parts in F.lo_segments(20):
+        lo = (f0 - d, f0 + d)[li]
+        for _ in range(parts):
+            sky = 1 + 0.04 * np.exp(-0.5 * ((lo + bb - line_rf) / 40e3) ** 2)
+            specs.append(shape * sky * (1 + rng.normal(0, 0.02, bb.size)))
+            los.append(lo)
+    r = F.analyse(specs, los, rate, d, f0_hz=f0, centre_topo_km_s=centre)
+    v, t = r["v_kms"], r["folded_baselined_pct"]
+    ok = np.isfinite(t)
+    assert v[ok].min() > 170 and v[ok].max() < 370 and r["line_window_kms"] == [235.0, 305.0]
+    w = ok & (np.abs(v - 265) < 20)
+    assert float(np.sum(np.clip(t[w], 0, None) * v[w]) / np.sum(np.clip(t[w], 0, None))) == pytest.approx(265, abs=3)
+    assert r["line_excess_pct"] > 0.5
+
+
+def test_the_status_job_passes_a_centre_only_when_given_and_refuses_nonsense(monkeypatch):
+    import almita_web_ops as ops
+    import transit_logger
+    monkeypatch.setattr(transit_logger, "sdr_process_busy", lambda *a, **k: None)
+    argv, meta = ops.build_command("fswitch", {"cycles": 12}, "FSWITCH-X")
+    assert "--center-velocity" not in argv and "center_velocity_km_s" not in meta
+    argv, meta = ops.build_command("fswitch", {"cycles": 12, "center_velocity_km_s": 270}, "FSWITCH-X")
+    assert argv[argv.index("--center-velocity") + 1] == "270.0" and meta["center_velocity_km_s"] == 270.0
+    with pytest.raises(ValueError, match="600"):
+        ops.build_command("fswitch", {"cycles": 12, "center_velocity_km_s": 9000}, "FSWITCH-X")

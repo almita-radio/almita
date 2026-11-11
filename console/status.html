@@ -32,7 +32,7 @@
       <header><h2 id="h-hi">HYDROGEN LINE · FREQUENCY SWITCHING <span class="muted">(MAIN alternates its tuning f0 ∓ 600 kHz while the antenna stays put: the receiver's band shape cancels, the 21 cm line stays · the mount is not moved)</span></h2><span id="hi-badge" class="badge">—</span></header>
       <div id="hi-detail" class="obs-summary">Loading…</div>
       <div class="temp-chart-wrap"><canvas id="hi-chart" height="260" aria-label="Folded frequency-switched spectrum against velocity, the expected hydrogen window shaded"></canvas><div id="hi-tip" class="temp-tip" hidden></div></div>
-      <div class="obs-actions"><label>LENGTH <select id="hi-cycles"></select></label><button id="btn-hi" type="button">RUN SWITCHING</button><span class="muted">point the antenna first (OBSERVE/ALIGN or by hand) · refused while anything else uses MAIN · not for the Sun or the load: switching cancels continuum</span></div>
+      <div class="obs-actions"><label>LENGTH <select id="hi-cycles"></select></label><label title="BL-105: centre of the ±84 km/s window as a TOPOCENTRIC velocity (km/s): this panel does not know where the antenna points, so there is no LSRK correction. Empty = around the line at rest, as before. Example: about 270 for the Large Magellanic Cloud.">CENTRE km/s <input id="hi-center" type="text" size="7" placeholder="0"></label><button id="btn-hi" type="button">RUN SWITCHING</button><span class="muted">point the antenna first (OBSERVE/ALIGN or by hand) · refused while anything else uses MAIN · not for the Sun or the load: switching cancels continuum</span></div>
       <div id="hi-job"></div>
     </section>
     <section class="panel" aria-labelledby="h-temp">

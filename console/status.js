@@ -399,7 +399,8 @@
     const ack = s.lo_acknowledged || {}, eff = s.efficiency || {};
     U.setBadge($("hi-badge"), ack.f_a && ack.f_b ? "PASS" : "FAIL");
     $("hi-detail").textContent =
-      `receiver band shape ±${res.ripple_band_shape_pct.toFixed(1)} % → folded ±${res.off_line_rms_pct.toFixed(2)} % off the line · `
+      (s.centre_topo_km_s !== null && s.centre_topo_km_s !== undefined ? `window centred on ${s.centre_topo_km_s} km/s (topocentric) · ` : "")
+      + `receiver band shape ±${res.ripple_band_shape_pct.toFixed(1)} % → folded ±${res.off_line_rms_pct.toFixed(2)} % off the line · `
       + `line window ${res.line_excess_pct >= 0 ? "+" : ""}${res.line_excess_pct.toFixed(2)} %\n`
       + `${res.n_a}+${res.n_b} × ${s.dwell_s} s · LO ${(s.f_a_hz / 1e6).toFixed(4)} / ${(s.f_b_hz / 1e6).toFixed(4)} MHz `
       + `${ack.f_a && ack.f_b ? "(both acknowledged by rtl_tcp)" : "(NOT both acknowledged)"} · gain ${s.gain_db} dB · `
@@ -420,8 +421,12 @@
   });
   $("btn-hi").addEventListener("click", U.guard($("btn-hi"), async () => {
     const n = Number($("hi-cycles").value), secs = Math.round(n * ((hi && hi.seconds_per_cycle) || 4.2));
-    if (!window.confirm(`Run frequency switching now?\n\nMAIN records ~${secs} s, alternating its tuning 600 kHz below and above the line (the LNA is switched on). The mount is not moved: point the antenna first. Refused while anything else uses MAIN.`)) return;
-    await hiJob.start("fswitch", { cycles: n });
+    const centreRaw = ($("hi-center").value || "").trim();       // BL-105: optional topocentric centre
+    const centre = centreRaw === "" ? null : Number(centreRaw);
+    if (centre !== null && !(Number.isFinite(centre) && Math.abs(centre) <= 600)) { window.alert("CENTRE must be a number of km/s within ±600, or empty"); return; }
+    const where = centre === null ? "the line" : `${centre} km/s (topocentric)`;
+    if (!window.confirm(`Run frequency switching now?\n\nMAIN records ~${secs} s, alternating its tuning 600 kHz below and above ${where} (the LNA is switched on). The mount is not moved: point the antenna first. Refused while anything else uses MAIN.`)) return;
+    await hiJob.start("fswitch", centre === null ? { cycles: n } : { cycles: n, center_velocity_km_s: centre });
   }, "STARTING…"));
   $("hi-chart").addEventListener("mousemove", (ev) => {
     const g = hiGeom, tip = $("hi-tip");

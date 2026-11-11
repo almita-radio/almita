@@ -53,6 +53,7 @@
       <div class="obs-summary" id="calib-single-note" hidden></div>
       <div class="obs-row"><label for="in-vmin">VELOCITY WINDOW MIN (km/s, LSRK)</label><input type="number" id="in-vmin" value="-100" step="1"></div>
       <div class="obs-row"><label for="in-vmax">VELOCITY WINDOW MAX (km/s, LSRK)</label><input type="number" id="in-vmax" value="100" step="1"></div>
+      <div class="obs-summary muted" id="vel-window-hint">Frequency switching covers only ±84 km/s around its WINDOW CENTRE (OBSERVE): keep this window inside it. Around the line at rest: −84…+84. Centred on the Large Magellanic Cloud (+270): about +190…+350; on the Small one (+160): about +80…+240. A window outside the switched one leaves points without data — that is "not measured", not "no hydrogen".</div>
       <div class="obs-row"><label for="in-beam-mode">REAL INSTRUMENT BEAM FWHM (reported only — no longer used to size the grid or to grid B/C, see below)</label>
         <select id="in-beam-mode"><option value="observer_config">from observer_config.json</option><option value="fwhm">enter manually</option></select></div>
       <div class="obs-row" id="row-beam-fwhm" hidden><label for="in-beam-fwhm">BEAM FWHM (deg)</label><input type="number" id="in-beam-fwhm" value="1.5" step="0.1" min="0.01"></div>

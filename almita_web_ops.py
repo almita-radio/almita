@@ -1113,8 +1113,16 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         if held:
             raise OpsBlocked(f"MAIN is in use by {held}")
         out = f"data/fswitch/WEB-{stamp}"
-        return ([PY, "fswitch.py", "--cycles", str(cycles), "--out-dir", out, "--web-job", job_id],
-                {"output_dir": out, "cycles": cycles})
+        argv = [PY, "fswitch.py", "--cycles", str(cycles), "--out-dir", out, "--web-job", job_id]
+        meta = {"output_dir": out, "cycles": cycles}
+        centre = p.get("center_velocity_km_s")              # BL-105: optional topocentric centre of the window
+        if centre not in (None, ""):
+            centre = float(centre)
+            if not (math.isfinite(centre) and abs(centre) <= 600):
+                raise ValueError("center_velocity_km_s must be within +/-600 km/s")
+            argv += ["--center-velocity", repr(centre)]
+            meta["center_velocity_km_s"] = centre
+        return argv, meta
     if stage == "lobe":
         mode = str(p.get("mode", "drift"))
         if mode not in ("drift", "scan"):
