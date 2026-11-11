@@ -265,6 +265,9 @@ def _capture_args(plan: Dict[str, Any], runtime_dir: str, device_name: Optional[
         centre = plan["requested"]["capture"].get("frequency_switching_center")
         if centre is not None:        # BL-105: per-point centre of the folded window ("auto" or km/s LSRK)
             args += ["--fswitch-center", str(centre)]
+        offset = plan["requested"]["capture"].get("frequency_switching_offset_hz")
+        if offset is not None:        # configurable throw (2026-11-11): LOs at centre -/+ offset
+            args += ["--fswitch-offset-hz", repr(float(offset))]
     if plan["rfi_ref"]["enabled"]:
         args += [
             "--rfi-ref-enabled",

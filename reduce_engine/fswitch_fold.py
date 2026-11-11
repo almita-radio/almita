@@ -27,6 +27,9 @@ baseline is fitted where the line really is not: on S outside both images of tha
 constant in S cancels in the fold, a slope folds into a constant) and a degree-0/1 baseline is fitted on the FOLDED
 spectrum, in the part of the folded band outside the line window (the line-free margin fswitch_center leaves beyond
 the edge). A capture without that attribute is folded exactly as before.
+Configurable throw (2026-11-11): the offset is read from the LOs (f_b - f_a), and a capture that also records MASK
+windows (fswitch_mask_windows_topo_km_s: the local gas and its ghosts, when the target is elsewhere - the Magellanic
+Clouds) keeps the baseline off them too.
 """
 from __future__ import annotations
 
@@ -85,6 +88,18 @@ def _line_window_topo(attrs: dict[str, Any]):
     return float(min(vals)), float(max(vals))
 
 
+def _mask_windows_topo(attrs: dict[str, Any]):
+    """Known emission that is not the target (the local gas and its ghosts, fswitch_center.plan_point): [(lo, hi)]."""
+    raw = attrs.get("fswitch_mask_windows_topo_km_s")
+    if raw is None:
+        return []
+    import json
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    vals = json.loads(raw) if isinstance(raw, str) else list(raw)
+    return [(float(min(w)), float(max(w))) for w in vals]
+
+
 def _ghost_overlap(window, f0: float, throw_hz: float, rest: float) -> float:
     v = (1 - (f0 + np.linspace(-(USABLE_HZ - throw_hz / 2), USABLE_HZ - throw_hz / 2, 801)) / rest) * C_KMS
     dv = throw_hz / rest * C_KMS
@@ -129,6 +144,7 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
 
     # 3. baseline of S where neither image of the line can be
     window = _line_window_topo(attrs)                          # BL-105: the capture says where the line is
+    masks = _mask_windows_topo(attrs)                          # ... and where other known emission is (local gas, ghosts)
     folded_baseline = None
     if window is None:
         hw_hz = IMAGE_HALFWIDTH_KMS / C_KMS * f0
@@ -151,6 +167,9 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
         in_a = (bb >= line_lo_rf - f_a) & (bb <= line_hi_rf - f_a)          # the line seen by LO A ...
         in_b = (bb >= line_lo_rf - f_b) & (bb <= line_hi_rf - f_b)          # ... and by LO B
         free = ok_bb & ~in_a & ~in_b & np.isfinite(S)
+        for m_lo, m_hi in masks:                                            # ... and the local gas, by either LO
+            lo_rf, hi_rf = rest * (1 - m_hi / C_KMS), rest * (1 - m_lo / C_KMS)
+            free &= ~((bb >= lo_rf - f_a) & (bb <= hi_rf - f_a)) & ~((bb >= lo_rf - f_b) & (bb <= hi_rf - f_b))
         x = bb / 1e6
         span = float(np.ptp(bb[free])) if free.any() else 0.0
         if free.sum() >= MIN_FREE_BINS_S and span >= MIN_FREE_SPAN_HZ:
@@ -175,6 +194,8 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
     if folded_baseline is not None:                            # BL-105: the line filled the baseband - fit here
         lo_rf, hi_rf = folded_baseline
         out_line = np.isfinite(T) & ((rf < lo_rf) | (rf > hi_rf))
+        for m_lo, m_hi in masks:                               # the local gas and its ghosts are not baseline either
+            out_line &= ~((rf >= rest * (1 - m_hi / C_KMS)) & (rf <= rest * (1 - m_lo / C_KMS)))
         if out_line.sum() < MIN_FREE_BINS_FOLDED:
             raise ValueError(f"only {int(out_line.sum())} line-free folded bins: the line window "
                              f"{window[0]:+.0f}..{window[1]:+.0f} km/s fills the folded band - move the centre")
@@ -205,5 +226,8 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
             # half height) inside the folded band. Fraction of the folded band whose ghost lands in the line window:
             "ghost_overlap_fraction": _ghost_overlap(window, f0, f_b - f_a, float(config.hi_rest_frequency_hz))}
            if window is not None else {}),
+        **({"mask_windows_topo_km_s": [[w[0], w[1]] for w in masks],
+            "local_ghost_in_line_window": str(attrs.get("fswitch_local_ghost_in_line_window", "")).lower() in ("true", "1")}
+           if masks else {}),
     }
     return FswitchSpectrum(rf, T, U, mask, clip, info)
