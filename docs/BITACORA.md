@@ -67,6 +67,7 @@ REDUCE y SCIENCE tienen sus motores **congelados**: cualquier cambio queda regis
 | **Conmutación de frecuencia** | Las ondas de ±2–6 % en los espectros eran la forma de banda del receptor derivando entre mediciones separadas por minutos. Alternar el oscilador cada pocos segundos las cancela. |
 | **Motores congelados y opciones "opt-in"** | Reproducibilidad: un resultado de ayer se puede rehacer igual hoy. |
 | **REDUCE en varios núcleos** | Mismos resultados, bit a bit, en menos tiempo. Con una captura en curso usa solo la mitad de los núcleos y siempre con prioridad baja. |
+| **Medir el haz en cruz con el Sol y calcular el área efectiva** (2026-11-11, rama `lobe-cross-scan`) | Hasta ahora el haz se supone redondo de 20°, y eso entra en la comparación con HI4PI, en los kelvin y en BL-105. Un plato de 90×60 debería dar un haz ovalado. LOBE ahora barre el Sol en RA y en Dec (CROSS, ~22 min) y entrega los dos anchos y el ángulo sólido. `lobe_aeff.py` baja de NOAA el flujo del Sol a 1415 MHz (la estación que midió más cerca en el tiempo; la dispersión entre estaciones, ~10–15 %, es la incertidumbre) y saca el área efectiva y la eficiencia: una escala en kelvin independiente del factor Y. Área del plato supuesta: 0,463 m² (extremos redondeados; falta medir el tramo recto). Corre de 09:30 a 12:00 o de 15:00 a 17:00, no al mediodía. Sin probar en el cielo. |
 
 ## 5. Reglas de oro (aprendidas a golpes)
 
@@ -88,6 +89,7 @@ REDUCE y SCIENCE tienen sus motores **congelados**: cualquier cambio queda regis
 - [ ] Noche en la azotea: plano galáctico con conmutación de frecuencia + ESTIMATOR v2, y calibración con factor Y.
 - [ ] Repetir la detección del 5-11 y confirmarla con REDUCE y SCIENCE.
 - [ ] Nubes de Magallanes: conmutación con velocidad central configurable (BL-105).
+- [ ] Medir el haz en cruz con el Sol (LOBE CROSS) y el área efectiva con `lobe_aeff.py`, en una salida de día después de un ALIGN solar PASS.
 - [ ] Llevar el ESTIMATOR v2 a QUICKLOOK, al panel HYDROGEN LINE y al factor Y.
 - [ ] Perfilar SCIENCE antes de decidir si se paraleliza.
 - [ ] Ordenar el repositorio en GitHub (archivos sueltos, ramas, historial pesado).

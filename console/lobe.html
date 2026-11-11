@@ -22,7 +22,9 @@
       <header><h2 id="h-config">TRANSIT <span class="muted">(lobe_transit.py · real mount + real MAIN · fixed gain, RTL AGC off, raw IQ kept)</span></h2><span id="plan-badge" class="badge">—</span></header>
       <div class="obs-actions">
         <button type="button" id="mode-drift" class="mode-btn active">DRIFT (mount still, tracking OFF)</button>
-        <button type="button" id="mode-scan" class="mode-btn">SCAN (mount steps in RA)</button>
+        <button type="button" id="mode-scan" class="mode-btn">SCAN RA (mount steps in RA)</button>
+        <button type="button" id="mode-decscan" class="mode-btn">SCAN DEC (mount steps in Dec)</button>
+        <button type="button" id="mode-cross" class="mode-btn">CROSS (RA, then Dec: both beam widths)</button>
       </div>
       <div class="obs-summary" id="mode-note"></div>
       <div class="obs-row"><label for="p-fwhm">EXPECTED BEAM FWHM (deg — provisional: observer_config 20, alignment.py 14; not measured)</label><input type="number" id="p-fwhm" min="1" max="90" step="any"></div>

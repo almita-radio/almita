@@ -6,6 +6,12 @@ Two ways to move the Sun across the beam:
   (fixed hour angle / declination) and the Earth's rotation carries the Sun through the beam and out the other side.
   Nothing moves while it measures; the background is measured at the same alt/az on both sides.
 * scan: the mount steps in RA across the Sun (SOLAR tracking on), from -half range to +half range.
+* decscan: the same, stepping in DECLINATION along the Sun's hour circle (offset = pointing Dec - Sun Dec, + north).
+* cross: scan, then decscan, in one run - the beam's width along both axes. On an equatorial mount the dish does not
+  rotate against RA/Dec, so the two cuts are the same two directions across the dish for the whole run; with the
+  dish's long side along one axis they are its principal planes (a 90 x 60 cm reflector should give an oval beam).
+  Each axis is fitted on its own (rows carry `axis` = ra / dec) and lobe_result.json adds the beam: both FWHMs, the
+  axial ratio and the main-beam solid angle 1.133 x FWHM_ra x FWHM_dec.
 
 Every sample: one raw IQ capture kept on disk (HDF5, like every other ALMITA capture), the band power (linear), the
 ADC clipping fraction, the SDR/LNA temperatures and the mount readback, appended to lobe_samples.csv as it happens
@@ -44,7 +50,10 @@ DEFAULT_HALF_RANGE_FWHM = 1.5
 MAX_HALF_RANGE_DEG = 60.0
 CSV_FIELDS = ("index", "utc", "elapsed_s", "sun_ra_hours", "sun_dec_deg", "point_ra_hours", "point_dec_deg",
               "offset_deg", "separation_deg", "point_alt_deg", "sun_alt_deg", "power_lin", "power_db",
-              "clipping_fraction", "adc_std_codes", "t_sdr_c", "t_lna_c", "tracking", "status", "hdf5")
+              "clipping_fraction", "adc_std_codes", "t_sdr_c", "t_lna_c", "tracking", "status", "hdf5", "axis")
+SCAN_MODES = ("scan", "decscan", "cross")
+MODES = ("drift",) + SCAN_MODES
+MAX_SCAN_DEC_DEG = 85.0              # Dec positions beyond this are refused (the pole: RA steps lose meaning)
 
 
 # ------------------------------------------------------------------ pure pieces (tested)
@@ -115,38 +124,48 @@ def plan(mode: str, now: Time, location: EarthLocation, expected_fwhm_deg: float
             out["problems"].append(f"pointing altitude {point.alt.deg:.1f} deg is below the minimum {min_elevation_deg:.0f} deg")
         if sun_mid.alt.deg < min_elevation_deg:
             out["problems"].append(f"the Sun crosses the beam at altitude {sun_mid.alt.deg:.1f} deg, below {min_elevation_deg:.0f} deg")
-    elif mode == "scan":
+    elif mode in SCAN_MODES:
         n = int(round(2 * half / scan_step_deg)) + 1
-        offsets = np.linspace(-half, half, n)
+        one = np.linspace(-half, half, n)
+        axes = {"scan": ["ra"], "decscan": ["dec"], "cross": ["ra", "dec"]}[mode]
+        offsets = np.concatenate([one] * len(axes))
+        axis_of = np.repeat(axes, n)
+        n = offsets.size
         per_point = capture_s + settle_s + scan_overhead_s
         duration_s = n * per_point
         times = now + (np.arange(n) * per_point) * u.s          # one vectorised transform for every position
         suns = sun_eod(times)
-        ras = (suns.ra.hour + offsets / (15.0 * np.maximum(0.05, np.cos(suns.dec.radian)))) % 24.0
-        altaz = SkyCoord(ra=ras * u.hourangle, dec=suns.dec, frame=CIRS(obstime=times)).transform_to(frame(times))
-        positions = [{"offset_deg": float(x), "ra_hours": float(ra), "dec_deg": float(dec), "alt_deg": float(alt), "az_deg": float(az)}
-                     for x, ra, dec, alt, az in zip(offsets, ras, suns.dec.deg, altaz.alt.deg, altaz.az.deg)]
-        low = [f"{q['offset_deg']:+.1f}" for q in positions if q["alt_deg"] < min_elevation_deg]
+        on_ra = axis_of == "ra"
+        ras = np.where(on_ra, (suns.ra.hour + offsets / (15.0 * np.maximum(0.05, np.cos(suns.dec.radian)))) % 24.0, suns.ra.hour)
+        decs = np.where(on_ra, suns.dec.deg, suns.dec.deg + offsets)
+        too_far = [f"{x:+.1f}" for x, d in zip(offsets, decs) if abs(d) > MAX_SCAN_DEC_DEG]
+        decs_c = np.clip(decs, -89.9, 89.9)
+        altaz = SkyCoord(ra=ras * u.hourangle, dec=decs_c * u.deg, frame=CIRS(obstime=times)).transform_to(frame(times))
+        positions = [{"axis": str(ax), "offset_deg": float(x), "ra_hours": float(ra), "dec_deg": float(dec), "alt_deg": float(alt), "az_deg": float(az)}
+                     for ax, x, ra, dec, alt, az in zip(axis_of, offsets, ras, decs, altaz.alt.deg, altaz.az.deg)]
+        if too_far:
+            out["problems"].append(f"Dec scan position(s) {', '.join(too_far[:6])} pass |Dec| {MAX_SCAN_DEC_DEG:g} deg - shorten the half range")
+        low = [f"{q['axis']} {q['offset_deg']:+.1f}" for q in positions if q["alt_deg"] < min_elevation_deg]
         # SOLAR tracking holds each position for settle + capture: one whose hour angle passes OnStep's meridian limit
         # (+12 min) meanwhile makes OnStep stop and latch the error mid-scan (BL-060)
         from calibration_engine.hi_reference_selection import ONSTEP_MERIDIAN_LIMIT_MIN, SIDEREAL_RATE, hour_angle_hours
         lim = ONSTEP_MERIDIAN_LIMIT_MIN / 60.0
         ha0 = hour_angle_hours(ras, location, times)
         ha1 = ha0 + (settle_s + capture_s + scan_overhead_s) / 3600.0 * SIDEREAL_RATE
-        crossing = [f"{x:+.1f}" for x, a0, a1 in zip(offsets, ha0, ha1) if a0 < lim <= a1]
+        crossing = [f"{ax} {x:+.1f}" for ax, x, a0, a1 in zip(axis_of, offsets, ha0, ha1) if a0 < lim <= a1]
         for q, h in zip(positions, ha0):
             q["hour_angle_h"] = float(h)
         if crossing:
             out["problems"].append(f"scan position(s) {', '.join(crossing)} would reach OnStep's meridian limit (+{ONSTEP_MERIDIAN_LIMIT_MIN:g} min) "
                                    "while held - OnStep would stop and latch the error; start a few minutes later")
-        out.update(positions=positions, duration_s=duration_s, samples_expected=n, scan_step_deg=scan_step_deg,
+        out.update(positions=positions, duration_s=duration_s, samples_expected=n, scan_step_deg=scan_step_deg, axes=axes,
                    point_ra_hours=positions[0]["ra_hours"], point_dec_deg=positions[0]["dec_deg"],
                    point_alt_deg=positions[0]["alt_deg"], point_az_deg=positions[0]["az_deg"],
                    end_utc=(now + duration_s * u.s).utc.isot + "Z")
         if low:
             out["problems"].append(f"{len(low)} scan positions fall below {min_elevation_deg:.0f} deg (offsets {', '.join(low[:6])}{'...' if len(low) > 6 else ''})")
     else:
-        raise ValueError("mode must be drift or scan")
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
     return out
 
 
@@ -258,16 +277,48 @@ def read_samples(csv_path: Path) -> List[Dict[str, Any]]:
             row: Dict[str, Any] = {}
             for k, v in r.items():
                 try:
-                    row[k] = float(v) if k not in ("utc", "status", "hdf5", "tracking") else v
+                    row[k] = float(v) if k not in ("utc", "status", "hdf5", "tracking", "axis") else v
                 except (TypeError, ValueError):
                     row[k] = None
             rows.append(row)
     return rows
 
 
-def fit_samples(rows: List[Dict[str, Any]], max_clipping: float) -> Dict[str, Any]:
-    use = [r for r in rows if r.get("status") == "VALID" and r.get("power_lin") and (r.get("clipping_fraction") or 0) <= max_clipping]
-    return fit_transit([r["offset_deg"] for r in use], [r["power_lin"] for r in use])
+def row_axis(r: Dict[str, Any]) -> str:
+    """ra for drift/scan rows and for CSVs written before the Dec scan existed (no axis column)."""
+    return "dec" if r.get("axis") == "dec" else "ra"
+
+
+def fit_samples(rows: List[Dict[str, Any]], max_clipping: float, axis: Optional[str] = None) -> Dict[str, Any]:
+    """axis None: the RA cut (drift, scan, the RA half of cross) or, when a run has only Dec rows, the Dec cut."""
+    if axis is None:
+        axis = "dec" if rows and all(row_axis(r) == "dec" for r in rows) else "ra"
+    use = [r for r in rows if row_axis(r) == axis and r.get("status") == "VALID" and r.get("power_lin")
+           and (r.get("clipping_fraction") or 0) <= max_clipping]
+    out = fit_transit([r["offset_deg"] for r in use], [r["power_lin"] for r in use])
+    out["axis"] = axis
+    return out
+
+
+GAUSS_SOLID_ANGLE = math.pi / (4 * math.log(2))      # 1.1331: Omega = 1.133 x FWHM_a x FWHM_b for a Gaussian beam
+
+
+def fit_good(f: Optional[Dict[str, Any]]) -> bool:
+    return bool(f) and f.get("status") == "FIT" and (f.get("fwhm_deg") or 0) > 0
+
+
+def beam_from_cuts(fit_ra: Optional[Dict[str, Any]], fit_dec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Both cuts fitted: the two FWHMs, axial ratio, the Gaussian main-beam solid angle and where the peak sat (the
+    pointing error along each axis). None unless both are clean fits - a cut with warnings is not combined."""
+    if not (fit_good(fit_ra) and fit_good(fit_dec)):
+        return None
+    a, b = float(fit_ra["fwhm_deg"]), float(fit_dec["fwhm_deg"])
+    omega = GAUSS_SOLID_ANGLE * math.radians(a) * math.radians(b)
+    return {"fwhm_ra_deg": a, "fwhm_dec_deg": b, "fwhm_geometric_mean_deg": math.sqrt(a * b),
+            "axial_ratio": max(a, b) / min(a, b), "solid_angle_sr": omega,
+            "peak_offset_ra_deg": fit_ra.get("x0_deg"), "peak_offset_dec_deg": fit_dec.get("x0_deg"),
+            "note": "Gaussian main beam from two cuts through the Sun (0.5 deg, a point source for this beam); the cuts "
+                    "are along RA and Dec, which on an equatorial mount stay fixed across the dish"}
 
 
 # ------------------------------------------------------------------ the real run
@@ -320,19 +371,20 @@ class LobeRun:
         return float(SkyCoord(ra=ra_h * u.hourangle, dec=dec * u.deg, frame=CIRS(obstime=t))
                      .transform_to(AltAz(obstime=t, location=self.location)).alt.deg)
 
-    async def sample(self, writer, fh, tracking: str) -> Dict[str, Any]:
+    async def sample(self, writer, fh, tracking: str, axis: str = "ra") -> Dict[str, Any]:
         import sdr_tuning
         a = self.args
         self.index += 1
         path = self.out / "iq" / f"lobe_{self.index:04d}.h5"
         path.parent.mkdir(exist_ok=True)
-        row: Dict[str, Any] = {"index": self.index, "status": "CAPTURE_FAILED", "hdf5": str(path.relative_to(self.out)), "tracking": tracking}
+        row: Dict[str, Any] = {"index": self.index, "status": "CAPTURE_FAILED", "hdf5": str(path.relative_to(self.out)), "tracking": tracking,
+                               "axis": axis}
         try:
             temps = self.temps.read_all() if self.temps else {}
             t, sra, sdec, _ = self._sun()
             await self.sdr.capture(a.capture_seconds, str(path), a.sample_rate,
                                    {**sdr_tuning.tuning_attrs(self.tuning), "gain_requested_db": a.gain,
-                                    "lobe_mode": a.mode, "lobe_index": self.index, "sun_ra_hours": sra, "sun_dec_deg": sdec})
+                                    "lobe_mode": a.mode, "lobe_index": self.index, "lobe_axis": axis, "sun_ra_hours": sra, "sun_dec_deg": sdec})
             pra, pdec = await self.telescope.get_coordinates(force_refresh=True)
             if pra is None or pdec is None:
                 raise RuntimeError("mount readback failed")
@@ -345,7 +397,8 @@ class LobeRun:
             m = band_power(raw)
             spectrum = capture_spectrum(raw).astype(np.float32)
             row.update(utc=t.utc.isot + "Z", elapsed_s=round(time.monotonic() - self.t0, 2), sun_ra_hours=sra, sun_dec_deg=sdec,
-                       point_ra_hours=pra, point_dec_deg=pdec, offset_deg=offset_deg(sra, sdec, pra),
+                       point_ra_hours=pra, point_dec_deg=pdec,
+                       offset_deg=(pdec - sdec) if axis == "dec" else offset_deg(sra, sdec, pra),
                        separation_deg=separation_deg(sra, sdec, pra, pdec), point_alt_deg=self._alt(t, pra, pdec),
                        sun_alt_deg=self._alt(t, sra, sdec), **m,
                        t_sdr_c=(temps.get("sdr") or {}).get("temperature_c"), t_lna_c=(temps.get("lna") or {}).get("temperature_c"),
@@ -359,7 +412,7 @@ class LobeRun:
         writer.writerow({k: row.get(k) for k in CSV_FIELDS})
         fh.flush()
         if row["status"] != "CAPTURE_FAILED":
-            self.log(f"#{self.index:4d} offset {row['offset_deg']:+7.2f} deg  sep {row['separation_deg']:6.2f}  "
+            self.log(f"#{self.index:4d} {axis.upper():3s} offset {row['offset_deg']:+7.2f} deg  sep {row['separation_deg']:6.2f}  "
                      f"P {row['power_db']:7.3f} dB  clip {row['clipping_fraction']:.2%}  {row['status']}")
         return row
 
@@ -400,23 +453,32 @@ class LobeRun:
             raise RuntimeError("OnStep did not confirm TRACK_SOLAR")
         await self.telescope.set_tracking(True)
         for pos in p["positions"]:
+            axis = pos.get("axis", "ra")
             _, sra, sdec, _ = self._sun()                  # re-anchored on the Sun at each step
-            ra = (sra + ra_offset_hours(pos["offset_deg"], sdec)) % 24.0
-            if not await self.telescope.goto(ra, sdec):
-                raise RuntimeError(f"GOTO failed at offset {pos['offset_deg']:+.1f} deg")
+            if axis == "dec":
+                ra, dec = sra, sdec + pos["offset_deg"]
+            else:
+                ra, dec = (sra + ra_offset_hours(pos["offset_deg"], sdec)) % 24.0, sdec
+            if not await self.telescope.goto(ra, dec):
+                raise RuntimeError(f"GOTO failed at {axis} offset {pos['offset_deg']:+.1f} deg")
             await asyncio.sleep(a.settle)
-            await self.sample(writer, fh, "on")
+            await self.sample(writer, fh, "on", axis)
         await self.telescope.set_tracking(False)
 
     def write_result(self, p: Dict[str, Any], status: str, stop_report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         rows = read_samples(self.csv_path)
         fit = fit_samples(rows, self.args.max_clipping)
         fit.pop("profile", None)
+        extra: Dict[str, Any] = {}
+        if any(row_axis(r) == "dec" for r in rows) and fit.get("axis") == "ra":
+            fd = fit_samples(rows, self.args.max_clipping, "dec")
+            fd.pop("profile", None)
+            extra = {"fit_dec": fd, "beam": beam_from_cuts(fit, fd)}
         res = {"status": status, "ended_utc": datetime.now(timezone.utc).isoformat(), "mount_device": self.args.device,
                "plan": p, "samples": len(rows),
                "valid": sum(1 for r in rows if r.get("status") == "VALID"), "clipped": sum(1 for r in rows if r.get("status") == "CLIPPED"),
                "gain_db": self.args.gain, "rtl_agc": (self.tuning or {}).get("rtl_agc"), "tuning": self.tuning, "fit": fit, "notes": self.notes,
-               "stop_report": stop_report, "location": self.args.location_note}
+               "stop_report": stop_report, "location": self.args.location_note, **extra}
         (self.out / "lobe_result.json").write_text(json.dumps(res, indent=2, default=str))
         return res
 
@@ -442,7 +504,7 @@ class LobeRun:
         fh.flush()
         try:
             await self.connect()
-            await (self.run_drift(p, writer, fh) if a.mode == "drift" else self.run_scan(p, writer, fh))
+            await (self.run_drift(p, writer, fh) if a.mode == "drift" else self.run_scan(p, writer, fh))  # every scan mode
             status = "COMPLETE"
         except (KeyboardInterrupt, asyncio.CancelledError):
             status = "STOPPED"
@@ -467,8 +529,15 @@ class LobeRun:
                     pass
         res = self.write_result(p, status, stop_report)
         f = res["fit"]
+        if res.get("fit_dec", {}).get("fwhm_deg") is not None:
+            d = res["fit_dec"]
+            self.log(f"FIT DEC {d['status']}: FWHM {d['fwhm_deg']:.2f} deg, peak at {d['x0_deg']:+.2f} deg, SNR {d.get('snr') or 0:.1f}")
+        if res.get("beam"):
+            b = res["beam"]
+            self.log(f"BEAM {b['fwhm_ra_deg']:.2f} x {b['fwhm_dec_deg']:.2f} deg (axial ratio {b['axial_ratio']:.2f}), "
+                     f"solid angle {b['solid_angle_sr']:.4f} sr")
         if f.get("fwhm_deg") is not None:
-            self.log(f"FIT {f['status']}: FWHM {f['fwhm_deg']:.2f} deg, peak at {f['x0_deg']:+.2f} deg, SNR {f.get('snr') or 0:.1f}"
+            self.log(f"FIT {f.get('axis', 'ra').upper()} {f['status']}: FWHM {f['fwhm_deg']:.2f} deg, peak at {f['x0_deg']:+.2f} deg, SNR {f.get('snr') or 0:.1f}"
                      + (f"; {'; '.join(f['flags'])}" if f.get("flags") else ""))
         else:
             self.log(f"FIT {f.get('status')}")
@@ -480,7 +549,8 @@ def parse_args(argv=None):
     import sdr_tuning
     cfg = json.loads((ROOT / "observer_config.json").read_text())
     p = argparse.ArgumentParser(description="ALMITA LOBE: beam from a solar transit (drift or scan)")
-    p.add_argument("--mode", choices=("drift", "scan"), default="drift")
+    p.add_argument("--mode", choices=MODES, default="drift",
+                   help="drift | scan (RA) | decscan (Dec) | cross (RA then Dec: both beam widths)")
     p.add_argument("--expected-fwhm", type=float, default=float(cfg.get("observation_defaults", {}).get("beam_fwhm_deg")
                                                                    or cfg.get("beam_fwhm_deg") or 20.0),
                    help="expected beam FWHM (deg) - provisional; sets the half range")

@@ -27,11 +27,14 @@
   function setMode(m) {
     mode = m;
     $("mode-drift").classList.toggle("active", m === "drift");
-    $("mode-scan").classList.toggle("active", m === "scan");
-    $("row-step").hidden = m !== "scan";
-    $("mode-note").textContent = m === "drift"
-      ? "DRIFT: the mount points west of the Sun by the half range, tracking goes OFF and the Earth's rotation carries the Sun through the beam and out the other side. Nothing moves while it measures."
-      : "SCAN: SOLAR tracking on, the mount steps in RA from -half range to +half range across the Sun (one capture per position).";
+    for (const k of ["scan", "decscan", "cross"]) $(`mode-${k}`).classList.toggle("active", m === k);
+    $("row-step").hidden = m === "drift";
+    $("mode-note").textContent = {
+      drift: "DRIFT: the mount points west of the Sun by the half range, tracking goes OFF and the Earth's rotation carries the Sun through the beam and out the other side. Nothing moves while it measures.",
+      scan: "SCAN RA: SOLAR tracking on, the mount steps in RA from -half range to +half range across the Sun (one capture per position).",
+      decscan: "SCAN DEC: SOLAR tracking on, the mount steps in declination along the Sun's hour circle, from -half range (south) to +half range (north).",
+      cross: "CROSS: the RA scan, then the Dec scan, in one run. Each cut is fitted on its own; with both clean the page shows the beam's two widths, how oval it is and its solid angle. On an equatorial mount the dish does not turn against RA/Dec, so the two cuts stay the same two directions across the dish.",
+    }[m];
     refreshStatus();
   }
 
@@ -144,14 +147,18 @@
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     ctx.fillText(`band power (linear, arb.)  ${pMin.toExponential(2)} … ${pMax.toExponential(2)}`, L + (w - L - R) / 2, h - B + 8);
     ctx.textBaseline = "bottom"; ctx.fillText("time ↓ (offset of the Sun from the beam)", L + (w - L - R) / 2, T - 6);
-    // fit (background + Gaussian) evaluated at each sample's offset, drawn along time
-    const f = data.fit;
-    if (f && U.finite(f.fwhm_deg)) {
+    // fit (background + Gaussian) evaluated at each sample's offset, drawn along time - each axis with its own fit
+    const axisOf = (r) => (r.axis === "dec" ? "dec" : "ra");
+    const cuts = [[data.fit, data.fit && data.fit.axis === "dec" ? "dec" : "ra"]];
+    if (data.fit_dec) cuts.push([data.fit_dec, "dec"]);
+    for (const [f, axis] of cuts) {
+      if (!f || !U.finite(f.fwhm_deg)) continue;
       const model = (x) => f.background_b0 + f.background_slope_per_deg * x + f.amplitude_lin * Math.exp(-4 * Math.LN2 * (x - f.x0_deg) ** 2 / f.fwhm_deg ** 2);
       const bg = (x) => f.background_b0 + f.background_slope_per_deg * x;
+      const mine = rows.filter((r) => U.finite(r.offset_deg) && axisOf(r) === axis);
       for (const [fn, col, dash] of [[bg, U.cssRgba("--muted", 0.8, "#91a2ad"), [4, 4]], [model, U.cssVar("--warn", "#e6b85c"), []]]) {
         ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash(dash); ctx.beginPath();
-        rows.filter((r) => U.finite(r.offset_deg)).forEach((r, i) => { const x = X(fn(r.offset_deg)), y = Y(r.elapsed_s); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+        mine.forEach((r, i) => { const x = X(fn(r.offset_deg)), y = Y(r.elapsed_s); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
         ctx.stroke(); ctx.setLineDash([]);
       }
     }
@@ -166,12 +173,19 @@
     const clipped = rows.filter((r) => r.status === "CLIPPED").length, failed = rows.filter((r) => r.status === "CAPTURE_FAILED").length;
     const last = rows[rows.length - 1];
     const lines = [`${data.dir} · ${rows.length} samples (${clipped} clipped, ${failed} failed)` + (res ? ` · RESULT ${res.status}` : " · running")];
-    if (last) lines.push(`last: ${whenText(last.utc)} · Sun offset ${U.fixed(last.offset_deg, 2, "°")} · P ${U.fixed(last.power_db, 3, "dB")} · clip ${U.fixed(100 * (last.clipping_fraction || 0), 3, "%")} · SDR ${U.fixed(last.t_sdr_c, 1, "°C")} LNA ${U.fixed(last.t_lna_c, 1, "°C")} · tracking ${last.tracking}`);
-    if (f && U.finite(f.fwhm_deg)) {
-      lines.push(`FIT (${f.status}, ${f.n} samples, linear power, background subtracted): FWHM ${f.fwhm_deg.toFixed(2)}° · peak at ${f.x0_deg >= 0 ? "+" : ""}${f.x0_deg.toFixed(2)}° · ` +
-                 `peak/background ${U.fixed(f.peak_over_background, 4)} · SNR ${U.fixed(f.snr, 1)}`);
-      for (const w of f.flags || []) lines.push(`  ! ${w}`);
-    } else if (f) lines.push(`FIT: ${f.status}`);
+    if (last) lines.push(`last: ${whenText(last.utc)} · ${last.axis === "dec" ? "Dec" : "RA"} offset ${U.fixed(last.offset_deg, 2, "°")} · P ${U.fixed(last.power_db, 3, "dB")} · clip ${U.fixed(100 * (last.clipping_fraction || 0), 3, "%")} · SDR ${U.fixed(last.t_sdr_c, 1, "°C")} LNA ${U.fixed(last.t_lna_c, 1, "°C")} · tracking ${last.tracking}`);
+    for (const g of [f, data.fit_dec]) {
+      if (!g) continue;
+      const ax = g.axis === "dec" ? "DEC" : "RA";
+      if (U.finite(g.fwhm_deg)) {
+        lines.push(`FIT ${ax} (${g.status}, ${g.n} samples, linear power, background subtracted): FWHM ${g.fwhm_deg.toFixed(2)}° · peak at ${g.x0_deg >= 0 ? "+" : ""}${g.x0_deg.toFixed(2)}° · ` +
+                   `peak/background ${U.fixed(g.peak_over_background, 4)} · SNR ${U.fixed(g.snr, 1)}`);
+        for (const w of g.flags || []) lines.push(`  ! ${w}`);
+      } else lines.push(`FIT ${ax}: ${g.status}`);
+    }
+    const b = data.beam;
+    if (b) lines.push(`BEAM: ${b.fwhm_ra_deg.toFixed(2)}° (RA) × ${b.fwhm_dec_deg.toFixed(2)}° (Dec) · axial ratio ${b.axial_ratio.toFixed(2)} · ` +
+                      `solid angle ${b.solid_angle_sr.toFixed(4)} sr · peak off by ${U.fixed(b.peak_offset_ra_deg, 2, "°")} RA, ${U.fixed(b.peak_offset_dec_deg, 2, "°")} Dec`);
     $("fit-out").textContent = lines.join("\n");
   }
 
@@ -223,13 +237,14 @@
   }
 
   $("mode-drift").addEventListener("click", () => setMode("drift"));
-  $("mode-scan").addEventListener("click", () => setMode("scan"));
+  for (const k of ["scan", "decscan", "cross"]) $(`mode-${k}`).addEventListener("click", () => setMode(k));
   for (const id of ["p-fwhm", "p-half", "p-every", "p-capture", "p-step", "p-gain", "p-minel"]) $(id).addEventListener("change", refreshStatus);
   $("p-confirm").addEventListener("input", updateStart);
   $("btn-start").addEventListener("click", U.guard($("btn-start"), async () => {
     const p = status.plan;
     if (!confirm(`START the ${p.mode.toUpperCase()} transit?\n\nThe mount will slew to RA ${p.point_ra_hours.toFixed(4)} h Dec ${p.point_dec_deg.toFixed(3)}° ` +
-                 `(alt ${p.point_alt_deg.toFixed(1)}°)` + (p.mode === "drift" ? " and switch tracking OFF" : " and step across the Sun") +
+                 `(alt ${p.point_alt_deg.toFixed(1)}°)` + (p.mode === "drift" ? " and switch tracking OFF" : p.mode === "cross" ? " and step across the Sun in RA, then in Dec" :
+                  p.mode === "decscan" ? " and step across the Sun in Dec" : " and step across the Sun in RA") +
                  `.\nDuration ${U.hms(p.duration_s)}, gain ${status.params.gain} dB fixed.`)) return;
     if (await job.start("lobe", params(), "MOVE")) { $("p-confirm").value = ""; liveDir = null; }
     refreshStatus();

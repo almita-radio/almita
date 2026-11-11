@@ -1116,9 +1116,10 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
         return ([PY, "fswitch.py", "--cycles", str(cycles), "--out-dir", out, "--web-job", job_id],
                 {"output_dir": out, "cycles": cycles})
     if stage == "lobe":
+        import lobe_transit
         mode = str(p.get("mode", "drift"))
-        if mode not in ("drift", "scan"):
-            raise ValueError("mode must be drift or scan")
+        if mode not in lobe_transit.MODES:
+            raise ValueError(f"mode must be one of {', '.join(lobe_transit.MODES)}")
         al = lobe_alignment()
         if not al["ok"]:
             raise ValueError(f"LOBE needs a valid real solar ALIGN first: {al['detail']}")
@@ -2799,8 +2800,8 @@ def lobe_status(p: Dict[str, Any]) -> Dict[str, Any]:
     from astropy.coordinates import AltAz, CIRS, SkyCoord
     import astropy.units as u
     q = _lobe_params(p)
-    if q["mode"] not in ("drift", "scan"):
-        raise ValueError("mode must be drift or scan")
+    if q["mode"] not in lt.MODES:
+        raise ValueError(f"mode must be one of {', '.join(lt.MODES)}")
     cfg = json.loads((ROOT / "observer_config.json").read_text())
     loc = lt.observer_location(cfg)
     now = Time.now()
@@ -2836,10 +2837,12 @@ def lobe_samples(rel_dir: str) -> Dict[str, Any]:
     csv_path = d / "lobe_samples.csv"
     rows = lt.read_samples(csv_path)
     keep = ("index", "utc", "elapsed_s", "offset_deg", "separation_deg", "power_lin", "power_db", "clipping_fraction",
-            "t_sdr_c", "t_lna_c", "tracking", "status")
+            "t_sdr_c", "t_lna_c", "tracking", "status", "axis")
     sig = (str(csv_path), csv_path.stat().st_mtime_ns if csv_path.is_file() else 0)
     if _LOBE_FIT_CACHE.get("sig") != sig:
-        _LOBE_FIT_CACHE.update(sig=sig, fit=lt.fit_samples(rows, 0.001) if rows else None)
+        fit = lt.fit_samples(rows, 0.001) if rows else None
+        fit_dec = lt.fit_samples(rows, 0.001, "dec") if fit and fit.get("axis") == "ra" and any(lt.row_axis(r) == "dec" for r in rows) else None
+        _LOBE_FIT_CACHE.update(sig=sig, fit=fit, fit_dec=fit_dec, beam=lt.beam_from_cuts(fit, fit_dec) if fit_dec else None)
     plan = _read_json(d / "lobe_plan.json") or {}
     last_spectrum = None
     spath, nfft = d / "lobe_spectra.f32", int(plan.get("spectrum_nfft") or lt.SPECTRUM_NFFT)
@@ -2858,7 +2861,8 @@ def lobe_samples(rel_dir: str) -> Dict[str, Any]:
                     break
     return {"dir": str(d.relative_to(ROOT)) if d.is_relative_to(ROOT) else str(d), "plan": plan, "last_spectrum": last_spectrum,
             "result": _read_json(d / "lobe_result.json"),
-            "samples": [{k: r.get(k) for k in keep} for r in rows], "fit": _LOBE_FIT_CACHE["fit"]}
+            "samples": [{k: r.get(k) for k in keep} for r in rows], "fit": _LOBE_FIT_CACHE["fit"],
+            "fit_dec": _LOBE_FIT_CACHE.get("fit_dec"), "beam": _LOBE_FIT_CACHE.get("beam")}
 
 
 # ------------------------------------------------------------------ MONITOR: the running campaign on the sky map

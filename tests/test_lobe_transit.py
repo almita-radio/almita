@@ -289,3 +289,83 @@ def _clock():
         t["v"] += 20.0                      # every call jumps 20 s: the drift loop reaches its deadline after a few samples
         return t["v"]
     return mono
+
+
+# ------------------------------------------------------------------ Dec scan and cross (both beam widths)
+def test_decscan_plan_steps_in_declination_along_the_suns_hour_circle():
+    p = lt.plan("decscan", NOON, LOC, 10, 1.5, 5, 1, scan_step_deg=1.0, settle_s=2, min_elevation_deg=10)
+    pos = p["positions"]
+    assert p["axes"] == ["dec"] and len(pos) == 31 and {q["axis"] for q in pos} == {"dec"}
+    sun = lt.sun_eod(NOON)
+    for q in (pos[0], pos[15], pos[-1]):
+        assert q["dec_deg"] - float(sun.dec.deg) == pytest.approx(q["offset_deg"], abs=0.01)
+        assert lt.wrap180((q["ra_hours"] - float(sun.ra.hour)) * 15) == pytest.approx(0, abs=0.2)   # the Sun's RA (moves ~0.01 deg/min)
+    assert pos[0]["offset_deg"] == -15 and pos[-1]["offset_deg"] == 15
+
+
+def test_cross_plan_is_the_ra_scan_then_the_dec_scan():
+    p = lt.plan("cross", NOON, LOC, 10, 1.0, 5, 1, scan_step_deg=1.0, settle_s=2, min_elevation_deg=10)
+    pos = p["positions"]
+    assert p["axes"] == ["ra", "dec"] and len(pos) == 42
+    assert [q["axis"] for q in pos] == ["ra"] * 21 + ["dec"] * 21
+    one = lt.plan("scan", NOON, LOC, 10, 1.0, 5, 1, scan_step_deg=1.0, settle_s=2, min_elevation_deg=10)
+    assert p["duration_s"] == pytest.approx(2 * one["duration_s"])
+    sun = lt.sun_eod(NOON)
+    assert all(q["dec_deg"] == pytest.approx(float(sun.dec.deg), abs=0.01) for q in pos[:21])
+
+
+def test_a_dec_scan_too_close_to_the_pole_is_refused(monkeypatch):
+    from astropy.coordinates import CIRS, SkyCoord
+    def high_sun(t):
+        n = np.shape(t.jd)
+        return SkyCoord(ra=np.full(n, 10.0) * u.hourangle, dec=np.full(n, 70.0) * u.deg, frame=CIRS(obstime=t))
+    monkeypatch.setattr(lt, "sun_eod", high_sun)
+    p = lt.plan("decscan", NOON, LOC, 20, 1.5, 5, 1, scan_step_deg=1.0, settle_s=2, min_elevation_deg=-90)
+    assert any("|Dec| 85" in q for q in p["problems"])
+
+
+def _cut(fwhm, x0, seed):
+    rng = np.random.default_rng(seed)
+    x = np.linspace(-45, 45, 61)
+    y = 100 + 0.05 * x + 12 * np.exp(-4 * math.log(2) * (x - x0) ** 2 / fwhm ** 2) + rng.normal(0, 0.15, x.size)
+    return x, y
+
+
+def test_each_axis_is_fitted_on_its_own_and_the_beam_combines_them():
+    rows = []
+    for axis, (fw, x0) in (("ra", (18.0, 1.5)), ("dec", (26.0, -2.0))):
+        x, y = _cut(fw, x0, seed=len(axis))
+        rows += [{"axis": axis, "offset_deg": float(a), "power_lin": float(b), "status": "VALID", "clipping_fraction": 0} for a, b in zip(x, y)]
+    fr, fd = lt.fit_samples(rows, 0.001), lt.fit_samples(rows, 0.001, "dec")
+    assert fr["axis"] == "ra" and fr["fwhm_deg"] == pytest.approx(18, rel=0.03) and fr["x0_deg"] == pytest.approx(1.5, abs=0.3)
+    assert fd["axis"] == "dec" and fd["fwhm_deg"] == pytest.approx(26, rel=0.03) and fd["x0_deg"] == pytest.approx(-2.0, abs=0.3)
+    b = lt.beam_from_cuts(fr, fd)
+    assert b["axial_ratio"] == pytest.approx(26 / 18, rel=0.05)
+    assert b["solid_angle_sr"] == pytest.approx(1.1331 * math.radians(18) * math.radians(26), rel=0.06)
+    assert b["peak_offset_ra_deg"] == fr["x0_deg"] and b["peak_offset_dec_deg"] == fd["x0_deg"]
+    assert lt.beam_from_cuts(fr, {**fd, "status": "FIT WITH WARNINGS"}) is None       # a doubtful cut is not combined
+
+
+def test_old_csvs_without_an_axis_column_are_the_ra_cut():
+    x, y = _cut(20.0, 0.0, seed=3)
+    rows = [{"offset_deg": float(a), "power_lin": float(b), "status": "VALID", "clipping_fraction": 0} for a, b in zip(x, y)]
+    f = lt.fit_samples(rows, 0.001)
+    assert f["axis"] == "ra" and f["fwhm_deg"] == pytest.approx(20, rel=0.03)
+    assert lt.fit_samples([{**r, "axis": "dec"} for r in rows], 0.001)["axis"] == "dec"    # a Dec-only run fits Dec
+
+
+def test_a_cross_run_with_fake_hardware_moves_in_dec_for_the_second_half(tmp_path, monkeypatch):
+    sun = lt.sun_eod(Time.now())
+    sd = float(sun.dec.deg)
+    pos = ([{"axis": "ra", "offset_deg": x, "ra_hours": 0, "dec_deg": sd, "alt_deg": 40, "az_deg": 90} for x in (-2.0, 0.0, 2.0)]
+           + [{"axis": "dec", "offset_deg": x, "ra_hours": 0, "dec_deg": sd + x, "alt_deg": 40, "az_deg": 90} for x in (-2.0, 0.0, 2.0)])
+    p = {"mode": "cross", "half_range_deg": 2.0, "duration_s": 60, "point_alt_deg": 40.0, "positions": pos, "problems": [], "axes": ["ra", "dec"]}
+    rc, mount, res, rows = _fake_run(tmp_path, monkeypatch, "cross", p)
+    assert rc == 0 and res["status"] == "COMPLETE"
+    gotos = [c for c in mount.calls if c[0] == "goto"]
+    assert [round(g[2] - sd, 0) for g in gotos[3:]] == [-2.0, 0.0, 2.0]        # the Dec half moves in declination...
+    assert all(abs(g[2] - sd) < 0.01 for g in gotos[:3])                       # ...the RA half does not
+    assert [r["axis"] for r in rows] == ["ra"] * 3 + ["dec"] * 3
+    assert [round(r["offset_deg"]) for r in rows[3:]] == [-2, 0, 2]           # Dec offset = readback Dec - Sun Dec
+    assert "fit_dec" in res and res["fit"]["axis"] == "ra"
+    assert mount.calls[-2:] == [("tracking", False), ("disconnect",)]

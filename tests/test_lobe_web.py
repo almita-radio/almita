@@ -125,3 +125,38 @@ def test_samples_route_returns_the_newest_valid_spectrum(tmp_path, monkeypatch):
     assert s["sample_index"] == 1 and s["offset_deg"] == -3.0 and s["utc"] == "2026-10-15T15:00:00Z"
     assert s["peak"]["freq_mhz"] == pytest.approx(s["freq_mhz"][200]) and s["peak"]["excess_db"] > 4
     assert len(ops.lobe_samples(str(d))["samples"]) == 2
+
+
+def test_dec_and_cross_modes_reach_the_command_and_the_status(monkeypatch):
+    monkeypatch.setattr(ops, "lobe_alignment", lambda *a, **k: {"ok": True, "verdict": "ALIGNED (SYNCED)", "detail": "x"})
+    for mode in ("decscan", "cross"):
+        argv, meta = ops.build_command("lobe", {"mode": mode, "scan_step": 1}, "JOB-1")
+        assert argv[argv.index("--mode") + 1] == mode and meta["mode"] == mode
+        s = ops.lobe_status({"mode": mode, "expected_fwhm": "20", "half_range_fwhm": "1.5"})
+        assert s["plan"]["mode"] == mode and s["plan"]["positions"]
+
+
+def test_samples_route_fits_each_axis_of_a_cross_run(tmp_path, monkeypatch):
+    import csv as _csv, math
+    import numpy as np
+    import lobe_transit as lt
+    d = tmp_path / "WEB-LOBE-CROSS-x"
+    d.mkdir()
+    rng = np.random.default_rng(5)
+    with open(d / "lobe_samples.csv", "w", newline="") as fh:
+        w = _csv.DictWriter(fh, fieldnames=lt.CSV_FIELDS)
+        w.writeheader()
+        i = 0
+        for axis, fw in (("ra", 18.0), ("dec", 25.0)):
+            for x in np.linspace(-40, 40, 41):
+                i += 1
+                p = 100 + 10 * math.exp(-4 * math.log(2) * x ** 2 / fw ** 2) + rng.normal(0, 0.1)
+                w.writerow({"index": i, "utc": "x", "elapsed_s": i * 10, "offset_deg": x, "power_lin": p, "power_db": 10 * math.log10(p),
+                            "clipping_fraction": 0, "status": "VALID", "axis": axis})
+    monkeypatch.setitem(ops.SERVE_ROOTS, "lobe", tmp_path)
+    monkeypatch.setattr(ops, "ROOT", tmp_path)
+    ops._LOBE_FIT_CACHE.clear()
+    out = ops.lobe_samples(str(d))
+    assert out["fit"]["axis"] == "ra" and abs(out["fit"]["fwhm_deg"] - 18) < 1
+    assert out["fit_dec"]["axis"] == "dec" and abs(out["fit_dec"]["fwhm_deg"] - 25) < 1
+    assert abs(out["beam"]["axial_ratio"] - 25 / 18) < 0.08 and {s["axis"] for s in out["samples"]} == {"ra", "dec"}
