@@ -76,7 +76,7 @@ def test_it_refuses_a_bad_fit_a_bad_flux_and_a_missing_y_factor(tmp_path):
 FIXTURE = Path(__file__).parent / "fixtures" / "solar_radio_flux_20261111.json"     # NOAA SWPC, fetched 2026-11-11
 
 
-def test_the_flux_is_the_good_1415_value_closest_to_the_transit_and_the_spread_its_uncertainty():
+def test_the_flux_is_the_mean_of_the_trusted_stations_closest_to_the_transit():
     from datetime import datetime, timezone
     recs = json.loads(FIXTURE.read_text())
     f = la.flux_from_rstn(recs, datetime(2026, 11, 10, 16, 0, tzinfo=timezone.utc))
@@ -84,8 +84,12 @@ def test_the_flux_is_the_good_1415_value_closest_to_the_transit_and_the_spread_i
     # within 18 h of 2026-11-10 16:00 UTC: Learmonth 89 (11-10 04:52), San Vito 93, Sagamore Hill 82, Learmonth 92 (11-11 04:0x,
     # reported twice: counted once); Kaena Point 74 is "Uncertain" -> left out; San Vito 79 (11-11 10:34) is 18.6 h away
     assert st == [("Learmonth", 89.0), ("Learmonth", 92.0), ("Sagamore Hill", 82.0), ("San Vito", 93.0)]
-    assert f["chosen"]["station"] == "Sagamore Hill" and f["flux_sfu"] == 82.0          # 17:19 UTC: 1.3 h from 16:00
-    assert f["median_sfu"] == 90.5 and f["spread_fraction"] == pytest.approx((93 - 82) / 2 / 82.0)
+    # Learmonth: 89 (-11.1 h) beats 92 (+12.1 h); San Vito 93 (-5.3 h); Sagamore Hill 82 is listed, not used
+    assert sorted((u["station"], u["flux_sfu"]) for u in f["used"]) == [("Learmonth", 89.0), ("San Vito", 93.0)]
+    assert f["flux_sfu"] == 91.0 and f["spread_fraction"] == pytest.approx(2 / 91.0) and f["warning"] is None
+    only_others = [r for r in recs if r["common_name"] not in la.TRUSTED_STATIONS]
+    g = la.flux_from_rstn(only_others, datetime(2026, 11, 10, 16, 0, tzinfo=timezone.utc))
+    assert "median" in g["rule"] and "Kaena" in g["warning"] and g["flux_sfu"] == 82.0     # Sagamore 82 alone (Kaena "Uncertain")
     with pytest.raises(ValueError, match="by hand"):
         la.flux_from_rstn(recs, datetime(2025, 1, 1, tzinfo=timezone.utc))
 
@@ -99,14 +103,14 @@ def test_download_keeps_a_copy_and_offline_reuses_it(tmp_path):
         dest.write_text(FIXTURE.read_text())
         return dest
     r = la.analyse(d, None, TSYS, download=fake_download)
-    assert r["sun_flux_sfu"] == 82.0 and r["sun_flux"]["fetched"] == "downloaded"
-    assert r["flux_uncertainty"] == pytest.approx(max(0.10, 5.5 / 82.0))
+    assert r["sun_flux_sfu"] == 91.0 and r["sun_flux"]["fetched"] == "downloaded"
+    assert r["flux_uncertainty"] == pytest.approx(0.10)                                   # stations agree within 2 %: the floor
     assert (d / "aeff" / "solar_radio_flux.json").is_file()
 
     def offline(dest):
         raise OSError("no network")
     r2 = la.analyse(d, None, TSYS, download=offline)
-    assert r2["sun_flux_sfu"] == 82.0 and r2["sun_flux"]["fetched"].startswith("offline")
+    assert r2["sun_flux_sfu"] == 91.0 and r2["sun_flux"]["fetched"].startswith("offline")
     d2 = tmp_path / "other"
     d2.mkdir()
     (d2 / "lobe_result.json").write_text((d / "lobe_result.json").read_text())

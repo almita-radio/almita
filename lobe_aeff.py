@@ -5,11 +5,14 @@
                         [--sun-flux-sfu 85 | --rstn-file FILE] [--geometric-area-m2 0.463] [--flux-uncertainty 0.10]
 
 The Sun's flux: by default it is DOWNLOADED from NOAA SWPC (services.swpc.noaa.gov/json/solar-radio-flux.json: the
-RSTN and other solar observatories' noon fluxes, ~30 days kept). Of the good-quality 1415 MHz values within
-RSTN_WINDOW_H of the transit, the one measured CLOSEST IN TIME is used (operator 2026-11-11: "la de Chile" - Sagamore
-Hill's noon is ~14 h Chile, when ALMITA scans the Sun; when it has no good value the next closest is taken). The
-spread of all of them (stations differ by ~10-15 % on the same day - their own calibrations, the quiet Sun changes
-over days) becomes the flux uncertainty when it is larger than --flux-uncertainty; their median is kept alongside. The downloaded file is kept in
+RSTN and other solar observatories' noon fluxes, ~30 days kept). The flux is the MEAN OF THE TRUSTED STATIONS
+(San Vito and Learmonth), each one's good-quality 1415 MHz value closest in time to the transit within
+RSTN_WINDOW_H. Why (30 days of the feed, 2026-10-12..11-11): San Vito and Learmonth report 27-28 good days of 30 and
+agree within ~2-3 %; Kaena Point reads ~9 % below them (19 good days) and Sagamore Hill had 2 good days. Where the
+Sun is seen from does not matter - its flux is the same for the whole Earth; each station's calibration does.
+The other stations are listed but not used. With neither trusted station in the window, the median of whatever
+good values exist is used, with a warning. The spread between the values used becomes the flux uncertainty when it
+is larger than --flux-uncertainty (10 %). The downloaded file is kept in
 <run>/aeff/ and reused when there is no internet (offline-first). --sun-flux-sfu overrides it by hand.
 
 The Sun is a calibrated source. Solar radio observatories (the RSTN network: Learmonth, San Vito, Sagamore Hill,
@@ -53,6 +56,7 @@ HI_REST_HZ = 1420405751.768
 RSTN_URL = "https://services.swpc.noaa.gov/json/solar-radio-flux.json"
 RSTN_FREQ_MHZ = 1415
 RSTN_WINDOW_H = 18.0
+TRUSTED_STATIONS = ("San Vito", "Learmonth")
 # the reflector: 90 x 60 cm, long sides straight, short ends rounded (operator 2026-11-11). With semicircular ends
 # (radius 30 cm) the outline is 0.30 x 0.60 + pi 0.30^2 = 0.463 m^2; a plain rectangle would be 0.54 m^2.
 DEFAULT_GEOMETRIC_AREA_M2 = 0.463
@@ -117,11 +121,24 @@ def flux_from_rstn(records, when, window_h: float = RSTN_WINDOW_H, freq_mhz: int
     if not uniq:
         raise ValueError(f"no good-quality {freq_mhz} MHz solar flux within {window_h:g} h of the transit ({when.isoformat()}) - "
                          "give it by hand with --sun-flux-sfu")
-    fl = sorted(u["flux_sfu"] for u in uniq)
-    med = float(np.median(fl))
-    near = min(uniq, key=lambda u: abs(u["hours_from_transit"]))
-    return {"flux_sfu": near["flux_sfu"], "chosen": near, "rule": "closest in time to the transit", "median_sfu": med,
-            "values": uniq, "spread_fraction": (fl[-1] - fl[0]) / 2 / near["flux_sfu"] if len(fl) > 1 else None,
+    chosen = []
+    for st in TRUSTED_STATIONS:
+        mine = [u for u in uniq if u["station"] == st]
+        if mine:
+            chosen.append(min(mine, key=lambda u: abs(u["hours_from_transit"])))
+    warning = None
+    if chosen:
+        flux = float(np.mean([u["flux_sfu"] for u in chosen]))
+        rule = f"mean of the trusted stations ({', '.join(TRUSTED_STATIONS)}), each one's value closest to the transit"
+    else:
+        chosen = uniq
+        flux = float(np.median([u["flux_sfu"] for u in uniq]))
+        rule = "median of every good value (no trusted station in the window)"
+        warning = (f"neither {' nor '.join(TRUSTED_STATIONS)} reported a good {freq_mhz} MHz value within {window_h:g} h: "
+                   "the median of the other stations is used (Kaena Point reads ~9 % low)")
+    fl = [u["flux_sfu"] for u in chosen]
+    return {"flux_sfu": flux, "used": chosen, "rule": rule, "warning": warning, "values": uniq,
+            "spread_fraction": (max(fl) - min(fl)) / 2 / flux if len(fl) > 1 else None,
             "window_h": window_h, "frequency_mhz": freq_mhz, "source": RSTN_URL}
 
 
@@ -231,10 +248,14 @@ def main(argv=None) -> int:
         return 2
     sf = r["sun_flux"]
     if sf.get("values"):
-        c = sf["chosen"]
-        print(f"Sun flux {r['sun_flux_sfu']:.0f} sfu at {sf['frequency_mhz']} MHz: {c['station']}, {c['hours_from_transit']:+.1f} h from the transit "
-              f"(closest); all within {sf['window_h']:g} h: " +
-              ", ".join(f"{v['station']} {v['flux_sfu']:.0f}" for v in sf["values"]) + f", median {sf['median_sfu']:.1f} [{sf['fetched']}]")
+        print(f"Sun flux {r['sun_flux_sfu']:.1f} sfu at {sf['frequency_mhz']} MHz = " +
+              " + ".join(f"{u['station']} {u['flux_sfu']:.0f} ({u['hours_from_transit']:+.1f} h)" for u in sf["used"]) +
+              f" [{sf['rule']}; {sf['fetched']}]")
+        others = [v for v in sf["values"] if v not in sf["used"]]
+        if others:
+            print("  not used: " + ", ".join(f"{v['station']} {v['flux_sfu']:.0f} ({v['hours_from_transit']:+.1f} h)" for v in others))
+        if sf.get("warning"):
+            print("  WARNING: " + sf["warning"])
     print(f"Sun peak / background {r['peak']['ratio']:.4f} ({r['peak']['cuts']} cut(s)) x Tsys {r['tsys']['tsys_k']:.0f} K "
           f"= delta T_A {r['delta_t_a_k']:.1f} K")
     print(f"effective area {r['effective_area_m2']:.3f} m^2 [{r['effective_area_range_m2'][0]:.3f}-{r['effective_area_range_m2'][1]:.3f}]")
