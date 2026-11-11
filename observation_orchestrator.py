@@ -262,6 +262,9 @@ def _capture_args(plan: Dict[str, Any], runtime_dir: str, device_name: Optional[
         args += ["--device", device_name]
     if plan["requested"]["capture"].get("frequency_switching"):
         args.append("--fswitch")      # BL-100: every point frequency-switched (capture.py --fswitch)
+        centre = plan["requested"]["capture"].get("frequency_switching_center")
+        if centre is not None:        # BL-105: per-point centre of the folded window ("auto" or km/s LSRK)
+            args += ["--fswitch-center", str(centre)]
     if plan["rfi_ref"]["enabled"]:
         args += [
             "--rfi-ref-enabled",

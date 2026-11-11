@@ -34,6 +34,21 @@
   let pollError = false;             // the banner currently shows a POLLING failure (it may be cleared by a good poll; other errors may not)
 
   // ------------------------------------------------------------------ form
+  // BL-105: the switched window's centre - null (around the line, as before), "auto" or a number (km/s LSRK)
+  function fswitchCentre() {
+    const raw = ($("f-fswitch-center").value || "").trim();
+    if (raw === "") return null;
+    if (raw.toLowerCase() === "auto") return "auto";
+    const v = Number(raw);
+    return Number.isFinite(v) ? v : raw;                  // anything else goes to the backend, which says why it refuses it
+  }
+  const centreText = (cap) => cap.frequency_switching_center === undefined || cap.frequency_switching_center === null
+    ? "the line"
+    : cap.frequency_switching_center === "auto" ? "AUTO (terminal edge, per point)" : `${cap.frequency_switching_center} km/s LSRK`;
+  const syncFswitchCentre = () => { $("f-fswitch-center").disabled = !$("f-fswitch").checked; };
+  $("f-fswitch").addEventListener("change", syncFswitchCentre);
+  syncFswitchCentre();
+
   function readSpec() {
     const placement = $("f-placement").value;
     const centerDecRaw = $("f-center-dec").value;
@@ -49,8 +64,10 @@
         rotation_deg: $("f-rotation").value === "" ? 0 : Number($("f-rotation").value),
       },
       // BL-100: frequency_switching only when ticked, so an unswitched spec is exactly what it was before
+      // BL-105: and its window centre only when given ("auto" or km/s LSRK); empty = around the line, as before
       capture: Object.assign({ seconds: Number($("f-capture").value), settle_seconds: Number($("f-settle").value) },
-                             $("f-fswitch").checked ? { frequency_switching: true } : {}),
+                             $("f-fswitch").checked ? { frequency_switching: true } : {},
+                             $("f-fswitch").checked && fswitchCentre() !== null ? { frequency_switching_center: fswitchCentre() } : {}),
       main: { center_frequency_hz: Number($("f-freq").value), sample_rate: Number($("f-rate").value), gain_db: Number($("f-gain").value), bias_tee: true },
       rfi_ref: { enabled: $("f-rfi-enabled").checked, serial: "00000002", gain_db: Number($("f-rfi-gain").value), bias_tee: $("f-rfi-bias-tee").checked },
       quicklook: { enabled: $("f-ql-enabled").checked, native_grid: $("f-ql-native").checked, interpolated_preview: $("f-ql-interp").checked,
@@ -228,7 +245,7 @@
       `Angle               ${U.deg(r.rotation_deg || 0, 1)} (position angle of the grid's up axis, North through East)`,
       `Spacing             ${U.deg(r.spacing_deg, 3)}`,
       `Capture / settle    ${U.num(cap.seconds, 2, "s")} / ${U.num(cap.settle_seconds, 2, "s")}`,
-      `Freq. switching     ${cap.frequency_switching ? "ON  (LO -600 / +600 kHz, ABBA; spectrum ±84 km/s around the line)" : "OFF"}`,
+      `Freq. switching     ${cap.frequency_switching ? "ON  (LO -600 / +600 kHz, ABBA; spectrum ±84 km/s around " + centreText(cap) + ")" : "OFF"}`,
       "",
       `RFI_REF             ${plan.rfi_ref && plan.rfi_ref.enabled ? "ENABLED" : "DISABLED"}`,
       `  Bias-T            ${plan.rfi_ref && plan.rfi_ref.enabled ? (plan.rfi_ref.bias_tee ? "ON" : "OFF") : "N/A"}`,
@@ -257,7 +274,7 @@
       `MAIN center         ${U.mhz(main.center_frequency_hz)}`,
       `MAIN sample rate    ${U.msps(main.sample_rate)}`,
       `MAIN gain           ${U.num(main.gain_db, 1, "dB")}   Bias-T ${main.bias_tee === false ? "OFF" : "ON"}`,
-      `Freq. switching     ${cap.frequency_switching ? "ON (every point ABBA, LO -600 / +600 kHz)" : "OFF"}`,
+      `Freq. switching     ${cap.frequency_switching ? "ON (every point ABBA, LO -600 / +600 kHz; window around " + centreText(cap) + ")" : "OFF"}`,
       `Estimated duration  ${U.hms(dur.estimated_seconds)} (conservative ${U.hms(dur.conservative_seconds)})`,
       "",
       "MOUNT: it WILL slew (GOTO) to every point and tracking will be enabled.",
