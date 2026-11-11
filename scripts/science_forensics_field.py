@@ -52,7 +52,10 @@ CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "tar
 # reduce_engine re-pinned from 6d0ea46 to 7adcefc (2026-11-11, operator 2026-11-10: "tienes todas mis autorizaciones
 # para intervenir las cosas que estén en freeze", BL-105): fswitch_fold fits the baseline outside the capture's line
 # window when it carries one (switching around a centre velocity). Captures without it fold exactly as before.
-FROZEN = (("reduce_engine", "7adcefc"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "2d62634"), ("almita_science.py", "f5e2f65"),
+# reduce_engine re-pinned from 7adcefc to 649ac2d (2026-11-11, same BL-105 authorisation, operator: "quiero aprovechar
+# la circunpolaridad de las nubes!"): the fold's baseline also stays off the capture's mask windows (local gas and its
+# ghosts) when it records them. Captures without them fold as before.
+FROZEN = (("reduce_engine", "649ac2d"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "2d62634"), ("almita_science.py", "f5e2f65"),
           # science_forensics re-pinned from 02b8e5a to 7b2eefb (2026-10-13, BL-052): experiment/plan.py's DEFAULT_INSTRUMENT
           # carries the RFI_REF Bias-T ON (antenna B's LNA) and records the campaign's OFF as bias_tee_feature_campaign.
           ("science_forensics", "7b2eefb"), ("almita_science_forensics.py", "8f4b40a"),
@@ -75,7 +78,9 @@ FROZEN = (("reduce_engine", "7adcefc"), ("almita_reduce.py", "2afc4c5"), ("scien
           # capture.py re-pinned from 6d0ea46 to 7adcefc (2026-11-11, same BL-105 authorisation): --fswitch-center - the
           # switched point's LOs straddle a planned centre (fswitch_center), the SDR goes back to the operating tuning
           # after each point. Without the option the acquisition loop, spectral path and HDF5 format are unchanged.
-          ("capture.py", "7adcefc"),
+          # capture.py re-pinned from 7adcefc to 649ac2d (2026-11-11, BL-105): --fswitch-offset-hz (configurable throw for
+          # the Magellanic Clouds). Without it the LOs stay at -/+ 600 kHz as before.
+          ("capture.py", "649ac2d"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
           # observation_spec.py re-pinned from 7b2eefb to e4b0a0b (2026-10-15): operator-ordered grid ANGLE - an optional
@@ -88,7 +93,9 @@ FROZEN = (("reduce_engine", "7adcefc"), ("almita_reduce.py", "2afc4c5"), ("scien
           # observation_orchestrator.py and observation_spec.py re-pinned from 6d0ea46 to 7adcefc (2026-11-11, BL-105):
           # optional capture.frequency_switching_center (written only when given, so older specs hash the same), passed
           # on as --fswitch-center.
-          ("observation_orchestrator.py", "7adcefc"), ("observation_spec.py", "7adcefc"))
+          # observation_orchestrator.py and observation_spec.py re-pinned from 7adcefc to 649ac2d (2026-11-11, BL-105):
+          # optional capture.frequency_switching_offset_hz (written only when given), passed on as --fswitch-offset-hz.
+          ("observation_orchestrator.py", "649ac2d"), ("observation_spec.py", "649ac2d"))
 DEFAULT_WINDOW = (150857.0, 5607.0)          # candidate LSRK window (m/s) of the feature campaign
 MIN_ALT_DEG, HA_MARGIN_H = 30.0, 0.25        # same values the plan/`windows` use
 ENDPOINTS = {"MAIN rtl_tcp": 1234, "INDI": 7624}
