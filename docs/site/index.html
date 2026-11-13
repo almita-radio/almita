@@ -112,6 +112,20 @@
   </div>
 
   <h2>First results</h2>
+  <h3>Hydrogen with frequency switching, repeated and matched · 12 November 2026</h3>
+  <p>
+    A week later the same 5 × 5 mosaic around l ≈ +20° was observed again, now with frequency switching (40 s per pointing) and a new
+    feed with a Pawsey balun and a reflector plate. The line shows up in all 25 pointings. For the six pointings inside the reference
+    cube, the switched spectra match HI4PI's prediction for the same pointing and 20° beam with a shape correlation of
+    +0.94 to +0.99 (5 November: +0.43 to +0.77), on a flat baseline. The receiver's Y-factor was 4.71 dB, a system temperature of about 120 K.
+  </p>
+  <figure>
+    <a href="results/hi_frequency_switched_20261112.png"><img src="results/hi_frequency_switched_20261112.png" width="2244" height="1188" loading="lazy"
+         alt="Six frequency-switched 21 cm spectra from ALMITA in blue against the HI4PI prediction for the same pointing and 20 degree beam in black"></a>
+    <figcaption>Blue: ALMITA, frequency-switched and folded by REDUCE, LSRK velocity. Black: HI4PI predicted for the same pointing and beam.
+      Still relative, not Kelvin. Peaks sit 3–10 km/s above HI4PI's, not yet explained. The Magellanic Clouds, at ~1–2 % of the system
+      noise, were not detected the same night: the switching leaves a ±1–2 % baseline that depends on where the dish points.</figcaption>
+  </figure>
   <h3>First 21 cm hydrogen detection · 5 November 2026</h3>
   <p>
     On its first night on a rooftop, in a 5 × 5 mosaic around galactic longitude l ≈ +20°, ALMITA saw the hydrogen line where the
@@ -148,12 +162,12 @@
     <li><strong>The web console grew to twelve pages:</strong> STATUS, PIPELINE, LOBE, TRANSIT, ALIGN, CALIBRATE, OBSERVE, MONITOR, REDUCE, SCIENCE,
       SESSIONS and DESKTOP. There is one port and a login, a day/night theme for sunlight, a real-mount / simulator switch and a STOP MOUNT button.</li>
     <li><strong>RFI masks</strong> live in MONITOR, as an opt-in in REDUCE, and in an <em>Unknown Pleasures</em> art view of each session.</li>
-    <li><strong>A new DIY feed:</strong> a copper-strip dipole with a reflector plate, modelled with NEC2. It replaced a feed that lost several dB before the LNA.</li>
+    <li><strong>A new DIY feed:</strong> a copper-strip dipole with a Pawsey balun and a reflector plate, modelled with NEC2 and tuned with a NanoVNA (SWR 1.14 at 1420 MHz). It replaced a feed that lost several dB before the LNA.</li>
     <li><strong>TRANSIT:</strong> a simple 10-second logger and page to watch the Sun drift through the beam.</li>
     <li><strong>Frequency switching, end to end:</strong> a checkbox in OBSERVE, folding in REDUCE, and live views in QUICKLOOK and STATUS.</li>
     <li><strong>A better REDUCE</strong> (opt-in; the engine itself is unchanged): overlapping windows, averaged, with spectral kurtosis against pulses.
       It uses ~95 % of the recorded time instead of about a third. It also runs on several CPU cores and masks a list of known local carriers.</li>
-    <li><strong>CALIBRATE measures the Y-factor</strong> (50 Ω load against cold sky) and the system temperature. On 5 November it gave Y = 1.53 dB.</li>
+    <li><strong>CALIBRATE measures the Y-factor</strong> (50 Ω load against cold sky) and the system temperature. On 5 November it gave Y = 1.53 dB; with the new feed on 12 November, 4.71 dB.</li>
     <li><strong>SCIENCE shows what HI4PI expects</strong> for the same area and beam directly under ALMITA's own maps.</li>
   </ul>
 

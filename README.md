@@ -71,6 +71,28 @@ Every command has `--help`. The long-running services are described under `syste
 
 ## Results so far
 
+### Hydrogen with frequency switching, repeated and matched (12 November 2026)
+
+A week after the first detection, the same 5 × 5 mosaic around l ≈ +20° was observed again from the rooftop, this time with
+**frequency switching** (40 s per pointing) and a new feed (Pawsey balun, reflector plate). The hydrogen line shows up in all
+25 pointings, and its velocity shifts from pointing to pointing as the gas along each line of sight does.
+
+For the six pointings inside the reference cube, the frequency-switched spectra from REDUCE match what HI4PI predicts for the
+same pointing and the same 20° beam with a **shape correlation of +0.94 to +0.99** (5 November: +0.43 to +0.77). The line now
+stands on a flat baseline: the leftover receiver structure dropped from ~2.9 % to ~0.75 %, against a line of 14–18 % of the
+system noise.
+
+<p align="center">
+  <img src="docs/site/results/hi_frequency_switched_20261112.png" alt="Six frequency-switched 21 cm spectra from ALMITA (blue) against the HI4PI prediction for the same pointing and 20° beam (black); shape correlation +0.94 to +0.99" width="100%">
+</p>
+
+The same night:
+- **Receiver Y-factor 4.71 dB** (50 Ω load against cold sky at 74° elevation), so a system temperature of about 120 K
+  (assuming the LNA's datasheet noise). It was 1.53 dB on 5 November.
+- **Still relative, not Kelvin.** Peaks sit 3–10 km/s above HI4PI's, as on 5 November; this is not explained yet.
+- **The Magellanic Clouds were not detected.** Their line is only ~1–2 % of the system noise, and the switching leaves a
+  baseline of ±1–2 % that depends on where the dish points. Removing that baseline is the next step.
+
 ### First 21 cm hydrogen detection (5 November 2026)
 
 On its first night on a rooftop, in a 5 × 5 mosaic around galactic longitude l ≈ +20°, ALMITA saw the hydrogen line where
@@ -162,7 +184,7 @@ November 2026 the instrument was split:
 **Feed and receiver.**
 - MAIN is now an RTL-SDR Blog V3 (the V4 was retired) with a Nooelec SAWbird+ H1 LNA.
 - A Y-factor of only ~1 dB on 2026-10-18 led to a new DIY feed: a copper-strip dipole in a 3D-printed case, modelled with NEC2.
-- The 12 cm reflector plate is now fitted. A Pawsey balun, which keeps current off the outside of the coax, comes next, and with it a second version of the feed.
+- The second version of the feed has a Pawsey balun, which keeps current off the outside of the coax, and the 12 cm reflector plate at 85 mm: SWR 1.14 at 1420 MHz.
 
 **Frequency switching, end to end (development branch).** OBSERVE has a FREQUENCY SWITCHING checkbox; REDUCE folds the
 switched captures; QUICKLOOK and STATUS (HYDROGEN LINE panel) show them live. See [Results so far](#results-so-far).
@@ -174,14 +196,14 @@ switched captures; QUICKLOOK and STATUS (HYDROGEN LINE panel) show them live. Se
 - **Known RFI lines:** a short, editable list of steady local carriers is masked, frequency-switched captures included.
 
 **CALIBRATE measures the receiver's Y-factor** (50 Ω load against cold sky) and, with the load temperature, the system temperature.
-On 2026-11-05 it gave Y = 1.53 dB. Turning the relative spectra into Kelvin is the next step.
+On 2026-11-05 it gave Y = 1.53 dB; with the new feed on 2026-11-12, Y = 4.71 dB. Turning the relative spectra into Kelvin is the next step.
 
 **SCIENCE draws what HI4PI expects** for the same area and beam directly under ALMITA's own maps, so shapes can be compared at a glance.
 Maps across the celestial pole now use an exact spherical frame.
 
-**Still pending.** Results stay relative and instrumental, the beam is still provisional, and the hydrogen detection above
-has to be repeated. Next: an open-sky night with frequency switching across the Milky Way, solar alignment, a Y-factor with
-the current feed, and the Pawsey balun.
+**Still pending.** Results stay relative and instrumental, and the beam is still provisional. The detection has been repeated
+with frequency switching (12 November). Next: the direction-dependent baseline that the switching leaves (bench test with the
+load), the beam from a solar cross scan, and the Magellanic Clouds.
 
 ## Hardware (short)
 
