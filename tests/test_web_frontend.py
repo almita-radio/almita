@@ -1177,7 +1177,7 @@ window.__routes["GET /api/system/health"] = () => ({ body: HEALTH });
 """
     out2 = run_page(tmp_path / "s", "status", routes2, driver.replace('$("run-summary").textContent.length', "0"), budget=1_900_000) if (tmp_path / "s").mkdir() is None else None
     assert out2["errors"] == [] and abs(out2["m2"]["nodes"] - out2["m1"]["nodes"]) <= 3 and out2["m1"]["timers"] == out2["m2"]["timers"]
-    assert 10 <= out2["rate_rest"] <= 19                                          # status page: health at 5 s (12/min) + temperatures 1 h at 20 s (3/min) + 6 h at 60 s (1/min) + LNA at 5 min
+    assert 10 <= out2["rate_rest"] <= 21                                          # status page: health at 5 s (12/min) + temperatures 1 h at 20 s (3/min) + 6 h at 20 s (3/min, operator 2026-11-12) + LNA at 5 min
 
 
 def test_field_console_left_open_for_30_minutes_keeps_two_timers_and_a_stable_dom(tmp_path):

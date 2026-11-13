@@ -23,9 +23,10 @@ from temperature_sensors import DS18B20Reader
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "observer_config.json"
 LOG_DIR = ROOT / "data" / "runtime" / "temperature"
+CALIBRATION_DIR = ROOT / "data" / "calibration"
 INTERVAL_S = 60.0
 STABLE_WINDOW_S = 600.0
-STABLE_DELTA_C = 0.2
+STABLE_DELTA_C = 3.0   # operator 2026-11-12 on the roof (summer heat): 0.2 was never reached; re-tune when it cools down
 KEEP_DAYS = 60
 # The DS18B20 power-up value of its temperature register: the first read after a power cut returns it before any
 # conversion (SDR sensor at 16:17 UTC 2026-10-18 after the Pi lost power). Nothing in this chain reaches 85 C, so the log
@@ -94,9 +95,10 @@ def load(hours: float, log_dir: Path = LOG_DIR, now: Optional[datetime] = None) 
 
 
 def stability(points: List[tuple], now: datetime, interval_s: float = INTERVAL_S,
-              window_s: float = STABLE_WINDOW_S, delta_c: float = STABLE_DELTA_C) -> Dict[str, Any]:
+              window_s: float = STABLE_WINDOW_S, delta_c: Optional[float] = None) -> Dict[str, Any]:
     """points: [(datetime, celsius)] sorted, valid samples only. A sample is "settled" when the reading one window
     earlier (the latest sample at or before t - window) is within delta_c of it."""
+    delta_c = STABLE_DELTA_C if delta_c is None else delta_c    # read at call time: the margin is tuned by season
     if not points:
         return {"state": "NO_DATA", "stable_since": None, "change_last_window_c": None, "last_c": None, "last_utc": None}
     last_t, last_c = points[-1]
@@ -125,8 +127,50 @@ def stability(points: List[tuple], now: datetime, interval_s: float = INTERVAL_S
     return {**out, "state": "STABLE", "stable_since": max(since, points[0][0]).isoformat(timespec="seconds")}
 
 
+def last_calibration(cal_dir: Path = CALIBRATION_DIR, log_dir: Path = LOG_DIR) -> Optional[Dict[str, Any]]:
+    """The newest finished REFERENCE WIZARD (step DONE, not aborted) and the sensor readings logged closest to its end,
+    so STATUS can mark it on the temperature chart and show how far the SDR has drifted since (operator 2026-11-12).
+    None when there is none. Never raises."""
+    best = None
+    for state_path in Path(cal_dir).glob("WIZARD-*/wizard_state.json"):
+        try:
+            st = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            continue
+        if st.get("step") != "DONE" or st.get("aborted"):
+            continue
+        utc = (st.get("y_factor") or {}).get("computed_utc") or st.get("updated_utc")
+        if not utc:
+            continue
+        try:
+            t = datetime.fromisoformat(str(utc).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        if best is None or t > best[0]:
+            best = (t, st, state_path.parent.name)
+    if best is None:
+        return None
+    t, st, session = best
+    yf = st.get("y_factor") or {}
+    readings: Dict[str, Optional[float]] = {}
+    nearest = None
+    for rec in load(24 * KEEP_DAYS, log_dir, max(t, datetime.now(timezone.utc))):
+        try:
+            dt = abs((datetime.fromisoformat(rec["utc"]) - t).total_seconds())
+        except (KeyError, ValueError):
+            continue
+        if dt <= 5 * 60 and (nearest is None or dt < nearest[0]):
+            nearest = (dt, rec)
+    if nearest is not None:
+        readings = {role: (r or {}).get("c") for role, r in nearest[1].get("readings", {}).items()}
+    return {"utc": t.isoformat(timespec="seconds"), "session_id": session, "y_db": yf.get("y_db"),
+            "tsys_sky_k": yf.get("tsys_sky_k"), "readings_c": readings}
+
+
 def summary(hours: float = 6.0, log_dir: Path = LOG_DIR, now: Optional[datetime] = None,
-            config_path: Path = CONFIG_PATH) -> Dict[str, Any]:
+            config_path: Path = CONFIG_PATH, cal_dir: Path = CALIBRATION_DIR) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     rows = load(hours, log_dir, now)
     roles = list(configured_sensors(config_path))
@@ -144,7 +188,8 @@ def summary(hours: float = 6.0, log_dir: Path = LOG_DIR, now: Optional[datetime]
         status[role]["sensor_id"] = (last or {}).get("id")
         status[role]["last_error"] = (last or {}).get("error")
     return {"generated_utc": now.isoformat(timespec="seconds"), "hours": hours, "interval_s": INTERVAL_S,
-            "rule": {"window_s": STABLE_WINDOW_S, "delta_c": STABLE_DELTA_C}, "series": series, "status": status}
+            "rule": {"window_s": STABLE_WINDOW_S, "delta_c": STABLE_DELTA_C}, "series": series, "status": status,
+            "last_calibration": last_calibration(cal_dir, log_dir)}
 
 
 def main() -> int:

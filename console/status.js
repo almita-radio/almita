@@ -108,6 +108,7 @@
     ctx.textAlign = "left";
     const step = ch.tickMin * 60e3;
     for (let tt = Math.ceil(t0 / step) * step; tt <= t1; tt += step) ctx.fillText(new Date(tt).toISOString().slice(11, 16), x(tt) - 14, h - 6);
+    drawCalibrationMark(ctx, d, x, t0, t1, padT, h - padB, padL, w - padR);
     for (const [role, pts] of lines) {
       if (!pts.length) continue;
       ctx.strokeStyle = roleColor(role); ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.beginPath();
@@ -118,6 +119,31 @@
       ctx.fillStyle = U.cssVar("--text", "#e6edf1"); ctx.fillText(role.toUpperCase(), x(lp[0]) + 15, y(lp[1]) + 4);
     }
     ch.geom = { x, y, t0, t1, padL, padR, w, h, lines };
+  }
+
+  // The last finished calibration (REFERENCE WIZARD) as a dashed vertical line, plus how far the SDR has moved since:
+  // past ~5 C the calibration no longer describes the receiver (operator 2026-11-12). Off the chart's left edge it is
+  // named at the edge instead.
+  const CAL_DRIFT_WARN_C = 5;
+  function drawCalibrationMark(ctx, d, x, t0, t1, top, bottom, left, right) {
+    const cal = d && d.last_calibration;
+    if (!cal || !cal.utc) return;
+    const tc = Date.parse(cal.utc), hhmm = new Date(tc).toISOString().slice(11, 16);
+    const then = cal.readings_c && cal.readings_c.sdr, now = d.status && d.status.sdr && d.status.sdr.last_c;
+    const drift = then != null && now != null ? now - then : null;
+    const warn = drift != null && Math.abs(drift) > CAL_DRIFT_WARN_C;
+    const ink = warn ? U.cssVar("--warn", "#e0a800") : U.cssVar("--text", "#e6edf1");
+    ctx.save(); ctx.fillStyle = ink; ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+    let label = `CAL ${hhmm} UTC`;
+    if (drift != null) label += ` · SDR ${then.toFixed(1)}° → ${now.toFixed(1)}° (${drift >= 0 ? "+" : ""}${drift.toFixed(1)} °C)${warn ? " · RECALIBRATE" : ""}`;
+    if (tc >= t0 && tc <= t1) {
+      const xc = x(tc); ctx.beginPath(); ctx.moveTo(xc, top); ctx.lineTo(xc, bottom); ctx.stroke();
+      ctx.setLineDash([]); ctx.textAlign = xc > (left + right) / 2 ? "right" : "left";
+      ctx.fillText(label, xc + (ctx.textAlign === "left" ? 4 : -4), top + 12);
+    } else if (tc < t0) {
+      ctx.setLineDash([]); ctx.textAlign = "left"; ctx.fillText("◀ " + label, left + 4, top + 12);
+    }
+    ctx.restore(); ctx.textAlign = "left";
   }
 
   function tipAt(ch, ev) {
@@ -349,7 +375,7 @@
     if (!r.ok) return false;
     renderTemps(r.data.data);
     return true;
-  }, { intervalMs: 60000 });                      // last 6 h + table, every minute (one sample a minute)
+  }, { intervalMs: 20000 });                      // last 6 h + table, every 20 s (one sample every 20 s, operator 2026-11-12)
   tempPoller1h.start(); tempPoller6h.start();
 
   // ---------------------------------------------------------------- HYDROGEN LINE · FREQUENCY SWITCHING (BL-100)

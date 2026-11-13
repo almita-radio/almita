@@ -37,7 +37,8 @@ def _log(tmp_path, values, start=T0, step_s=60, role="lna"):
                    "readings": {role: {"c": v, "id": "28-x"}}}, tmp_path)
 
 
-def test_warming_then_stable_reports_since_when(tmp_path):
+def test_warming_then_stable_reports_since_when(tmp_path, monkeypatch):
+    monkeypatch.setattr(tl, "STABLE_DELTA_C", 0.2)    # the logic at the original 0.2 C margin (the live value is seasonal)
     vals = [20 + i * 0.5 for i in range(30)] + [35.0 + 0.01 * (i % 3) for i in range(30)]    # 30 min heating, 30 min flat
     _log(tmp_path, vals)
     now = T0 + timedelta(seconds=59 * 60 + 5)
@@ -47,7 +48,8 @@ def test_warming_then_stable_reports_since_when(tmp_path):
     assert T0 + timedelta(minutes=29) <= since <= T0 + timedelta(minutes=31)                  # where the plateau began
 
 
-def test_changing_stale_no_data_and_too_little_history(tmp_path):
+def test_changing_stale_no_data_and_too_little_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(tl, "STABLE_DELTA_C", 0.2)    # the logic at the original 0.2 C margin (the live value is seasonal)
     _log(tmp_path, [20 + i * 0.1 for i in range(30)])                                       # +1.0 C per 10 min
     end = T0 + timedelta(minutes=29, seconds=5)
     assert tl.summary(1, tmp_path, end, config_path=tmp_path / "none.json")["status"]["lna"]["state"] == "CHANGING"
@@ -87,3 +89,27 @@ def test_a_line_padded_with_nul_bytes_after_a_power_cut_is_still_read(tmp_path):
         fh.write("\x00" * 40 + json.dumps(rec) + "\n")
     rows = tl.load(1.0, tmp_path, now=T0 + timedelta(minutes=5))
     assert [r["readings"]["lna"]["c"] for r in rows] == [20.0, 21.0]
+
+
+def test_last_calibration_is_the_newest_finished_wizard_with_its_temperatures(tmp_path):
+    """STATUS marks the last calibration on the temperature chart and shows the SDR drift since (operator 2026-11-12)."""
+    cal = tmp_path / "cal"
+    def wiz(name, step, utc, aborted=False, y=True):
+        d = cal / name; d.mkdir(parents=True)
+        st = {"step": step, "aborted": aborted, "updated_utc": utc}
+        if y:
+            st["y_factor"] = {"computed_utc": utc, "y_db": 4.71, "tsys_sky_k": 121.6}
+        (d / "wizard_state.json").write_text(json.dumps(st))
+    wiz("WIZARD-1", "DONE", "2026-11-12T22:10:48+00:00")
+    wiz("WIZARD-2", "DONE", "2026-11-12T23:25:04+00:00")
+    wiz("WIZARD-3", "RESULT_50R", "2026-11-12T23:40:00+00:00")             # not finished: ignored
+    wiz("WIZARD-4", "DONE", "2026-11-12T23:50:00+00:00", aborted=True)    # aborted: ignored
+    logs = tmp_path / "logs"
+    tl.append({"utc": "2026-11-12T23:24:57+00:00", "readings": {"sdr": {"c": 52.19, "id": "a"}}}, logs)
+    tl.append({"utc": "2026-11-12T23:40:00+00:00", "readings": {"sdr": {"c": 50.0, "id": "a"}}}, logs)
+    c = tl.last_calibration(cal, logs)
+    assert c["session_id"] == "WIZARD-2" and c["utc"] == "2026-11-12T23:25:04+00:00"
+    assert c["readings_c"]["sdr"] == 52.19 and c["y_db"] == 4.71
+    assert tl.last_calibration(tmp_path / "none", logs) is None
+    s = tl.summary(1, logs, datetime(2026, 11, 12, 23, 41, tzinfo=timezone.utc), config_path=tmp_path / "x.json", cal_dir=cal)
+    assert s["last_calibration"]["session_id"] == "WIZARD-2"

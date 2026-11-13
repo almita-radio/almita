@@ -1,0 +1,15 @@
+[Unit]
+Description=ALMITA temperature logger - DS18B20 sensors (read on the capture Pi through the agent) every 20 s for STATUS
+After=network.target almita-instrument-forwarder.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/felipe/almita
+ExecStart=/home/felipe/almita/.venv/bin/python /home/felipe/almita/temperature_logger.py --interval 20
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

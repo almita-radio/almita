@@ -36,7 +36,7 @@
       <div id="hi-job"></div>
     </section>
     <section class="panel" aria-labelledby="h-temp">
-      <header><h2 id="h-temp">TEMPERATURES <span class="muted">(last hour, refreshed every 20 s · below: last 6 h · one sample a minute · STABLE = moved ≤ 0.2 °C in 10 min)</span></h2><span id="temp-badge" class="badge">—</span></header>
+      <header><h2 id="h-temp">TEMPERATURES <span class="muted">(last hour, refreshed every 20 s · below: last 6 h · one sample every 20 s · STABLE = moved ≤ 3 °C in 10 min)</span></h2><span id="temp-badge" class="badge">—</span></header>
       <div class="temp-chart-wrap"><canvas id="temp-chart" height="260" aria-label="temperature of each sensor over the last hour"></canvas><div id="temp-tip" class="temp-tip" hidden></div></div>
       <div class="temp-chart-wrap"><canvas id="temp-chart-6h" class="temp-chart" height="260" aria-label="temperature of each sensor over the last 6 hours"></canvas><div id="temp-tip-6h" class="temp-tip" hidden></div></div>
       <div class="table-wrap"><table class="status-table"><thead><tr><th>SENSOR</th><th>LAST</th><th>CHANGE 10 MIN</th><th>STATE</th><th>1-WIRE ID</th></tr></thead><tbody id="tbl-temps"></tbody></table></div>
