@@ -395,12 +395,49 @@
     U.setEnabled($("btn-stack"), !!(q.stack3d && q.stack3d.state === "OK"), "no stored session_waterfall_state.json");
     if (!(q.stack3d && q.stack3d.state === "OK")) { sb.textContent = "MISSING"; sb.className = "badge status-missing"; }
     else if (!loaded.stack) { sb.textContent = "NOT LOADED"; sb.className = "badge status-not_loaded"; $("ses-stack-message").textContent = "PRESS LOAD 3D STACK"; $("ses-stack-message").hidden = false; if (stack) stack._clearGeometry(); }
+    drawUnknownPleasures(q);
     if (!loaded.points) {
       try { points = (await get("/api/sessions/points?id=" + encodeURIComponent(current))).points; loaded.points = true; }
       catch (err) { points = []; showError(err); }
       renderPoints();
     }
   }
+
+  // UNKNOWN PLEASURES of the stored session (operator 2026-11-13), drawn by unknown_pleasures.js: the same art view as
+  // MONITOR, with the DIFF (each bin minus the session median) computed here and up to 80 points spread over the session.
+  let upDoc = null, upFor = null;
+  async function drawUnknownPleasures(q) {
+    const badgeEl = $("ses-up-badge"), png = $("ses-up-png");
+    const ok = !!(q && q.stack3d && q.stack3d.state === "OK" && window.AlmitaUnknownPleasures);
+    if (!ok) { badgeEl.textContent = "MISSING"; badgeEl.className = "badge status-missing"; png.hidden = true;
+      const c = $("ses-up-canvas"); c.getContext("2d").clearRect(0, 0, c.width, c.height); return; }
+    if (upFor !== current) {
+      badgeEl.textContent = "LOADING…"; badgeEl.className = "badge status-busy";
+      const r = await U.api(fileUrl(q.stack3d.path), { timeoutMs: 60000 });
+      if (!r.ok) { badgeEl.textContent = "ERROR"; badgeEl.className = "badge status-error"; return; }
+      upDoc = r.data; upFor = current;
+    }
+    const url = window.AlmitaUnknownPleasures.draw($("ses-up-canvas"), upDoc, { label: "DIFF", diff: true, pick: "spread" });
+    const n = Array.isArray(upDoc.rows) ? upDoc.rows.length : 0;
+    badgeEl.textContent = n ? `${Math.min(n, window.AlmitaUnknownPleasures.UP_LINES)}/${n} LINES` : "EMPTY";
+    badgeEl.className = n ? "badge status-ok" : "badge status-missing";
+    png.hidden = !url; if (url) { png.href = url; png.download = `almita_unknown_pleasures_${current}.png`; }
+    $("btn-up-print").hidden = $("btn-up-print-clear").hidden = !url;
+  }
+
+  // PRINT (operator 2026-11-13, "para hacerlo en una polera"): 4800 × 4800 px = 40 × 40 cm at 300 dpi, drawn offscreen;
+  // TRANSPARENT keeps only the white lines and the title, for a black shirt. The browser saves it as a PNG file.
+  const UP_PRINT_PX = 4800;
+  function printUnknownPleasures(transparent) {
+    if (!upDoc || !window.AlmitaUnknownPleasures) return;
+    const c = document.createElement("canvas");
+    const url = window.AlmitaUnknownPleasures.draw(c, upDoc, { label: "DIFF", diff: true, pick: "spread", pixels: UP_PRINT_PX, transparent });
+    if (!url) return;
+    const a = el("a", { href: url, download: `almita_unknown_pleasures_${current}_${UP_PRINT_PX}px${transparent ? "_transparent" : ""}.png` });
+    document.body.append(a); a.click(); a.remove();
+  }
+  $("btn-up-print").addEventListener("click", () => printUnknownPleasures(false));
+  $("btn-up-print-clear").addEventListener("click", () => printUnknownPleasures(true));
 
   $("btn-stack").addEventListener("click", U.guard($("btn-stack"), async () => {
     const q = detail.sections.quicklook;
@@ -891,7 +928,10 @@
   }, "COMPARING…"));
 
   // ------------------------------------------------------------------ start
-  window.addEventListener("resize", () => { if (points.length && !$("sec-quicklook").hidden) drawGrid(currentPoint); });
+  window.addEventListener("resize", () => {
+    if (points.length && !$("sec-quicklook").hidden) drawGrid(currentPoint);
+    if (upDoc && upFor === current && !$("sec-quicklook").hidden) drawUnknownPleasures(detail.sections.quicklook);
+  });
   (async () => {
     await loadCatalog();
     const h = new URLSearchParams(location.hash.slice(1));

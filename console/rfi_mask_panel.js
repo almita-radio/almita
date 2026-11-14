@@ -131,14 +131,12 @@
       + `lines masked: ${ll}`;
   }
 
-  // UNKNOWN PLEASURES (operator 2026-10-30): the stacked spectra drawn like CP 1919's pulses on Joy Division's cover -
-  // white lines on black, each point's line hiding the ones behind it. Masked/empty bins break the line (nothing filled).
-  // At most UP_LINES lines (operator 2026-11-02: "tiene 80 líneas"); past that only the latest UP_LINES are drawn.
-  // Fewer lines are spread over the whole height ("espaciadas pero sin disparar los gráficos"): the wiggles are scaled
-  // from the UP_LINES spacing and may grow at most UP_MAX_GROW times, however far apart the lines are.
-  const UP_LINES = 80, UP_MAX_GROW = 3;
+  // UNKNOWN PLEASURES (operator 2026-10-30): drawn by unknown_pleasures.js (shared with SESSIONS, 2026-11-13); here only
+  // the live session's DIFF rows are fetched, and the last 80 points are drawn.
   let upStamp = null;
   async function drawUnknownPleasures(sessionId) {
+    const UP = window.AlmitaUnknownPleasures;
+    if (!UP) return;
     const mode = STACK_MODES[2];                                                // always DIFF: the view that looks like the cover
     const url = mode.url || `${ROOT}/quicklook_products/session_waterfall_state.json`;
     let doc = null;
@@ -146,76 +144,11 @@
     if (!doc || String(doc.session_id) !== String(sessionId) || !Array.isArray(doc.rows) || !doc.rows.length) return;
     const canvas = $("rfi-mask-up"), box = canvas.getBoundingClientRect();
     if (box.width < 50 || box.height < 50) return;                              // not laid out yet: draw on the next tick
-    // drawn at least 3x the screen pixels (whatever the screen) and shrunk by the browser: smooth lines, sharp PNG
-    const scale = Math.min(Math.max(3, 2 * (window.devicePixelRatio || 1)), 4000 / box.width);
-    const stamp = `${mode.name}|${doc.updated_utc}|${doc.rows.length}|${Math.round(box.width)}x${Math.round(box.height)}|${scale}`;
+    const stamp = `${mode.name}|${doc.updated_utc}|${doc.rows.length}|${Math.round(box.width)}x${Math.round(box.height)}|${window.devicePixelRatio || 1}`;
     if (stamp === upStamp) return;
     upStamp = stamp;
-    const rows = doc.rows.slice().sort((a, b) => parseInt(a.point_id, 10) - parseInt(b.point_id, 10)).slice(-UP_LINES);
-    const w = box.width, h = box.height;
-    canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
-    const ctx = canvas.getContext("2d"); ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
-    const n = rows[0].relative_db.length;
-    // ART VIEW, not a measurement: each line around its own median, smoothed (gaussian, SIGMA bins) (empty bins stay empty),
-    // and tapered hard towards the band edges: signal in the middle, flat margins on both sides as on the cover
-    const SIGMA = 2, RADIUS = 6;                                                // gaussian smoothing, in bins
-    const centered = rows.map((r) => {
-      const v = r.relative_db.filter((x) => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
-      const med = v.length ? v[Math.floor(v.length / 2)] : 0;
-      const c = r.relative_db.map((x) => (x === null || !Number.isFinite(x) ? null : x - med));
-      return c.map((x, i) => {
-        const u = (i - (c.length - 1) / 2) / (c.length * 0.20);
-        const wgt = 0.03 + 0.97 * Math.exp(-(u ** 6));                       // centre ~half alive, outer ~quarter each side flat
-        if (x === null) return wgt < 0.05 ? 0 : null;                          // flat edges stay one unbroken line
-        let s = 0, k = 0;
-        for (let j = Math.max(0, i - RADIUS); j <= Math.min(c.length - 1, i + RADIUS); j++) {
-          if (c[j] === null) continue;
-          const g = Math.exp(-0.5 * ((j - i) / SIGMA) ** 2); s += c[j] * g; k += g;
-        }
-        return (s / k) * wgt;
-      });
-    });
-    const all = []; centered.forEach((r) => r.forEach((x, i) => { if (x !== null && Math.abs(i - (n - 1) / 2) < n * 0.2) all.push(Math.abs(x)); }));   // scale from the live middle only
-    all.sort((a, b) => a - b);
-    const at = (q) => (all.length ? all[Math.floor(q * (all.length - 1))] : 0) || 1e-3;
-    const med = at(0.5), p999 = at(0.999);
-    const top = h * 0.16, bottom = h * 0.94, left = w * 0.18, right = w * 0.82;
-    const step = (bottom - top) / Math.max(rows.length - 1, 1);              // spacing: the lines fill the height
-    const ampStep = Math.min(step, UP_MAX_GROW * (bottom - top) / (UP_LINES - 1));   // wiggle size: capped
-    const amp = Math.min(ampStep * 0.5 / med, ampStep * 6 / p999);                  // noise a tremor, the strongest ~5 lines
-    const X = (i) => left + (right - left) * i / (n - 1);
-    ctx.lineWidth = Math.max(1, w / 450); ctx.lineJoin = "round"; ctx.lineCap = "round";
-    // a smooth curve through the points (quadratic through the midpoints), not straight segments with corners
-    const trace = (pts, start) => {
-      if (start) ctx.moveTo(pts[0][0], pts[0][1]); else ctx.lineTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length - 1; i++)
-        ctx.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
-      if (pts.length > 1) ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
-    };
-    centered.forEach((r, k) => {                                                // back (top) first, front (bottom) last
-      const base = top + k * step;
-      const floor = ampStep * 0.4;                                                 // dips compressed softly, never cut flat
-      const Y = (x) => { const y = x * amp; return base - (y >= 0 ? y : -floor * Math.tanh(-y / floor)); };
-      ctx.beginPath();                                                          // the black body that hides the lines behind
-      trace(r.map((x, i) => [X(i), x === null ? base : Y(x)]), true);
-      ctx.lineTo(X(n - 1), h); ctx.lineTo(X(0), h); ctx.closePath();
-      ctx.fillStyle = "#000"; ctx.fill();
-      ctx.strokeStyle = "#fff"; ctx.beginPath();
-      let run = [];
-      for (let i = 0; i <= n; i++) {                                            // each unbroken run of bins is one curve
-        if (i < n && r[i] !== null) { run.push([X(i), Y(r[i])]); continue; }
-        if (run.length) trace(run, true);
-        run = [];
-      }
-      ctx.stroke();
-    });
-    ctx.fillStyle = "#fff"; ctx.font = `${Math.round(w / 40)}px ui-monospace,monospace`; ctx.textAlign = "center";
-    ctx.fillText("ALMITA", w / 2, h * 0.07);
-    ctx.font = `${Math.round(w / 60)}px ui-monospace,monospace`;
-    ctx.fillText(`art view · ${mode.name} · session ${sessionId} · ${rows.length}/${UP_LINES} lines · ${Array.isArray(doc.frequency_mhz) && doc.frequency_mhz.length ? `${doc.frequency_mhz[0].toFixed(1)}-${doc.frequency_mhz[doc.frequency_mhz.length - 1].toFixed(1)} MHz` : ""}`, w / 2, h * 0.11);
-    try { $("rfi-mask-up-png").href = canvas.toDataURL("image/png"); } catch (e) { /* tainted canvas: no link */ }
+    const png = UP.draw(canvas, doc, { label: mode.name, pick: "latest" });
+    if (png) $("rfi-mask-up-png").href = png;
   }
 
   async function tick() {

@@ -106,6 +106,7 @@ STATIC_FILES = {
     # SESSIONS: catalog + viewer of stored observations (BL-079..BL-090), read-only over the data
     "/sessions.html": "sessions.html",
     "/sessions.js": "sessions.js",
+    "/unknown_pleasures.js": "unknown_pleasures.js",
 }
 # BL-094 presentation mode: /present/<page>.html (and /present/ for MONITOR) is the SAME page, marked <html data-present>
 # so styles.css zooms it for a projector; a <base href="/"> keeps its relative assets and API calls where they are.

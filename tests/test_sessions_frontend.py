@@ -53,6 +53,16 @@ out.seen = seen;
 document.querySelector('#session-tabs button[data-tab="CAPTURES / QUICKLOOK"]').click();
 await until(() => document.querySelectorAll("#tbl-points tr").length > 0, 4000);
 out.points = document.querySelectorAll("#tbl-points tr").length;
+await until(() => /LINES|EMPTY|MISSING|ERROR/.test($("ses-up-badge").textContent), 4000);
+out.upBadge = $("ses-up-badge").textContent;
+out.upPng = !$("ses-up-png").hidden && $("ses-up-png").href.startsWith("data:image/png");
+{ const c = $("ses-up-canvas"), px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let white = 0;
+  for (let i = 0; i < px.length; i += 4) if (px[i] > 200) white++; out.upWhite = white; }
+out.printButtons = !$("btn-up-print").hidden && !$("btn-up-print-clear").hidden;
+{ const doc = window.__routes["GET /api/ops/file"].body, c = document.createElement("canvas");
+  const url = window.AlmitaUnknownPleasures.draw(c, doc, { diff: true, pick: "spread", pixels: 4800, transparent: true });
+  const corner = c.getContext("2d").getImageData(0, 0, 1, 1).data;
+  out.print = { ok: !!url && url.startsWith("data:image/png"), w: c.width, h: c.height, cornerAlpha: corner[3] }; }
 $("btn-stack").click(); await sleep(400);
 out.stackBadge = $("ses-stack-badge").textContent;
 document.querySelector("#tbl-points tr").click();
@@ -68,7 +78,7 @@ out.nameHtml = document.querySelector("#h-session").innerHTML;
 
 
 def test_sessions_page_catalog_viewer_and_isolation_from_the_live_session(tmp_path):
-    for name in ("spectral_stack_3d.js",):
+    for name in ("spectral_stack_3d.js", "unknown_pleasures.js"):
         shutil.copyfile(CONSOLE / name, tmp_path / name)
     shutil.copytree(CONSOLE / "vendor", tmp_path / "vendor")
     out = run_page(tmp_path, "sessions", _routes(tmp_path) + f"window.__A = {json.dumps(fx.A)};\n", DRIVER, budget=30000)
@@ -78,6 +88,11 @@ def test_sessions_page_catalog_viewer_and_isolation_from_the_live_session(tmp_pa
     assert "&lt;img" in out["nameHtml"] and "<img" not in out["nameHtml"]
     assert out["badge"] == "COMPLETED" and len(out["tabs"]) == 11 and all(v > 0 for v in out["seen"].values()), out["seen"]
     assert out["points"] == 3 and out["pointTitle"] == "POINT 1"
+    # UNKNOWN PLEASURES of the stored session (operator 2026-11-13): drawn from the same stored waterfall, with a PNG
+    assert out["upBadge"].endswith("LINES"), out["upBadge"]
+    assert out["upPng"] and out["upWhite"] > 500, (out["upPng"], out["upWhite"])
+    # print export for a shirt (operator 2026-11-13): 4800 x 4800 px (40 cm at 300 dpi), transparent background
+    assert out["printButtons"] and out["print"] == {"ok": True, "w": 4800, "h": 4800, "cornerAlpha": 0}, out["print"]
     assert out["stackBadge"] in ("STORED", "ERROR")                     # ERROR only where headless Chromium has no WebGL
     assert not [c for c in out["calls"] if "/runtime/" in c or "quicklook_products" in c]
     writes = [c for c in out["calls"] if not c.startswith("GET ")]
