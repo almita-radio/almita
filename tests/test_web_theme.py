@@ -59,20 +59,22 @@ const box = document.getElementById("theme-toggle");
 const btns = [...document.querySelectorAll("#theme-toggle button")];
 out.kinds = btns.map((b) => b.tagName + ":" + b.textContent);
 out.selects = document.querySelectorAll(".topbar select").length;
-out.besideMount = !!box && box.previousElementSibling && box.previousElementSibling.id === "mount-device"
+// operator 2026-11-17: LX200|SIMULATOR, then AUDIO, then DAY|NIGHT, then STOP MOUNT
+out.besideMount = !!box && box.previousElementSibling && box.previousElementSibling.id === "audio-toggle"
+                  && box.previousElementSibling.previousElementSibling && box.previousElementSibling.previousElementSibling.id === "mount-device"
                   && box.nextElementSibling && box.nextElementSibling.id === "btn-mount-stop";
 out.initial = document.documentElement.getAttribute("data-theme");
 out.activeInitial = (document.querySelector("#theme-toggle .active") || {}).textContent || null;
 let events = 0; window.addEventListener("almita-theme", () => { events++; });
 const nErr = window.__errors.length, nCalls = window.__calls.length;
-btns.find((b) => b.textContent === "DÍA").click();
+btns.find((b) => b.textContent === "DAY").click();
 out.callsDuringSwitch = window.__calls.length - nCalls;
 out.day = document.documentElement.getAttribute("data-theme");
 out.dayBg = getComputedStyle(document.body).backgroundColor;
 out.dayText = getComputedStyle(document.body).color;
 out.activeDay = document.querySelector("#theme-toggle .active").textContent;
 out.stored = (() => { try { return localStorage.getItem("almita-theme"); } catch (e) { return "BLOCKED"; } })();
-btns.find((b) => b.textContent === "NOCHE").click();
+btns.find((b) => b.textContent === "NIGHT").click();
 out.night = document.documentElement.getAttribute("data-theme");
 out.nightBg = getComputedStyle(document.body).backgroundColor;
 out.events = events;
@@ -110,10 +112,10 @@ for (const n of names) {{
 
 def _assert_toggle(name, o):
     assert "driver_error" not in o, (name, o.get("driver_error"))
-    assert o["kinds"] == ["BUTTON:DÍA", "BUTTON:NOCHE"] and o["selects"] == 0, (name, o)
-    assert o["besideMount"] is True, (name, "toggle not between the mount buttons and STOP MOUNT")
-    assert o["initial"] == "night" and o["activeInitial"] == "NOCHE", (name, o)                      # default NOCHE
-    assert o["day"] == "day" and o["activeDay"] == "DÍA" and o["dayBg"] == "rgb(255, 255, 255)" and o["dayText"] == "rgb(5, 8, 10)", (name, o)
+    assert o["kinds"] == ["BUTTON:DAY", "BUTTON:NIGHT"] and o["selects"] == 0, (name, o)
+    assert o["besideMount"] is True, (name, "toggle not between AUDIO (after the mount buttons) and STOP MOUNT")
+    assert o["initial"] == "night" and o["activeInitial"] == "NIGHT", (name, o)                      # default NOCHE
+    assert o["day"] == "day" and o["activeDay"] == "DAY" and o["dayBg"] == "rgb(255, 255, 255)" and o["dayText"] == "rgb(5, 8, 10)", (name, o)
     assert o["night"] == "night" and o["nightBg"] == "rgb(11, 16, 20)", (name, o)
     assert o["events"] == 2 and o["callsDuringSwitch"] == 0, (name, o)                                 # redraw only, no request
     assert o["stored"] in ("day", "BLOCKED"), (name, o)
@@ -157,7 +159,7 @@ out.newErrors = window.__errors.slice(nErr);
     stored_day = ("<script>(() => { const m = { 'almita-theme': 'day' }; Object.defineProperty(window, 'localStorage', { value: "
                   "{ getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); } } }); })();</script>")
     results = {}
-    for label, inject, flip in (("blocked", blocked, "DÍA"), ("day", stored_day, "NOCHE")):
+    for label, inject, flip in (("blocked", blocked, "DAY"), ("day", stored_day, "NIGHT")):
         sub = tmp_path / label
         sub.mkdir()
         target = page_harness(sub, "status", probe + f"window.__flip = {flip!r};", driver)
@@ -166,7 +168,7 @@ out.newErrors = window.__errors.slice(nErr);
         results[label] = result_of(chromium(target, 8000))
     b, d = results["blocked"], results["day"]
     assert "driver_error" not in b and "driver_error" not in d, (b, d)
-    assert b["atBody"] == "night" and b["active"] == "NOCHE" and b["bg"] == "rgb(11, 16, 20)"
+    assert b["atBody"] == "night" and b["active"] == "NIGHT" and b["bg"] == "rgb(11, 16, 20)"
     assert b["after"] == "day" and b["newErrors"] == []                 # still switches for this page; nothing thrown
-    assert d["atBody"] == "day" and d["active"] == "DÍA" and d["bg"] == "rgb(255, 255, 255)"   # applied in <head>, before the body
+    assert d["atBody"] == "day" and d["active"] == "DAY" and d["bg"] == "rgb(255, 255, 255)"   # applied in <head>, before the body
     assert d["after"] == "night" and d["newErrors"] == []

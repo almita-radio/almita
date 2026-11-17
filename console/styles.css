@@ -248,9 +248,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .mount-device-btn:disabled{cursor:wait;opacity:.6}
 body.mount-simulated .mount-device-btn.active{background:var(--warn);color:var(--on-warn)}
 .mount-sim-banner{background:var(--warn);color:var(--on-warn);font:700 12px/1.5 monospace;letter-spacing:.06em;padding:6px 16px;text-align:center}
-.theme-toggle{display:inline-flex;margin-left:6px;align-self:center;border:1px solid var(--line)}   /* DÍA | NOCHE, in every page header */
+.theme-toggle{display:inline-flex;margin-left:6px;align-self:center;border:1px solid var(--line)}   /* DAY | NIGHT, in every page header */
 .theme-btn{padding:3px 8px;border:0;background:transparent;color:var(--muted);cursor:pointer;font:700 11px/1.6 monospace;letter-spacing:.1em}
 .theme-btn.active{background:var(--accent);color:var(--on-accent)}
+.audio-toggle{display:inline-flex;margin-left:6px;align-self:center;border:1px solid var(--line)}   /* AUDIO ON/OFF (sdr_audio.js) */
+.audio-btn{padding:3px 8px;border:0;background:transparent;color:var(--muted);cursor:pointer;font:700 11px/1.6 monospace;letter-spacing:.1em}
+.audio-btn.active{background:var(--accent);color:var(--on-accent)}
+.audio-btn:disabled{cursor:wait;opacity:.6}
 .spectral-stack-range{right:122px}   /* next to RESET CAMERA: FULL RANGE / CLIP OUTLIERS */
 .spectral-stack-scale{max-width:calc(100% - 250px)}
 

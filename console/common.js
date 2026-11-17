@@ -263,14 +263,15 @@
   U.setTheme(readStoredTheme(), { store: false });
   // another tab changed it: follow (the storage event carries it; nothing is polled)
   window.addEventListener("storage", (ev) => { try { if (ev.key === U.THEME_KEY) U.setTheme(readStoredTheme(), { store: false }); } catch (e) { /* ignore */ } });
-  // DÍA | NOCHE, two buttons beside the mount buttons in every page header (never a combo box)
-  const THEME_CHOICES = [{ theme: "day", label: "DÍA", title: "Tema de día: claro, alto contraste para sol directo" },
-                         { theme: "night", label: "NOCHE", title: "Tema de noche: oscuro" }];
+  // DAY | NIGHT, two buttons beside the mount buttons in every page header (never a combo box). English like the rest of the
+  // console (operator 2026-11-17: "todo esto debería ser day or night ... está toda la weá en inglés")
+  const THEME_CHOICES = [{ theme: "day", label: "DAY", title: "Day theme: light, high contrast for direct sunlight" },
+                         { theme: "night", label: "NIGHT", title: "Night theme: dark" }];
   U.themeToggle = function (nav) {
     if (!nav || document.getElementById("theme-toggle")) return null;
     const box = document.createElement("span");
     box.id = "theme-toggle"; box.className = "theme-toggle";
-    box.setAttribute("role", "group"); box.setAttribute("aria-label", "Tema de la pantalla");
+    box.setAttribute("role", "group"); box.setAttribute("aria-label", "Screen theme");
     for (const c of THEME_CHOICES) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "theme-btn"; b.textContent = c.label; b.dataset.theme = c.theme; b.title = c.title;
@@ -281,6 +282,63 @@
     markThemeButtons(box, U.theme());                 // the header may not be in the document yet: mark its own buttons
     return box;
   };
+  // ------------------------------------------------------------------ AUDIO (operator 2026-11-17): hear the hydrogen
+  // One ON/OFF button between the mount and DAY/NIGHT, in every page header. NOT science: sdr_audio.js (loaded on the first
+  // click, so pages that never use it load nothing) turns the spectra into sound in THIS browser; ON also starts the idle
+  // reader (sdr_audio.py), which samples the SDR only while nothing else uses it and stops itself when no page listens.
+  // The sound lives in this page: changing page or closing the tab ends it.
+  let audioLoading = null;
+  function loadAudioEngine() {
+    if (window.AlmitaAudio) return Promise.resolve(window.AlmitaAudio);
+    if (!audioLoading) audioLoading = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "/sdr_audio.js"; sc.async = true;
+      sc.onload = () => (window.AlmitaAudio ? resolve(window.AlmitaAudio) : reject(new Error("sdr_audio.js loaded without AlmitaAudio")));
+      sc.onerror = () => { audioLoading = null; reject(new Error("sdr_audio.js could not be loaded")); };
+      document.head.appendChild(sc);
+    });
+    return audioLoading;
+  }
+  function audioStatusText(st) {
+    if (!st) return "";
+    if (!st.source) return st.note || "waiting";
+    const a = st.analysis || {};
+    if (!a.found) return `${st.source.toUpperCase()} spectra · ${a.reason || "nothing yet"} (${a.spectra || 0} spectra heard)`;
+    return `${st.source.toUpperCase()} spectra · window ${(a.lowHz / 1e6).toFixed(3)}–${(a.highHz / 1e6).toFixed(3)} MHz · `
+      + `${a.velocityKmS >= 0 ? "+" : ""}${a.velocityKmS.toFixed(0)} km/s · excess ${(a.meanExcess * 100).toFixed(1)} % (peak ${(a.peak * 100).toFixed(1)} %)`;
+  }
+  U.audioToggle = function (nav) {
+    if (!nav || document.getElementById("audio-toggle")) return null;
+    const box = document.createElement("span");
+    box.id = "audio-toggle"; box.className = "audio-toggle";
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "audio-btn"; b.setAttribute("aria-pressed", "false");
+    const IDLE_TITLE = "AUDIO: listen to the hydrogen (not science). ON plays the spectra as sound in this browser and lets an idle "
+      + "reader sample the SDR while nothing else uses it; captures always come first.";
+    const show = (on, title) => {
+      b.textContent = on ? "AUDIO ON" : "AUDIO OFF"; b.classList.toggle("active", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.title = title || IDLE_TITLE;
+    };
+    show(false);
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        const A = await loadAudioEngine();
+        if (A.running) { await A.stop(); show(false); }
+        else {
+          show(true, "AUDIO ON · starting…");
+          await A.start((st) => show(true, "AUDIO ON · " + audioStatusText(st)));
+        }
+      } catch (err) {
+        show(false, "AUDIO failed: " + (err && err.message || err));
+        window.alert("AUDIO failed: " + (err && err.message || err));
+      } finally { b.disabled = false; }
+    });
+    box.appendChild(b);
+    nav.appendChild(box);
+    return box;
+  };
+
   // every sky view / HI4PI legend drawn by this file redraws itself with the new colours
   U.onThemeChange(() => {
     for (const c of document.querySelectorAll("canvas")) {
@@ -371,6 +429,7 @@
       window.alert(text);
     });
     U.mountDeviceToggle(nav);
+    U.audioToggle(nav);
     U.themeToggle(nav);
     nav.appendChild(b);
     return b;

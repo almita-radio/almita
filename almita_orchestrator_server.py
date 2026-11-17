@@ -107,6 +107,7 @@ STATIC_FILES = {
     "/sessions.html": "sessions.html",
     "/sessions.js": "sessions.js",
     "/unknown_pleasures.js": "unknown_pleasures.js",
+    "/sdr_audio.js": "sdr_audio.js",                     # AUDIO button's sound engine, loaded on the first click
 }
 # BL-094 presentation mode: /present/<page>.html (and /present/ for MONITOR) is the SAME page, marked <html data-present>
 # so styles.css zooms it for a projector; a <base href="/"> keeps its relative assets and API calls where they are.
@@ -266,7 +267,7 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
 
     # ---- logging: UTC timestamp, level, component, request id; never bodies
     _QUIET_POLL_PATHS = ("/healthz", "/api/system/health", "/api/system/version", "/api/observe/status", "/api/align/status", "/api/calibrate/status", "/mount_camera/status",
-                         "/api/ops/lobe/status", "/api/ops/lobe/samples", "/api/observe/sky")
+                         "/api/ops/lobe/status", "/api/ops/lobe/samples", "/api/observe/sky", "/api/audio/state")
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
         # Successful polls (every open page asks every few seconds) would fill the journal: log them only when they fail.
@@ -400,6 +401,13 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             if path == "/api/transit/state":
                 import transit_logger
                 return _json_response(self, 200, {"ok": True, "data": transit_logger.service_state()})
+            if path == "/api/audio/state":
+                # AUDIO (operator 2026-11-17): a page that is playing says so (?listening=1) - that is the idle reader's
+                # heartbeat; with none for a minute it stops by itself and lets go of the SDR
+                import sdr_audio
+                if (parse_qs(urlsplit(self.path).query).get("listening") or ["0"])[0] == "1":
+                    sdr_audio.touch_heartbeat()
+                return _json_response(self, 200, {"ok": True, "data": sdr_audio.service_state()})
             if path == "/api/instrument":
                 probe = (parse_qs(urlsplit(self.path).query).get("probe") or ["0"])[0] == "1"
                 return _json_response(self, 200, {"ok": True, "data": almita_web_ops.instrument_state(probe=probe)})
@@ -617,6 +625,16 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 import transit_logger
                 _log("INFO", f"req={self._request_id} TRANSIT graphs CLEAR requested")
                 return _json_response(self, 200, {"ok": True, "data": transit_logger.clear_view()})
+            if path in ("/api/audio/start", "/api/audio/stop"):
+                if _read_json_body(self).get("confirm") is not True:
+                    raise ValueError("send {confirm: true}")
+                import sdr_audio
+                action = path.rsplit("/", 1)[-1]
+                _log("WARNING", f"req={self._request_id} AUDIO idle reader {action.upper()} requested")
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": sdr_audio.service_action(action)})
+                except RuntimeError as exc:
+                    return _error_response(self, 409, str(exc))
             if path in ("/api/transit/start", "/api/transit/stop"):
                 body = _read_json_body(self)
                 if body.get("confirm") is not True:

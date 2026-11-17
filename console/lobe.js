@@ -255,5 +255,5 @@
   U.poller(refreshStatus, { intervalMs: 15000 }).start();
   U.poller(refreshLive, { intervalMs: 5000 }).start();
   window.addEventListener("resize", () => refreshLive());
-  U.onThemeChange(() => { if (lastData) { drawPlot(lastData); drawSpectrum(lastData); } });   // DÍA/NOCHE: redraw, no request (the sky view redraws itself)
+  U.onThemeChange(() => { if (lastData) { drawPlot(lastData); drawSpectrum(lastData); } });   // DAY/NIGHT: redraw, no request (the sky view redraws itself)
 })();

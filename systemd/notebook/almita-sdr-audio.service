@@ -1,0 +1,18 @@
+[Unit]
+Description=ALMITA AUDIO idle reader - a short SDR spectrum every 2 s for the header's AUDIO button, only while nothing else uses the SDR; stops by itself when no page listens
+After=network-online.target almita-instrument-forwarder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/sdr_audio.py
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
