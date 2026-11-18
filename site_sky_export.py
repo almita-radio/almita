@@ -208,6 +208,15 @@ def build_payload() -> dict:
     for sess in sessions:
         q = [p for p in points if p["s"] == sess["id"]]
         sess["decon"] = deconvolve_session(q, sess["spacing_deg"]) if len(q) > 3 else {"iterations": 0, "grid": []}
+    for sess in sessions:      # display-only shift (see DISPLAY_SHIFTS_DEG); true l/b stay in "l"/"b"
+        sh = DISPLAY_SHIFTS_DEG.get(sess["campaign_id"])
+        sess["display_shift_deg"] = sh
+        dl, db = (sh["dl"], sh["db"]) if sh else (0.0, 0.0)
+        for p in points:
+            if p["s"] == sess["id"]:
+                p["l_disp"], p["b_disp"] = round((p["l"] + dl) % 360, 3), round(p["b"] + db, 3)
+        if sh and sess.get("decon"):
+            sess["decon"]["grid"] = [[round((l + dl) % 360, 3), round(b + db, 3), v] for l, b, v in sess["decon"]["grid"]]
     ref_pts = [p for p in points if p["hi4pi_beam_1e20"] > 3.0]
     factor = float(np.median([p["integral_pct_kms"] / p["hi4pi_beam_1e20"] for p in ref_pts])) if ref_pts else None
     for p in points:
@@ -235,6 +244,14 @@ def build_payload() -> dict:
         "sessions": sessions, "points": points,
         "credits": {"hi4pi": "HI4PI Collaboration, Ben Bekhti N. et al. 2016, A&A 594, A116"},
     }
+
+
+# DISPLAY-ONLY shifts (operator 2026-11-18: "solo para efectos de observación y visualización en el status"): a
+# night whose dish was not aligned (no solar ALIGN) can be drawn moved on the map. Readings, r vs HI4PI and the
+# deconvolution all use the TRUE pointing; only the drawn position moves, and the page says so.
+# 2026-11-12 22:38:42 (l=20 grid): ALMITA's weighted centroid sits at b = +5.4 deg vs HI4PI's +0.8 -> moved -5 deg
+# (two 2.5 deg tiles) in galactic latitude.
+DISPLAY_SHIFTS_DEG = {"ALMITA-OBSERVE-20261112-22:38:42": {"dl": 0.0, "db": -5.0}}
 
 
 # ---- deconvolution (operator 2026-11-18: "quiero el gráfico de status con deconvolución") ----

@@ -48,7 +48,7 @@
   // 0.75 x the pointing's own grid spacing (the cell the grid gave it, not the 20 deg beam), and shows that
   // pointing's own reading - no averaging between pointings, every tile is a real measurement.
   function buildTiles() {
-    const pts = D.points.map((p) => ({ u: unit(p.l, p.b), v: p.integral_pct_kms, p,
+    const pts = D.points.map((p) => ({ u: unit(p.l_disp ?? p.l, p.b_disp ?? p.b), v: p.integral_pct_kms, p,
       reach: Math.cos(REACH * (D.sessions[p.s].spacing_deg || D.beam_fwhm_deg / 2) * RAD) }));
     // the deconvolved model, per session: fine-grid points (1.25 deg) with their unit vectors
     const dec = D.sessions.map((s) => ((s.decon && s.decon.grid) || []).map(([l, b, v]) => ({ u: unit(l, b), v })));
@@ -148,7 +148,9 @@
     $("sky-badge").textContent = (frac * 100).toFixed(1) + " % OF THE SKY";
     $("sky-badge").className = "badge " + (frac > 0 ? "status-ok" : "status-unknown");
     $("sky-note").textContent = `tile = ${CELL}° · each pointing fills its own grid cell (${D.sessions.map((s) => s.spacing_deg + "°").join(", ")} spacing) with its own reading · reading = area of the line over the window's edges, ±60 km/s, in ALMITA's own units (linear, viridis as in SCIENCE) · `
-      + `${D.sessions.length} sessions: ${D.selection} · background: HI4PI (Ben Bekhti et al. 2016)`;
+      + `${D.sessions.length} sessions: ${D.selection} · background: HI4PI (Ben Bekhti et al. 2016)`
+      + D.sessions.filter((s) => s.display_shift_deg).map((s) => ` · DISPLAY ONLY: ${s.started_chile} drawn moved ${s.display_shift_deg.db}° in b`
+        + `${s.display_shift_deg.dl ? ` and ${s.display_shift_deg.dl}° in l` : ""} (dish not aligned that night; readings, r and the deconvolution use the true pointing)`).join("");
     const bar = $("sky-bar"), bx = bar.getContext("2d"), [mn, mx] = D.tiles_scale_pct_kms;
     for (let i = 0; i < bar.width; i++) { const c = colour(mn + i / (bar.width - 1) * (mx - mn)); bx.fillStyle = `rgb(${c})`; bx.fillRect(i, 0, 1, bar.height); }
     $("sky-lo").textContent = mn.toFixed(0); $("sky-hi").textContent = mx.toFixed(0) + " %·km/s";
@@ -168,7 +170,8 @@
     if (!t) { tip.hidden = true; return; }
     const r = canvas.getBoundingClientRect();
     const s = D.sessions[t.p.s];
-    tip.innerHTML = `pointing ${t.p.i} · ${s.started_chile.slice(0, 10)} · l ${t.p.l.toFixed(1)}° b ${t.p.b.toFixed(1)}°<br>`
+    tip.innerHTML = `pointing ${t.p.i} · ${s.started_chile.slice(0, 10)} · l ${t.p.l.toFixed(1)}° b ${t.p.b.toFixed(1)}°`
+      + `${s.display_shift_deg ? ` (drawn ${s.display_shift_deg.db}° in b)` : ""}<br>`
       + `measured <b>${t.vm.toFixed(0)}</b> · deconvolved <b>${t.vd.toFixed(0)}</b> %·km/s<br>`
       + `HI4PI (20° beam) ${(t.p.hi4pi_beam_1e20 / 100).toFixed(2)}×10²² cm⁻²`;
     tip.hidden = false; tip.style.left = (ev.clientX - r.left + 16) + "px"; tip.style.top = (ev.clientY - r.top + 10) + "px";
