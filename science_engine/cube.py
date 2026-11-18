@@ -43,6 +43,47 @@ def _ascending(velocity: np.ndarray, *arrays: np.ndarray) -> tuple[np.ndarray, .
     return (velocity, *arrays)
 
 
+FREQUENCY_GRID_COMMON = "COMMON"
+FREQUENCY_GRID_RETUNED = "RETUNED_PER_POINT"
+_RETUNED_CHANNEL_REL_TOL = 1e-6
+
+
+def _points_with_velocity(science_input: ScienceInput) -> list:
+    points = [p for p in science_input.points if p.velocity_lsrk_m_s is not None]
+    if not points:
+        raise IncompatibleVelocityGridError(
+            "no input point carries velocity_lsrk_m_s - velocity-dependent products must BLOCK, never guess"
+        )
+    return points
+
+
+def _channel_hz(frequency_hz: np.ndarray) -> float:
+    d = np.diff(np.asarray(frequency_hz, float))
+    return float(np.median(np.abs(d))) if d.size else float("nan")
+
+
+def frequency_grid_mode(science_input: ScienceInput) -> str:
+    """COMMON: every point shares REDUCE's campaign frequency grid (the V1 contract). RETUNED_PER_POINT: the points
+    were TUNED differently on purpose - BL-105 frequency switching with a WINDOW CENTRE retunes every point by its own
+    LSRK correction (operator 2026-11-18: the 5x5 web test's grids differed by up to 18 km/s across the field) - so
+    each point has the same channel width on a shifted grid. Anything else (another channel width, a malformed axis)
+    is still a hard block."""
+    points = _points_with_velocity(science_input)
+    ref = points[0]
+    if all(np.array_equal(p.frequency_hz, ref.frequency_hz) for p in points[1:]):
+        return FREQUENCY_GRID_COMMON
+    ref_ch = _channel_hz(ref.frequency_hz)
+    for p in points[1:]:
+        ch = _channel_hz(p.frequency_hz)
+        if not (np.isfinite(ch) and np.isfinite(ref_ch) and abs(ch - ref_ch) <= _RETUNED_CHANNEL_REL_TOL * ref_ch):
+            raise IncompatibleVelocityGridError(
+                f"point {p.point_index}'s frequency_hz differs from point {ref.point_index}'s and so does its channel "
+                f"width ({ch:.3f} vs {ref_ch:.3f} Hz) - not a per-point retune of one grid; V1 has no resample path "
+                f"for that"
+            )
+    return FREQUENCY_GRID_RETUNED
+
+
 def canonical_velocity_axis(science_input: ScienceInput) -> np.ndarray:
     """The cube's velocity axis: the ASCENDING axis of the reference point = the point with the lowest
     `point_index` that carries velocity_lsrk_m_s (ingest sorts points by point_index, so this never depends
@@ -54,24 +95,31 @@ def canonical_velocity_axis(science_input: ScienceInput) -> np.ndarray:
     axes are the SAME grid shifted by a per-point LSRK offset (measured up to ~84 channels = 5.2 km/s on a
     real 100-point campaign) - the reference choice only decides which ~1% of edge channels lose support,
     far from any HI signal window. It is deterministic and never inflates the cube beyond one real axis.
+
+    RETUNED_PER_POINT (BL-105, see frequency_grid_mode): the points' velocity coverages can differ by far more
+    than ~1 % (a WINDOW CENTRE "auto" moves each point's window), so the reference axis is EXTENDED with its own
+    channel width to the union of every point's coverage - no point loses measured channels, and each point is
+    MISSING (not zero) where it was not measured.
     """
-    points_with_velocity = [p for p in science_input.points if p.velocity_lsrk_m_s is not None]
-    if not points_with_velocity:
-        raise IncompatibleVelocityGridError(
-            "no input point carries velocity_lsrk_m_s - velocity-dependent products must BLOCK, never guess"
-        )
-    reference_freq = points_with_velocity[0].frequency_hz
-    reference_n = points_with_velocity[0].velocity_lsrk_m_s.shape[0]
-    for p in points_with_velocity[1:]:
-        if not np.array_equal(p.frequency_hz, reference_freq):
-            raise IncompatibleVelocityGridError(
-                f"point {p.point_index}'s frequency_hz differs from point "
-                f"{points_with_velocity[0].point_index}'s - REDUCE's per-campaign common-grid guarantee "
-                f"is violated; V1 has no resample path for frequency (only for the derived velocity axis)"
-            )
-        if p.velocity_lsrk_m_s.shape[0] != reference_n:
-            raise IncompatibleVelocityGridError(f"point {p.point_index} has a different velocity-bin count")
-    return _ascending(points_with_velocity[0].velocity_lsrk_m_s)[0].copy()
+    points = _points_with_velocity(science_input)
+    reference_n = points[0].velocity_lsrk_m_s.shape[0]
+    mode = frequency_grid_mode(science_input)
+    if mode == FREQUENCY_GRID_COMMON:
+        for p in points[1:]:
+            if p.velocity_lsrk_m_s.shape[0] != reference_n:
+                raise IncompatibleVelocityGridError(f"point {p.point_index} has a different velocity-bin count")
+        return _ascending(points[0].velocity_lsrk_m_s)[0].copy()
+    ref = _ascending(np.asarray(points[0].velocity_lsrk_m_s, float))[0]
+    width = float(np.median(np.diff(ref)))
+    if not (np.isfinite(width) and width > 0):
+        raise IncompatibleVelocityGridError(f"point {points[0].point_index}'s velocity axis has no usable channel width")
+    lo = min(float(np.nanmin(p.velocity_lsrk_m_s)) for p in points)
+    hi = max(float(np.nanmax(p.velocity_lsrk_m_s)) for p in points)
+    n_below = max(0, int(np.ceil((ref[0] - lo) / width - 1e-9)))
+    n_above = max(0, int(np.ceil((hi - ref[-1]) / width - 1e-9)))
+    below = ref[0] - width * np.arange(n_below, 0, -1)
+    above = ref[-1] + width * np.arange(1, n_above + 1)
+    return np.concatenate([below, ref, above])
 
 
 def build_cube(science_input: ScienceInput, grid: ScienceGrid, beam: BeamModel, config: ScienceConfig,
@@ -122,7 +170,12 @@ def build_cube(science_input: ScienceInput, grid: ScienceGrid, beam: BeamModel, 
         n_suspect.append(int(suspect.sum()))
         if suspect.any():
             mask_pt = np.where(suspect, MaskFlag.INVALID.value, mask_pt)
-        offset = v_pt - velocity_axis
+        if v_pt.shape == velocity_axis.shape:
+            offset = v_pt - velocity_axis
+        else:                   # RETUNED_PER_POINT: the axis is longer than the point; the sub-channel misalignment
+            nearest = velocity_axis[np.clip(np.searchsorted(velocity_axis, v_pt), 0, nv - 1)]
+            offset = np.full(v_pt.shape, np.inf)                         # never passthrough
+            offset_report = v_pt - nearest
         max_offset = float(np.max(np.abs(offset)))
         if max_offset <= velocity_match_tol_channels * channel_width:
             values, uncertainty, mask = values_pt, unc_pt, mask_pt
@@ -132,7 +185,7 @@ def build_cube(science_input: ScienceInput, grid: ScienceGrid, beam: BeamModel, 
             timings["resample"] += time.perf_counter() - t
             values, uncertainty, mask = resampled.relative_intensity, resampled.uncertainty, resampled.mask
             resampled_indices.append(point.point_index)
-        offsets_m_s.append(float(np.median(offset)))
+        offsets_m_s.append(float(np.median(offset if v_pt.shape == velocity_axis.shape else offset_report)))
         edge_bins_lost.append(int(np.sum((velocity_axis < v_pt[0]) | (velocity_axis > v_pt[-1]))))
         masked_before.append(float(np.mean(mask_pt != 0)))
 
@@ -149,6 +202,7 @@ def build_cube(science_input: ScienceInput, grid: ScienceGrid, beam: BeamModel, 
     abs_offsets = np.abs(np.array(offsets_m_s)) if offsets_m_s else np.array([0.0])
     build_info = {
         "canonical_velocity_axis": {"order": "ascending", "reference_point_index": int(reference_point_index),
+                                    "frequency_grid": frequency_grid_mode(science_input),
                                     "n_channels": int(nv), "channel_width_m_s": channel_width,
                                     "min_m_s": float(velocity_axis[0]), "max_m_s": float(velocity_axis[-1])},
         "n_points_input": len(science_input.points), "n_points_used": len(used), "used_point_indices": used,

@@ -87,9 +87,28 @@ def update_session_waterfall(
         frequency_hz, np.asarray(relative_db)[None, :], np.asarray(valid_mask),
         frequency_bins=frequency_bins,
     )
-    new_row = {"point_id": point_id, "utc": utcnow(), "relative_db": _finite_list(dashboard_values[0])}
-
     state = _load_state(output_dir, session_id)
+    row_values = np.asarray(dashboard_values[0], float)
+    # BL-105 (2026-11-18): frequency switching with a WINDOW CENTRE retunes every point by its own LSRK correction, so
+    # each point's folded axis is shifted (up to ~85 kHz across a 5x5 field, far more with "auto"). The session keeps
+    # the FIRST point's axis and later rows are placed on it by frequency (blank where a point did not measure), so a
+    # column is one topocentric frequency for every row - otherwise rows were drawn on the LAST point's axis.
+    session_axis = np.asarray(state.get("frequency_mhz") or [], float) * 1e6
+    if session_axis.size and not (session_axis.shape == dashboard_frequency.shape
+                                  and np.allclose(session_axis, dashboard_frequency, rtol=0, atol=1.0)):
+        order = np.argsort(dashboard_frequency)
+        xf, yf = np.asarray(dashboard_frequency, float)[order], row_values[order]
+        ok = np.isfinite(yf)
+        if ok.sum() >= 2:
+            row_values = np.interp(session_axis, xf[ok], yf[ok], left=np.nan, right=np.nan)
+            gap = np.max(np.abs(np.diff(xf))) if xf.size > 1 else 0.0
+            nearest = np.min(np.abs(session_axis[:, None] - xf[ok][None, :]), axis=1)   # no bridging over masked gaps
+            row_values[nearest > gap] = np.nan
+        else:
+            row_values = np.full(session_axis.shape, np.nan)
+        dashboard_frequency = session_axis
+    new_row = {"point_id": point_id, "utc": utcnow(), "relative_db": _finite_list(row_values)}
+
     rows = [row for row in state["rows"] if row.get("point_id") != point_id]
     rows.append(new_row)
     state["rows"] = rows[-max_rows:]

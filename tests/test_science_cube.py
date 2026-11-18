@@ -169,16 +169,37 @@ def test_velocity_gradient_across_field_is_not_collapsed():
 
 
 def test_incompatible_frequency_grid_is_rejected():
-    specs = [SyntheticPointSpec(point_index=1, ra_hours=CENTER_RA_H, dec_degrees=CENTER_DEC)]
-    si = build_synthetic_science_input(specs, n_channels=16)
-    si.points[0].frequency_hz = si.points[0].frequency_hz[:-1]  # corrupt: wrong length vs a hypothetical peer
-    # single-point case can't demonstrate a mismatch; build a genuinely mismatched two-point input instead
+    """A different CHANNEL WIDTH is not one grid retuned: still a hard block."""
     si2 = build_synthetic_science_input(
         [SyntheticPointSpec(point_index=1, ra_hours=CENTER_RA_H, dec_degrees=CENTER_DEC),
          SyntheticPointSpec(point_index=2, ra_hours=CENTER_RA_H + 0.1, dec_degrees=CENTER_DEC)], n_channels=16)
-    si2.points[1].frequency_hz = si2.points[1].frequency_hz + 1.0  # tiny, deliberate mismatch
+    f = si2.points[1].frequency_hz
+    si2.points[1].frequency_hz = f[0] + (f - f[0]) * 1.01     # 1 % wider channels
     with pytest.raises(IncompatibleVelocityGridError):
         canonical_velocity_axis(si2)
+
+
+def test_per_point_retuned_grids_are_aligned_in_velocity_not_rejected():
+    """BL-105 (operator 2026-11-18): frequency switching with a WINDOW CENTRE retunes every point by its own LSRK
+    correction, so the frequency grids are the same grid SHIFTED. SCIENCE used to block such a session outright; now
+    the axis is the reference one extended to every point's coverage, and nothing measured is lost."""
+    from science_engine.cube import FREQUENCY_GRID_RETUNED, frequency_grid_mode
+    si = build_synthetic_science_input(
+        [SyntheticPointSpec(point_index=1, ra_hours=CENTER_RA_H, dec_degrees=CENTER_DEC),
+         SyntheticPointSpec(point_index=2, ra_hours=CENTER_RA_H + 0.1, dec_degrees=CENTER_DEC)], n_channels=32)
+    p2 = si.points[1]
+    v = np.asarray(p2.velocity_lsrk_m_s, float)
+    width = float(np.median(np.abs(np.diff(v))))
+    df = float(np.median(np.diff(p2.frequency_hz)))
+    p2.frequency_hz = p2.frequency_hz + 5 * df                # retuned by 5 channels...
+    p2.velocity_lsrk_m_s = v + 5.5 * np.sign(v[-1] - v[0]) * width   # ...and its coverage moves by 5.5 channels
+    assert frequency_grid_mode(si) == FREQUENCY_GRID_RETUNED
+    axis = canonical_velocity_axis(si)
+    assert np.all(np.diff(axis) > 0)
+    for p in si.points:                                       # the union: every point's whole coverage is inside
+        assert axis[0] <= np.min(p.velocity_lsrk_m_s) + 1e-6 and axis[-1] >= np.max(p.velocity_lsrk_m_s) - 1e-6
+    assert len(axis) <= 32 + 7                                # extended by the shift only, never inflated beyond it
+    assert np.allclose(np.diff(axis), width)
 
 
 def test_no_velocity_at_all_blocks_not_guesses():

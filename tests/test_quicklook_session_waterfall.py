@@ -93,3 +93,28 @@ def test_png_dimensions_are_fixed_regardless_of_row_count(tmp_path, spectrum_arr
     with Image.open(single_row_dir / "session_waterfall.png") as image:
         dimensions_at_1_row = image.size
     assert dimensions_at_1_row == dimensions_at_40_rows
+
+
+def test_retuned_points_are_placed_on_the_first_points_frequency_axis(tmp_path):
+    """BL-105 (2026-11-18): with a WINDOW CENTRE every point is retuned by its own LSRK correction. A feature at one
+    topocentric frequency must stay in ONE column for every row (rows used to be drawn on the last point's axis)."""
+    import numpy as np
+    f1 = 1419.5e6 + np.arange(4096) * 195.3125            # ~0.8 MHz folded window
+    f2 = f1 + 40_000.0                                    # the next point, retuned 40 kHz up
+    line = 1419.7e6
+
+    def spec(f):
+        return np.where(np.abs(f - line) < 3000, 10.0, 0.0), np.ones(f.size, bool)
+
+    v1, m1 = spec(f1)
+    v2, m2 = spec(f2)
+    update_session_waterfall(tmp_path, session_id="s", point_id="p1", frequency_hz=f1, relative_db=v1, valid_mask=m1,
+                             frequency_bins=512)
+    update_session_waterfall(tmp_path, session_id="s", point_id="p2", frequency_hz=f2, relative_db=v2, valid_mask=m2,
+                             frequency_bins=512)
+    state = json.loads((tmp_path / "session_waterfall_state.json").read_text())
+    axis = np.array(state["frequency_mhz"]) * 1e6
+    assert abs(axis[0] - f1[0]) < 1000                    # the FIRST point's axis is kept
+    rows = [np.array([np.nan if x is None else x for x in r["relative_db"]]) for r in state["rows"]]
+    assert abs(int(np.nanargmax(rows[0])) - int(np.nanargmax(rows[1]))) <= 1   # same column (decimation rounding); was 25 off
+    assert np.isnan(rows[1][:5]).all() and np.isfinite(rows[1][-5:]).all()   # p2 did not measure the low edge

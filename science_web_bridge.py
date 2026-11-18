@@ -925,7 +925,8 @@ def per_point_integrated_values(filtered_input, science_config, velocity_axis: n
         if suspect.any():
             mask_pt = np.where(suspect, MaskFlag.INVALID.value, mask_pt)
 
-        if float(np.max(np.abs(v_pt - velocity_axis))) <= 1e-3 * channel_width:
+        # BL-105 retuned grids: the canonical axis can be longer than the point (science_engine.cube) -> resample
+        if v_pt.shape == velocity_axis.shape and float(np.max(np.abs(v_pt - velocity_axis))) <= 1e-3 * channel_width:
             values, uncertainty, mask = values_pt, unc_pt, mask_pt
         else:
             r = resample_to_velocity_axis(v_pt, values_pt, unc_pt, mask_pt, velocity_axis)
