@@ -360,3 +360,5 @@ html[data-present]{zoom:1.5}
 .sky-legend{display:flex;align-items:center;gap:10px;max-width:520px;margin:10px auto 0;font-size:.78rem;color:var(--muted)}
 .sky-legend canvas{flex:1;min-width:0;width:100%;height:10px;border-radius:3px}
 .sky-note{font-size:.75rem;margin:8px 12px 12px;text-align:center}
+.sky-mode-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 12px 10px;font-size:.78rem}
+.sky-mode-bar .seg-btns{display:inline-flex;gap:0}

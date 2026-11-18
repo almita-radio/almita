@@ -205,6 +205,9 @@ def build_payload() -> dict:
             sess["spacing_deg"] = round(float(np.median(dd.min(axis=1))), 2)
         else:
             sess["spacing_deg"] = BEAM_FWHM_DEG / 2
+    for sess in sessions:
+        q = [p for p in points if p["s"] == sess["id"]]
+        sess["decon"] = deconvolve_session(q, sess["spacing_deg"]) if len(q) > 3 else {"iterations": 0, "grid": []}
     ref_pts = [p for p in points if p["hi4pi_beam_1e20"] > 3.0]
     factor = float(np.median([p["integral_pct_kms"] / p["hi4pi_beam_1e20"] for p in ref_pts])) if ref_pts else None
     for p in points:
@@ -225,10 +228,76 @@ def build_payload() -> dict:
         # the high-latitude sky (~1.3) at once.
         "tiles_lut": inferno_lut("viridis"),
         "tiles_scale_pct_kms": [0.0, round(float(np.percentile([p["integral_pct_kms"] for p in points], 98)), 1) if points else 1.0],
+        "decon": {"method": "Richardson-Lucy, iterations per session by leave-one-out", "beam_fwhm_deg": BEAM_FWHM_DEG,
+                  "step_deg": DECON_STEP_DEG, "expected_resolution_deg": [11, 15],
+                  "note": "a model of the sky consistent with the readings and the beam, not a measurement"},
         "selection": "real mount (LX200 OnStep) + REDUCE + frequency switching in every point",
         "sessions": sessions, "points": points,
         "credits": {"hi4pi": "HI4PI Collaboration, Ben Bekhti N. et al. 2016, A&A 594, A116"},
     }
+
+
+# ---- deconvolution (operator 2026-11-18: "quiero el gráfico de status con deconvolución") ----
+# Simulation 2026-11-18 (HI4PI -> 20 deg beam -> grid + noise -> Richardson-Lucy): 10-30 iterations give ~11-15 deg
+# effective resolution from 20-24 deg; beyond ~100 the noise starts to invent structure (error rises).
+DECON_STEP_DEG = 1.25
+
+
+ITERATION_CHOICES = (1, 2, 3, 4, 6, 8, 10, 15, 20, 30)   # capped at 30: past ~100 the noise invents structure
+
+
+def _decon_setup(pts: list, beam: float):
+    lon = np.array([p["l"] for p in pts]); lat = np.array([p["b"] for p in pts])
+    y = np.array([p["integral_pct_kms"] for p in pts], float)
+    cen = SkyCoord(l=float(np.degrees(np.angle(np.mean(np.exp(1j * np.radians(lon)))))) * u.deg, b=float(np.mean(lat)) * u.deg, frame="galactic")
+    off = cen.skyoffset_frame()
+    sp = SkyCoord(l=lon * u.deg, b=lat * u.deg, frame="galactic").transform_to(off)
+    samp = np.stack([sp.lon.wrap_at(180 * u.deg).deg, sp.lat.deg], 1)
+    gx = np.arange(samp[:, 0].min() - beam, samp[:, 0].max() + beam + 1e-9, DECON_STEP_DEG)
+    gy = np.arange(samp[:, 1].min() - beam, samp[:, 1].max() + beam + 1e-9, DECON_STEP_DEG)
+    grid = np.stack([a.ravel() for a in np.meshgrid(gx, gy)], 1)
+    A = np.exp(-0.5 * ((samp[:, None, :] - grid[None, :, :]) ** 2).sum(-1) / (beam / 2.3548) ** 2)
+    A /= A.sum(1, keepdims=True)
+    # readings can be negative (FS baseline ripple): a constant floor in, taken off after (rows of A sum to 1, so a
+    # constant sky passes through unchanged)
+    floor = max(0.0, -float(y.min())) + 0.05 * float(np.abs(y).max() or 1.0)
+    return off, samp, grid, A, y + floor, floor
+
+
+def _rl(A: np.ndarray, y: np.ndarray, iterations: int, x0=None) -> np.ndarray:
+    x = np.full(A.shape[1], float(y.mean())) if x0 is None else x0.copy()
+    norm = np.clip(A.T @ np.ones_like(y), 1e-12, None)
+    for _ in range(iterations):
+        x = x * (A.T @ (y / np.clip(A @ x, 1e-12, None))) / norm
+    return x
+
+
+def choose_iterations(A: np.ndarray, y: np.ndarray) -> dict:
+    """Leave-one-out: deconvolve without one pointing, predict its reading through the beam; the iteration count
+    that predicts the unseen pointings best wins. Data only - HI4PI is never used to tune it. On 2026-11-18 it chose
+    30 for the bright l=20 field and 3 for the faint b=-50 one, matching what HI4PI says is best (15-25 and ~2)."""
+    err = {k: 0.0 for k in ITERATION_CHOICES}
+    for i in range(len(y)):
+        m = np.ones(len(y), bool); m[i] = False
+        x, done = None, 0
+        for k in ITERATION_CHOICES:
+            x = _rl(A[m], y[m], k - done, x); done = k
+            err[k] += float((A[i] @ x - y[i]) ** 2)
+    rms = {k: math.sqrt(v / len(y)) for k, v in err.items()}
+    return {"iterations": min(rms, key=rms.get), "loo_rms_pct_kms": {str(k): round(v, 1) for k, v in rms.items()}}
+
+
+def deconvolve_session(pts: list, spacing: float, beam: float = BEAM_FWHM_DEG, iterations: int = None) -> dict:
+    """Richardson-Lucy of one session's readings on a fine grid (local offset frame around the field's centre),
+    Gaussian beam of FWHM `beam`, iterations chosen by leave-one-out unless given. Returns the grid only inside the
+    cells the pointings sample (within 0.75 x spacing of one) - outside there is no data to constrain it."""
+    off, samp, grid, A, y, floor = _decon_setup(pts, beam)
+    choice = choose_iterations(A, y) if iterations is None else {"iterations": iterations}
+    x = _rl(A, y, choice["iterations"]) - floor
+    near = np.sqrt(((grid[:, None, :] - samp[None, :, :]) ** 2).sum(-1)).min(1) <= 0.75 * spacing
+    gc = SkyCoord(lon=grid[near, 0] * u.deg, lat=grid[near, 1] * u.deg, frame=off).galactic
+    choice["grid"] = [[round(float(a), 3), round(float(b), 3), round(float(v), 2)] for a, b, v in zip(gc.l.deg, gc.b.deg, x[near])]
+    return choice
 
 
 # ---- cached access for the web (STATUS) ----

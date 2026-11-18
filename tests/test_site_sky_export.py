@@ -44,3 +44,19 @@ def test_line_area_ignores_a_flat_offset_and_counts_only_the_line():
     assert abs(a - 10.0 * 10.0 * math.sqrt(2 * math.pi)) < 15       # ~ the Gaussian's area
     assert abs(sse.line_area(v, line + 3.0) - a) < 1e-6             # a baseline offset is removed at the edges
     assert sse.line_area(v, np.zeros_like(v)) == 0.0
+
+
+def test_deconvolution_sharpens_a_bright_band_and_leaves_a_flat_sky_flat():
+    # a 5x5 grid every 7.5 deg across a narrow bright band at b=0, seen through the 20 deg beam
+    pts = []
+    for i in range(5):
+        for j in range(5):
+            l, b = 20 + (i - 2) * 7.5, (j - 2) * 7.5
+            pts.append({"l": l, "b": b, "integral_pct_kms": 100 + 500 * math.exp(-0.5 * (b / 9.0) ** 2)})
+    out = sse.deconvolve_session(pts, 7.5, iterations=20)
+    centre = max(v for l, b, v in out["grid"] if abs(b) < 1)
+    assert centre > 600                     # sharper than the measured peak (600): the beam's blur partly undone
+    flat = [{"l": p["l"], "b": p["b"], "integral_pct_kms": 50.0} for p in pts]
+    fo = sse.deconvolve_session(flat, 7.5)
+    assert all(abs(v - 50.0) < 1.0 for _, _, v in fo["grid"])
+    assert fo["iterations"] in sse.ITERATION_CHOICES

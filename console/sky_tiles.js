@@ -13,6 +13,8 @@
   const CELL = 2.5;                                 // tile size, deg of galactic latitude (finer than any grid spacing)
   const REACH = 0.75;                               // a tile belongs to a pointing within 0.75 x its grid spacing (cell corner = 0.71)
   let D = null, ghost = null, tiles = [];
+  let mode = "measured";                            // "measured" | "decon" (remembered per browser)
+  try { if (localStorage.getItem("almita-sky-mode") === "decon") mode = "decon"; } catch (e) { /* private window */ }
 
   function project(l, b) {                          // l grows to the LEFT, l=0 in the centre
     const lam = -((((l + 180) % 360) + 360) % 360 - 180) * RAD, phi = b * RAD;
@@ -48,6 +50,13 @@
   function buildTiles() {
     const pts = D.points.map((p) => ({ u: unit(p.l, p.b), v: p.integral_pct_kms, p,
       reach: Math.cos(REACH * (D.sessions[p.s].spacing_deg || D.beam_fwhm_deg / 2) * RAD) }));
+    // the deconvolved model, per session: fine-grid points (1.25 deg) with their unit vectors
+    const dec = D.sessions.map((s) => ((s.decon && s.decon.grid) || []).map(([l, b, v]) => ({ u: unit(l, b), v })));
+    const decAt = (sid, c) => {
+      let best = -2, v = null;
+      for (const g of dec[sid] || []) { const dot = c[0] * g.u[0] + c[1] * g.u[1] + c[2] * g.u[2]; if (dot > best) { best = dot; v = g.v; } }
+      return v;
+    };
     tiles = [];
     let area = 0;
     for (let b0 = -90; b0 < 90; b0 += CELL) {
@@ -61,7 +70,8 @@
           if (dot >= q.reach) near++;
         }
         if (!bq || best < bq.reach) continue;
-        tiles.push({ l0, dl, b0, lc: (lc + 360) % 360, bc, v: bq.v, near, p: bq.p });
+        const vd = decAt(bq.p.s, c);
+        tiles.push({ l0, dl, b0, lc: (lc + 360) % 360, bc, vm: bq.v, vd: vd === null ? bq.v : vd, near, p: bq.p });
         area += dl * RAD * (Math.sin((b0 + CELL) * RAD) - Math.sin(b0 * RAD));
       }
     }
@@ -113,7 +123,7 @@
     ctx.restore();
     // the tiles, with dark grout between them
     ctx.save(); ctx.shadowColor = "rgba(120,220,160,.35)"; ctx.shadowBlur = 14;
-    for (const t of tiles) { tilePath(t); const c = colour(t.v); ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; ctx.fill(); }
+    for (const t of tiles) { tilePath(t); const c = colour(mode === "decon" ? t.vd : t.vm); ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; ctx.fill(); }
     ctx.restore();
     ctx.save(); ctx.strokeStyle = "rgba(5,7,10,.8)"; ctx.lineWidth = 1.4;
     for (const t of tiles) { tilePath(t); ctx.stroke(); }
@@ -159,10 +169,24 @@
     const r = canvas.getBoundingClientRect();
     const s = D.sessions[t.p.s];
     tip.innerHTML = `pointing ${t.p.i} · ${s.started_chile.slice(0, 10)} · l ${t.p.l.toFixed(1)}° b ${t.p.b.toFixed(1)}°<br>`
-      + `ALMITA <b>${t.v.toFixed(0)} %·km/s</b> · HI4PI (20° beam) ${(t.p.hi4pi_beam_1e20 / 100).toFixed(2)}×10²² cm⁻²`;
+      + `measured <b>${t.vm.toFixed(0)}</b> · deconvolved <b>${t.vd.toFixed(0)}</b> %·km/s<br>`
+      + `HI4PI (20° beam) ${(t.p.hi4pi_beam_1e20 / 100).toFixed(2)}×10²² cm⁻²`;
     tip.hidden = false; tip.style.left = (ev.clientX - r.left + 16) + "px"; tip.style.top = (ev.clientY - r.top + 10) + "px";
   });
   canvas.addEventListener("mouseleave", () => { hovered = null; $("sky-tip").hidden = true; if (D) draw(null); });
+
+  function setMode(m) {
+    mode = m;
+    try { localStorage.setItem("almita-sky-mode", m); } catch (e) { /* private window */ }
+    for (const b of document.querySelectorAll("#sky-mode button")) b.classList.toggle("active", b.dataset.mode === m);
+    $("sky-mode-note").textContent = m === "decon"
+      ? "DECONVOLVED: a model of the sky consistent with the readings and a 20° Gaussian beam (Richardson–Lucy; iterations per night chosen by leave-one-out: "
+        + D.sessions.map((s) => `${s.started_chile.slice(5, 16)} → ${s.decon ? s.decon.iterations : 0}`).join(", ")
+        + ") · expected ~11–15° instead of 20–24° where the signal is strong · NOT a measurement: the measured view is the evidence"
+      : "MEASURED: each tile is a pointing's own reading";
+    draw(hovered);
+  }
+  for (const b of document.querySelectorAll("#sky-mode button")) b.addEventListener("click", () => { if (D) setMode(b.dataset.mode); });
 
   async function load() {
     const r = await U.api("/api/status/sky-map", { timeoutMs: 60000 });
@@ -173,7 +197,7 @@
     }
     D = body.data;
     const frac = buildTiles();
-    stats(frac); draw(null);
+    stats(frac); setMode(mode);
     const im = new Image();
     im.onload = () => { ghost = im; draw(hovered); };
     im.src = "/api/status/sky-ghost.png?kind=full";
