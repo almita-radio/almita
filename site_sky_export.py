@@ -250,8 +250,8 @@ def build_payload() -> dict:
 # night whose dish was not aligned (no solar ALIGN) can be drawn moved on the map. Readings, r vs HI4PI and the
 # deconvolution all use the TRUE pointing; only the drawn position moves, and the page says so.
 # 2026-11-12 22:38:42 (l=20 grid): ALMITA's weighted centroid sits at b = +5.4 deg vs HI4PI's +0.8 -> moved -5 deg
-# (two 2.5 deg tiles) in galactic latitude.
-DISPLAY_SHIFTS_DEG = {"ALMITA-OBSERVE-20261112-22:38:42": {"dl": 0.0, "db": -5.0}}
+# (two 2.5 deg tiles) in galactic latitude; operator then asked one tile more -> -7.5 deg.
+DISPLAY_SHIFTS_DEG = {"ALMITA-OBSERVE-20261112-22:38:42": {"dl": 0.0, "db": -7.5}}
 
 
 # ---- deconvolution (operator 2026-11-18: "quiero el gráfico de status con deconvolución") ----
