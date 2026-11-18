@@ -39,6 +39,19 @@
           <div class="obs-row" id="row-fswitch-center"><label for="f-fswitch-center" title="BL-105: where each point's ±84 km/s window sits. Empty = around the line at rest, as before. 'auto' = toward the line's terminal edge from a rotation-curve model of the Milky Way through the 20° beam, per point (rotation curve). A number = a fixed centre in km/s LSRK, e.g. 260 for the Large Magellanic Cloud (with SWITCH OFFSET 300 kHz), 145 for the Small one.">WINDOW CENTRE (km/s LSRK)</label><input id="f-fswitch-center" type="text" placeholder="empty · auto · or km/s, e.g. 270" disabled></div>
           <div class="obs-row" id="row-fswitch-offset"><label for="f-fswitch-offset" title="How far each LO jumps from the window centre. 600 kHz (default): window ±84 km/s, the Milky Way's local gas leaves a negative ghost at ±253 km/s - right on the Large Magellanic Cloud. 300 kHz: window ±148 km/s, ghost at ±127 km/s - use it for the LMC. The Small Cloud (+160) works with 600.">SWITCH OFFSET</label><select id="f-fswitch-offset" disabled><option value="">600 kHz (±84 km/s)</option><option value="300000">300 kHz (±148 km/s, LMC)</option></select></div>
           </div>
+          <div class="obs-split-suggest" id="fs-suggest" aria-live="polite" title="A suggestion only: nothing changes until you press USE. From the HI the 20° beam should see at the region's centre - GASS (Parkes, measured) in the south (Dec ≤ −45°: the Magellanic Clouds, the southern Milky Way), a rotation-curve model elsewhere.">
+            <div class="est-label">WINDOW SUGGESTION</div>
+            <div class="fs-sug-where est-sub" id="fs-sug-where">click the map or set a centre</div>
+            <div class="est-big" id="fs-sug-main">—</div>
+            <div class="est-sub" id="fs-sug-window"></div>
+            <canvas id="fs-sug-spectrum" width="240" height="110" aria-label="expected HI spectrum in the beam, with the suggested window"></canvas>
+            <div class="fs-sug-legend est-sub"><span class="fs-key fs-key-hi"></span>HI <span class="fs-key fs-key-win"></span>window <span class="fs-key fs-key-ghost"></span>ghosts · km/s LSRK</div>
+            <div class="est-sub" id="fs-sug-fractions"></div>
+            <ul class="fs-sug-notes" id="fs-sug-notes"></ul>
+            <div class="est-sub" id="fs-sug-source"></div>
+            <div class="est-sub" id="fs-sug-alt"></div>
+            <button type="button" id="fs-sug-use" class="mode-btn" disabled title="Turns FREQUENCY SWITCHING on and copies this WINDOW CENTRE and SWITCH OFFSET into the form. PLAN still checks everything.">USE</button>
+          </div>
           <div class="obs-split-map">
             <div class="obs-actions" id="est-view-bar" style="justify-content:center;padding:0"><button type="button" id="est-view-now" class="mode-btn active">AREA NOW</button><button type="button" id="est-view-capture" class="mode-btn">AT EACH CAPTURE</button></div>
             <canvas id="est-skymap" width="420" height="420" style="display:block;border:1px solid var(--line);border-radius:8px" aria-label="Alt/Az map of the requested grid points" title="AREA NOW: every point at the start (the region's shape). AT EACH CAPTURE: where the mount will be at each point's turn. CLICK: centre the region there (FIXED_CENTER, approximate RA/Dec)."></canvas>

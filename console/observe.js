@@ -117,15 +117,22 @@
   });
   // The map is a square as tall as the specification column beside it (OBSERVATION NAME .. SETTLE), never wider
   // than the space left; on a narrow screen (stacked) it takes the width instead.
+  // The map's size depends on the window only (Felipe 2026-11-18): it is computed once per window size and kept, so
+  // form changes, the suggestion card or a longer note under the map never make it grow or shrink.
+  let mapSide = null, mapSideKey = "";
   function sizeSkyMap() {
     const form = $("obs-split-form"), canvas = $("est-skymap");
     if (!form || !canvas) return;
-    const stacked = window.matchMedia("(max-width:900px)").matches;
-    const other = $("est-view-bar").offsetHeight + $("est-sky-time").offsetHeight + ($("est-skymap-legend").hidden ? 0 : 40) + $("est-skymap-note").offsetHeight + 28;
-    const byHeight = form.offsetHeight - other;
-    const byWidth = stacked ? form.offsetWidth : Math.max(280, form.parentElement.offsetWidth * 0.5);
-    const side = Math.round(Math.max(260, Math.min(stacked ? byWidth : byHeight, byWidth, 640)));
-    canvas.style.width = canvas.style.height = side + "px";
+    const key = window.innerWidth + "x" + window.innerHeight;
+    if (mapSide === null || key !== mapSideKey) {
+      const stacked = window.matchMedia("(max-width:900px)").matches;
+      const sugW = stacked ? 0 : (($("fs-suggest") && $("fs-suggest").offsetWidth) || 0) + 18;
+      const byWidth = stacked ? form.offsetWidth : Math.max(280, form.parentElement.offsetWidth - form.offsetWidth - sugW - 24);
+      const byWindow = window.innerHeight - 260;
+      mapSide = Math.round(Math.max(260, Math.min(byWidth, byWindow, 420)));
+      mapSideKey = key;
+    }
+    canvas.style.width = canvas.style.height = mapSide + "px";
   }
   window.addEventListener("resize", () => { if (lastSky) renderEstimateSky(lastSky); });
   function renderEstimateSky(sky) {
@@ -231,9 +238,120 @@
     estimate.inFlight = false;
     if (estimate.dirty) return runEstimate();          // the form changed while this one ran: its answer is already stale
     $("estimate").classList.remove("est-pending");
-    if (!r.ok) { setVerdict("", `estimate unavailable: ${(r.error && r.error.message) || "no answer"}`); return; }
+    if (!r.ok) { setVerdict("", `estimate unavailable: ${(r.error && r.error.message) || "no answer"}`); updateSuggestion(null); return; }
     renderEstimate(r.data);
+    updateSuggestion(r.data);
   }
+
+  // ------------------------------------------------------------------ window suggestion (operator 2026-11-18)
+  // "al picar algún lugar del mapa ... me recomiende la velocidad": WINDOW CENTRE + SWITCH OFFSET for the region's
+  // centre, from /api/observe/fswitch-suggest (fswitch_suggest.py). Display only until the operator presses USE.
+  const sug = { key: null, data: null, seq: 0 };
+  const kms = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v));
+  const pct = (f) => (U.finite(f) ? Math.round(f * 100) + " %" : "—");
+  function regionCentre(e) {
+    if (e && U.finite(e.center_ra_hours) && U.finite(e.center_dec_deg)) return { ra: e.center_ra_hours, dec: e.center_dec_deg };
+    if ($("f-placement").value === "FIXED_CENTER") {
+      const ra = Number($("f-center-ra").value), dec = Number($("f-center-dec").value);
+      if ($("f-center-ra").value !== "" && $("f-center-dec").value !== "" && Number.isFinite(ra) && Number.isFinite(dec)) return { ra, dec };
+    }
+    return null;
+  }
+  function sugClear(text) {
+    sug.data = null; sug.key = null;
+    $("fs-sug-where").textContent = text; $("fs-sug-main").textContent = "—";
+    for (const id of ["fs-sug-window", "fs-sug-fractions", "fs-sug-source", "fs-sug-alt"]) $(id).textContent = "";
+    $("fs-sug-notes").replaceChildren(); $("fs-sug-use").disabled = true; drawSugSpectrum(null);
+  }
+  async function updateSuggestion(e) {
+    const c = regionCentre(e);
+    if (!c) return sugClear("click the map or set a centre (FIXED_CENTER)");
+    const key = `${c.ra.toFixed(2)}|${c.dec.toFixed(1)}`;
+    if (key === sug.key) return;
+    sug.key = key;
+    const seq = ++sug.seq;
+    $("fs-sug-where").textContent = `centre RA ${c.ra.toFixed(2)} h, Dec ${c.dec.toFixed(1)}° · computing…`;
+    const r = await U.api(`/api/observe/fswitch-suggest?ra_hours=${c.ra}&dec_deg=${c.dec}`, { timeoutMs: 30000 });
+    if (seq !== sug.seq) return;                                         // a newer centre is already on its way
+    if (!r.ok) { sug.key = null; return sugClear(`suggestion unavailable: ${(r.error && r.error.message) || "no answer"}`); }
+    renderSuggestion(r.data && r.data.data ? r.data.data : r.data);           // the route answers {ok, data}
+  }
+  function renderSuggestion(d) {
+    sug.data = d;
+    $("fs-sug-where").textContent = `centre RA ${d.ra_hours.toFixed(2)} h, Dec ${d.dec_deg.toFixed(1)}° · l ${d.l_deg.toFixed(1)}°, b ${d.b_deg.toFixed(1)}°`;
+    $("fs-sug-main").textContent = `${kms(d.centre_km_s)} km/s\n${Math.round(d.offset_hz / 1e3)} kHz`;
+    $("fs-sug-window").textContent = `window ${kms(d.window_lsrk_km_s[0])}…${kms(d.window_lsrk_km_s[1])} km/s LSRK (±${Math.round(d.half_window_km_s)})`
+      + (d.target_extent_lsrk_km_s ? ` · the gas: ${kms(d.target_extent_lsrk_km_s[0])}…${kms(d.target_extent_lsrk_km_s[1])}` : "");
+    $("fs-sug-fractions").textContent = (d.nonlocal_in_window === null ? "only local gas here" : `beyond the local gas, inside: ${pct(d.nonlocal_in_window)}`)
+      + ` · all HI inside: ${pct(d.all_hi_in_window)}`;
+    $("fs-sug-notes").replaceChildren(...(d.notes || []).map((n) => { const li = document.createElement("li"); li.textContent = n; return li; }));
+    $("fs-sug-source").textContent = d.source === "GASS"
+      ? `from GASS (Parkes, measured) · beam ${Math.round(d.beam_fwhm_deg)}° · peak ${d.peak_value.toFixed(1)} K`
+      : `from a rotation-curve MODEL · beam ${Math.round(d.beam_fwhm_deg)}° (no survey data here)`;
+    const other = (d.alternatives || []).find((a) => a.offset_hz !== d.offset_hz);
+    $("fs-sug-alt").textContent = other
+      ? `with ${Math.round(other.offset_hz / 1e3)} kHz: ${kms(other.centre_km_s)} km/s, beyond-local inside ${pct(other.nonlocal_in_window)}` : "";
+    syncSuggestionUse();
+    drawSugSpectrum(d);
+  }
+  function syncSuggestionUse() {
+    const d = sug.data, b = $("fs-sug-use");
+    if (!d) { b.disabled = true; b.textContent = "USE"; return; }
+    const inUse = $("f-fswitch").checked && Number($("f-fswitch-center").value) === d.centre_km_s && $("f-fswitch-center").value.trim() !== ""
+      && (d.offset_hz === 600e3 ? $("f-fswitch-offset").value === "" : Number($("f-fswitch-offset").value) === d.offset_hz);
+    b.disabled = inUse; b.textContent = inUse ? "IN USE" : "USE";
+  }
+  function drawSugSpectrum(d) {
+    const cv = $("fs-sug-spectrum"), ctx = cv.getContext("2d");
+    const dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 240, H = cv.clientHeight || 110;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    if (!d || !d.spectrum) return;
+    const css = getComputedStyle(document.documentElement), col = (n) => css.getPropertyValue(n).trim();
+    const v = d.spectrum.v_km_s, t = d.spectrum.t.map((x) => (x === null ? NaN : x)), g = d.spectrum.ghost;
+    const ext = d.target_extent_lsrk_km_s || [-30, 30];
+    const v0 = Math.max(v[0], Math.min(d.window_lsrk_km_s[0], ext[0]) - 40), v1 = Math.min(v[v.length - 1], Math.max(d.window_lsrk_km_s[1], ext[1]) + 40);
+    const inR = v.map((x) => x >= v0 && x <= v1);
+    // the local gas is 10-20x the rest: a square-root scale keeps the faint gas (a Magellanic Cloud) visible
+    const tmax = Math.max(1e-9, ...t.filter((x, i) => inR[i] && Number.isFinite(x)));
+    const f = (x) => Math.sqrt(Math.max(0, x) / tmax);
+    const X = (x) => ((x - v0) / (v1 - v0)) * (W - 8) + 4, base = H * 0.68, top = 6, bot = H - 14;
+    ctx.fillStyle = col("--ok-bg"); ctx.strokeStyle = col("--ok"); ctx.lineWidth = 1;
+    const wx0 = X(d.window_lsrk_km_s[0]), wx1 = X(d.window_lsrk_km_s[1]);
+    ctx.fillRect(wx0, top, wx1 - wx0, bot - top); ctx.strokeRect(wx0 + 0.5, top + 0.5, wx1 - wx0 - 1, bot - top - 1);
+    ctx.strokeStyle = col("--line"); ctx.beginPath(); ctx.moveTo(4, base); ctx.lineTo(W - 4, base); ctx.stroke();
+    const line = (vals, sign, colour) => {
+      ctx.strokeStyle = colour; ctx.lineWidth = 1.5; ctx.beginPath(); let pen = false;
+      vals.forEach((x, i) => {
+        if (!inR[i] || !Number.isFinite(x)) { pen = false; return; }
+        const y = base - sign * f(x) * (sign > 0 ? base - top : bot - base);
+        if (pen) ctx.lineTo(X(v[i]), y); else { ctx.moveTo(X(v[i]), y); pen = true; }
+      });
+      ctx.stroke();
+    };
+    line(g, -1, col("--error"));
+    line(t, 1, col("--accent"));
+    ctx.fillStyle = col("--muted"); ctx.font = "10px sans-serif"; ctx.textBaseline = "alphabetic";
+    for (const tick of [-300, -200, -100, 0, 100, 200, 300, 400]) {
+      if (tick < v0 || tick > v1) continue;
+      ctx.fillText(String(tick), X(tick) - 8, H - 2);
+    }
+  }
+  $("fs-sug-use").addEventListener("click", () => {
+    const d = sug.data;
+    if (!d) return;
+    $("f-fswitch").checked = true;
+    $("f-fswitch").dispatchEvent(new Event("change", { bubbles: true }));
+    $("f-fswitch-center").value = String(d.centre_km_s);
+    $("f-fswitch-offset").value = d.offset_hz === 600e3 ? "" : String(Math.round(d.offset_hz));
+    $("f-fswitch-center").dispatchEvent(new Event("input", { bubbles: true }));
+    $("f-fswitch-offset").dispatchEvent(new Event("change", { bubbles: true }));
+    syncSuggestionUse();
+  });
+  for (const id of ["f-fswitch", "f-fswitch-center", "f-fswitch-offset"]) {
+    $(id).addEventListener("input", syncSuggestionUse); $(id).addEventListener("change", syncSuggestionUse);
+  }
+  window.addEventListener("resize", () => drawSugSpectrum(sug.data));
 
   function scheduleEstimate() {
     clearTimeout(estimate.timer);

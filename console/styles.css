@@ -259,9 +259,19 @@ body.mount-simulated .mount-device-btn.active{background:var(--warn);color:var(-
 .spectral-stack-scale{max-width:calc(100% - 250px)}
 
 /* OBSERVE: the grid's sky map beside the specification column (OBSERVATION NAME .. SETTLE); stacked on narrow screens */
-.obs-split{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}
-.obs-split-map{display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:8px}
+.obs-split{display:grid;grid-template-columns:minmax(0,480px) 260px minmax(0,1fr);gap:18px;align-items:start}
+.obs-split-suggest{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-top:0;min-width:0}
+.obs-split-suggest .est-big{font-size:1.5rem;line-height:1.15;white-space:pre-line}
+.obs-split-suggest canvas{width:100%;height:110px;display:block}
+.fs-sug-notes{margin:0;padding-left:16px;font-size:.78rem;color:var(--muted)}
+.fs-sug-notes li{margin:2px 0}
+.fs-sug-legend{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.fs-key{display:inline-block;width:12px;height:8px;border-radius:2px}
+.fs-key-hi{background:var(--accent)}.fs-key-win{background:var(--ok-bg);border:1px solid var(--ok)}.fs-key-ghost{background:var(--error)}
+#fs-sug-use{align-self:flex-start}
+.obs-split-map{display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:0}
 @media (max-width:900px){.obs-split{grid-template-columns:minmax(0,1fr)}}
+@media (min-width:901px) and (max-width:1250px){.obs-split{grid-template-columns:minmax(0,1fr) 230px auto}}
 
 /* STATUS temperatures (operator 2026-10-17) */
 .temp-chart-wrap{position:relative;margin:6px 0 10px}

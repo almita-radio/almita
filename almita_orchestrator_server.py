@@ -380,6 +380,18 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 return _json_response(self, 200, {"ok": True, "status": "OK", "data": almita_web_system.version_info()})
             if path == "/api/observe/defaults":
                 return _json_response(self, 200, _observe_defaults())
+            if path == "/api/observe/fswitch-suggest":
+                # operator 2026-11-18: the WINDOW CENTRE / SWITCH OFFSET suggestion for the region's centre (display
+                # only - OBSERVE applies nothing until the operator presses USE). fswitch_suggest.py says how.
+                import fswitch_suggest
+                q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                try:
+                    beam = float((json.loads(Path("observer_config.json").read_text(encoding="utf-8"))
+                                  .get("observation_defaults") or {}).get("beam_fwhm_deg") or 20.0)
+                except (OSError, TypeError, ValueError):
+                    beam = 20.0
+                return _json_response(self, 200, {"ok": True, "data": fswitch_suggest.suggest(
+                    float(q.get("ra_hours", "nan")), float(q.get("dec_deg", "nan")), beam)})
             if path in ("/api/observe/calibration-profiles", "/api/observe/calibration-profiles/validate",
                         "/api/observe/calibration-profiles/browse"):
                 return self._handle_calibration_profiles(path)
