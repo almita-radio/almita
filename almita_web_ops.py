@@ -614,7 +614,7 @@ def _file_in(p: Dict[str, Any], key: str, roots: Tuple[Path, ...]) -> Path:
 def _ring_pattern(p: Dict[str, Any]) -> Optional[Tuple[List[float], int]]:
     """Ring pattern override for ALIGN (center + N rings of the SAME point count each), as alignment.py's own
     multiscale_pattern() shapes it. None -> the caller passes no flags and alignment.py keeps its own default
-    (5.0, 2.0, 0.6 deg / 16 points, the original fixed pattern). alignment.py re-validates independently; this
+    (12.0, 8.0, 4.0 deg / 16 points; operator 2026-11-17 - was 5.0, 2.0, 0.6). alignment.py re-validates independently; this
     only catches obviously bad input before a real process is spawned, and bounds it to a sane exploration range."""
     radii, points = p.get("ring_radii"), p.get("ring_points")
     if radii is None and points is None:
@@ -2477,7 +2477,9 @@ def align_defaults() -> Dict[str, Any]:
             beam_fwhm, beam_source = float(obs_defaults["beam_fwhm_deg"]), "observer_config.json: observation_defaults.beam_fwhm_deg"
     except (OSError, ValueError, KeyError):
         pass
-    return {"ring_radii_deg": [5.0, 2.0, 0.6], "ring_points": 8, "min_elevation_deg": a.min_elevation, "settle_s": a.settle,
+    # rings 12/8/4 deg (operator 2026-11-17): the 2026-11-12 Sun ALIGN found 6.7 deg with rings of 5/2/0.6 - for a 20 deg
+    # beam those rings sat almost on the peak and the offset was outside the pattern; ~0.2-0.6 FWHM pins it down
+    return {"ring_radii_deg": [12.0, 8.0, 4.0], "ring_points": 8, "min_elevation_deg": a.min_elevation, "settle_s": a.settle,
             "capture_time_s": a.integration_seconds, "gain_db": a.gain, "sun_gain_db": a.sun_gain,
             # Single source of truth for the web's PLAN countdown (console/align.js reads this, never a
             # hardcoded number of its own) - the SAME PLAN_VALIDITY_SECONDS start()/build_command() enforces

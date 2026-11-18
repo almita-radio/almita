@@ -138,7 +138,7 @@ def offset_coordinates(center, east_deg, north_deg):
                     lat=np.asarray(north_deg) * u.deg, frame=frame).icrs
 
 
-def multiscale_pattern(center, radii=(5.0, 2.0, 0.6), ring_points=16):
+def multiscale_pattern(center, radii=(12.0, 8.0, 4.0), ring_points=16):
     east, north = [0.0], [0.0]
     for radius in radii:
         for angle in np.linspace(0, 2 * np.pi, ring_points, endpoint=False):
@@ -1308,8 +1308,9 @@ def parse_args(argv=None):
     p.add_argument("--minimum-valid-positions", type=int, default=DEFAULT_MINIMUM_VALID_POSITIONS)
     p.add_argument("--minimum-robust-positions", type=int, default=4)
     p.add_argument("--replay-tolerance", type=float, default=1e-9)
-    p.add_argument("--ring-radii", default="5.0,2.0,0.6",
-                   help="comma-separated ring radii in degrees around the center (default: 5.0,2.0,0.6, i.e. the original fixed pattern)")
+    p.add_argument("--ring-radii", default="12.0,8.0,4.0",
+                   help="comma-separated ring radii in degrees around the center (default: 12.0,8.0,4.0 - operator 2026-11-17, "
+                        "~0.2-0.6 of the 20 deg beam; the original fixed pattern was 5.0,2.0,0.6)")
     p.add_argument("--ring-points", type=int, default=16, help="points per ring, the same count on every ring (default: 16)")
     p.add_argument("--center-ra-hours", type=float, default=None, help="HI only: use exactly this RA (hours) as the center - e.g. an "
                    "operator-picked A/B/C area - instead of choose_hi_region() picking one automatically. Requires --center-dec-deg too.")

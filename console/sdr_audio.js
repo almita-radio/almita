@@ -92,16 +92,24 @@
   }
 
   // ---------------------------------------------------------------- sound
-  let ctx = null, master = null, bandGains = [], tone = null, toneGain = null, noiseSrc = null;
+  let ctx = null, master = null, bandGains = [], tone = null, toneGain = null, noiseSrc = null, comp = null;
   let timer = null, lastBeat = 0, lastStamp = null, state = {}, stateSource = null, onStatus = () => {};
   const bandFreq = (b) => AUDIO_LO * Math.pow(AUDIO_HI / AUDIO_LO, (b + 0.5) / N_BANDS);
   const BED = 0.012;                                                          // the quiet hiss that says AUDIO is on
+  // operator 2026-11-17 "suena muy bajo": each band passes only a narrow slice of the noise (~13 % of its power for all 16
+  // together), so the hiss was ~-26 dBFS at full hydrogen. Make-up gain on the hiss (+16 dB), a louder tone, and a
+  // compressor before the output so a strong line never clips.
+  const HISS_MAKEUP = 6.0, TONE_MAX = 0.35, MASTER = 0.8;
 
   function build() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error("this browser has no Web Audio");
     ctx = new AC();
-    master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+    comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -12; comp.knee.value = 10; comp.ratio.value = 6; comp.attack.value = 0.01; comp.release.value = 0.3;
+    comp.connect(ctx.destination);
+    master = ctx.createGain(); master.gain.value = 0; master.connect(comp);
+    const hiss = ctx.createGain(); hiss.gain.value = HISS_MAKEUP; hiss.connect(master);
     const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     noiseSrc = ctx.createBufferSource(); noiseSrc.buffer = buf; noiseSrc.loop = true;
@@ -109,12 +117,12 @@
     for (let b = 0; b < N_BANDS; b++) {
       const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = bandFreq(b); bp.Q.value = 6;
       const gn = ctx.createGain(); gn.gain.value = BED;
-      noiseSrc.connect(bp); bp.connect(gn); gn.connect(master); bandGains.push(gn);
+      noiseSrc.connect(bp); bp.connect(gn); gn.connect(hiss); bandGains.push(gn);
     }
     tone = ctx.createOscillator(); tone.type = "triangle"; tone.frequency.value = 440;
     toneGain = ctx.createGain(); toneGain.gain.value = 0; tone.connect(toneGain); toneGain.connect(master);
     noiseSrc.start(); tone.start();
-    master.gain.setTargetAtTime(0.5, ctx.currentTime, 0.4);
+    master.gain.setTargetAtTime(MASTER, ctx.currentTime, 0.4);
   }
 
   function play(a) {
@@ -127,7 +135,7 @@
     if (a.found) {
       const hz = Math.min(1000, Math.max(180, 440 * Math.pow(2, -a.velocityKmS / 150)));
       tone.frequency.setTargetAtTime(hz, t, tau);
-      toneGain.gain.setTargetAtTime(Math.min(0.18, a.peak / 0.2 * 0.18), t, tau);
+      toneGain.gain.setTargetAtTime(Math.min(TONE_MAX, a.peak / 0.2 * TONE_MAX), t, tau);
     } else toneGain.gain.setTargetAtTime(0, t, tau);
   }
 

@@ -522,7 +522,7 @@
     }
     async function fetchSky() {
       const rc = ringConfig();
-      const radii = rc.valid ? rc.radii : [5.0, 2.0, 0.6];
+      const radii = rc.valid ? rc.radii : [12.0, 8.0, 4.0];
       const points = rc.valid ? rc.points : 16;
       // ring_points and capture_time both matter here: the candidate check now walks the WHOLE ring pattern
       // forward through the real wall-clock schedule of a run (not just an instant), so it needs to know how many
