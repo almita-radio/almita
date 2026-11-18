@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import re
 import time
@@ -96,8 +97,11 @@ def ripple_rms(y: np.ndarray, mask: np.ndarray) -> float:
 
 
 def analyse(spectra: List[np.ndarray], los: List[float], sample_rate: float, offset_hz: float,
-            f0_hz: float = HI_REST_HZ, smooth_hz: float = 10e3) -> Dict[str, Any]:
-    """All products of one run: mean A/B, switched, folded (percent), velocity axis and ripple figures."""
+            f0_hz: float = HI_REST_HZ, smooth_hz: float = 10e3,
+            centre_topo_km_s: Optional[float] = None) -> Dict[str, Any]:
+    """All products of one run: mean A/B, switched, folded (percent), velocity axis and ripple figures.
+    BL-105: with `centre_topo_km_s` the LOs straddle that velocity's frequency (f0_hz), the velocity axis is taken
+    against the line's rest frequency and the line / baseline windows follow the centre."""
     los = np.asarray(los, float)
     f_a, f_b = float(np.min(los)), float(np.max(los))
     A = np.mean([s for s, lo in zip(spectra, los) if lo == f_a], axis=0)
@@ -107,8 +111,14 @@ def analyse(spectra: List[np.ndarray], los: List[float], sample_rate: float, off
     S = switched(A, B)
     rf = f0_hz + np.linspace(-0.45e6, 0.45e6, 1801)
     T = fold(smooth(S, nsm), bb, f_a, f_b, rf) * 100
-    v = -(rf - f0_hz) / f0_hz * C_KMS
-    Tb = remove_baseline(v, T)
+    if centre_topo_km_s is None:
+        v = -(rf - f0_hz) / f0_hz * C_KMS
+        base_window, line_window = (-60.0, 80.0), (-30.0, 40.0)
+    else:
+        v = (HI_REST_HZ - rf) / HI_REST_HZ * C_KMS
+        c = float(centre_topo_km_s)
+        base_window, line_window = (c - 70.0, c + 70.0), (c - 35.0, c + 35.0)
+    Tb = remove_baseline(v, T, base_window)
     band = (np.abs(bb) <= USABLE_HZ) & (np.abs(bb) >= DC_HZ)
     # the band shape itself (what position switching leaves behind): A divided by a smoothed copy of itself
     shape = smooth(A, nsm) / np.nanmedian(A[band]) - 1
@@ -127,7 +137,8 @@ def analyse(spectra: List[np.ndarray], los: List[float], sample_rate: float, off
         "ripple_band_shape_pct": ripple_rms(shape * 100, band & ~line_bb),
         "ripple_switched_pct": ripple_rms(smooth(S, nsm) * 100, band & ~line_bb),
         "ripple_half_split_pct": ripple_rms(split, band & ~line_bb) if split is not None else None,
-        "line_excess_pct": float(np.nanmean(Tb[(v > -30) & (v < 40)])),
+        "line_excess_pct": float(np.nanmean(Tb[(v > line_window[0]) & (v < line_window[1])])),
+        "line_window_kms": list(line_window), "centre_topo_km_s": centre_topo_km_s,
         "off_line_rms_pct": ripple_rms(Tb, (v < -60) | (v > 80)),
         "n_a": int(np.sum(los == f_a)), "n_b": int(np.sum(los == f_b)), "smooth_hz": smooth_hz,
     }
@@ -193,11 +204,14 @@ def _segment_job(raw: np.ndarray, sample_rate: float, parts: int):
 
 
 async def acquire(cycles: int, dwell_s: float, offset_hz: float, gain_db: Optional[float], settle_s: float = SETTLE_S,
-                  host: str = "127.0.0.1", port: int = 1234, progress=print) -> Dict[str, Any]:
+                  host: str = "127.0.0.1", port: int = 1234, progress=print,
+                  centre_topo_km_s: Optional[float] = None) -> Dict[str, Any]:
     import sdr_tuning
     from sdr_capture import SDRCapture
     operating = sdr_tuning.operating_config()
     f0 = int(operating["center_frequency_hz"])
+    if centre_topo_km_s is not None:      # BL-105: straddle that velocity's frequency instead of the line at rest
+        f0 = int(round(HI_REST_HZ * (1.0 - float(centre_topo_km_s) / C_KMS)))
     rate = int(operating["sample_rate_hz"])
     gain = float(gain_db if gain_db is not None else operating.get("gain_db", 40.2))
     f_a, f_b = int(round(f0 - offset_hz)), int(round(f0 + offset_hz))
@@ -255,6 +269,7 @@ async def acquire(cycles: int, dwell_s: float, offset_hz: float, gain_db: Option
     seen = {int(m.group(1)) for ln in lines for m in [re.search(r"\bset freq (\d+)\b", ln)] if m}
     recorded = len(spectra) * dwell_s - sum(trims) / 1e3
     return {"spectra": spectra, "los": los, "utc": stamps, "adc_rms": adc, "f0_hz": f0, "sample_rate_hz": rate,
+            "centre_topo_km_s": centre_topo_km_s,
             "gain_db": gain, "f_a_hz": f_a, "f_b_hz": f_b, "offset_hz": offset_hz, "dwell_s": dwell_s,
             "settle_s": settle_s, "tuning": tuning, "segments": len(segs),
             "head_trim_ms": {"segments_trimmed": sum(1 for t in trims if t > 0), "max": max(trims, default=0.0)},
@@ -273,7 +288,7 @@ def save(run: Dict[str, Any], res: Dict[str, Any], out_dir: Path) -> Dict[str, A
     out_dir.mkdir(parents=True, exist_ok=False)
     np.savez_compressed(out_dir / "spectra.npz", spectra=np.array(run["spectra"], np.float32),
                         lo_hz=np.array(run["los"]), utc=np.array(run["utc"]), adc_rms=np.array(run["adc_rms"]))
-    summary = {k: run.get(k) for k in ("f0_hz", "sample_rate_hz", "gain_db", "f_a_hz", "f_b_hz", "offset_hz", "dwell_s",
+    summary = {k: run.get(k) for k in ("f0_hz", "centre_topo_km_s", "sample_rate_hz", "gain_db", "f_a_hz", "f_b_hz", "offset_hz", "dwell_s",
                                        "settle_s", "segments", "head_trim_ms", "efficiency", "lo_acknowledged",
                                        "pll_not_locked_count")}
     summary["tuning"] = {k: run["tuning"].get(k) for k in ("requested", "applied", "evidence", "rtl_agc", "bias_tee")}
@@ -287,7 +302,7 @@ def save(run: Dict[str, Any], res: Dict[str, Any], out_dir: Path) -> Dict[str, A
     ok = np.isfinite(t)
     (out_dir / "folded.json").write_text(json.dumps({
         "v_kms": [round(float(x), 2) for x in v[ok]], "folded_pct": [round(float(x), 3) for x in t[ok]],
-        "line_window_kms": [-30.0, 40.0], "summary": summary}, default=str))
+        "line_window_kms": res.get("line_window_kms", [-30.0, 40.0]), "summary": summary}, default=str))
     plot(res, out_dir / "fswitch.png", summary)
     return summary
 
@@ -336,6 +351,9 @@ def main(argv=None) -> int:
     ap.add_argument("--label", default="")
     ap.add_argument("--out-dir", default=None, help="output folder (default data/fswitch/<UTC>[_label])")
     ap.add_argument("--web-job", default=None, help="the web job this run is (it does not count as another SDR user)")
+    ap.add_argument("--center-velocity", type=float, default=None,
+                    help="BL-105: centre the +/-84 km/s window on this TOPOCENTRIC velocity (km/s) instead of the line at "
+                         "rest - STATUS does not know where the antenna points, so no LSRK correction here")
     a = ap.parse_args(argv)
     from transit_logger import sdr_busy
     busy = sdr_busy(ignore_job_id=a.web_job)
@@ -343,9 +361,13 @@ def main(argv=None) -> int:
         print(f"REFUSED: the SDR is in use by {busy}")
         return 2
     print(f"FSWITCH {a.cycles} cycles x 2 x {a.dwell} s, LO f0 -/+ {a.offset_hz / 1e3:.0f} kHz, pause {a.settle} s", flush=True)
+    if a.center_velocity is not None and not (math.isfinite(a.center_velocity) and abs(a.center_velocity) <= 600):
+        print("REFUSED: --center-velocity must be within +/-600 km/s")
+        return 2
     run = asyncio.run(acquire(a.cycles, a.dwell, a.offset_hz, a.gain_db, a.settle,
-                              progress=lambda m: print(m, flush=True)))
-    res = analyse(run["spectra"], run["los"], run["sample_rate_hz"], run["offset_hz"])
+                              progress=lambda m: print(m, flush=True), centre_topo_km_s=a.center_velocity))
+    res = analyse(run["spectra"], run["los"], run["sample_rate_hz"], run["offset_hz"],
+                  **({"f0_hz": run["f0_hz"], "centre_topo_km_s": a.center_velocity} if a.center_velocity is not None else {}))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(a.out_dir) if a.out_dir else OUT_ROOT / (stamp + (f"_{a.label}" if a.label else ""))
     out = out if out.is_absolute() else ROOT / out

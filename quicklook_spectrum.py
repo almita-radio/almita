@@ -397,7 +397,9 @@ def generate_quicklook_switched(source_hdf5: str | Path, output_dir: str | Path)
             "max_positive_fractional_excess": float(np.max(residual)) if residual.size else None,
             "min_fractional_excess": float(np.min(residual)) if residual.size else None,
         },
-        "known_limitations": ["frequency-switched: folded band f0 +/- 0.4 MHz (+/-84 km/s topocentric) only",
+        "known_limitations": [("frequency-switched: folded band f0 +/- {:.2f} MHz (+/-{:.0f} km/s topocentric) only".format(
+                                  (1e6 - float(sw.info["offset_hz"])) / 1e6,
+                                  (1e6 - float(sw.info["offset_hz"])) / 1e6 * 299792.458 / 1420.40575177)),
                               "relative only (fraction of the system level), no calibration profile",
                               "no spectral feature is identified as astronomical HI",
                               "indoor captures permit no astronomical interpretation"],

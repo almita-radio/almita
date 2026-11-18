@@ -168,7 +168,8 @@ def _validate_grid(raw: dict) -> dict:
 
 def _validate_capture(raw: dict) -> dict:
     where = "capture"
-    _require_keys(raw, ("seconds", "settle_seconds", "frequency_switching"), where)
+    _require_keys(raw, ("seconds", "settle_seconds", "frequency_switching", "frequency_switching_center",
+                        "frequency_switching_offset_hz"), where)
     out = {
         "seconds": _num(raw, "seconds", where, min_value=0.1),
         "settle_seconds": _num(raw, "settle_seconds", where, min_value=0.0),
@@ -179,6 +180,30 @@ def _validate_capture(raw: dict) -> dict:
         _require(out["seconds"] >= 4.0, f"{where}.seconds: frequency switching needs at least 4 s per point "
                                          "(one A and one B dwell of 2 s)")
         out["frequency_switching"] = True
+        # BL-105 (operator 2026-11-10): where each point's +/-84 km/s folded window sits - "auto" (terminal side, from a
+        # rotation-curve model, fswitch_center.py) or a velocity in km/s LSRK. Only written when given, so a plain
+        # switched spec resolves - and hashes - exactly as before.
+        centre = raw.get("frequency_switching_center")
+        if centre is not None and not (isinstance(centre, str) and centre.strip() == ""):
+            import fswitch_center
+            try:
+                parsed = fswitch_center.parse_centre(centre)
+            except (TypeError, ValueError) as exc:
+                raise ObservationSpecError(f"{where}.frequency_switching_center: {exc}") from None
+            out["frequency_switching_center"] = parsed
+        # Configurable throw (operator 2026-11-11, Magellanic Clouds): LOs at centre -/+ offset. Only written when
+        # given, so a spec without it resolves - and hashes - exactly as before (600 kHz).
+        offset = raw.get("frequency_switching_offset_hz")
+        if offset is not None and not (isinstance(offset, str) and offset.strip() == ""):
+            import fswitch_center
+            try:
+                out["frequency_switching_offset_hz"] = fswitch_center.parse_offset_hz(offset)
+            except (TypeError, ValueError) as exc:
+                raise ObservationSpecError(f"{where}.frequency_switching_offset_hz: {exc}") from None
+    else:
+        for key in ("frequency_switching_center", "frequency_switching_offset_hz"):
+            if raw.get(key) not in (None, ""):
+                raise ObservationSpecError(f"{where}.{key}: needs frequency_switching: true")
     return out
 
 

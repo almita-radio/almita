@@ -72,8 +72,13 @@ def _metadata(metadata: Optional[Dict[str, Any]], *, f0: int, rate: int, duratio
 async def capture_point(sdr: Any, *, f0_hz: int, sample_rate: int, gain_db: float, duration_s: float,
                         output_file: str, metadata: Optional[Dict[str, Any]] = None,
                         offset_hz: float = DEFAULT_OFFSET_HZ, dwell_s: float = DEFAULT_DWELL_S,
-                        settle_s: float = F.SETTLE_S, log=None):
-    """Capture one point frequency-switched into output_file; returns a sdr_capture.CaptureMetrics."""
+                        settle_s: float = F.SETTLE_S, log=None, home_hz: Optional[int] = None,
+                        extra_attrs: Optional[Dict[str, Any]] = None):
+    """Capture one point frequency-switched into output_file; returns a sdr_capture.CaptureMetrics.
+
+    BL-105: f0_hz may be a centre other than the operating tuning (fswitch_center.plan_point); `home_hz` is where
+    the SDR is put back afterwards (default f0_hz, as before) and `extra_attrs` (the centre-velocity record) are
+    written into the capture's attributes, lists as JSON."""
     from sdr_capture import CaptureMetrics, adc_level_summary, write_hdf5_atomic
     log = log or (lambda m: None)
     cycles, dwell = plan_cycles(duration_s, dwell_s)
@@ -100,9 +105,10 @@ async def capture_point(sdr: Any, *, f0_hz: int, sample_rate: int, gain_db: floa
             if drop:
                 log(f"FSWITCH segment at {lo / 1e6:.4f} MHz: head trimmed {drop / sample_rate * 1e3:.0f} ms")
     finally:
-        # back on f0 whatever happened: the rest of capture.py (and the next point) expects the nominal tuning
+        # back on the nominal tuning whatever happened: the rest of capture.py (and the next point) expects it
         try:
-            await sdr.configure(center_freq=int(f0_hz), sample_rate=sample_rate, gain=str(gain_db))
+            await sdr.configure(center_freq=int(home_hz if home_hz is not None else f0_hz), sample_rate=sample_rate,
+                                gain=str(gain_db))
         finally:
             sdr.retune_settle_seconds = previous_settle
     capture_time = time.perf_counter() - t0
@@ -118,6 +124,8 @@ async def capture_point(sdr: Any, *, f0_hz: int, sample_rate: int, gain_db: floa
                "fswitch_offset_hz": float(offset_hz), "fswitch_settle_s": float(settle_s), "fswitch_dwell_s": float(dwell),
                "fswitch_cycles": int(cycles), "fswitch_segments_json": json.dumps(table),
                "fswitch_head_trimmed_samples": int(sum(t["trimmed_samples"] for t in table))})
+    for k, v in (extra_attrs or {}).items():
+        md[k] = json.dumps(v) if isinstance(v, (list, tuple, dict)) else v
     from pathlib import Path
     md["final_filename"] = Path(output_file).name
     if callback:

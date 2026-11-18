@@ -123,7 +123,9 @@ class CaptureExecutor:
                  rfi_ref_port: int = 1235,
                  rfi_ref_serial: str = "00000002",
                  rfi_ref_bias_tee: bool = False,
-                 frequency_switching: bool = False):
+                 frequency_switching: bool = False,
+                 fswitch_centre: Optional[str] = None,
+                 fswitch_offset_hz: Optional[float] = None):
         """
         Initialize capture executor
 
@@ -178,6 +180,16 @@ class CaptureExecutor:
         # BL-100 (operator 2026-11-09: "descongela y aplica"): each point frequency-switched (fswitch_capture.py,
         # ABBA around sdr_freq) instead of one capture at sdr_freq. Off by default: an unswitched run is unchanged.
         self.frequency_switching = bool(frequency_switching)
+        # BL-105 (operator 2026-11-10): where each switched point's +/-84 km/s window sits - None = around the operating
+        # tuning (BL-100, unchanged), "auto" or a velocity (km/s LSRK) = per-point centre from fswitch_center.plan_point.
+        import fswitch_center
+        self.fswitch_centre = fswitch_center.parse_centre(fswitch_centre)
+        if self.fswitch_centre is not None and not self.frequency_switching:
+            raise ValueError("--fswitch-center needs --fswitch")
+        # Configurable throw (operator 2026-11-11, Magellanic Clouds): LOs at centre -/+ this; None = 600 kHz as before
+        self.fswitch_offset_hz = fswitch_center.parse_offset_hz(fswitch_offset_hz)
+        if self.fswitch_offset_hz is not None and not self.frequency_switching:
+            raise ValueError("--fswitch-offset-hz needs --fswitch")
         self.sdr = None
         self.sdr_tuning = None   # sdr_tuning record of the explicit tuning (requested / applied / evidence)
 
@@ -1417,8 +1429,9 @@ class CaptureExecutor:
             frequency_switching=self.frequency_switching,
         )
         if self.frequency_switching:
+            off = self.fswitch_offset_hz or 600e3
             self.log("FSWITCH    every point frequency-switched: LO "
-                     f"{(self.sdr_freq - 600e3) / 1e6:.4f} / {(self.sdr_freq + 600e3) / 1e6:.4f} MHz (ABBA)", force=True)
+                     f"{(self.sdr_freq - off) / 1e6:.4f} / {(self.sdr_freq + off) / 1e6:.4f} MHz (ABBA)", force=True)
 
         self._live_timing_csv_path = (
             self.csv_path.parent / f"capture_timing_{self.session_id}.csv"
@@ -2112,11 +2125,28 @@ class CaptureExecutor:
                     try:
                         if self.frequency_switching:
                             import fswitch_capture
+                            f0_point, extra = int(self.sdr_freq), None
+                            if self.fswitch_centre is not None:
+                                import fswitch_center
+                                beam = float((self.observer_config.get('observation_defaults') or {}).get('beam_fwhm_deg') or 20.0)
+                                planned = fswitch_center.plan_point(
+                                    self.fswitch_centre, ra_hours, dec_deg, datetime.now(timezone.utc).replace(tzinfo=None),
+                                    self.observer_config.get('observer') or {}, beam_fwhm_deg=beam,
+                                    offset_hz=self.fswitch_offset_hz)
+                                f0_point, extra = int(planned["centre_frequency_hz"]), planned["attrs"]
+                                self.log(f"FSWITCH centre {extra['fswitch_centre_lsrk_km_s']:+.1f} km/s LSRK "
+                                         f"({extra['fswitch_centre_mode']}, l={extra['galactic_l_deg']:.1f} "
+                                         f"b={extra['galactic_b_deg']:.1f}) -> {f0_point / 1e6:.6f} MHz", force=True)
+                                if extra.get("fswitch_local_ghost_in_line_window"):
+                                    self.log("FSWITCH WARNING the Milky Way's local gas puts its negative ghost inside "
+                                             "this point's line window: use a smaller offset (--fswitch-offset-hz "
+                                             "300000 for the LMC)", force=True)
                             sdr_metrics = await fswitch_capture.capture_point(
-                                self.sdr, f0_hz=int(self.sdr_freq), sample_rate=self.sdr_sample_rate,
+                                self.sdr, f0_hz=f0_point, sample_rate=self.sdr_sample_rate,
                                 gain_db=float(self.sdr_gain_db), duration_s=capture_time,
                                 output_file=str(data_path), metadata=capture_metadata,
-                                log=lambda m: self.log(m, force=True))
+                                log=lambda m: self.log(m, force=True), home_hz=int(self.sdr_freq), extra_attrs=extra,
+                                **({"offset_hz": self.fswitch_offset_hz} if self.fswitch_offset_hz is not None else {}))
                         else:
                             sdr_metrics = await self.sdr.capture(
                                 duration=capture_time,
@@ -2621,6 +2651,14 @@ Useful for re-observations or after fixing equipment issues.
     parser.add_argument('--fswitch', action='store_true',
                         help='Frequency switching (BL-100): every point recorded ABBA with the LO at sdr-freq -/+ 600 kHz '
                              '(fswitch_capture.py); REDUCE folds it. Default: off (one capture at sdr-freq)')
+    parser.add_argument('--fswitch-center', default=None,
+                        help='BL-105, with --fswitch: centre of each point\'s +/-84 km/s folded window - "auto" (the '
+                             'line\'s terminal side from a rotation-curve model, fswitch_center.py) or a velocity in '
+                             'km/s LSRK (e.g. 270 for the LMC). Default: around sdr-freq, as plain --fswitch')
+    parser.add_argument('--fswitch-offset-hz', type=float, default=None,
+                        help='with --fswitch: LOs at centre -/+ this many Hz (250000-700000). Default 600000 '
+                             '(253 km/s throw, +/-84 km/s window). 300000 for the LMC: 127 km/s throw keeps the local '
+                             'gas\'s ghost off it and widens the window to +/-148 km/s')
     parser.add_argument('--rfi-ref-bias-t', action='store_true',
                         help='Enable bias-tee on the RFI_REF RTL-SDR (V3-only GPIO bias-tee, powers an '
                              'in-line LNA on antenna B; independent of MAIN\'s bias-tee). Default: disabled')
@@ -2717,6 +2755,8 @@ Useful for re-observations or after fixing equipment issues.
             rfi_ref_serial=args.rfi_ref_serial,
             rfi_ref_bias_tee=args.rfi_ref_bias_t,
             frequency_switching=args.fswitch,
+            fswitch_centre=args.fswitch_center,
+            fswitch_offset_hz=args.fswitch_offset_hz,
         )
         executor.compact_console = not executor.verbose
 
@@ -2748,6 +2788,8 @@ Useful for re-observations or after fixing equipment issues.
             rfi_ref_serial=args.rfi_ref_serial,
             rfi_ref_bias_tee=args.rfi_ref_bias_t,
             frequency_switching=args.fswitch,
+            fswitch_centre=args.fswitch_center,
+            fswitch_offset_hz=args.fswitch_offset_hz,
         )
         executor.compact_console = not executor.verbose
 
