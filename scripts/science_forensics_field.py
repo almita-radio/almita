@@ -46,6 +46,9 @@ CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "tar
 # science_engine re-pinned from f5e2f65 to 2d62634 (2026-11-06, operator: "arréglala de verdad"): maps in the exact
 # spherical offset frame (OBSERVE's SkyOffsetFrame) instead of the linear dRA*cos(dec0) plane, so wide fields and grids
 # across a pole work; a few-degree field moves < 0.01 deg. Weighting, integration and units unchanged.
+# science_engine re-pinned from 2d62634 to d8893ff (2026-11-18, operator: "aregla ermano, y verifica dónde más"):
+# cube.py accepts per-point RETUNED frequency grids (BL-105 window centre) on a union velocity axis; a common grid
+# builds exactly as before.
 # reduce_engine re-pinned from 2afc4c5 to 6d0ea46 (2026-11-10, operator: "descongela y aplica" 2026-11-09, BL-100):
 # fswitch_fold.py + a branch in reduce_point for frequency-switched captures (segment table) - reduce-v1.1.
 # Ordinary captures go through the unchanged path.
@@ -55,7 +58,7 @@ CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "tar
 # reduce_engine re-pinned from 7adcefc to 649ac2d (2026-11-11, same BL-105 authorisation, operator: "quiero aprovechar
 # la circunpolaridad de las nubes!"): the fold's baseline also stays off the capture's mask windows (local gas and its
 # ghosts) when it records them. Captures without them fold as before.
-FROZEN = (("reduce_engine", "649ac2d"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "2d62634"), ("almita_science.py", "f5e2f65"),
+FROZEN = (("reduce_engine", "649ac2d"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "d8893ff"), ("almita_science.py", "f5e2f65"),
           # science_forensics re-pinned from 02b8e5a to 7b2eefb (2026-10-13, BL-052): experiment/plan.py's DEFAULT_INSTRUMENT
           # carries the RFI_REF Bias-T ON (antenna B's LNA) and records the campaign's OFF as bias_tee_feature_campaign.
           ("science_forensics", "7b2eefb"), ("almita_science_forensics.py", "8f4b40a"),
