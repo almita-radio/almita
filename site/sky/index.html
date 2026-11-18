@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>El cielo de ALMITA</title>
+<meta name="description" content="Hidrógeno neutro a 21 cm medido por ALMITA, un radiotelescopio casero en Chile, pintado sobre el cielo de HI4PI.">
+<style>
+  :root{
+    --bg:#07060c; --panel:#100e18; --line:#2a2638; --text:#ece8f4; --muted:#9a93ad; --accent:#ffb340; --cool:#7fd8ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent)}
+  header{max-width:1200px;margin:0 auto;padding:40px 16px 8px}
+  .kicker{font:600 .78rem/1 var(--mono);letter-spacing:.18em;color:var(--accent);text-transform:uppercase}
+  h1{font-size:clamp(2rem,5vw,3.4rem);line-height:1.05;margin:.35em 0 .25em;font-weight:700;letter-spacing:-.02em}
+  .lede{max-width:760px;color:var(--muted);font-size:1.05rem;margin:0}
+  main{max-width:1200px;margin:0 auto;padding:16px}
+  .stage{position:relative;border:1px solid var(--line);border-radius:14px;background:radial-gradient(ellipse at center,#120f1f 0%,#07060c 70%);padding:14px;overflow:hidden}
+  canvas#sky{display:block;width:100%;height:auto;cursor:crosshair}
+  .tip{position:absolute;pointer-events:none;background:rgba(10,8,18,.92);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:12px/1.4 var(--mono);color:var(--text);white-space:nowrap;display:none;z-index:2}
+  .controls{display:flex;flex-wrap:wrap;gap:14px 22px;align-items:center;margin:14px 2px 4px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+  .seg button{background:transparent;color:var(--muted);border:0;padding:7px 14px;font:600 .8rem system-ui;cursor:pointer}
+  .seg button.on{background:var(--accent);color:#1a1206}
+  .timeline{flex:1 1 360px;display:flex;align-items:center;gap:12px}
+  .timeline input{flex:1;accent-color:var(--accent)}
+  .play{width:38px;height:38px;border-radius:50%;border:1px solid var(--accent);background:transparent;color:var(--accent);font-size:15px;cursor:pointer;flex:none}
+  .when{font:600 .85rem var(--mono);color:var(--text);min-width:170px}
+  .grid2{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;margin-top:16px}
+  @media (max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
+  .card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:16px 18px}
+  .card h2{font:600 .78rem/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  @media (max-width:600px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .stat b{display:block;font-size:1.7rem;line-height:1.1;font-variant-numeric:tabular-nums}
+  .stat span{font-size:.8rem;color:var(--muted)}
+  .legend{display:flex;align-items:center;gap:10px;margin-top:14px;font:12px var(--mono);color:var(--muted)}
+  .legend canvas{flex:1;width:100%;height:12px;border-radius:3px;min-width:0}
+  .keys{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:.82rem;color:var(--muted)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:6px}
+  #detail .empty{color:var(--muted);font-size:.92rem}
+  #detail .big{font-size:1.25rem;font-weight:700;margin:0 0 4px}
+  #detail .meta{font:12px/1.6 var(--mono);color:var(--muted)}
+  #spec{width:100%;height:auto;display:block;margin-top:10px;border-radius:6px}
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:2px}
+  .cmp b{display:block;font-size:1.7rem;line-height:1.1;font-variant-numeric:tabular-nums}
+  .cmp span{font-size:.78rem;color:var(--muted)}
+  .sessions{list-style:none;margin:0;padding:0;font-size:.88rem}
+  .sessions li{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}
+  .sessions li:first-child{border-top:0}
+  .sessions .d{font:12px var(--mono);color:var(--muted);min-width:118px}
+  .sessions .tag{font:600 10px var(--mono);letter-spacing:.06em;padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
+  .sessions .tag.fs{color:var(--accent);border-color:rgba(255,179,64,.45)}
+  .prose{color:var(--muted);font-size:.95rem}
+  .prose p{margin:.2em 0 .8em}
+  footer{max-width:1200px;margin:0 auto;padding:22px 16px 48px;color:var(--muted);font-size:.8rem}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">ALMITA · radiotelescopio casero · 1420 MHz</div>
+  <h1>El cielo de ALMITA</h1>
+  <p class="lede">El fondo es el hidrógeno de toda la Vía Láctea según el gran relevamiento HI4PI, apagado como un fantasma. Encima, en color vivo, está lo que <strong>ALMITA midió de verdad</strong> desde un techo en Chile, con un plato hecho en casa. Cada noche de observación repinta un pedazo más del cielo.</p>
+</header>
+
+<main>
+  <div class="stage" id="stage">
+    <canvas id="sky" width="2000" height="1000" aria-label="Mapa del cielo en coordenadas galácticas"></canvas>
+    <div class="tip" id="tip"></div>
+  </div>
+
+  <div class="controls">
+    <div class="timeline">
+      <button class="play" id="play" title="Ver cómo creció el mapa">▶</button>
+      <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Hasta qué sesión">
+      <span class="when" id="when"></span>
+    </div>
+    <div class="seg" id="ghostSeg" role="group" aria-label="Fondo">
+      <button data-g="full" class="on">Fantasma detallado</button>
+      <button data-g="beam">Como lo ve ALMITA</button>
+      <button data-g="off">Sin fantasma</button>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Hasta ahora</h2>
+      <div class="stats">
+        <div class="stat"><b id="stSessions">–</b><span>noches de cielo</span></div>
+        <div class="stat"><b id="stPoints">–</b><span>apuntamientos</span></div>
+        <div class="stat"><b id="stArea">–</b><span>del cielo repintado</span></div>
+        <div class="stat"><b id="stR">–</b><span>parecido con HI4PI (r)</span></div>
+      </div>
+      <div class="legend"><span>1e20</span><canvas id="bar" width="512" height="12"></canvas><span>3e22 cm⁻²</span></div>
+      <div class="keys">
+        <span><i class="dot" style="background:#fff"></i>apuntamiento medido</span>
+      </div>
+      <div class="prose" style="margin-top:16px">
+        <p><strong>Cómo leerlo.</strong> Es el cielo entero visto desde la Vía Láctea: el plano de la galaxia cruza por el medio y el centro galáctico queda al centro. Abajo a la derecha están las Nubes de Magallanes. El color es la cantidad de hidrógeno en esa dirección.</p>
+        <p><strong>Lo honesto.</strong> ALMITA ve con un haz de 20°, así que sus manchas son anchas. Su medida es relativa y la pusimos en la escala de HI4PI con <em>un solo número</em> para todas las noches (<span id="factor"></span>). Si coincide punto a punto, es porque el cielo coincide, no porque lo forzamos. Solo cuentan noches válidas: montura real, reducidas con REDUCE y con frequency switching en cada punto.</p>
+      </div>
+    </div>
+    <div class="card" id="detail">
+      <h2>Apuntamiento</h2>
+      <p class="empty">Pasa el mouse o toca un punto del mapa para ver su espectro.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Noches de observación</h2>
+    <ul class="sessions" id="sessions"></ul>
+  </div>
+</main>
+
+<footer>
+  Fondo: HI4PI Collaboration, Ben Bekhti N. et al. 2016, A&amp;A 594, A116 (densidad de columna de HI integrada en −600…+600 km/s), proyección Mollweide galáctica. Mediciones: ALMITA, reducidas con su propio software (REDUCE). <span id="gen"></span>
+</footer>
+
+<script src="sky_data.js"></script>
+<script>
+(() => {
+  const D = window.ALMITA_SKY;
+  const W = D.image.w, H = D.image.h, R2 = Math.SQRT2;
+  const RAD = Math.PI / 180, FWHM = D.beam_fwhm_deg;
+  const [NMIN, NMAX] = D.scale_1e20;
+  const LUT = D.lut;
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("sky"), ctx = canvas.getContext("2d");
+  const ghosts = {}; let ghost = "full";
+  let upTo = D.sessions.length - 1, hover = null, pinned = null;
+
+  // ---- projection (l grows to the left, l=0 in the centre) ----
+  function project(l, b) {
+    let lam = -(((l + 180) % 360 + 360) % 360 - 180) * RAD, phi = b * RAD, th = phi;
+    for (let k = 0; k < 30; k++) {
+      const f = 2 * th + Math.sin(2 * th) - Math.PI * Math.sin(phi), d = 2 + 2 * Math.cos(2 * th);
+      if (Math.abs(d) < 1e-9) break;
+      const s = f / d; th -= s; if (Math.abs(s) < 1e-9) break;
+    }
+    const x = 2 * R2 / Math.PI * lam * Math.cos(th), y = R2 * Math.sin(th);
+    return [(x + 2 * R2) / (4 * R2) * W, (R2 - y) / (2 * R2) * H];
+  }
+  function inverse(px, py) {
+    const x = px / W * 4 * R2 - 2 * R2, y = R2 - py / H * 2 * R2;
+    if ((x / (2 * R2)) ** 2 + (y / R2) ** 2 > 1) return null;
+    const th = Math.asin(Math.max(-1, Math.min(1, y / R2)));
+    const lat = Math.asin(Math.max(-1, Math.min(1, (2 * th + Math.sin(2 * th)) / Math.PI)));
+    const lon = Math.PI * x / (2 * R2 * Math.cos(th));
+    if (Math.abs(lon) > Math.PI) return null;
+    return [lat, -lon];                    // radians: b, l (l signed, left positive)
+  }
+  const colour = (v) => {
+    const t = Math.max(0, Math.min(1, (Math.log10(Math.max(v, 1e-6)) - Math.log10(NMIN)) / (Math.log10(NMAX) - Math.log10(NMIN))));
+    return LUT[Math.round(t * 255)];
+  };
+
+  // ---- overlay: ALMITA's beam-weighted paint, computed on a coarse grid ----
+  const OW = 500, OH = 250;
+  const over = document.createElement("canvas"); over.width = OW; over.height = OH;
+  const octx = over.getContext("2d");
+  const cells = [];                       // unit vectors of the coarse grid
+  for (let j = 0; j < OH; j++) for (let i = 0; i < OW; i++) {
+    const g = inverse((i + .5) / OW * W, (j + .5) / OH * H);
+    cells.push(g ? [Math.cos(g[0]) * Math.cos(g[1]), Math.cos(g[0]) * Math.sin(g[1]), Math.sin(g[0])] : null);
+  }
+  const unit = (l, b) => [Math.cos(b * RAD) * Math.cos(l * RAD), Math.cos(b * RAD) * Math.sin(l * RAD), Math.sin(b * RAD)];
+  const K = 4 * Math.LN2 / (FWHM * RAD) ** 2;
+  let coveredFrac = 0;
+  function paintOverlay() {
+    const pts = D.points.filter((p) => p.s <= upTo && p.nhi_equiv_1e20 !== null).map((p) => ({ u: unit(p.l, p.b), v: p.nhi_equiv_1e20 }));
+    const img = octx.createImageData(OW, OH);
+    let inside = 0, covered = 0;
+    const cosCut = Math.cos(2.2 * FWHM * RAD);
+    for (let n = 0; n < cells.length; n++) {
+      const c = cells[n]; if (!c) continue; inside++;
+      let sw = 0, sv = 0;
+      for (const p of pts) {
+        const dot = c[0] * p.u[0] + c[1] * p.u[1] + c[2] * p.u[2];
+        if (dot < cosCut) continue;
+        const d = Math.acos(Math.min(1, dot)), w = Math.exp(-K * d * d);
+        sw += w; sv += w * p.v;
+      }
+      if (sw < 0.02) continue;
+      if (sw > 0.5) covered++;
+      const rgb = colour(sv / sw), a = Math.max(0, Math.min(1, (sw - 0.12) / 0.55));
+      img.data.set([rgb[0], rgb[1], rgb[2], Math.round(a * 255)], n * 4);
+    }
+    coveredFrac = inside ? covered / inside : 0;
+    octx.putImageData(img, 0, 0);
+  }
+
+  // ---- drawing ----
+  const LABELS = [[0, 0, "centro galáctico", "center", 0, 48], [176, 0, "anticentro", "left", 8, -14], [280.47, -32.89, "Nube Grande", "center", 0, -16],
+                  [302.8, -44.3, "Nube Chica", "center", 0, -16], [121.17, -21.57, "Andrómeda", "center", 0, -16], [80, 1, "Cisne", "center", 0, -16]];
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    if (ghost !== "off" && ghosts[ghost]) {
+      // the ghost: the survey in moonlight - grey, tinted blue, dimmed - so ALMITA's own colour stands out on top
+      ctx.save(); ctx.filter = "grayscale(100%) brightness(80%) contrast(110%)"; ctx.drawImage(ghosts[ghost], 0, 0, W, H); ctx.restore();
+      ctx.save(); ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "#6f8fd8";
+      ctx.beginPath(); ctx.ellipse(W / 2, H / 2, W / 2, H / 2, 0, 0, 2 * Math.PI); ctx.fill(); ctx.restore();
+    } else {                                  // the sky's outline only
+      ctx.beginPath(); ctx.ellipse(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0, 2 * Math.PI);
+      ctx.fillStyle = "#0c0a14"; ctx.fill();
+    }
+    // graticule
+    ctx.save(); ctx.strokeStyle = "rgba(255,255,255,.10)"; ctx.lineWidth = 1.2;
+    for (let l = -180; l <= 180; l += 30) { ctx.beginPath(); for (let b = -90; b <= 90; b += 2) { const [x, y] = project(l === 180 ? 179.999 : l, b); b === -90 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); } ctx.stroke(); }
+    for (let b = -60; b <= 60; b += 30) { ctx.beginPath(); for (let l = -180; l <= 180; l += 2) { const [x, y] = project(l === 180 ? 179.999 : l, b); l === -180 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); } ctx.stroke(); }
+    ctx.restore();
+    // ALMITA's paint
+    ctx.save(); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+    ctx.shadowColor = "rgba(255,170,60,.35)"; ctx.shadowBlur = 24; ctx.drawImage(over, 0, 0, W, H); ctx.restore();
+    // labels
+    ctx.save(); ctx.font = "600 22px system-ui"; ctx.textAlign = "center";
+    for (const [l, b, t, al, dx, dy] of LABELS) {
+      const [x, y] = project(l, b); ctx.textAlign = al; ctx.fillStyle = "rgba(255,255,255,.62)";
+      ctx.shadowColor = "#000"; ctx.shadowBlur = 6; ctx.fillText(t, x + dx, y + dy); ctx.shadowBlur = 0;
+      if (al === "center") { ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill(); }
+    }
+    ctx.textAlign = "center";
+    ctx.font = "16px ui-monospace,monospace"; ctx.fillStyle = "rgba(255,255,255,.35)";
+    for (const l of [90, 270]) { const [x, y] = project(l, 0); ctx.fillText(`l=${l}°`, x, y + 28); }
+    ctx.restore();
+    // points
+    for (const p of D.points) {
+      if (p.s > upTo) continue;
+      const [x, y] = project(p.l, p.b);
+      ctx.beginPath();
+      if (p.nhi_equiv_1e20 === null) { ctx.arc(x, y, 5, 0, 7); ctx.strokeStyle = "rgba(127,216,255,.8)"; ctx.lineWidth = 2; ctx.stroke(); }
+      else { ctx.arc(x, y, 3.2, 0, 7); ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fill(); }
+    }
+    const sel = pinned || hover;
+    if (sel) { const [x, y] = project(sel.l, sel.b); ctx.beginPath(); ctx.arc(x, y, 11, 0, 7); ctx.strokeStyle = "#ffb340"; ctx.lineWidth = 3; ctx.stroke(); }
+  }
+
+  // ---- UI ----
+  const fmtDay = (s) => { const [d, t] = s.started_chile.split(" "); const [Y, M, Dd] = d.split("-"); return `${+Dd} ${["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][M - 1]} ${Y} · ${t}`; };
+  function refresh() {
+    paintOverlay(); draw();
+    const shown = D.points.filter((p) => p.s <= upTo);
+    const nights = new Set(D.sessions.filter((s) => s.id <= upTo).map((s) => s.started_chile.slice(0, 10)));
+    $("stSessions").textContent = nights.size;
+    $("stPoints").textContent = shown.length;
+    $("stArea").textContent = (coveredFrac * 100).toFixed(1) + " %";
+    $("when").textContent = "hasta " + fmtDay(D.sessions[upTo]);
+  }
+  $("stR").textContent = D.log_r_vs_hi4pi === null ? "–" : D.log_r_vs_hi4pi.toFixed(2);
+  $("factor").textContent = `${D.factor_pct_kms_per_1e20} %·km/s por 10²⁰ átomos/cm²`;
+  $("gen").textContent = "Actualizado " + D.generated_utc.slice(0, 10) + ".";
+  const slider = $("slider"); slider.max = D.sessions.length - 1; slider.value = upTo;
+  slider.addEventListener("input", () => { upTo = +slider.value; refresh(); });
+
+  let timer = null;
+  $("play").addEventListener("click", () => {
+    if (timer) { clearInterval(timer); timer = null; $("play").textContent = "▶"; return; }
+    upTo = 0; slider.value = 0; refresh(); $("play").textContent = "❚❚";
+    timer = setInterval(() => {
+      if (upTo >= D.sessions.length - 1) { clearInterval(timer); timer = null; $("play").textContent = "▶"; return; }
+      upTo++; slider.value = upTo; refresh();
+    }, 1100);
+  });
+  for (const b of $("ghostSeg").querySelectorAll("button")) b.addEventListener("click", () => {
+    ghost = b.dataset.g; for (const o of $("ghostSeg").querySelectorAll("button")) o.classList.toggle("on", o === b); draw();
+  });
+
+  // colour bar
+  (() => { const c = $("bar"), x = c.getContext("2d"); for (let i = 0; i < 512; i++) { const v = 10 ** (Math.log10(NMIN) + i / 511 * (Math.log10(NMAX) - Math.log10(NMIN))); const r = colour(v); x.fillStyle = `rgb(${r})`; x.fillRect(i, 0, 1, 12); } })();
+
+  // sessions list
+  $("sessions").innerHTML = D.sessions.map((s) => {
+    const n = D.points.filter((p) => p.s === s.id);
+    const c = SkyCoordText(n);
+    return `<li><span class="d">${fmtDay(s)}</span><span class="tag ${s.frequency_switching ? "fs" : ""}">${s.frequency_switching ? "FREQUENCY SWITCHING" : "PRIMERA LUZ"}</span><span>${s.points} apuntamientos · ${c}</span></li>`;
+  }).join("");
+  function SkyCoordText(pts) {
+    const ls = pts.map((p) => ((p.l + 180) % 360) - 180), bs = pts.map((p) => p.b);
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    const l = (mean(ls) + 360) % 360;
+    return `alrededor de l=${l.toFixed(0)}°, b=${mean(bs).toFixed(0)}°`;
+  }
+
+  // hover / click
+  function pick(ev) {
+    const r = canvas.getBoundingClientRect(), sx = W / r.width;
+    const mx = (ev.clientX - r.left) * sx, my = (ev.clientY - r.top) * sx;
+    let best = null, bd = 18 * sx;
+    for (const p of D.points) { if (p.s > upTo) continue; const [x, y] = project(p.l, p.b); const d = Math.hypot(x - mx, y - my); if (d < bd) { bd = d; best = p; } }
+    return { best, mx, my, r, sx };
+  }
+  canvas.addEventListener("mousemove", (ev) => {
+    const { best, r } = pick(ev);
+    const tip = $("tip");
+    if (best !== hover) { hover = best; draw(); if (!pinned) showDetail(best); }
+    if (best) {
+      const s = D.sessions[best.s];
+      tip.innerHTML = `l=${best.l.toFixed(1)}° b=${best.b.toFixed(1)}°<br>${fmtDay(s)}`;
+      tip.style.display = "block";
+      tip.style.left = (ev.clientX - r.left + 28) + "px"; tip.style.top = (ev.clientY - r.top + 6) + "px";
+    } else tip.style.display = "none";
+  });
+  canvas.addEventListener("mouseleave", () => { $("tip").style.display = "none"; hover = null; draw(); });
+  canvas.addEventListener("click", (ev) => {
+    const { best } = pick(ev); pinned = best; draw(); showDetail(best);
+    history.replaceState(null, "", best ? `#p=${D.sessions[best.s].campaign_id.replace(/[^0-9]/g, "").slice(-14)}-${best.i}` : location.pathname);
+  });
+  // a shared link pins its point: #p=<yyyymmddHHMMSS of the session>-<point>
+  function fromHash() {
+    const m = /^#p=(\d{14})-(\d+)$/.exec(location.hash); if (!m) return;
+    const s = D.sessions.find((x) => x.campaign_id.replace(/[^0-9]/g, "").slice(-14) === m[1]); if (!s) return;
+    const p = D.points.find((x) => x.s === s.id && x.i === +m[2]); if (!p) return;
+    pinned = p; showDetail(p); draw();
+  }
+
+  function showDetail(p) {
+    const el = $("detail");
+    if (!p) { el.innerHTML = `<h2>Apuntamiento</h2><p class="empty">Pasa el mouse o toca un punto del mapa para ver su espectro.</p>`; return; }
+    const s = D.sessions[p.s];
+    const val = p.nhi_equiv_1e20 === null
+      ? `<p class="big">Primera luz</p><p class="meta">Sin frequency switching: la línea apareció, pero la forma del receptor no deja medir cuánto hidrógeno hay. Por eso este punto no tiene color.</p>`
+      : `<div class="cmp"><div><b style="color:var(--accent)">${(p.nhi_equiv_1e20 / 100).toFixed(2)}</b><span>ALMITA</span></div>
+         <div><b>${(p.hi4pi_beam_1e20 / 100).toFixed(2)}</b><span>HI4PI visto con un haz de 20°</span></div></div>
+         <p class="meta">×10²² átomos de hidrógeno por cm² en esa dirección</p>`;
+    el.innerHTML = `<h2>Apuntamiento</h2>${val}
+      <p class="meta">l ${p.l.toFixed(1)}° · b ${p.b.toFixed(1)}° &nbsp;|&nbsp; AR ${p.ra_h.toFixed(2)} h · Dec ${p.dec.toFixed(1)}°<br>${fmtDay(s)} (Chile) · punto ${p.i} de ${s.points}</p>
+      ${p.spec_v.length ? `<canvas id="spec" width="720" height="340"></canvas><p class="meta">Espectro medido por ALMITA · exceso sobre el ruido del receptor (%) vs velocidad LSRK (km/s)</p>` : ""}`;
+    if (p.spec_v.length) drawSpec($("spec"), p);
+  }
+  function drawSpec(c, p) {
+    const x = c.getContext("2d"), w = c.width, h = c.height, m = { l: 60, r: 16, t: 16, b: 44 };
+    const vs = p.spec_v, ys = p.spec_y;
+    const vmin = Math.min(...vs), vmax = Math.max(...vs);
+    const ymax = Math.max(1, ...ys) * 1.1, ymin = Math.min(0, ...ys) * 1.1 - 0.5;
+    const X = (v) => m.l + (v - vmin) / (vmax - vmin) * (w - m.l - m.r), Y = (y) => m.t + (ymax - y) / (ymax - ymin) * (h - m.t - m.b);
+    x.fillStyle = "#0b0912"; x.fillRect(0, 0, w, h);
+    x.strokeStyle = "rgba(255,255,255,.12)"; x.lineWidth = 1; x.font = "24px ui-monospace,monospace"; x.fillStyle = "#9a93ad";
+    x.beginPath(); x.moveTo(m.l, Y(0)); x.lineTo(w - m.r, Y(0)); x.stroke();
+    for (let v = Math.ceil(vmin / 50) * 50; v <= vmax; v += 50) { x.textAlign = "center"; x.fillText(v, X(v), h - 10); x.textAlign = "left"; x.beginPath(); x.moveTo(X(v), m.t); x.lineTo(X(v), h - m.b); x.stroke(); }
+    x.fillText(ymax.toFixed(0) + "%", 4, m.t + 18); x.fillText("0", 30, Y(0) + 8);
+    const g = x.createLinearGradient(0, Y(ymax), 0, Y(0)); g.addColorStop(0, "rgba(255,179,64,.55)"); g.addColorStop(1, "rgba(255,179,64,0)");
+    x.beginPath(); x.moveTo(X(vs[0]), Y(0)); vs.forEach((v, i) => x.lineTo(X(v), Y(ys[i]))); x.lineTo(X(vs[vs.length - 1]), Y(0)); x.closePath(); x.fillStyle = g; x.fill();
+    x.beginPath(); vs.forEach((v, i) => i ? x.lineTo(X(v), Y(ys[i])) : x.moveTo(X(v), Y(ys[i]))); x.strokeStyle = "#ffb340"; x.lineWidth = 2.5; x.stroke();
+  }
+
+  // load ghosts, then draw
+  let pending = 2;
+  for (const g of ["full", "beam"]) {
+    const im = new Image(); im.onload = () => { ghosts[g] = im; if (--pending === 0) refresh(); else draw(); };
+    im.onerror = () => { if (--pending === 0) refresh(); };
+    im.src = `ghost_${g}.png`;
+  }
+  refresh(); fromHash();
+})();
+</script>
+</body>
+</html>

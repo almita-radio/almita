@@ -108,6 +108,7 @@ STATIC_FILES = {
     "/sessions.js": "sessions.js",
     "/unknown_pleasures.js": "unknown_pleasures.js",
     "/sdr_audio.js": "sdr_audio.js",                     # AUDIO button's sound engine, loaded on the first click
+    "/sky_tiles.js": "sky_tiles.js",                     # STATUS "ALMITA'S SKY" tile map (operator 2026-11-18)
 }
 # BL-094 presentation mode: /present/<page>.html (and /present/ for MONITOR) is the SAME page, marked <html data-present>
 # so styles.css zooms it for a projector; a <base href="/"> keeps its relative assets and API calls where they are.
@@ -392,6 +393,31 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                     beam = 20.0
                 return _json_response(self, 200, {"ok": True, "data": fswitch_suggest.suggest(
                     float(q.get("ra_hours", "nan")), float(q.get("dec_deg", "nan")), beam)})
+            if path == "/api/status/sky-map":
+                # operator 2026-11-18: "the final status of the project" at the top of STATUS - the sky ALMITA has
+                # measured (valid sessions only: real mount + REDUCE + frequency switching), painted over HI4PI.
+                # Rebuilt only when the session catalog or a REDUCE run changes (site_sky_export.cached_payload).
+                import site_sky_export
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": site_sky_export.cached_payload()})
+                except Exception as exc:   # noqa: BLE001 - STATUS must still load without the map
+                    return _json_response(self, 200, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            if path == "/api/status/sky-ghost.png":
+                import site_sky_export
+                kind = (parse_qs(urlsplit(self.path).query).get("kind") or ["full"])[0]
+                try:
+                    data = site_sky_export.ghost_path(kind).read_bytes()
+                except ValueError:
+                    return _error_response(self, 400, "kind must be full or beam")
+                except Exception as exc:   # noqa: BLE001
+                    return _error_response(self, 503, f"HI4PI background unavailable: {type(exc).__name__}")
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "private, max-age=86400")
+                _common_headers(self)
+                self.end_headers()
+                return _write_body(self, data)
             if path in ("/api/observe/calibration-profiles", "/api/observe/calibration-profiles/validate",
                         "/api/observe/calibration-profiles/browse"):
                 return self._handle_calibration_profiles(path)

@@ -6,6 +6,13 @@
   <header id="almita-header"><h1>STATUS</h1></header>
   <div id="error-banner" class="banner connection" hidden></div>
   <main id="app">
+    <section class="panel" aria-labelledby="h-sky">
+      <header><h2 id="h-sky">ALMITA'S SKY <span class="muted">(where ALMITA has measured hydrogen · valid sessions only: real mount + REDUCE + frequency switching · grows with every night)</span></h2><span id="sky-badge" class="badge">—</span></header>
+      <div id="sky-stats" class="sky-stats">Loading…</div>
+      <div class="sky-wrap"><canvas id="sky-canvas" width="2000" height="1000" aria-label="The whole sky in galactic coordinates: HI4PI faint in the background, tiles where ALMITA has measured"></canvas><div id="sky-tip" class="temp-tip" hidden></div></div>
+      <div class="sky-legend"><span id="sky-lo">0</span><canvas id="sky-bar" width="400" height="10"></canvas><span id="sky-hi">—</span></div>
+      <p id="sky-note" class="muted sky-note"></p>
+    </section>
     <section class="panel" aria-labelledby="h-op">
       <header><h2 id="h-op">OPERATIONAL READINESS</h2><span id="op-badge" class="badge">—</span></header>
       <div id="op-reasons" class="obs-summary">Loading…</div>
@@ -61,4 +68,5 @@
   <footer id="almita-footer"></footer>
   <script src="common.js"></script>
   <script src="status.js"></script>
+  <script src="sky_tiles.js"></script>
 </body></html>

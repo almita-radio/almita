@@ -349,3 +349,14 @@ body:has(#session-panel) #error-banner{overflow-wrap:anywhere}   /* long request
 @media(max-width:700px){.ses-split{flex-direction:column}.ses-points{flex-basis:auto;width:100%}}
 /* BL-094 presentation mode: /present/<page> serves the same pages with <html data-present>, scaled for a projector */
 html[data-present]{zoom:1.5}
+
+/* STATUS · ALMITA'S SKY (operator 2026-11-18) */
+.sky-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:8px 12px 10px}
+@media (max-width:800px){.sky-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.sky-stat b{display:block;font-size:1.6rem;line-height:1.1;color:var(--text);font-variant-numeric:tabular-nums}
+.sky-stat span{font-size:.78rem;color:var(--muted)}
+.sky-wrap{position:relative;background:#000;border-radius:10px;padding:10px;margin:0 12px}
+.sky-wrap canvas{display:block;width:100%;max-width:1200px;height:auto;margin:0 auto}
+.sky-legend{display:flex;align-items:center;gap:10px;max-width:520px;margin:10px auto 0;font-size:.78rem;color:var(--muted)}
+.sky-legend canvas{flex:1;min-width:0;width:100%;height:10px;border-radius:3px}
+.sky-note{font-size:.75rem;margin:8px 12px 12px;text-align:center}
