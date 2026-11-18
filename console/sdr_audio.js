@@ -8,9 +8,12 @@
 // What you hear, from each spectrum (2048 bins over the whole band):
 //   1. the spectrum is divided by its own level at the band's outer parts (gain drifts cancel) and narrow lines are
 //      shaved off (running median);
-//   2. EXCESS = how far each bin is above the LOWEST it has been since AUDIO was switched on (a floor that very slowly
-//      forgets): more hydrogen than the least you have pointed at - that is what sounds. Pointing at one place only, it
-//      fades to the quiet bed: it is the CHANGE that you hear;
+//   2. EXCESS = how far each bin (smoothed, ~17 kHz) is above the LOWEST it has been since AUDIO was switched on (a floor
+//      that very slowly forgets): more hydrogen than the least you have pointed at - that is what sounds. Pointing at one
+//      place only, it fades to the quiet bed: it is the CHANGE that you hear. The minimum of a noisy number sits below
+//      its mean, so the excess the band's outer parts show (no hydrogen there) is taken off every bin, and only bins
+//      4 sigma above the noise, over at least MIN_BINS_FOUND bins (~30 kHz, narrower than any HI line), make sound
+//      (operator 2026-11-18: with no LNA and no antenna the volume swung a lot - pure noise read as a 3-4 % "excess");
 //   3. a window FOLLOWS the hydrogen: centred on the excess, as wide as it is (200 kHz - 1 MHz), gliding;
 //   4. HISS: the window cut into 16 slices, each slice a band of noise between 300 Hz and 3 kHz (low radio frequency =
 //      receding gas = low sound) as loud as its excess - more hydrogen, more hiss;
@@ -22,6 +25,7 @@
   const N_BANDS = 16, AUDIO_LO = 300, AUDIO_HI = 3000;
   const MIN_WIDTH_HZ = 200e3, MAX_WIDTH_HZ = 1.0e6, ZONE_HALF_HZ = 0.95e6, OUTER_FROM_HZ = 0.7e6;
   const FLOOR_RISE = 0.0005;                    // per spectrum: the floor forgets ~1.5 %/min at one spectrum every 2 s
+  const N_SIGMA = 4, MIN_THRESHOLD = 0.004, MIN_BINS_FOUND = 25;
   const POLL_MS = 2000, HEARTBEAT_MS = 15000, IDLE_FRESH_S = 15, CAPTURE_FRESH_S = 600;
   const RUNTIME = (new URLSearchParams(location.search)).get("root") || window.ALMITA_RUNTIME_ROOT || "/runtime";
 
@@ -57,23 +61,26 @@
     const outer = []; for (let i = 0; i < n; i++) if (Math.abs(f[i] - c0) >= OUTER_FROM_HZ && Number.isFinite(r[i])) outer.push(r[i]);
     const g = median(outer.length > 20 ? outer : Array.from(r));
     if (!Number.isFinite(g) || g <= 0) return { found: false, reason: "no data" };
-    const x = runningMedian(Array.from(r, (v) => v / g), 4);                   // narrow lines (<~10 kHz) shaved off
+    const x = boxcar(runningMedian(Array.from(r, (v) => v / g), 4), 7);       // narrow lines (<~10 kHz) shaved, ~17 kHz smoothing
     if (!state.floor || state.floor.length !== n) { state.floor = Float64Array.from(x); state.spectra = 0; }
     const fl = state.floor;
     for (let i = 0; i < n; i++) if (Number.isFinite(x[i])) fl[i] = Number.isFinite(fl[i]) ? Math.min(fl[i] * (1 + FLOOR_RISE), x[i]) : x[i];
     state.spectra = (state.spectra || 0) + 1;
-    const e = boxcar(Array.from(x, (v, i) => v / fl[i] - 1), 7);              // ~17 kHz smoothing
-    const outerE = []; for (let i = 0; i < n; i++) if (Math.abs(f[i] - c0) >= OUTER_FROM_HZ) outerE.push(e[i]);
-    const mOut = median(outerE);
-    const sigma = 1.4826 * median(outerE.map((v) => Math.abs(v - mOut))) || 0.002;
-    const thr = Math.max(3 * sigma, 0.003);
-    let sw = 0, swf = 0, peak = 0; const pos = new Float64Array(n);
+    const e0 = Array.from(x, (v, i) => v / fl[i] - 1);
+    const outerE = []; for (let i = 0; i < n; i++) if (Math.abs(f[i] - c0) >= OUTER_FROM_HZ && Number.isFinite(e0[i])) outerE.push(e0[i]);
+    const mOut = median(outerE);                                               // the noise's own "excess" over its minimum
+    const bias = Number.isFinite(mOut) ? mOut : 0;
+    const e = e0.map((v) => v - bias);
+    const sigma = 1.4826 * median(outerE.map((v) => Math.abs(v - bias))) || 0.002;
+    const thr = Math.max(N_SIGMA * sigma, MIN_THRESHOLD);
+    let sw = 0, swf = 0, peak = 0, nAbove = 0; const pos = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       if (Math.abs(f[i] - c0) > ZONE_HALF_HZ || !Number.isFinite(e[i])) continue;
-      pos[i] = Math.max(0, e[i] - thr); sw += pos[i]; swf += pos[i] * f[i]; if (e[i] > peak) peak = e[i];
+      pos[i] = Math.max(0, e[i] - thr); sw += pos[i]; swf += pos[i] * f[i]; if (e[i] > peak) peak = e[i]; if (pos[i] > 0) nAbove++;
     }
-    const out = { spectra: state.spectra, threshold: thr, peak: 0, meanExcess: 0, bands: new Array(N_BANDS).fill(0) };
-    if (sw <= 0) return { ...out, found: false, reason: "no excess above the floor" };
+    const out = { spectra: state.spectra, threshold: thr, noiseBias: bias, binsAbove: nAbove, peak: 0, meanExcess: 0,
+                  bands: new Array(N_BANDS).fill(0) };
+    if (sw <= 0 || nAbove < MIN_BINS_FOUND) return { ...out, found: false, reason: "no excess above the noise" };
     const fc = swf / sw;
     let acc = 0, lo = fc, hi = fc;
     for (let i = 0; i < n; i++) { const a0 = acc; acc += pos[i]; if (a0 < 0.05 * sw && acc >= 0.05 * sw) lo = f[i]; if (a0 < 0.95 * sw && acc >= 0.95 * sw) hi = f[i]; }
@@ -84,10 +91,10 @@
     for (let i = 0; i < n; i++) {
       if (f[i] < w0 || f[i] >= w1 || !Number.isFinite(e[i])) continue;
       const b = Math.min(N_BANDS - 1, Math.floor((f[i] - w0) / width * N_BANDS));
-      const v = Math.max(0, e[i]); sums[b] += v; counts[b]++; sWin += v; kWin++; if (e[i] > pWin) pWin = e[i];
+      const v = Math.max(0, e[i] - thr); sums[b] += v; counts[b]++; sWin += v; kWin++; if (e[i] > pWin) pWin = e[i];
     }
     return { ...out, found: true, centerHz: fc, widthHz: width, lowHz: w0, highHz: w1,
-             velocityKmS: (1 - fc / HI_REST_HZ) * C_KM_S, peak: pWin, meanExcess: kWin ? sWin / kWin : 0,
+             velocityKmS: (1 - fc / HI_REST_HZ) * C_KM_S, peak: Math.max(0, pWin - thr), meanExcess: kWin ? sWin / kWin : 0,
              bands: sums.map((s, b) => (counts[b] ? s / counts[b] : 0)) };
   }
 

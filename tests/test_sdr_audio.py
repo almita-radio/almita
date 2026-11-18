@@ -146,6 +146,37 @@ def test_the_window_follows_the_hydrogen_and_more_hydrogen_is_louder(tmp_path):
     assert len(s["bands"]) == 16 and max(s["bands"]) > 0
 
 
+JS_NOISE = r"""
+global.window = {}; global.location = { search: "" };
+require(process.argv[2]);
+const A = window.AlmitaAudio, REST = 1420405751.77, F0 = 1420405752, FS = 2.4e6, N = 2048;
+const f = Array.from({ length: N }, (_, i) => F0 + (i - N / 2 + 0.5) * FS / N);
+let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+const gauss = () => Math.sqrt(-2 * Math.log(rnd() || 1e-12)) * Math.cos(2 * Math.PI * rnd());
+// 0.5 s of IQ, 8192-point frames folded to 2048 bins: ~4 % noise per bin (the idle reader's real spectra)
+const spectrum = (amp) => ({ frequency_hz: f, inner: f.map((_, i) => i > 100 && i < N - 100),
+  power_db: f.map((x) => (Math.abs(x - F0) < 3000 ? null : 50 - 6 * ((x - F0) / 1.2e6) ** 2 +
+    10 * Math.log10((1 + amp * Math.exp(-0.5 * ((x - REST) / 120e3) ** 2)) * Math.max(0.5, 1 + 0.041 * gauss())))) });
+const st = {}; let noiseFound = 0, lineFound = 0, lineVel = [];
+for (let k = 0; k < 100; k++) if (A.analyse(spectrum(0), st, F0).found) noiseFound++;
+for (let k = 0; k < 20; k++) { const a = A.analyse(spectrum(0.15), st, F0); if (a.found) { lineFound++; lineVel.push(a.velocityKmS); } }
+console.log(JSON.stringify({ noiseFound, lineFound, lineVel }));
+"""
+
+
+def test_pure_noise_stays_quiet_and_a_real_line_still_sounds(tmp_path):
+    """Operator 2026-11-18: SDR alone (no LNA, no antenna) swung in volume - the floor is a running minimum, which noise
+    always undercuts, so noise read as a 3-4 % "excess". The band's outer parts now set that bias aside."""
+    drv = tmp_path / "noise.js"
+    drv.write_text(JS_NOISE)
+    r = subprocess.run(["node", str(drv), str(ROOT / "console" / "sdr_audio.js")], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    assert o["noiseFound"] <= 2                                            # 100 noise-only spectra: (almost) silent
+    assert o["lineFound"] >= 18                                            # a 15 % line over the same noise: heard
+    assert all(abs(v) < 15 for v in o["lineVel"])
+
+
 def test_header_has_audio_between_mount_and_day_night():
     js = (ROOT / "console" / "common.js").read_text()
     i, j, k = js.index("U.mountDeviceToggle(nav);\n    U.audioToggle(nav);"), js.index("U.audioToggle(nav);\n    U.themeToggle(nav);"), 0
