@@ -37,12 +37,22 @@
     return [((Math.atan2(g[1], g[0]) / RAD) + 360) % 360, Math.asin(Math.max(-1, Math.min(1, g[2]))) / RAD];
   }
   const unit = (l, b) => [Math.cos(b * RAD) * Math.cos(l * RAD), Math.cos(b * RAD) * Math.sin(l * RAD), Math.sin(b * RAD)];
-  // ALMITA's own reading, LINEAR, viridis - the same look as SCIENCE's maps (operator 2026-11-18)
+  // ALMITA's own reading, LINEAR, on a cool "moonlight" ramp that belongs with the HI4PI ghost behind it (operator
+  // 2026-11-18: viridis was too disruptive - "algo más elegante"): deep blue -> steel -> ice -> near white, and the
+  // tiles grow more opaque with the signal so faint sky melts into the background.
+  const STOPS = [[0, [14, 28, 58]], [0.3, [34, 78, 138]], [0.6, [78, 150, 210]], [0.82, [150, 210, 240]], [1, [240, 250, 255]]];
+  const tOf = (v) => { const [mn, mx] = D.tiles_scale_pct_kms; return Math.max(0, Math.min(1, (v - mn) / (mx - mn))); };
   const colour = (v) => {
-    const [mn, mx] = D.tiles_scale_pct_kms;
-    const t = Math.max(0, Math.min(1, (v - mn) / (mx - mn)));
-    return D.tiles_lut[Math.round(t * 255)];
+    const t = tOf(v);
+    for (let i = 1; i < STOPS.length; i++) {
+      if (t <= STOPS[i][0]) {
+        const [t0, a] = STOPS[i - 1], [t1, b] = STOPS[i], f = (t - t0) / (t1 - t0);
+        return a.map((x, k) => Math.round(x + (b[k] - x) * f));
+      }
+    }
+    return STOPS[STOPS.length - 1][1];
   };
+  const alphaOf = (v) => 0.42 + 0.48 * tOf(v);
 
   // Tiles: an equal-area-ish lat/long board. A tile belongs to its NEAREST pointing when that pointing lies within
   // 0.75 x the pointing's own grid spacing (the cell the grid gave it, not the 20 deg beam), and shows that
@@ -122,10 +132,13 @@
     }
     ctx.restore();
     // the tiles, with dark grout between them
-    ctx.save(); ctx.shadowColor = "rgba(120,220,160,.35)"; ctx.shadowBlur = 14;
-    for (const t of tiles) { tilePath(t); const c = colour(mode === "decon" ? t.vd : t.vm); ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`; ctx.fill(); }
+    ctx.save(); ctx.shadowColor = "rgba(150,200,255,.22)"; ctx.shadowBlur = 10;
+    for (const t of tiles) {
+      const v = mode === "decon" ? t.vd : t.vm, c = colour(v);
+      tilePath(t); ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${alphaOf(v).toFixed(3)})`; ctx.fill();
+    }
     ctx.restore();
-    ctx.save(); ctx.strokeStyle = "rgba(5,7,10,.8)"; ctx.lineWidth = 1.4;
+    ctx.save(); ctx.strokeStyle = "rgba(5,9,16,.45)"; ctx.lineWidth = 1;
     for (const t of tiles) { tilePath(t); ctx.stroke(); }
     if (hover) { tilePath(hover); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
     ctx.restore();
@@ -147,7 +160,7 @@
     ].map(([v, k]) => `<div class="sky-stat"><b>${v}</b><span>${k}</span></div>`).join("");
     $("sky-badge").textContent = (frac * 100).toFixed(1) + " % OF THE SKY";
     $("sky-badge").className = "badge " + (frac > 0 ? "status-ok" : "status-unknown");
-    $("sky-note").textContent = `tile = ${CELL}° · each pointing fills its own grid cell (${D.sessions.map((s) => s.spacing_deg + "°").join(", ")} spacing) with its own reading · reading = area of the line over the window's edges, ±60 km/s, in ALMITA's own units (linear, viridis as in SCIENCE) · `
+    $("sky-note").textContent = `tile = ${CELL}° · each pointing fills its own grid cell (${D.sessions.map((s) => s.spacing_deg + "°").join(", ")} spacing) with its own reading · reading = area of the line over the window's edges, ±60 km/s, in ALMITA's own units (linear, moonlight ramp; fainter = more transparent) · `
       + `${D.sessions.length} sessions: ${D.selection} · background: HI4PI (Ben Bekhti et al. 2016)`
       + D.sessions.filter((s) => s.display_shift_deg).map((s) => ` · DISPLAY ONLY: ${s.started_chile} drawn moved ${s.display_shift_deg.db}° in b`
         + `${s.display_shift_deg.dl ? ` and ${s.display_shift_deg.dl}° in l` : ""} (dish not aligned that night; readings, r and the deconvolution use the true pointing)`).join("");
