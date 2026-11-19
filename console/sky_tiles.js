@@ -14,6 +14,7 @@
   const REACH = 0.75;                               // a tile belongs to a pointing within 0.75 x its grid spacing (cell corner = 0.71)
   let D = null, ghost = null, tiles = [];
   let mode = "measured";                            // "measured" | "decon" (remembered per browser)
+  let showTiles = true;                             // TILES ON/OFF: compare with the HI4PI ghost underneath
   try { if (localStorage.getItem("almita-sky-mode") === "decon") mode = "decon"; } catch (e) { /* private window */ }
 
   function project(l, b) {                          // l grows to the LEFT, l=0 in the centre
@@ -103,7 +104,8 @@
     ctx.clearRect(0, 0, W, H);
     ctx.save(); ctx.beginPath(); ctx.ellipse(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0, 2 * Math.PI); ctx.fillStyle = "#05070a"; ctx.fill(); ctx.restore();
     if (ghost) {      // the ghost: HI4PI faint, grey-blue, so the tiles carry the eye
-      ctx.save(); ctx.filter = "grayscale(100%) brightness(42%) contrast(115%)"; ctx.drawImage(ghost, 0, 0, W, H); ctx.restore();
+      ctx.save(); ctx.filter = showTiles ? "grayscale(100%) brightness(42%) contrast(115%)" : "grayscale(100%) brightness(80%) contrast(115%)";
+      ctx.drawImage(ghost, 0, 0, W, H); ctx.restore();
       ctx.save(); ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "#7d9ad6";
       ctx.beginPath(); ctx.ellipse(W / 2, H / 2, W / 2, H / 2, 0, 0, 2 * Math.PI); ctx.fill(); ctx.restore();
     }
@@ -132,6 +134,13 @@
     }
     ctx.restore();
     // the tiles, with dark grout between them
+    if (!showTiles) {         // only a faint outline of where the tiles are
+      ctx.save(); ctx.strokeStyle = "rgba(200,225,255,.28)"; ctx.lineWidth = 1;
+      for (const t of tiles) { tilePath(t); ctx.stroke(); }
+      if (hover) { tilePath(hover); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
+      ctx.restore();
+    }
+    if (showTiles) {
     ctx.save(); ctx.shadowColor = "rgba(150,200,255,.22)"; ctx.shadowBlur = 10;
     for (const t of tiles) {
       const v = mode === "decon" ? t.vd : t.vm, c = colour(v);
@@ -142,6 +151,7 @@
     for (const t of tiles) { tilePath(t); ctx.stroke(); }
     if (hover) { tilePath(hover); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
     ctx.restore();
+    }
     // a few landmarks
     ctx.save(); ctx.font = "600 22px system-ui,sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,.6)";
     ctx.shadowColor = "#000"; ctx.shadowBlur = 6;
@@ -203,6 +213,11 @@
     draw(hovered);
   }
   for (const b of document.querySelectorAll("#sky-mode button")) b.addEventListener("click", () => { if (D) setMode(b.dataset.mode); });
+  for (const b of document.querySelectorAll("#sky-tiles button")) b.addEventListener("click", () => {
+    showTiles = b.dataset.tiles === "on";
+    for (const o of document.querySelectorAll("#sky-tiles button")) o.classList.toggle("active", o === b);
+    if (D) draw(hovered);
+  });
 
   async function load() {
     const r = await U.api("/api/status/sky-map", { timeoutMs: 60000 });
