@@ -314,6 +314,25 @@ def _config_hash_payload(*, grid_mode: str, placement: str, resolved_ra: float, 
     }
 
 
+def _target_list_hash_payload(*, targets: List[Dict[str, Any]], spacing_deg: float, min_altitude_deg: float,
+                              capture: Dict[str, Any], main: Dict[str, Any], rfi_ref: Dict[str, Any],
+                              quicklook: Dict[str, Any]) -> Dict[str, Any]:
+    """Hash payload of a TARGET_LIST plan (SURVEY, 2026-11-19): the exact pointings, in order, instead of a grid
+    shape. Rectangular plans never reach this function, so their hashes are unchanged."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "grid": {
+            "mode": "TARGET_LIST",
+            "targets": [{"ra_hours": round(float(t["ra_hours"]), 8), "dec_deg": round(float(t["dec_deg"]), 8),
+                         "label": str(t.get("label", ""))} for t in targets],
+            "nominal_spacing_deg": round(float(spacing_deg), 10),
+            "min_altitude_deg": min_altitude_deg,
+        },
+        "capture": capture, "main": main, "rfi_ref": rfi_ref,
+        "quicklook": {k: v for k, v in quicklook.items()},
+    }
+
+
 def recompute_config_hash(resolved_plan: Dict[str, Any]) -> str:
     """Recompute observation_config_sha256 from an already-written resolved plan dict.
 
@@ -322,6 +341,11 @@ def recompute_config_hash(resolved_plan: Dict[str, Any]) -> str:
     """
     resolved = resolved_plan["resolved"]
     requested = resolved_plan["requested"]
+    if resolved.get("mode") == "TARGET_LIST":
+        return observation_spec.compute_config_hash(_target_list_hash_payload(
+            targets=resolved["targets"], spacing_deg=resolved["spacing_deg"],
+            min_altitude_deg=requested["grid"]["min_altitude_deg"], capture=requested["capture"],
+            main=requested["main"], rfi_ref=requested["rfi_ref"], quicklook=requested["quicklook"]))
     payload = _config_hash_payload(
         grid_mode=resolved["mode"], placement=resolved["placement"],
         resolved_ra=resolved["center_ra_hours"], resolved_dec=resolved["center_dec_deg"],
@@ -576,6 +600,115 @@ def plan_observation(spec: Dict[str, Any], *, observer_config_path: str = "obser
     if run_preflight:
         resolved_plan["preflight"] = _plan_time_preflight(resolved_plan)
 
+    resolved_path = generator.output_dir / "observation_resolved.json"
+    resolved_path.write_text(json.dumps(resolved_plan, indent=2), encoding="utf-8")
+    resolved_plan["_resolved_plan_path"] = str(resolved_path)
+    return resolved_plan
+
+
+def validate_target_list_spec(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """A TARGET_LIST spec (SURVEY): the same capture/main/rfi_ref/quicklook validation as a grid spec, plus
+    grid = {"mode": "TARGET_LIST", "min_altitude_deg", "nominal_spacing_deg", "targets": [{ra_hours, dec_deg, label}]}.
+    Never a free-form pass-through: every field is checked here."""
+    S = observation_spec
+    S._require(isinstance(raw, dict), "target-list spec: top level must be a mapping")
+    for key in ("session", "grid", "capture", "main", "rfi_ref", "quicklook"):
+        S._require(key in raw, f"target-list spec: missing section {key!r}")
+    grid = raw["grid"]
+    S._require_keys(grid, ("mode", "min_altitude_deg", "nominal_spacing_deg", "targets"), "grid")
+    S._require(grid.get("mode") == "TARGET_LIST", "grid.mode: must be TARGET_LIST")
+    targets = grid.get("targets")
+    S._require(isinstance(targets, list) and 1 <= len(targets) <= 200, "grid.targets: 1..200 pointings required")
+    clean = []
+    for i, t in enumerate(targets):
+        where = f"grid.targets[{i}]"
+        S._require_keys(t, ("ra_hours", "dec_deg", "label"), where)
+        clean.append({"ra_hours": S._num(t, "ra_hours", where, min_value=0.0, max_value=24.0),
+                      "dec_deg": S._num(t, "dec_deg", where, min_value=-90.0, max_value=90.0),
+                      "label": str(t.get("label") or f"T{i + 1}")[:40]})
+    capture = S._validate_capture(raw["capture"])
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "session": S._validate_session(raw["session"]),
+        "grid": {"mode": "TARGET_LIST", "targets": clean,
+                 "min_altitude_deg": S._num(grid, "min_altitude_deg", "grid", min_value=0.0, max_value=89.0),
+                 "nominal_spacing_deg": S._num(grid, "nominal_spacing_deg", "grid", min_value=0.1, max_value=90.0)},
+        "capture": capture,
+        "main": S._validate_main(raw["main"]),
+        "rfi_ref": S._validate_rfi_ref(raw["rfi_ref"]),
+        "quicklook": S._validate_quicklook(raw["quicklook"], bool(capture.get("frequency_switching"))),
+        "console": S._validate_console(raw.get("console") or {}),
+        "execution": S._validate_execution(raw.get("execution") or {}),
+    }
+
+
+def plan_target_list(spec: Dict[str, Any], *, observer_config_path: str = "observer_config.json",
+                     data_dir: str = "./data/mosaic", now: Optional[datetime] = None,
+                     run_preflight: bool = False) -> Dict[str, Any]:
+    """PLAN for an explicit list of pointings (SURVEY, 2026-11-19). Zero hardware motion. Same resolved-plan shape
+    RUN, preflight and the session catalog read (mosaic.csv, observer_config copy, hash, altitude predictions,
+    start-delay budget); resolved.mode = TARGET_LIST and resolved.targets replace the grid shape. Blocks exactly as
+    a FIXED_CENTER grid does when a pointing would fall below the altitude floor during the planned window."""
+    spec = validate_target_list_spec(spec)
+    g = spec["grid"]
+    fs = bool(spec["capture"].get("frequency_switching"))
+    duration = estimate_duration(len(g["targets"]), spec["capture"]["seconds"], spec["capture"]["settle_seconds"],
+                                 frequency_switching=fs)
+    observer_config = _load_observer_config(Path(observer_config_path))
+    location, _ = _observer_location(observer_config)
+    t0 = Time(now.astimezone(timezone.utc)) if now else Time.now()
+    points = [{"point_id": i + 1, "scan_order": i + 1, "target_ra_hours": t["ra_hours"] % 24.0,
+               "target_dec_degrees": t["dec_deg"]} for i, t in enumerate(g["targets"])]
+    predictions = _predicted_altitudes(points, location, t0, duration["per_point_planning_seconds"])
+    min_predicted = min(p["predicted_altitude_deg"] for p in predictions)
+    if min_predicted < g["min_altitude_deg"]:
+        raise ObservationPlanError(
+            f"TARGET_LIST: predicted minimum altitude {min_predicted:.1f} deg falls below planning floor "
+            f"{g['min_altitude_deg']:.1f} deg during the planned window")
+
+    storage = estimate_storage(len(points), spec["capture"]["seconds"], spec["main"]["sample_rate"])
+    free_bytes = int(shutil.disk_usage(data_dir if Path(data_dir).exists() else ".").free)
+    generator = grid_generator.GridGenerator(
+        session_name=spec["session"]["name"], base_dir=data_dir,
+        beam_fwhm_deg=g["nominal_spacing_deg"], beam_sampling_fraction=1.0,
+        instrument_beam_fwhm_deg=(observer_config.get("observation_defaults") or {}).get("beam_fwhm_deg"),
+    )
+    generator.persist_observer_config(Path(observer_config_path))
+    generator.generate_target_list_plan(g["targets"], g["nominal_spacing_deg"])
+
+    config_hash = observation_spec.compute_config_hash(_target_list_hash_payload(
+        targets=g["targets"], spacing_deg=g["nominal_spacing_deg"], min_altitude_deg=g["min_altitude_deg"],
+        capture=spec["capture"], main=spec["main"], rfi_ref=spec["rfi_ref"], quicklook=spec["quicklook"]))
+    resolved_plan = {
+        "schema_version": SCHEMA_VERSION,
+        "observation_name": spec["session"]["name"],
+        "planning_timestamp_utc": t0.utc.isot + "Z",
+        "observer_config": observer_config,
+        "requested": spec,
+        "resolved": {
+            "mode": "TARGET_LIST", "placement": "TARGET_LIST", "frame": "ICRS",
+            "center_ra_hours": g["targets"][0]["ra_hours"], "center_dec_deg": g["targets"][0]["dec_deg"],
+            "rows": 1, "cols": len(points), "point_count": len(points),
+            "footprint_width_deg": None, "footprint_height_deg": None,
+            "spacing_deg": g["nominal_spacing_deg"], "rotation_deg": 0.0, "traversal": "AS_GIVEN",
+            "targets": g["targets"],
+            "placement_reasoning": "explicit pointings chosen by SURVEY, in the given order",
+        },
+        "target_list": predictions,
+        "duration": duration,
+        "storage": {**storage, "free_bytes_at_plan_time": free_bytes},
+        "main": spec["main"], "rfi_ref": spec["rfi_ref"], "quicklook": spec["quicklook"],
+        "safety_policy": _static_safety_policy(),
+        "software_versions": _software_versions(),
+        "observation_config_sha256": config_hash,
+        "grid_session_dir": str(generator.output_dir),
+        "mosaic_csv_path": str(generator.csv_filepath),
+        "min_predicted_altitude_deg": min_predicted,
+        "visibility": "PASS",
+        "max_recommended_start_delay_minutes": _max_recommended_start_delay_minutes(predictions, g["min_altitude_deg"]),
+    }
+    if run_preflight:
+        resolved_plan["preflight"] = _plan_time_preflight(resolved_plan)
     resolved_path = generator.output_dir / "observation_resolved.json"
     resolved_path.write_text(json.dumps(resolved_plan, indent=2), encoding="utf-8")
     resolved_plan["_resolved_plan_path"] = str(resolved_path)

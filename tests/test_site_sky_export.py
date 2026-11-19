@@ -60,3 +60,20 @@ def test_deconvolution_sharpens_a_bright_band_and_leaves_a_flat_sky_flat():
     fo = sse.deconvolve_session(flat, 7.5)
     assert all(abs(v - 50.0) < 1.0 for _, _, v in fo["grid"])
     assert fo["iterations"] in sse.ITERATION_CHOICES
+
+
+def test_survey_batches_share_one_key_and_other_campaigns_have_none():
+    assert sse.survey_key("ALMITA-SURVEY-SCP-PETORCA-20261207-01:02:03") == "ALMITA-SURVEY-SCP-PETORCA"
+    assert sse.survey_key("ALMITA-OBSERVE-20261112-22:38:42") is None
+
+
+def test_merge_survey_passes_averages_one_tile_and_leaves_other_sessions_alone():
+    v = list(range(-80, 81, 2))
+    def pt(s, l, b, val):
+        return {"s": s, "l": l, "b": b, "integral_pct_kms": val, "spec_v": v, "spec_y": [val / 10] * len(v), "t_utc": "x"}
+    pts = [pt(0, 300.0, -27.0, 10.0), pt(0, 300.2, -27.1, 20.0), pt(0, 310.0, -27.0, 5.0), pt(1, 300.0, -27.0, 99.0)]
+    out = sse.merge_survey_passes(pts, {0})
+    merged = [p for p in out if p["s"] == 0]
+    assert len(merged) == 2 and len([p for p in out if p["s"] == 1]) == 1
+    first = next(p for p in merged if p["passes"] == 2)
+    assert first["integral_pct_kms"] == 15.0 and first["spec_y"][0] == 1.5

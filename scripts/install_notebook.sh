@@ -24,7 +24,7 @@ ME="$(id -un)"
 PY="$ROOT/.venv/bin/python"
 UNITS=(almita-instrument-forwarder almita-observe-api almita-console-watcher almita-system-blackbox almita-rfi-mask-live)
 # installed but NOT enabled or started: run only when the operator wants them (systemctl --user start <unit>)
-ON_DEMAND=(almita-transit-logger almita-sdr-audio)
+ON_DEMAND=(almita-transit-logger almita-sdr-audio almita-survey)
 
 cd "$ROOT"
 [[ -x "$PY" ]] || { echo "no $PY - create the venv first (python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)"; exit 1; }

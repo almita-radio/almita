@@ -109,6 +109,7 @@ STATIC_FILES = {
     "/unknown_pleasures.js": "unknown_pleasures.js",
     "/sdr_audio.js": "sdr_audio.js",                     # AUDIO button's sound engine, loaded on the first click
     "/sky_tiles.js": "sky_tiles.js",                     # STATUS "ALMITA'S SKY" tile map (operator 2026-11-18)
+    "/survey_panel.js": "survey_panel.js",               # STATUS SURVEY panel + its rings on the sky map (2026-11-19)
 }
 # BL-094 presentation mode: /present/<page>.html (and /present/ for MONITOR) is the SAME page, marked <html data-present>
 # so styles.css zooms it for a projector; a <base href="/"> keeps its relative assets and API calls where they are.
@@ -439,6 +440,10 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
             if path == "/api/transit/state":
                 import transit_logger
                 return _json_response(self, 200, {"ok": True, "data": transit_logger.service_state()})
+            if path == "/api/survey/state":
+                # SURVEY (operator 2026-11-19): the active survey, its tiles and passes, the pilot and its unit
+                import survey
+                return _json_response(self, 200, {"ok": True, "data": survey.status_snapshot()})
             if path == "/api/audio/state":
                 # AUDIO (operator 2026-11-17): a page that is playing says so (?listening=1) - that is the idle reader's
                 # heartbeat; with none for a minute it stops by itself and lets go of the SDR
@@ -671,6 +676,16 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 _log("WARNING", f"req={self._request_id} AUDIO idle reader {action.upper()} requested")
                 try:
                     return _json_response(self, 200, {"ok": True, "data": sdr_audio.service_action(action)})
+                except RuntimeError as exc:
+                    return _error_response(self, 409, str(exc))
+            if path in ("/api/survey/start", "/api/survey/stop"):
+                if _read_json_body(self).get("confirm") is not True:
+                    raise ValueError("send {confirm: true}")
+                import survey
+                action = path.rsplit("/", 1)[-1]
+                _log("WARNING", f"req={self._request_id} SURVEY pilot {action.upper()} requested")
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": survey.service_action(action)})
                 except RuntimeError as exc:
                     return _error_response(self, 409, str(exc))
             if path in ("/api/transit/start", "/api/transit/stop"):

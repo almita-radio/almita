@@ -96,6 +96,9 @@ def sessions_from_catalog() -> list:
 
 def read_points(reduce_run: str):
     base = ROOT / "data" / "reduced" / "ALMITA-OBSERVE" / reduce_run
+    if not base.is_dir():      # SURVEY batches reduce under their own campaign name (ALMITA-SURVEY-<id>)
+        found = sorted((ROOT / "data" / "reduced").glob(f"*/{reduce_run}"))
+        base = found[0] if found else base
     import h5py
     pts = []
     for p in sorted(glob.glob(str(base / "points" / "*" / "master_spectrum.h5")), key=lambda q: int(Path(q).parent.name)):
@@ -172,17 +175,27 @@ def build_payload() -> dict:
     _, beam, wcs = _hi4pi_maps()
     lut = inferno_lut()
     sessions, points = [], []
+    survey_sid: dict = {}
     for s in sessions_from_catalog():
         pts = read_points(s["reduce_run"])
         if not pts or not all(is_frequency_switched(p["meta"]) and p["v"].size > 10 for p in pts):
             continue
         t0 = datetime.fromisoformat(s["started_utc"].replace("Z", "+00:00"))
-        sid = len(sessions)
-        sessions.append({
-            "id": sid, "campaign_id": s["campaign_id"], "reduce_run": s["reduce_run"],
-            "started_utc": s["started_utc"], "started_chile": t0.astimezone(CHILE).strftime("%Y-%m-%d %H:%M"),
-            "frequency_switching": True, "points": len(pts),
-        })
+        key = survey_key(s["campaign_id"])
+        if key is not None and key in survey_sid:     # a later batch of a survey already on the map: same session
+            sid = survey_sid[key]
+            sessions[sid]["points"] += len(pts)
+            sessions[sid]["batches"] += 1
+        else:
+            sid = len(sessions)
+            sessions.append({
+                "id": sid, "campaign_id": s["campaign_id"], "reduce_run": s["reduce_run"],
+                "started_utc": s["started_utc"], "started_chile": t0.astimezone(CHILE).strftime("%Y-%m-%d %H:%M"),
+                "frequency_switching": True, "points": len(pts),
+                **({"survey": key, "batches": 1} if key is not None else {}),
+            })
+            if key is not None:
+                survey_sid[key] = sid
         for p in pts:
             m = p["meta"]
             c = SkyCoord(ra=m["ra_hours"] * 15 * u.deg, dec=m["dec_degrees"] * u.deg, frame="icrs").galactic
@@ -196,6 +209,10 @@ def build_payload() -> dict:
                 "hi4pi_beam_1e20": round(ref, 2), "spec_v": vv, "spec_y": ys,
             })
 
+    points = merge_survey_passes(points, {sess["id"] for sess in sessions if sess.get("survey")})
+    for sess in sessions:
+        if sess.get("survey"):
+            sess["points"] = sum(1 for p in points if p["s"] == sess["id"])
     for sess in sessions:      # grid spacing = median nearest-neighbour distance between the session's pointings
         q = [p for p in points if p["s"] == sess["id"]]
         if len(q) > 1:
@@ -244,6 +261,51 @@ def build_payload() -> dict:
         "sessions": sessions, "points": points,
         "credits": {"hi4pi": "HI4PI Collaboration, Ben Bekhti N. et al. 2016, A&A 594, A116"},
     }
+
+
+SURVEY_PREFIX = "ALMITA-SURVEY-"
+
+
+def survey_key(campaign_id: str):
+    """ALMITA-SURVEY-<id>-YYYYMMDD-HH:MM:SS -> ALMITA-SURVEY-<id> (every batch of a survey is one session on the
+    map, SURVEY 2026-11-19); None for any other campaign."""
+    if not campaign_id.startswith(SURVEY_PREFIX):
+        return None
+    parts = campaign_id.rsplit("-", 2)
+    return parts[0] if len(parts) == 3 and len(parts[1]) == 8 and parts[1].isdigit() else campaign_id
+
+
+MERGE_DEG = 1.0     # repeated passes of a survey tile land within a fraction of a degree of each other
+
+
+def merge_survey_passes(points: list, survey_sids: set) -> list:
+    """Average the repeated passes over one survey tile into a single pointing: mean reading, mean spectrum on the
+    common bins, and the number of passes. Other sessions are left exactly as they are."""
+    out, groups = [], []
+    for p in points:
+        if p["s"] not in survey_sids:
+            out.append(p)
+            continue
+        for g in groups:
+            q = g[0]
+            if q["s"] == p["s"] and abs(q["b"] - p["b"]) < MERGE_DEG and \
+                    abs(((q["l"] - p["l"] + 180) % 360) - 180) * math.cos(math.radians(p["b"])) < MERGE_DEG:
+                g.append(p)
+                break
+        else:
+            groups.append([p])
+    for g in groups:
+        m = dict(g[0])
+        m["passes"] = len(g)
+        if len(g) > 1:
+            m["integral_pct_kms"] = round(float(np.mean([q["integral_pct_kms"] for q in g])), 2)
+            common = sorted(set(g[0]["spec_v"]).intersection(*[set(q["spec_v"]) for q in g[1:]]))
+            if len(common) > 10:
+                m["spec_v"] = common
+                m["spec_y"] = [round(float(np.mean([dict(zip(q["spec_v"], q["spec_y"]))[v] for q in g])), 3) for v in common]
+            m["t_utc"] = max((q.get("t_utc") or "") for q in g) or None
+        out.append(m)
+    return out
 
 
 # DISPLAY-ONLY shifts (operator 2026-11-18: "solo para efectos de observación y visualización en el status"): a

@@ -159,7 +159,33 @@
       const [x, y] = project(l, b); ctx.fillText(t, x, y + dy); ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill();
     }
     ctx.restore();
+    drawSurvey();
   }
+
+  // SURVEY (2026-11-19): the active survey's tiles as rings - dashed = still to measure, solid = measured, brighter
+  // with every pass (survey_panel.js hands them over in window.AlmitaSurvey)
+  function drawSurvey() {
+    const S = window.AlmitaSurvey;
+    if (!S || !S.tiles) return;
+    const r = S.spacing / 2;
+    ctx.save(); ctx.lineWidth = 2;
+    for (const t of S.tiles) {
+      const f = Math.min(1, t.passes_done / Math.max(1, S.passes));
+      ctx.beginPath(); let prev = null;
+      for (let k = 0; k <= 36; k++) {
+        const th = k / 36 * 2 * Math.PI, bb = t.b + r * Math.cos(th);
+        const ll = t.l + r * Math.sin(th) / Math.max(0.2, Math.cos(t.b * RAD));
+        const xy = project(((ll % 360) + 360) % 360, Math.max(-89.9, Math.min(89.9, bb)));
+        if (!prev || Math.abs(xy[0] - prev[0]) > W / 4) ctx.moveTo(xy[0], xy[1]); else ctx.lineTo(xy[0], xy[1]);
+        prev = xy;
+      }
+      if (f === 0) { ctx.setLineDash([6, 6]); ctx.strokeStyle = "rgba(255,200,120,.55)"; }
+      else { ctx.setLineDash([]); ctx.strokeStyle = `rgba(255,${Math.round(190 + 50 * f)},${Math.round(110 + 100 * f)},${(0.45 + 0.5 * f).toFixed(2)})`; }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  window.addEventListener("almita-survey", () => { if (D) draw(hovered); });
 
   function stats(frac) {
     const nights = new Set(D.sessions.map((s) => s.started_chile.slice(0, 10)));

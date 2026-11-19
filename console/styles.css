@@ -355,10 +355,20 @@ html[data-present]{zoom:1.5}
 @media (max-width:800px){.sky-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .sky-stat b{display:block;font-size:1.6rem;line-height:1.1;color:var(--text);font-variant-numeric:tabular-nums}
 .sky-stat span{font-size:.78rem;color:var(--muted)}
-.sky-wrap{position:relative;background:#000;border-radius:10px;padding:10px;margin:0 12px}
+.sky-wrap{position:relative;background:var(--viewport-bg);border-radius:10px;padding:10px;margin:0 12px}
 .sky-wrap canvas{display:block;width:100%;max-width:1200px;height:auto;margin:0 auto}
 .sky-legend{display:flex;align-items:center;gap:10px;max-width:520px;margin:10px auto 0;font-size:.78rem;color:var(--muted)}
 .sky-legend canvas{flex:1;min-width:0;width:100%;height:10px;border-radius:3px}
 .sky-note{font-size:.75rem;margin:8px 12px 12px;text-align:center}
 .sky-mode-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 12px 10px;font-size:.78rem}
 .sky-mode-bar .seg-btns{display:inline-flex;gap:0}
+
+/* SURVEY panel under ALMITA'S SKY (2026-11-19) */
+.survey-panel{max-width:760px;margin:6px auto 14px;padding:12px 16px;border:1px solid var(--warn-line);border-radius:8px;background:var(--warn-bg)}
+.survey-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.survey-bar{height:10px;border-radius:5px;background:var(--line);overflow:hidden}
+.survey-bar>div{height:100%;width:0;background:var(--warn);transition:width .6s}
+.survey-stats{display:flex;flex-wrap:wrap;gap:6px 18px;margin:8px 0 4px;font-size:.82rem}
+.survey-stats b{font-size:1rem;margin-right:4px}
+.survey-line{font-size:.8rem;margin:4px 0}
+.survey-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 4px}

@@ -1,0 +1,23 @@
+[Unit]
+Description=ALMITA SURVEY pilot - runs the active survey batch after batch (OBSERVE + REDUCE), started/stopped from STATUS
+After=network.target almita-instrument-forwarder.service
+# a pilot that keeps crashing stops trying after 5 restarts in an hour
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/almita_survey.py run
+# SIGINT, never SIGTERM: it reaches capture.py too (its own clean stop); the pilot waits for it and saves
+KillSignal=SIGINT
+TimeoutStopSec=200
+# a crash restarts it (it resumes: a captured batch is reduced first); exit 2 = HALTED on purpose, stays down
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

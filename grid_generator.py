@@ -722,6 +722,52 @@ class GridGenerator:
         except Exception as exc:
             self.log(f"Error generating plot: {exc}", "WARNING")
 
+    def generate_target_list_plan(self, targets: List[Dict], nominal_spacing_deg: float) -> Dict:
+        """SURVEY (2026-11-19): write mosaic.csv + grid_metadata.json for an explicit list of pointings, in the
+        given order, instead of a rectangular grid. Same CSV columns capture.py reads (one row, column = position in
+        the list); capture.py still applies its own meridian partition to the order. No planning plots: they draw a
+        rectangular footprint. Each target: {"ra_hours", "dec_deg", "label"}. Returns the metadata written."""
+        if not targets:
+            raise ValueError("target list is empty")
+        first = SkyCoord(ra=float(targets[0]["ra_hours"]) * u.hourangle, dec=float(targets[0]["dec_deg"]) * u.deg)
+        for i, t in enumerate(targets):
+            ra_hours = normalize_ra_hours(float(t["ra_hours"]))
+            dec_deg = float(t["dec_deg"])
+            if not (-90.0 <= dec_deg <= 90.0):
+                raise ValueError(f"target {i + 1}: dec {dec_deg} out of range")
+            here = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_deg * u.deg)
+            order = i + 1
+            self.append_point({
+                "point_number": order, "point_id": order, "scan_order": order,
+                "grid_row": 0, "grid_col": i, "row": 0, "column": i,
+                "ra": f"{ra_hours:.6f}", "dec": f"{dec_deg:.6f}",
+                "target_ra_hours": f"{ra_hours:.6f}", "target_dec_degrees": f"{dec_deg:.6f}",
+                "target_ra_hms": self._ra_to_hms(ra_hours), "target_dec_dms": self._dec_to_dms(dec_deg),
+                "center_distance_deg": f"{first.separation(here).deg:.6f}",
+                "nominal_spacing_deg": f"{nominal_spacing_deg:.10f}",
+                "capture_status": "planned", "start_time": "", "end_time": "", "duration": "",
+                "error_message": "", "data_filename": f"{self.session_name}_{order:04d}.dat",
+                "session_name": self.session_name, "session_id": self.session_id,
+            })
+        metadata = {
+            "mode": "TARGET_LIST",
+            "center_ra_hours": normalize_ra_hours(float(targets[0]["ra_hours"])),
+            "center_ra": normalize_ra_hours(float(targets[0]["ra_hours"])),
+            "center_dec_degrees": float(targets[0]["dec_deg"]),
+            "center_dec": float(targets[0]["dec_deg"]),
+            "beam_fwhm_deg": nominal_spacing_deg, "beam_sampling_fraction": 1.0,
+            "nominal_spacing_deg": nominal_spacing_deg,
+            "rows": 1, "columns": len(targets), "total_points": len(targets),
+            "scan_strategy": "as_given",
+            "targets": [str(t.get("label", "")) for t in targets],
+            "projection": "none (explicit pointings)",
+        }
+        if self.instrument_beam_fwhm_deg:
+            metadata["instrument_beam_fwhm_deg"] = float(self.instrument_beam_fwhm_deg)
+        self._write_metadata(metadata)
+        self.log(f"TARGET LIST PLAN GENERATED: {len(targets)} pointings -> {self.csv_filepath}")
+        return metadata
+
     def generate_grid_plan(
         self,
         center_ra: float,

@@ -13,6 +13,15 @@
       <div class="sky-wrap"><canvas id="sky-canvas" width="2000" height="1000" aria-label="The whole sky in galactic coordinates: HI4PI faint in the background, tiles where ALMITA has measured"></canvas><div id="sky-tip" class="temp-tip" hidden></div></div>
       <div class="sky-legend"><span id="sky-lo">0</span><canvas id="sky-bar" width="400" height="10"></canvas><span id="sky-hi">—</span></div>
       <p id="sky-note" class="muted sky-note"></p>
+      <div id="survey-panel" class="survey-panel" hidden>
+        <div class="survey-head"><b id="survey-name">SURVEY</b><span id="survey-badge" class="badge">—</span></div>
+        <div class="survey-bar" role="progressbar" aria-label="Survey progress" aria-valuemin="0" aria-valuemax="100"><div id="survey-fill"></div></div>
+        <div id="survey-stats" class="survey-stats"></div>
+        <p id="survey-pilot" class="survey-line"></p>
+        <p id="survey-last" class="survey-line muted"></p>
+        <div class="survey-ctl"><button type="button" id="survey-start">START PILOT</button><button type="button" id="survey-stop">STOP PILOT</button><span id="survey-ctl-note" class="muted"></span></div>
+        <p class="muted survey-line">The pilot picks the next tiles by itself (the ones owing passes, high enough, away from the Sun), runs OBSERVE and REDUCE, and repeats until every tile has its passes. On the map: dashed rings = tiles still to measure, solid = measured (brighter = more passes).</p>
+      </div>
     </section>
     <section class="panel" aria-labelledby="h-op">
       <header><h2 id="h-op">OPERATIONAL READINESS</h2><span id="op-badge" class="badge">—</span></header>
@@ -70,4 +79,5 @@
   <script src="common.js"></script>
   <script src="status.js"></script>
   <script src="sky_tiles.js"></script>
+  <script src="survey_panel.js"></script>
 </body></html>
