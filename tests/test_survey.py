@@ -21,10 +21,10 @@ def _sep(a, b):
 
 def test_ring_tiles_around_the_pole_are_evenly_spaced():
     tiles = survey.ring_tiles(0.0, -90.0, 30.0, 7.5)
-    assert len(tiles) == 1 + 6 + 13 + 19 + 25
+    assert len(tiles) == 1 + 6 + 12 + 18 + 24          # 2*pi*sin(r)/spacing per ring
     assert sorted({round(90 + t["dec_deg"], 3) for t in tiles}) == [0.0, 7.5, 15.0, 22.5, 30.0]
     nn = [min(_sep(a, b) for b in tiles if b is not a) for a in tiles]
-    assert min(nn) > 6.5 and max(nn) <= 7.5 + 1e-6
+    assert min(nn) > 7.0 and max(nn) <= 7.5 * 1.05
     assert len({t["id"] for t in tiles}) == len(tiles)
 
 
@@ -89,7 +89,7 @@ def test_save_load_and_active(tmp_path):
     survey.set_active("SCP", base=tmp_path)
     assert survey.active_id(base=tmp_path) == "SCP"
     assert survey.load("SCP", base=tmp_path)["tiles"] == st["tiles"]
-    assert survey.list_surveys(base=tmp_path)[0]["tiles"] == 64
+    assert survey.list_surveys(base=tmp_path)[0]["tiles"] == 61
 
 
 def test_simulated_petorca_survey_completes_in_about_a_day():
@@ -129,3 +129,31 @@ def test_target_list_spec_validation_is_strict():
     spec["grid"]["extra"] = 1
     with pytest.raises(Exception):
         observation_plan.validate_target_list_spec(spec)
+
+
+def test_hemisphere_rings_keep_the_spacing_out_to_the_equator():
+    tiles = survey.ring_tiles(0.0, -90.0, 90.0, 7.5)
+    nn = [min(_sep(a, b) for b in tiles if b is not a) for a in tiles]
+    assert min(nn) > 7.0 and max(nn) <= 7.5 * 1.05
+    assert max(t["dec_deg"] for t in tiles) <= 1e-6 and len(tiles) < 420     # no overcrowded outer rings
+
+
+def test_status_flags_tiles_behind_the_sun(tmp_path):
+    st = survey.new_survey("H", "h", radius_deg=90.0, **PETORCA)
+    survey.save(st, base=tmp_path)
+    survey.set_active("H", base=tmp_path)
+    snap = survey.status_snapshot(base=tmp_path)
+    assert all("behind_sun" in t for t in snap["tiles"])
+    assert 0 < snap["progress"]["behind_sun"] < len(snap["tiles"])
+
+
+def test_target_survey_puts_the_first_target_as_the_check_tile():
+    T = [{"id": "GC", "l": 0, "b": 0}, {"id": "l+10", "l": 10, "b": 0}, {"id": "CTRL", "l": 0, "b": -30}]
+    st = survey.new_survey("T", "t", targets=T, spacing_deg=10.0, **PETORCA)
+    assert [t["id"] for t in st["tiles"]] == ["C", "l+10", "CTRL"] and st["tiles"][0]["label"] == "GC"
+    assert abs(st["tiles"][0]["ra_hours"] - 17.761) < 0.01 and abs(st["tiles"][0]["dec_deg"] + 28.94) < 0.05
+    assert (st["definition"]["centre_ra_hours"], st["definition"]["centre_dec_deg"]) == (st["tiles"][0]["ra_hours"], st["tiles"][0]["dec_deg"])
+    with pytest.raises(survey.SurveyError):
+        survey.new_survey("T", "t", targets=[{"l": 0, "b": 0}, {"id": "C", "l": 5, "b": 0}])
+    with pytest.raises(survey.SurveyError):
+        survey.new_survey("T", "t", targets=[{"l": 0, "b": 95}])

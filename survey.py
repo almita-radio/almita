@@ -45,6 +45,10 @@ DEFAULTS: Dict[str, Any] = {
     "site_lat_deg": None, "site_lon_deg": None,   # simulate/plan for another site (Petorca); None = observer_config
     "capture_seconds": 120.0, "settle_seconds": 2.0,
     "frequency_switching": True, "frequency_switching_offset_hz": None, "frequency_switching_center": None,
+    # explicit galactic targets [{"id", "l", "b"}] instead of rings (2026-11-19: the Galactic Centre / rotation-curve
+    # experiment). The FIRST target becomes the check tile "C" that opens every batch; spacing_deg is then only the
+    # matching tolerance (a reduced point counts for a target within 0.5 x spacing).
+    "targets": None,
 }
 
 
@@ -72,8 +76,9 @@ def ring_tiles(centre_ra_hours: float, centre_dec_deg: float, radius_deg: float,
     rings = int(math.floor(radius_deg / spacing_deg + 1e-9))
     lon, lat, ids, ring_of = [], [], [], []
     for k in range(rings + 1):
-        n = 1 if k == 0 else max(1, int(round(2 * math.pi * k)))
         r = k * spacing_deg
+        # ring circumference on the sphere is 2*pi*sin(r) (not 2*pi*r: that overcounts far from the centre)
+        n = 1 if k == 0 else max(1, int(round(2 * math.pi * math.sin(math.radians(r)) / math.radians(spacing_deg))))
         for j in range(n):
             pa = 2 * math.pi * (j + 0.5 * (k % 2)) / n      # position angle, North through East
             # exact spherical point at distance r, angle pa, as a unit vector in the offset frame:
@@ -94,10 +99,34 @@ def ring_tiles(centre_ra_hours: float, centre_dec_deg: float, radius_deg: float,
             for i in range(len(ids))]
 
 
+def target_tiles(targets: Any) -> List[Dict[str, Any]]:
+    """Tiles from explicit galactic targets; the first one is the check tile "C" (its own id kept as the label)."""
+    if not isinstance(targets, list) or not 1 <= len(targets) <= 200:
+        raise SurveyError("targets: a list of 1-200 {id, l, b}")
+    out, seen = [], set()
+    for i, t in enumerate(targets):
+        if not isinstance(t, dict) or set(t) - {"id", "l", "b"} or not {"l", "b"} <= set(t):
+            raise SurveyError(f"targets[{i}]: needs l and b (and an optional id), nothing else")
+        l, b = t["l"], t["b"]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (l, b)) or not -90 <= b <= 90:
+            raise SurveyError(f"targets[{i}]: l, b must be numbers, b within +/-90")
+        label = str(t.get("id") or f"l{l:g}b{b:g}")[:24]
+        tid = "C" if i == 0 else label
+        if tid in seen or (i and label == "C"):
+            raise SurveyError(f"targets[{i}]: duplicate id {tid!r}")
+        seen.add(tid)
+        c = SkyCoord(l=float(l) % 360.0 * u.deg, b=float(b) * u.deg, frame="galactic").icrs
+        out.append({"id": tid, "label": label, "ring": 0 if i == 0 else 1,
+                    "ra_hours": round(float(c.ra.hour) % 24.0, 6), "dec_deg": round(float(c.dec.deg), 6),
+                    "l": round(float(l) % 360.0, 3), "b": round(float(b), 3),
+                    "passes_done": 0, "attempts": 0, "last_utc": None, "readings": []})
+    return out
+
+
 def new_survey(survey_id: str, name: str, **params: Any) -> Dict[str, Any]:
     if not _ID_RE.match(survey_id or ""):
         raise SurveyError("survey_id: letters, digits, - and _ only (max 48)")
-    nullable = ("frequency_switching_offset_hz", "frequency_switching_center", "site_lat_deg", "site_lon_deg")
+    nullable = ("frequency_switching_offset_hz", "frequency_switching_center", "site_lat_deg", "site_lon_deg", "targets")
     d = {**DEFAULTS, **{k: v for k, v in params.items() if v is not None or k in nullable}}
     unknown = set(params) - set(DEFAULTS)
     if unknown:
@@ -115,7 +144,11 @@ def new_survey(survey_id: str, name: str, **params: Any) -> Dict[str, Any]:
         v = d[key]
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not (lo <= v <= hi):
             raise SurveyError(f"{key}: must be a number in [{lo}, {hi}], got {v!r}")
-    tiles = ring_tiles(d["centre_ra_hours"], d["centre_dec_deg"], d["radius_deg"], d["spacing_deg"])
+    if d["targets"] is not None:
+        tiles = target_tiles(d["targets"])
+        d["centre_ra_hours"], d["centre_dec_deg"] = tiles[0]["ra_hours"], tiles[0]["dec_deg"]
+    else:
+        tiles = ring_tiles(d["centre_ra_hours"], d["centre_dec_deg"], d["radius_deg"], d["spacing_deg"])
     return {"schema": 1, "survey_id": survey_id, "name": str(name)[:80], "created_utc": utcnow(),
             "definition": d, "tiles": tiles, "batches": [],
             "pilot": {"state": "IDLE", "note": "created", "updated_utc": utcnow()}}
@@ -384,7 +417,9 @@ def service_action(action: str) -> Dict[str, Any]:
     if action == "start" and not active_id():
         raise RuntimeError("no active survey - create one and activate it first (almita_survey.py create/activate)")
     try:
-        r = _systemctl(action, UNIT)
+        # STOP does not wait: the unit's SIGINT lets capture.py finish its point (up to ~2-3 min), longer than any
+        # web request should hang - the panel's polling shows deactivating -> inactive (2026-11-19 review)
+        r = _systemctl(*(("stop", "--no-block") if action == "stop" else ("start",)), UNIT)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"systemctl --user {action} {UNIT} did not answer in 60 s")
     if r.returncode != 0:
@@ -406,12 +441,22 @@ def status_snapshot(base: Path = SURVEYS_DIR) -> Dict[str, Any]:
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
     d = st["definition"]
+    # distance to the Sun right now: tiles inside sun_avoid are only above the horizon by day, so the pilot cannot
+    # reach them this season (December: the Galactic Centre side) - STATUS draws them apart instead of as "owed"
+    try:
+        sun = get_sun(Time.now())
+        coords = SkyCoord(ra=[t["ra_hours"] * 15 for t in st["tiles"]] * u.deg, dec=[t["dec_deg"] for t in st["tiles"]] * u.deg)
+        sun_sep = [float(x) for x in coords.separation(SkyCoord(ra=sun.ra, dec=sun.dec)).deg]
+    except Exception:  # noqa: BLE001 - display only; never break STATUS over it
+        sun_sep = [None] * len(st["tiles"])
     tiles = []
-    for t in st["tiles"]:
+    for t, sep in zip(st["tiles"], sun_sep):
         vals = [r["reading"] for r in t.get("readings") or [] if isinstance(r.get("reading"), (int, float))]
         tiles.append({"id": t["id"], "ra_hours": t["ra_hours"], "dec_deg": t["dec_deg"], "l": t["l"], "b": t["b"],
                       "passes_done": t["passes_done"], "attempts": t["attempts"], "last_utc": t["last_utc"],
-                      "reading_mean": round(sum(vals) / len(vals), 2) if vals else None})
+                      "reading_mean": round(sum(vals) / len(vals), 2) if vals else None,
+                      "sun_sep_deg": round(sep, 1) if sep is not None else None,
+                      "behind_sun": sep is not None and sep < float(d["sun_avoid_deg"])})
     batches = st.get("batches") or []
     last = batches[-1] if batches else None
     out.update({
@@ -419,7 +464,8 @@ def status_snapshot(base: Path = SURVEYS_DIR) -> Dict[str, Any]:
         "definition": {k: d[k] for k in ("centre_ra_hours", "centre_dec_deg", "radius_deg", "spacing_deg", "passes",
                                           "min_altitude_deg", "sun_avoid_deg", "batch_points", "capture_seconds",
                                           "allow_simulator")},
-        "progress": progress(st), "pilot": st.get("pilot"), "tiles": tiles,
+        "progress": {**progress(st), "behind_sun": sum(1 for t in tiles if t["behind_sun"] and t["passes_done"] < int(d["passes"]))},
+        "pilot": st.get("pilot"), "tiles": tiles,
         "last_batch": {k: last.get(k) for k in ("batch_id", "status", "planned_utc", "ended_utc", "campaign_id",
                                                  "credited", "missed", "reason", "error", "mount")} if last else None,
     })

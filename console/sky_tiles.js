@@ -15,6 +15,8 @@
   let D = null, ghost = null, tiles = [];
   let mode = "measured";                            // "measured" | "decon" (remembered per browser)
   let showTiles = true;                             // TILES ON/OFF: compare with the HI4PI ghost underneath
+  let showSurvey = true;                            // SURVEY ON/OFF: the active survey's outlines over the map
+  try { if (localStorage.getItem("almita-sky-survey") === "off") showSurvey = false; } catch (e) { /* private window */ }
   try { if (localStorage.getItem("almita-sky-mode") === "decon") mode = "decon"; } catch (e) { /* private window */ }
 
   function project(l, b) {                          // l grows to the LEFT, l=0 in the centre
@@ -29,7 +31,8 @@
     return [(2 * R2 / Math.PI * lam * Math.cos(th) + 2 * R2) / (4 * R2) * W, (R2 - R2 * Math.sin(th)) / (2 * R2) * H];
   }
   // signed longitude (-180..180] so a tile never straddles the map's edge
-  const projS = (ls, b) => project(ls === -180 ? -179.9999 : ls === 180 ? 179.9999 : ls, b);
+  // (clamped, not compared: -180 + k*360/n can land a hair past 180 and jump to the other edge as a long line)
+  const projS = (ls, b) => project(Math.max(-179.9999, Math.min(179.9999, ls)), b);
   // ICRS (J2000) -> galactic, the standard rotation (deg in, deg out)
   const GAL = [[-0.0548755604, -0.8734370902, -0.4838350155], [0.4941094279, -0.4448296300, 0.7469822445], [-0.8676661490, -0.1980763734, 0.4559837762]];
   function eqToGal(raDeg, decDeg) {
@@ -134,12 +137,7 @@
     }
     ctx.restore();
     // the tiles, with dark grout between them
-    if (!showTiles) {         // only a faint outline of where the tiles are
-      ctx.save(); ctx.strokeStyle = "rgba(200,225,255,.28)"; ctx.lineWidth = 1;
-      for (const t of tiles) { tilePath(t); ctx.stroke(); }
-      if (hover) { tilePath(hover); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
-      ctx.restore();
-    }
+    // TILES OFF = nothing of the measured tiles, not even their outlines (operator 2026-11-19: "que salga todo")
     if (showTiles) {
     ctx.save(); ctx.shadowColor = "rgba(150,200,255,.22)"; ctx.shadowBlur = 10;
     for (const t of tiles) {
@@ -162,26 +160,38 @@
     drawSurvey();
   }
 
-  // SURVEY (2026-11-19): the active survey's tiles as rings - dashed = still to measure, solid = measured, brighter
-  // with every pass (survey_panel.js hands them over in window.AlmitaSurvey)
+  // SURVEY (2026-11-19): the active survey drawn on the SAME 2.5 deg board as the measured tiles (operator: the
+  // survey should look like what is already covered, not big circles). A board cell belongs to its nearest survey
+  // tile within 0.75 x spacing, as with the measured sessions. Outline only - the measured fill comes from the
+  // survey's own REDUCE runs, painted above like any session: faint amber = still owed, brighter = passes done,
+  // dim red dotted = behind the Sun right now (only up by day: not this season).
+  let surveyCells = [], surveyKey = null;
+  function buildSurveyCells(S) {
+    const key = S.name + "|" + S.spacing + "|" + S.tiles.map((t) => t.id + ":" + t.passes_done + ":" + (t.behind_sun ? 1 : 0)).join(",");
+    if (key === surveyKey) return;
+    surveyKey = key; surveyCells = [];
+    const reach = Math.cos(REACH * S.spacing * RAD), st = S.tiles.map((t) => ({ t, u: unit(t.l, t.b) }));
+    for (let b0 = -90; b0 < 90; b0 += CELL) {
+      const bc = b0 + CELL / 2, n = Math.max(1, Math.round(360 * Math.cos(bc * RAD) / CELL)), dl = 360 / n;
+      for (let k = 0; k < n; k++) {
+        const l0 = -180 + k * dl, c = unit(l0 + dl / 2, bc);
+        let best = -2, bt = null;
+        for (const q of st) { const dot = c[0] * q.u[0] + c[1] * q.u[1] + c[2] * q.u[2]; if (dot > best) { best = dot; bt = q.t; } }
+        if (bt && best >= reach) surveyCells.push({ l0, dl, b0, t: bt });
+      }
+    }
+  }
   function drawSurvey() {
     const S = window.AlmitaSurvey;
-    if (!S || !S.tiles) return;
-    const r = S.spacing / 2;
-    ctx.save(); ctx.lineWidth = 2;
-    for (const t of S.tiles) {
-      const f = Math.min(1, t.passes_done / Math.max(1, S.passes));
-      ctx.beginPath(); let prev = null;
-      for (let k = 0; k <= 36; k++) {
-        const th = k / 36 * 2 * Math.PI, bb = t.b + r * Math.cos(th);
-        const ll = t.l + r * Math.sin(th) / Math.max(0.2, Math.cos(t.b * RAD));
-        const xy = project(((ll % 360) + 360) % 360, Math.max(-89.9, Math.min(89.9, bb)));
-        if (!prev || Math.abs(xy[0] - prev[0]) > W / 4) ctx.moveTo(xy[0], xy[1]); else ctx.lineTo(xy[0], xy[1]);
-        prev = xy;
-      }
-      if (f === 0) { ctx.setLineDash([6, 6]); ctx.strokeStyle = "rgba(255,200,120,.55)"; }
-      else { ctx.setLineDash([]); ctx.strokeStyle = `rgba(255,${Math.round(190 + 50 * f)},${Math.round(110 + 100 * f)},${(0.45 + 0.5 * f).toFixed(2)})`; }
-      ctx.stroke();
+    if (!showSurvey || !S || !S.tiles) return;
+    buildSurveyCells(S);
+    ctx.save(); ctx.lineWidth = 1.2;
+    for (const c of surveyCells) {
+      const f = Math.min(1, c.t.passes_done / Math.max(1, S.passes));
+      if (f === 0 && c.t.behind_sun) { ctx.setLineDash([2, 3]); ctx.strokeStyle = "rgba(255,120,100,.30)"; }
+      else if (f === 0) { ctx.setLineDash([]); ctx.strokeStyle = "rgba(255,200,120,.30)"; }
+      else { ctx.setLineDash([]); ctx.strokeStyle = `rgba(255,${Math.round(190 + 50 * f)},${Math.round(110 + 100 * f)},${(0.35 + 0.5 * f).toFixed(2)})`; }
+      tilePath(c); ctx.stroke();
     }
     ctx.restore();
   }
@@ -207,6 +217,7 @@
 
   // hover: which tile is under the mouse
   function tileAt(ev) {
+    if (!showTiles) return null;                    // hidden tiles have no tooltip either
     const r = canvas.getBoundingClientRect(), mx = (ev.clientX - r.left) * W / r.width, my = (ev.clientY - r.top) * H / r.height;
     for (const t of tiles) { tilePath(t); if (ctx.isPointInPath(mx, my)) return t; }
     return null;
@@ -244,6 +255,15 @@
     for (const o of document.querySelectorAll("#sky-tiles button")) o.classList.toggle("active", o === b);
     if (D) draw(hovered);
   });
+
+  const syncSurveyBtns = () => { for (const o of document.querySelectorAll("#sky-survey button")) o.classList.toggle("active", (o.dataset.survey === "on") === showSurvey); };
+  for (const b of document.querySelectorAll("#sky-survey button")) b.addEventListener("click", () => {
+    showSurvey = b.dataset.survey === "on";
+    try { localStorage.setItem("almita-sky-survey", showSurvey ? "on" : "off"); } catch (e) { /* private window */ }
+    syncSurveyBtns();
+    if (D) draw(hovered);
+  });
+  syncSurveyBtns();
 
   async function load() {
     const r = await U.api("/api/status/sky-map", { timeoutMs: 60000 });

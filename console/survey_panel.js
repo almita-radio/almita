@@ -10,7 +10,7 @@
   let busy = false, svc = null;
 
   const STATE_CLASS = { RUNNING: "status-ok", CAPTURING: "status-ok", REDUCING: "status-ok", COMPLETE: "status-ok",
-    WAITING: "status-unknown", IDLE: "status-unknown", STOPPED: "status-unknown", HALTED: "status-bad", CRASHED: "status-bad" };
+    WAITING: "status-unknown", STOPPING: "status-unknown", IDLE: "status-unknown", STOPPED: "status-unknown", HALTED: "status-bad", CRASHED: "status-bad" };
   const chile = (utc) => {
     if (!utc) return "–";
     const d = new Date(utc);
@@ -29,7 +29,8 @@
     svc = d.service;
     const p = d.progress, pil = d.pilot || {}, def = d.definition;
     const running = svc && svc.active;
-    const st = running ? (pil.state || "RUNNING") : (pil.state === "HALTED" || pil.state === "COMPLETE" || pil.state === "CRASHED" ? pil.state : "STOPPED");
+    const stopping = svc && svc.state === "deactivating";
+    const st = stopping ? "STOPPING" : running ? (pil.state || "RUNNING") : (pil.state === "HALTED" || pil.state === "COMPLETE" || pil.state === "CRASHED" ? pil.state : "STOPPED");
     $("survey-name").textContent = `SURVEY · ${d.name} (${d.survey_id})`;
     $("survey-badge").textContent = st;
     $("survey-badge").className = "badge " + (STATE_CLASS[st] || "status-unknown");
@@ -38,7 +39,7 @@
     $("survey-stats").innerHTML = [
       [(p.fraction * 100).toFixed(1) + " %", "done"], [`${p.passes_done}/${p.passes_total}`, "passes"],
       [`${p.tiles_complete}/${p.tiles}`, `tiles with all ${p.passes_per_tile} passes`], [`${p.tiles_started}`, "tiles measured at least once"],
-      [p.batches, "batches"], [`${def.spacing_deg}° · r ${def.radius_deg}°`, "spacing · radius"], [`≥ ${def.min_altitude_deg}°`, "altitude floor"],
+      [p.behind_sun || 0, "tiles behind the Sun now (only up by day)"], [p.batches, "batches"], [`${def.spacing_deg}° · r ${def.radius_deg}°`, "spacing · radius"], [`≥ ${def.min_altitude_deg}°`, "altitude floor"],
     ].map(([v, k]) => `<span><b>${esc(v)}</b>${esc(k)}</span>`).join("");
     $("survey-pilot").innerHTML = `pilot: <b>${esc(st)}</b>${running ? "" : " (unit " + esc(svc ? svc.state : "?") + ")"} · ${esc(pil.note || "")} · ${chile(pil.updated_utc)}`;
     const lb = d.last_batch;
@@ -46,8 +47,8 @@
       ? `last batch ${lb.batch_id}: ${lb.status} · ${chile(lb.ended_utc || lb.planned_utc)} · credited ${(lb.credited || []).length}, missed ${(lb.missed || []).length}`
         + (lb.error ? ` · ${lb.error}` : "") + (lb.mount ? ` · mount ${lb.mount}` : "")
       : "no batch yet";
-    $("survey-start").disabled = busy || !!running || p.complete;
-    $("survey-stop").disabled = busy || !running;
+    $("survey-start").disabled = busy || !!running || stopping || p.complete;
+    $("survey-stop").disabled = busy || !running || stopping;
     window.AlmitaSurvey = { tiles: d.tiles, passes: def.passes, spacing: def.spacing_deg, name: d.name };
     window.dispatchEvent(new Event("almita-survey"));
   }
@@ -66,7 +67,9 @@
     $("survey-ctl-note").textContent = action === "start" ? "starting the pilot…" : "stopping the pilot (the current point ends first, up to ~3 min)…";
     const r = await U.api(`/api/survey/${action}`, { method: "POST", body: { confirm: true }, timeoutMs: 240000 });
     busy = false;
-    $("survey-ctl-note").textContent = r.ok ? `pilot ${r.data.data.active ? "running" : "stopped"} (${r.data.data.state})`
+    $("survey-ctl-note").textContent = r.ok
+      ? (action === "stop" ? `stop requested (${r.data.data.state}): the current point ends cleanly first, then the pilot saves - watch the badge`
+                           : `pilot ${r.data.data.active ? "running" : "not running"} (${r.data.data.state})`)
       : `${action.toUpperCase()} failed: ${U.errorText(r.error)}`;
     tick();
   }
@@ -74,4 +77,5 @@
   $("survey-stop").addEventListener("click", () => control("stop"));
   tick();
   setInterval(tick, 30000);
+  setInterval(() => { if (svc && svc.state === "deactivating") tick(); }, 5000);
 })();
