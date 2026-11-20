@@ -90,7 +90,7 @@ def test_cli_max_sync_offset_default_and_bounds():
     assert alignment.parse_args([]).max_sync_offset_deg == alignment.DEFAULT_MAX_SYNC_OFFSET_DEG == 5.0
     import pytest
     with pytest.raises(SystemExit):
-        alignment.parse_args(["--max-sync-offset-deg", "20"])
+        alignment.parse_args(["--max-sync-offset-deg", "20.1"])
 
 
 def test_web_run_requests_sync_only_when_ticked(sandboxed):  # noqa: F811

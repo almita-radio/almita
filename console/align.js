@@ -318,8 +318,10 @@
     // (display only - the offset comes from the full analysis). Sun: band power vs the centre point, in dB. HI: the
     // HI-window excess over the side bands, in % points vs the centre point. Meant for a person watching: is the reading changing where it should?
     const SVGNS = "http://www.w3.org/2000/svg";
-    const RAMP_NIGHT = ["#2a5468", "#2f7396", "#3f93bb", "#62b3d9", "#9ad6f2"];   // one hue, dark -> light = low -> high
-    const RAMP_DAY = ["#0b2f42", "#134f73", "#1d6fa0", "#3a8fc4", "#7fb9dd"];     // DÍA: same hue and direction, darker so the top end shows on white
+    // operator 2026-11-19: the one-hue blue ramp "no dice nada" - red = weaker, amber = middle, green = stronger
+    // (relative to the other points of this run; for the Sun, green is where the Sun is)
+    const RAMP_NIGHT = ["#e0533f", "#ef8f3a", "#f2c94c", "#9fd45a", "#43c46b"];
+    const RAMP_DAY = ["#b8321f", "#c9681a", "#b8900a", "#5f9a22", "#1f8a45"];     // DÍA: darker so every step shows on white
     const ramp = () => (U.isDay() ? RAMP_DAY : RAMP_NIGHT);
     let lastLive = null;
     let liveFinal = null;
@@ -441,6 +443,8 @@
         svg("rect", { x: 40, y: S + 4, width: S - 80, height: 8, rx: 4, fill: "url(#live-ramp)" }, el);
         svg("text", { x: 36, y: S + 12, "text-anchor": "end", class: "live-axis" }, el, lo.toFixed(digits));
         svg("text", { x: S - 36, y: S + 12, class: "live-axis" }, el, hi.toFixed(digits));
+        svg("text", { x: 40, y: S + 26, class: "live-axis" }, el, "weaker");
+        svg("text", { x: S - 40, y: S + 26, "text-anchor": "end", class: "live-axis" }, el, "stronger");
       }
     }
     async function refreshLive(j) {

@@ -812,7 +812,7 @@ def build_command(stage: str, p: Dict[str, Any], job_id: str) -> Tuple[List[str]
             # SYNC (operator decision 2026-10-08: Sun and HI): only when RUN explicitly asks for it. alignment.py
             # still refuses it unless confidence >= its threshold and the offset <= max_sync_offset_deg.
             if p.get("sync") is True:
-                max_off = _float(p, "max_sync_offset_deg", 0.1, 10, 5.0)
+                max_off = _float(p, "max_sync_offset_deg", 0.1, 20, 20.0)
                 argv[argv.index("--no-sync")] = "--apply-sync"
                 argv += ["--max-sync-offset-deg", str(max_off)]
                 meta["sync_requested"] = True

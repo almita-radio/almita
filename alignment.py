@@ -1341,8 +1341,8 @@ def parse_args(argv=None):
     if args.beam_fwhm <= 0 or args.gain < 0 or args.sun_gain < 0: p.error("beam/gains must be fixed valid values")
     if args.integration_seconds <= 0 or (args.capture_time is not None and args.capture_time <= 0):
         p.error("integration/capture time must be positive")
-    if not (0 < args.max_sync_offset_deg <= 10):
-        p.error("--max-sync-offset-deg must be in (0, 10]")
+    if not (0 < args.max_sync_offset_deg <= 20):
+        p.error("--max-sync-offset-deg must be in (0, 20]")
     if args.minimum_valid_positions < 4 or args.minimum_robust_positions < 2:
         p.error("minimum position guards are too small")
     if args.replay_dir:
