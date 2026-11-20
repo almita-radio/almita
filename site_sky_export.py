@@ -144,6 +144,20 @@ def line_area(v: list, y: list) -> float:
     return float(np.trapezoid(ys[m], v[m])) if m.sum() > 3 else 0.0
 
 
+MIN_READING_COVERAGE = 0.5     # operator 2026-11-20: a pass counts on the map only if its spectrum covers >= half of +-60 km/s
+
+
+def reading_coverage(v) -> float:
+    """Fraction of the reading window (+-LINE_WINDOW_KM_S) that a spectrum's velocity axis spans. A switched run tuned
+    away from 0 km/s (a terminal-velocity or Magellanic window, e.g. 2026-11-19's 600 kHz NUCLEO batches) spans little
+    or none of it: its reading would be ~0 and must not darken the tile it shares with the 0 km/s passes."""
+    v = np.asarray(v, float)
+    if v.size < 2:
+        return 0.0
+    lo, hi = max(float(v.min()), -LINE_WINDOW_KM_S), min(float(v.max()), LINE_WINDOW_KM_S)
+    return max(0.0, hi - lo) / (2 * LINE_WINDOW_KM_S)
+
+
 def is_frequency_switched(meta: dict) -> bool:
     """Evidence, not a guess: REDUCE copies the capture's switching facts (fswitch_offset_hz, ...) into every
     frequency-switched point; an unswitched point has none."""
@@ -179,6 +193,9 @@ def build_payload() -> dict:
     for s in sessions_from_catalog():
         pts = read_points(s["reduce_run"])
         if not pts or not all(is_frequency_switched(p["meta"]) and p["v"].size > 10 for p in pts):
+            continue
+        pts = [p for p in pts if reading_coverage(p["v"]) >= MIN_READING_COVERAGE]
+        if not pts:                # every pass looked away from 0 km/s (terminal or Magellanic window): not a map reading
             continue
         t0 = datetime.fromisoformat(s["started_utc"].replace("Z", "+00:00"))
         key = survey_key(s["campaign_id"])

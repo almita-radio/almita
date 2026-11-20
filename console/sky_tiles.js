@@ -190,7 +190,14 @@
       const f = Math.min(1, c.t.passes_done / Math.max(1, S.passes));
       if (f === 0 && c.t.behind_sun) { ctx.setLineDash([2, 3]); ctx.strokeStyle = "rgba(255,120,100,.30)"; }
       else if (f === 0) { ctx.setLineDash([]); ctx.strokeStyle = "rgba(255,200,120,.30)"; }
-      else { ctx.setLineDash([]); ctx.strokeStyle = `rgba(255,${Math.round(190 + 50 * f)},${Math.round(110 + 100 * f)},${(0.35 + 0.5 * f).toFixed(2)})`; }
+      else {
+        // operator 2026-11-19: amber at 1/8 looked the same as pending - a tile with passes is GREEN and fills up
+        // with its progress (faint at the first pass, solid when all passes are in)
+        ctx.setLineDash([]);
+        ctx.fillStyle = `rgba(110,220,140,${(0.12 + 0.43 * f).toFixed(2)})`;
+        tilePath(c); ctx.fill();
+        ctx.strokeStyle = `rgba(120,235,150,${(0.65 + 0.35 * f).toFixed(2)})`;
+      }
       tilePath(c); ctx.stroke();
     }
     ctx.restore();

@@ -77,3 +77,13 @@ def test_merge_survey_passes_averages_one_tile_and_leaves_other_sessions_alone()
     assert len(merged) == 2 and len([p for p in out if p["s"] == 1]) == 1
     first = next(p for p in merged if p["passes"] == 2)
     assert first["integral_pct_kms"] == 15.0 and first["spec_y"][0] == 1.5
+
+
+def test_reading_coverage_drops_windows_tuned_away_from_zero():
+    import numpy as np
+    import site_sky_export as sse
+    assert sse.reading_coverage(np.arange(-148, 148, 1.0)) == 1.0          # centred window: full
+    assert abs(sse.reading_coverage(np.arange(-31, 264, 1.0)) - 91 / 120) < 0.01   # 300 kHz toward the GC: 76 %
+    assert sse.reading_coverage(np.arange(95, 264, 1.0)) == 0.0           # 600 kHz terminal window: none
+    assert sse.reading_coverage(np.arange(36, 205, 1.0)) < sse.MIN_READING_COVERAGE   # l=30 at 600 kHz: 20 %
+    assert sse.reading_coverage(np.arange(86, 234, 1.0)) == 0.0           # SMC window
