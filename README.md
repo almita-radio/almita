@@ -71,6 +71,34 @@ Every command has `--help`. The long-running services are described under `syste
 
 ## Results so far
 
+### The Milky Way's rotation (19 November 2026)
+
+A full afternoon on the rooftop with the **survey pilot** running on its own: it chose each batch, pointed the mount, captured,
+reduced and moved on. 99 captures of 2 minutes, none failed. Seven directions along the Galactic plane (l = 0°, ±10°, ±20°, ±30°)
+and two off the plane were each observed several times.
+
+On one side of the Galactic Centre the hydrogen spreads to **positive** velocities (receding), on the other side to **negative**
+velocities (approaching), and the spread grows away from the centre: the disc rotates. The mean velocity of the line goes from
++23 km/s at l = +30° to −26 km/s at l = −30°, through +2 km/s at the centre.
+
+At sunset the same directions were observed once more with **position switching** (sky ON minus an empty sky OFF at the same
+tuning), which has no switching ghost. From the edge of the line (the terminal velocity) the tangent-point method gives
+rotation speeds of **200 ± 15 km/s at 2.8 kpc** (l = −20°) and **218 ± 5 km/s at 4.1 kpc** (l = +30°) from the Galactic Centre,
+inside the range professional surveys measure (~200–235 km/s).
+
+<p align="center">
+  <img src="docs/site/results/rotation_20261119.png" alt="ALMITA 21 cm spectra along the Galactic plane, a map of mean hydrogen velocity (red receding, blue approaching), position-switched spectra with their terminal edges, and rotation speeds of 200 and 218 km/s at 2.8 and 4.1 kpc against the professional range" width="100%">
+</p>
+
+Caveats:
+- **One afternoon, relative intensities, one ON/OFF run per direction.** These are coarse numbers, not a calibrated rotation curve.
+- **A 20° beam averages a wide stretch of the Galaxy.** At l = −30° the edge is pulled out by faster gas from smaller l (248 km/s,
+  above the range). Near the centre (l = ±10°, +20°) there was no clean edge.
+- **Frequency switching with a ±300 kHz throw puts an inverted copy of the line 127 km/s away,** right where the terminal velocities
+  are. That is why the terminal velocities come from the ON/OFF run. Two known RFI carriers are interpolated there.
+- **The Magellanic Clouds were tried the same evening and not detected.** The rooftop direction they lie in shows about +50 % more
+  noise power than the empty-sky references, roughly 60 times the ~1 % the clouds would add. A darker site is planned.
+
 ### Hydrogen with frequency switching, repeated and matched (12 November 2026)
 
 A week after the first detection, the same 5 × 5 mosaic around l ≈ +20° was observed again from the rooftop, this time with
