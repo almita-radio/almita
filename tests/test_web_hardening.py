@@ -423,7 +423,7 @@ def running_console(public):
 def test_every_local_reference_of_every_page_resolves(tmp_path):
     """Every page, MONITOR included, on the ONE unified server: each local href/src resolves there, and so does
     every link of the shared header nav (common.js NAV)."""
-    pages = ("index.html", "pipeline.html", "observe.html", "align.html", "calibrate.html", "reduce.html", "science.html", "status.html", "sessions.html")
+    pages = ("index.html", "pipeline.html", "observe.html", "align.html", "calibrate.html", "reduce.html", "science.html", "status.html", "sessions.html", "experiment.html")
     with running_console(_console_public(tmp_path)) as base:
         nav = re.findall(r'href: (?:consoleBase\(\) \+ )?"(/[^"]*)"', (CONSOLE / "common.js").read_text())
         assert {"/observe.html", "/calibrate.html", "/science.html", "/"} <= set(nav)

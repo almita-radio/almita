@@ -70,10 +70,18 @@ def log(msg: str) -> None:
 
 # ------------------------------------------------------------------------------------------------------ gates
 
-def gate_reason(state: Dict[str, Any]) -> Optional[str]:
-    """Why the pilot must not start a batch now, or None."""
+def gate_reason(state: Dict[str, Any], check_experiment: bool = True) -> Optional[str]:
+    """Why the pilot must not start a batch now, or None. The EXPERIMENT runner (2026-11-21) uses the same gates
+    with check_experiment=False; for the SURVEY pilot a running experiment is another driver of the mount."""
     import mount_device
     import observation_orchestrator
+    if check_experiment:
+        try:
+            import experiment
+            if experiment.service_state().get("active"):
+                return "an EXPERIMENT is running (one driver of the mount at a time)"
+        except Exception as exc:  # noqa: BLE001 - an unreadable state is a reason to wait, not to go
+            return f"cannot read the EXPERIMENT runner's state ({type(exc).__name__}: {exc})"
     if mount_device.is_simulator() and not state["definition"].get("allow_simulator"):
         return "the mount selector in the page header is on SIM; this survey is for the real sky (LX200)"
     try:

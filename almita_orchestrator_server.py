@@ -110,6 +110,8 @@ STATIC_FILES = {
     "/sdr_audio.js": "sdr_audio.js",                     # AUDIO button's sound engine, loaded on the first click
     "/sky_tiles.js": "sky_tiles.js",                     # STATUS "ALMITA'S SKY" tile map (operator 2026-11-18)
     "/survey_panel.js": "survey_panel.js",               # STATUS SURVEY panel + its rings on the sky map (2026-11-19)
+    "/experiment.html": "experiment.html",               # EXPERIMENT: ready-made recipes + verdicts (operator 2026-11-21)
+    "/experiment.js": "experiment.js",
 }
 # BL-094 presentation mode: /present/<page>.html (and /present/ for MONITOR) is the SAME page, marked <html data-present>
 # so styles.css zooms it for a projector; a <base href="/"> keeps its relative assets and API calls where they are.
@@ -121,6 +123,7 @@ _ALIGN_SESSION_RE = re.compile(r"^/api/align/session/(?P<id>[^/]+)$")
 _CALIBRATE_SESSION_RE = re.compile(r"^/api/calibrate/session/(?P<id>[^/]+)$")
 _ALIGN_MODE_ACTION_RE = re.compile(r"^/api/align/(?P<action>plan|preflight|run)/(?P<mode>solar|hi)$")
 _ALIGN_SYNC_RE = re.compile(r"^/api/align/sync/(?P<step>prepare|apply)/(?P<mode>solar|hi)$")
+_EXPERIMENT_RUN_RE = re.compile(r"^/api/experiment/run/(?P<id>[A-Za-z0-9_-]{1,80})$")
 _OPS_JOB_RE = re.compile(r"^/api/ops/job/(?P<id>[A-Za-z0-9_-]{6,64})$")
 # up to 40: "observe_gain_pilot_capture" (26) did not match the former {3,24} and every real pilot capture got a 404
 _OPS_START_RE = re.compile(r"^/api/ops/start/(?P<stage>[a-z_]{3,40})$")
@@ -444,6 +447,17 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 # SURVEY (operator 2026-11-19): the active survey, its tiles and passes, the pilot and its unit
                 import survey
                 return _json_response(self, 200, {"ok": True, "data": survey.status_snapshot()})
+            if path == "/api/experiment/state":
+                # EXPERIMENT (operator 2026-11-21): the recipes and when each can run, the runner, the runs and verdicts
+                import experiment
+                return _json_response(self, 200, {"ok": True, "data": experiment.state_snapshot()})
+            exp_run = _EXPERIMENT_RUN_RE.match(path)
+            if exp_run:
+                import experiment
+                try:
+                    return _json_response(self, 200, {"ok": True, "data": experiment.run_detail(exp_run.group("id"))})
+                except (OSError, experiment.RecipeError) as exc:
+                    return _error_response(self, 404, f"no such experiment run ({type(exc).__name__})")
             if path == "/api/audio/state":
                 # AUDIO (operator 2026-11-17): a page that is playing says so (?listening=1) - that is the idle reader's
                 # heartbeat; with none for a minute it stops by itself and lets go of the SDR
@@ -677,6 +691,27 @@ class ObserveHandler(almita_console_server.ConsoleHandler):
                 try:
                     return _json_response(self, 200, {"ok": True, "data": sdr_audio.service_action(action)})
                 except RuntimeError as exc:
+                    return _error_response(self, 409, str(exc))
+            if path in ("/api/experiment/start", "/api/experiment/resume", "/api/experiment/stop"):
+                # EXPERIMENT (operator 2026-11-21): START a recipe (open sky confirmed by the operator), RESUME a stopped
+                # run, STOP the runner (its unit's SIGINT - capture.py ends its point cleanly)
+                body = _read_json_body(self)
+                if body.get("confirm") is not True:
+                    raise ValueError("send {confirm: true}")
+                import experiment
+                action = path.rsplit("/", 1)[-1]
+                _log("WARNING", f"req={self._request_id} EXPERIMENT {action.upper()} requested "
+                                f"{body.get('recipe_id') or body.get('run_id') or ''}")
+                try:
+                    if action == "start":
+                        data = experiment.start_run(str(body.get("recipe_id") or ""), open_sky_confirmed=body.get("open_sky") is True,
+                                                    note=str(body.get("note") or ""))
+                    elif action == "resume":
+                        data = experiment.resume_run(str(body.get("run_id") or ""))
+                    else:
+                        data = experiment.stop_runner()
+                    return _json_response(self, 200, {"ok": True, "data": data})
+                except (RuntimeError, experiment.RecipeError, OSError) as exc:
                     return _error_response(self, 409, str(exc))
             if path in ("/api/survey/start", "/api/survey/stop"):
                 if _read_json_body(self).get("confirm") is not True:

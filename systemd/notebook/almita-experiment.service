@@ -1,0 +1,23 @@
+[Unit]
+Description=ALMITA EXPERIMENT runner - runs the active recipe run batch by batch (OBSERVE + REDUCE) and writes its verdict; started/stopped from the EXPERIMENT page
+After=network.target almita-instrument-forwarder.service
+# a runner that keeps crashing stops trying after 5 restarts in an hour
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python @ROOT@/almita_experiment.py run
+# SIGINT, never SIGTERM: it reaches capture.py too (its own clean stop); the runner waits for it and saves
+KillSignal=SIGINT
+TimeoutStopSec=200
+# a crash restarts it (it resumes: a captured batch is reduced first); exit 2 = HALTED on purpose, stays down
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

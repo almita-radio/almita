@@ -1,0 +1,77 @@
+{
+  "id": "SMC-ONOFF",
+  "order": 20,
+  "name": "Small Magellanic Cloud (SMC): ON/OFF at the same altitude",
+  "kind": "ONOFF",
+  "question": "Is there SMC gas at +120…+200 km/s above two OFFs at its own altitude?",
+  "why": "On 19-11 the SMC came out at −4.6 % against fixed OFFs that sat at a different altitude: the switching baseline depends on where the dish points. Here each OFF is computed at the moment, at the SMC's altitude and 40° east and west in azimuth (further out if it lands on the LMC, the Bridge or the plane), and they alternate many times. Expected signal in the 20° beam: 0.6–0.9 % of Tsys.",
+  "targets": [
+    {
+      "id": "SMC",
+      "l": 302.79,
+      "b": -44.33
+    },
+    {
+      "id": "OFF-E",
+      "same_alt_as": "SMC",
+      "daz_deg": 40
+    },
+    {
+      "id": "OFF-W",
+      "same_alt_as": "SMC",
+      "daz_deg": -40
+    }
+  ],
+  "off_rules": {
+    "min_sep_deg": 25,
+    "min_abs_b_deg": 20,
+    "avoid": [
+      {
+        "id": "LMC",
+        "l": 280.47,
+        "b": -32.89,
+        "r_deg": 25
+      },
+      {
+        "id": "Bridge",
+        "l": 291.5,
+        "b": -40.0,
+        "r_deg": 12
+      }
+    ]
+  },
+  "modes": {
+    "S": {
+      "label": "650 kHz, centre +160 km/s",
+      "frequency_switching": true,
+      "offset_hz": 650000,
+      "center": 160
+    }
+  },
+  "sequence": [
+    {
+      "mode": "S",
+      "targets": [
+        "SMC",
+        "OFF-E",
+        "OFF-W"
+      ]
+    }
+  ],
+  "cycles": 10,
+  "capture_seconds": 120,
+  "min_altitude_deg": 30,
+  "analysis": {
+    "on": "SMC",
+    "window_km_s": [
+      120,
+      200
+    ],
+    "expected_pct": [
+      0.6,
+      0.9
+    ],
+    "min_pairs": 6,
+    "max_off_abs_pct": 1.5
+  }
+}

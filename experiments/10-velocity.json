@@ -1,0 +1,67 @@
+{
+  "id": "VEL-AB",
+  "order": 10,
+  "name": "Which mode shifts the velocity? (A/B/C at l = 20°)",
+  "kind": "AB_VELOCITY",
+  "question": "On 19-11, with 300 kHz centred (auto), the line came out shifted by −5 to −6.5 km/s. Is it the 300 kHz throw, the centring, or the night?",
+  "why": "The same tile, pass after pass, in three modes: A = 600 kHz centred on 0 (like 12-11, which matches HI4PI to +0.06 km/s), B = 300 kHz centred auto (like 19-11), C = 300 kHz centred on 0. If B shifts and C does not, it is the centring; if B and C both shift, it is the throw; if none shifts, it was the night. The whole profile is compared, never the peak.",
+  "targets": [
+    {
+      "id": "l20",
+      "l": 20,
+      "b": 0
+    }
+  ],
+  "modes": {
+    "A": {
+      "label": "600 kHz, centre 0 (BL-100, like 12-11)",
+      "frequency_switching": true,
+      "offset_hz": null,
+      "center": null
+    },
+    "B": {
+      "label": "300 kHz, centre auto (like 19-11)",
+      "frequency_switching": true,
+      "offset_hz": 300000,
+      "center": "auto"
+    },
+    "C": {
+      "label": "300 kHz, fixed centre 0",
+      "frequency_switching": true,
+      "offset_hz": 300000,
+      "center": 0
+    }
+  },
+  "sequence": [
+    {
+      "mode": "A",
+      "targets": [
+        "l20"
+      ]
+    },
+    {
+      "mode": "B",
+      "targets": [
+        "l20"
+      ]
+    },
+    {
+      "mode": "C",
+      "targets": [
+        "l20"
+      ]
+    }
+  ],
+  "cycles": 2,
+  "capture_seconds": 120,
+  "min_altitude_deg": 30,
+  "analysis": {
+    "reference_mode": "A",
+    "tolerance_km_s": 1.5,
+    "min_passes": 2,
+    "reference_reduce": {
+      "reduce_dir": "data/reduced/ALMITA-OBSERVE/REDUCE-20261112-231215-610238",
+      "label": "ALMITA 12-11"
+    }
+  }
+}

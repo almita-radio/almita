@@ -416,6 +416,10 @@ def service_action(action: str) -> Dict[str, Any]:
         raise ValueError("action must be start or stop")
     if action == "start" and not active_id():
         raise RuntimeError("no active survey - create one and activate it first (almita_survey.py create/activate)")
+    if action == "start":
+        import experiment
+        if experiment.service_state().get("active"):
+            raise RuntimeError("an EXPERIMENT is running - stop it first (one driver of the mount at a time)")
     try:
         # STOP does not wait: the unit's SIGINT lets capture.py finish its point (up to ~2-3 min), longer than any
         # web request should hang - the panel's polling shows deactivating -> inactive (2026-11-19 review)

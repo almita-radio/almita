@@ -1,0 +1,102 @@
+{
+  "id": "ROTATION",
+  "order": 40,
+  "name": "Galactic Centre and rotation curve",
+  "kind": "TANGENT",
+  "question": "How fast does the Milky Way rotate 1–7 kpc from the centre, measured from the terminal edge of each spectrum?",
+  "why": "Tangent points on the plane on both sides of the Galactic Centre (l = +10…+40° and −10…−60°; l = 50–60° do not rise high enough this season), two passes each, with the window shifted toward the terminal edge (600 kHz, centre auto). Run after VEL-AB: if that experiment says a mode shifts the axis, pick another one here.",
+  "after": [
+    "VEL-AB"
+  ],
+  "targets": [
+    {
+      "id": "l10",
+      "l": 10,
+      "b": 0
+    },
+    {
+      "id": "l20",
+      "l": 20,
+      "b": 0
+    },
+    {
+      "id": "l30",
+      "l": 30,
+      "b": 0
+    },
+    {
+      "id": "l40",
+      "l": 40,
+      "b": 0
+    },
+    {
+      "id": "l350",
+      "l": 350,
+      "b": 0
+    },
+    {
+      "id": "l340",
+      "l": 340,
+      "b": 0
+    },
+    {
+      "id": "l330",
+      "l": 330,
+      "b": 0
+    },
+    {
+      "id": "l320",
+      "l": 320,
+      "b": 0
+    },
+    {
+      "id": "l310",
+      "l": 310,
+      "b": 0
+    },
+    {
+      "id": "l300",
+      "l": 300,
+      "b": 0
+    }
+  ],
+  "modes": {
+    "T": {
+      "label": "600 kHz, centre auto (terminal edge)",
+      "frequency_switching": true,
+      "offset_hz": null,
+      "center": "auto"
+    }
+  },
+  "sequence": [
+    {
+      "mode": "T",
+      "targets": [
+        "l10",
+        "l20",
+        "l30",
+        "l40"
+      ]
+    },
+    {
+      "mode": "T",
+      "targets": [
+        "l350",
+        "l340",
+        "l330",
+        "l320",
+        "l310",
+        "l300"
+      ]
+    }
+  ],
+  "cycles": 2,
+  "capture_seconds": 120,
+  "min_altitude_deg": 25,
+  "min_coverage": 0.5,
+  "analysis": {
+    "edge_fraction": 0.03,
+    "nsigma": 4.0,
+    "min_points": 3
+  }
+}

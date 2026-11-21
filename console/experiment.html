@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALMITA Experiment</title><link rel="icon" href="data:,"><link rel="stylesheet" href="styles.css"><script>/* DAY/NIGHT before first paint (common.js U.setTheme); default NIGHT */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("almita-theme")==="day"?"day":"night")}catch(e){document.documentElement.setAttribute("data-theme","night")}</script></head>
+<body>
+  <header id="almita-header"><h1>EXPERIMENT</h1></header>
+  <div id="error-banner" class="banner connection" hidden></div>
+  <main id="app">
+    <p class="exp-intro">Ready-made experiments. Each recipe says <b>what it asks</b>, <b>what counts as a result</b> (written before the data exist), and <b>when the sky allows it</b>. START runs it batch by batch through OBSERVE + REDUCE (the SURVEY pilot's same calls) and writes the verdict at the end. One driver of the mount at a time: SURVEY and EXPERIMENT never run together.</p>
+
+    <section class="panel" aria-labelledby="h-runner">
+      <header><h2 id="h-runner">RUNNER</h2><span id="run-badge" class="badge">—</span></header>
+      <div class="exp-runner">
+        <div id="run-name" class="exp-run-name">No experiment running.</div>
+        <div class="survey-bar" role="progressbar" aria-label="Batches done" aria-valuemin="0" aria-valuemax="100"><div id="run-fill"></div></div>
+        <div id="run-steps" class="exp-steps" aria-label="Batches"></div>
+        <p id="run-pilot" class="survey-line"></p>
+        <div class="survey-ctl"><button type="button" id="run-stop">STOP</button><button type="button" id="run-resume" hidden>RESUME</button><span id="run-note" class="muted"></span></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-recipes">
+      <header><h2 id="h-recipes">RECIPES <span class="muted">(times in Chile · readiness recomputed every minute)</span></h2><span id="recipes-badge" class="badge">—</span></header>
+      <label class="exp-sky"><input type="checkbox" id="open-sky"><span>The antenna is <b>under open sky</b> (indoors an experiment is an instrument check, never a sky result)</span></label>
+      <div id="recipes" class="exp-recipes">Loading…</div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-results">
+      <header><h2 id="h-results">RESULTS</h2><span id="results-badge" class="badge">—</span></header>
+      <div class="exp-results">
+        <div class="exp-table-wrap"><table class="exp-table" id="runs-table"><thead><tr><th>started (Chile)</th><th>recipe</th><th>status</th><th>batches</th><th>verdict</th></tr></thead><tbody></tbody></table></div>
+        <div id="run-detail" class="exp-detail" hidden></div>
+      </div>
+    </section>
+  </main>
+  <script src="common.js"></script>
+  <script src="experiment.js"></script>
+</body></html>

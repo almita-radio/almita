@@ -1,0 +1,69 @@
+{
+  "id": "CHAIN-CHECK",
+  "order": 0,
+  "name": "Chain check (4 min)",
+  "kind": "LINE_CHECK",
+  "question": "Is the hydrogen where it always is? Run before any long experiment.",
+  "why": "The SDR can come back mute after a restart and the feed connector has failed before: one pass on the highest part of the galactic plane tells within minutes whether the chain antenna → LNA → SDR → REDUCE works.",
+  "targets": [
+    {
+      "id": "l20",
+      "l": 20,
+      "b": 0
+    },
+    {
+      "id": "l340",
+      "l": 340,
+      "b": 0
+    },
+    {
+      "id": "l300",
+      "l": 300,
+      "b": 0
+    },
+    {
+      "id": "l270",
+      "l": 270,
+      "b": 0
+    },
+    {
+      "id": "l230",
+      "l": 230,
+      "b": 0
+    },
+    {
+      "id": "l190",
+      "l": 190,
+      "b": 0
+    }
+  ],
+  "modes": {
+    "A": {
+      "label": "600 kHz, centre 0 (BL-100)",
+      "frequency_switching": true,
+      "offset_hz": null,
+      "center": null
+    }
+  },
+  "sequence": [
+    {
+      "mode": "A",
+      "targets": [
+        "l20",
+        "l340",
+        "l300",
+        "l270",
+        "l230",
+        "l190"
+      ],
+      "choose": 1
+    }
+  ],
+  "cycles": 1,
+  "capture_seconds": 60,
+  "min_altitude_deg": 25,
+  "analysis": {
+    "snr_ok": 20,
+    "snr_weak": 5
+  }
+}

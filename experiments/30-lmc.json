@@ -1,0 +1,77 @@
+{
+  "id": "LMC-ONOFF",
+  "order": 30,
+  "name": "Large Magellanic Cloud (LMC): ON/OFF at the same altitude",
+  "kind": "ONOFF",
+  "question": "Is there LMC gas at +220…+300 km/s above two OFFs at its own altitude?",
+  "why": "With 300 kHz the ghost of the local gas lands at ~+127 km/s, far from the LMC; with 600 kHz it eats it. OFFs at the same altitude, 40° east and west in azimuth (further out if they land on the SMC, the Bridge or the plane), alternating many times. Expected signal in the 20° beam (GASS): ~0.8–1.0 % of Tsys.",
+  "targets": [
+    {
+      "id": "LMC",
+      "l": 280.47,
+      "b": -32.89
+    },
+    {
+      "id": "OFF-E",
+      "same_alt_as": "LMC",
+      "daz_deg": 40
+    },
+    {
+      "id": "OFF-W",
+      "same_alt_as": "LMC",
+      "daz_deg": -40
+    }
+  ],
+  "off_rules": {
+    "min_sep_deg": 25,
+    "min_abs_b_deg": 20,
+    "avoid": [
+      {
+        "id": "SMC",
+        "l": 302.79,
+        "b": -44.33,
+        "r_deg": 25
+      },
+      {
+        "id": "Bridge",
+        "l": 291.5,
+        "b": -40.0,
+        "r_deg": 12
+      }
+    ]
+  },
+  "modes": {
+    "L": {
+      "label": "300 kHz, centre +250 km/s",
+      "frequency_switching": true,
+      "offset_hz": 300000,
+      "center": 250
+    }
+  },
+  "sequence": [
+    {
+      "mode": "L",
+      "targets": [
+        "LMC",
+        "OFF-E",
+        "OFF-W"
+      ]
+    }
+  ],
+  "cycles": 10,
+  "capture_seconds": 120,
+  "min_altitude_deg": 30,
+  "analysis": {
+    "on": "LMC",
+    "window_km_s": [
+      220,
+      300
+    ],
+    "expected_pct": [
+      0.8,
+      1.0
+    ],
+    "min_pairs": 6,
+    "max_off_abs_pct": 1.5
+  }
+}
