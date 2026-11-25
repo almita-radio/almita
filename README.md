@@ -78,22 +78,29 @@ reduced and moved on. 99 captures of 2 minutes, none failed. Seven directions al
 and two off the plane were each observed several times.
 
 On one side of the Galactic Centre the hydrogen spreads to **positive** velocities (receding), on the other side to **negative**
-velocities (approaching), and the spread grows away from the centre: the disc rotates. The mean velocity of the line goes from
-+23 km/s at l = +30° to −26 km/s at l = −30°, through +2 km/s at the centre.
+velocities (approaching), and the spread grows away from the centre: the disc rotates. Measured in a velocity window symmetric
+about zero, the mean velocity of the line goes from +18 km/s at l = +30° to −19 km/s at l = −30°, through 0 at the centre. (The
+first version of this page gave +23 / +2 / −26 km/s: the switching windows had been centred toward the terminal side, which
+pushes the mean outward, by up to 3–5 times at l = ±10° and ±20°. The sign pattern is the same with any window.)
 
 At sunset the same directions were observed once more with **position switching** (sky ON minus an empty sky OFF at the same
-tuning), which has no switching ghost. From the edge of the line (the terminal velocity) the tangent-point method gives
-rotation speeds of **200 ± 15 km/s at 2.8 kpc** (l = −20°) and **218 ± 5 km/s at 4.1 kpc** (l = +30°) from the Galactic Centre,
-inside the range professional surveys measure (~200–235 km/s).
+tuning), which has no switching ghost. At l = +30° the edge of the line (the terminal velocity) is **+104 ± 2 km/s** whichever
+threshold is used. **This is not yet a rotation speed.** The tangent-point method adds the Sun's own speed, V = |v_t| + V0 |sin l|,
+and with the usual V0 = 220 km/s that assumption supplies half of the ~215 km/s. At l = −20° the edge moves from −129 to −182 km/s
+(V from 204 to 257 km/s) depending on the threshold, because the ON/OFF baseline wanders by ±1–2 % while the edge threshold is
+~0.45 %. (The first version of this page gave 200 ± 15 and 218 ± 5 km/s; a re-analysis on 25 November 2026 showed those error
+bars left out the threshold choice and the baseline.)
 
 <p align="center">
-  <img src="docs/site/results/rotation_20261119.png" alt="ALMITA 21 cm spectra along the Galactic plane, a map of mean hydrogen velocity (red receding, blue approaching), position-switched spectra with their terminal edges, and rotation speeds of 200 and 218 km/s at 2.8 and 4.1 kpc against the professional range" width="100%">
+  <img src="docs/site/results/rotation_20261119.png" alt="ALMITA 21 cm spectra along the Galactic plane with the velocity window each covers, the mean hydrogen velocity in symmetric and off-centre windows, two position-switched spectra with their terminal edges at two thresholds, and the split of each rotation speed into the measured edge and the assumed solar speed" width="100%">
 </p>
 
 Caveats:
-- **One afternoon, relative intensities, one ON/OFF run per direction.** These are coarse numbers, not a calibrated rotation curve.
-- **A 20° beam averages a wide stretch of the Galaxy.** At l = −30° the edge is pulled out by faster gas from smaller l (248 km/s,
-  above the range). Near the centre (l = ±10°, +20°) there was no clean edge.
+- **One afternoon, relative intensities, one ON/OFF run per direction.** These are coarse numbers, not a rotation curve.
+- **The OFFs were observed 20–40° higher in the sky than the ONs,** so the ON/OFF baseline is not flat. ON and OFF at the same
+  elevation, alternated many times, is the next step.
+- **A 20° beam averages a wide stretch of the Galaxy** and moves the edge by tens of km/s. At l = −30°, ±10° and +20° there was no
+  clean edge.
 - **Frequency switching with a ±300 kHz throw puts an inverted copy of the line 127 km/s away,** right where the terminal velocities
   are. That is why the terminal velocities come from the ON/OFF run. Two known RFI carriers are interpolated there.
 - **The Magellanic Clouds were tried the same evening and not detected.** The rooftop direction they lie in shows about +50 % more
@@ -105,39 +112,45 @@ A week after the first detection, the same 5 × 5 mosaic around l ≈ +20° was 
 **frequency switching** (40 s per pointing) and a new feed (Pawsey balun, reflector plate). The hydrogen line shows up in all
 25 pointings, and its velocity shifts from pointing to pointing as the gas along each line of sight does.
 
-For the six pointings inside the reference cube, the frequency-switched spectra from REDUCE match what HI4PI predicts for the
-same pointing and the same 20° beam with a **shape correlation of +0.94 to +0.99** (5 November: +0.43 to +0.77). The line now
-stands on a flat baseline: the leftover receiver structure dropped from ~2.9 % to ~0.75 %, against a line of 14–18 % of the
-system noise.
+For the seven pointings inside the HI4PI reference tile, the frequency-switched spectra from REDUCE have the velocity shape of the
+hydrogen HI4PI sees in this region: **shape correlation +0.95 to +0.99**, and +0.29 to +0.65 with the velocity axis mirrored. What
+this test does **not** show is that each spectrum matches its own pointing: HI4PI's spectrum of *another* pointing of the same
+grid gives +0.91 to +0.98 (re-analysis, 25 November 2026). The tile on disk spans l −1…21°, |b| ≤ 11°, so the 20° beam is
+truncated to 44–63 % of its weight. The line now stands on a flat baseline: the leftover receiver structure dropped from ~2.9 %
+to ~0.75 %, against a line of 14–18 % of the system noise.
 
 <p align="center">
-  <img src="docs/site/results/hi_frequency_switched_20261112.png" alt="Six frequency-switched 21 cm spectra from ALMITA (blue) against the HI4PI prediction for the same pointing and 20° beam (black); shape correlation +0.94 to +0.99" width="100%">
+  <img src="docs/site/results/hi_frequency_switched_20261112.png" alt="Seven frequency-switched 21 cm spectra from ALMITA (blue) against HI4PI for the same pointing (black) and for another pointing of the grid (dashed grey), and the null test: correlations for the same pointing, other pointings and the mirrored axis" width="100%">
 </p>
 
 The same night:
 - **Receiver Y-factor 4.71 dB** (50 Ω load against cold sky at 74° elevation), so a system temperature of about 120 K
   (assuming the LNA's datasheet noise). It was 1.53 dB on 5 November.
-- **Still relative, not Kelvin.** Peaks sit 3–10 km/s above HI4PI's, as on 5 November; this is not explained yet.
+- **Still relative, not Kelvin.** An earlier version of this page said the peaks sit 3–10 km/s above HI4PI's: that came from
+  comparing the maxima of flat-topped profiles. Fitting the whole profile gives +0.06 km/s, and the LSRK correction was checked
+  against an independent calculation (5 m/s, sign included).
 - **The Magellanic Clouds were not detected.** Their line is only ~1–2 % of the system noise, and the switching leaves a
   baseline of ±1–2 % that depends on where the dish points. Removing that baseline is the next step.
 
 ### First 21 cm hydrogen detection (5 November 2026)
 
 On its first night on a rooftop, in a 5 × 5 mosaic around galactic longitude l ≈ +20°, ALMITA saw the hydrogen line where
-the HI4PI all-sky survey says it should be. For the six pointings inside the reference cube, the measured line has the shape
-HI4PI predicts for the **same pointing, the same 20° beam and the same instant** (shape correlation +0.43 to +0.77). The
-same test with the velocity axis flipped fails, so the line sits on the correct side. The peak velocity follows the predicted
-one from point to point.
+the HI4PI all-sky survey says it should be. With the velocity axis flipped, the match with HI4PI fails, so the line sits on the
+correct side. Re-analysed on 25 November 2026 with the REDUCE spectra, the shape correlation with HI4PI is +0.37 to +0.51
+(+0.83 at l = 20°, b = 0; mirrored 0.0 to +0.36). As on 12 November, HI4PI's spectrum of another pointing correlates about as
+well, so the test shows hydrogen with the right velocity sign, not a pointing-by-pointing match. (The first version of this page
+gave +0.43 to +0.77 for "the same pointing, beam and instant", from the quick-look spectra.)
 
 <p align="center">
-  <img src="docs/site/results/hi_detection_20261105.png" alt="Six measured 21 cm spectra (blue) against the HI4PI prediction for the same pointing, beam and instant (black)" width="100%">
+  <img src="docs/site/results/hi_detection_20261105.png" alt="Seven measured 21 cm spectra from 5 November (blue, REDUCE) against HI4PI for the same pointing (black) and another pointing (dashed grey), and the null test" width="100%">
 </p>
 
 What this is **not** yet:
 - **Not a calibrated measurement.** The spectra are relative: each one is divided by an off-plane reference taken minutes
   earlier, and the receiver's ripple of ±2–6 % that remains is larger than everything except the line itself.
 - **Not yet repeated.**
-- **Peaks sit 3–6 km/s above HI4PI's.** This is not explained yet.
+- **Without switching, the baseline drifts ~0.5 % within a single 20 s capture,** so integrals over the line carry about twice the
+  error REDUCE reports.
 - **An earlier strip the same night (l = +10…+30°) showed nothing.** That is still an open question.
 
 That leftover ripple is why the next step was frequency switching.
@@ -154,7 +167,8 @@ the line are folded back together.
   <img src="docs/site/results/frequency_switching_bench.png" alt="Bench test: receiver band shape of ±14.6 % (top) versus 0.29 % noise in one 10 s switched pointing and 0.06 % residual in the mean of 400" width="80%">
 </p>
 
-This is a **bench test** with the LNA and the SDR but no antenna, so no sky signal is expected. On 400 pointings of 10 s each:
+This is a **bench test** with the LNA and the SDR but no antenna, so no sky signal is expected (the 400 captures are no longer
+on disk, so these two numbers could not be re-checked in November's re-analysis). On 400 pointings of 10 s each:
 - the noise of one pointing is **0.29 %** (about 4 km/s resolution), close to the theoretical limit;
 - what is left of the receiver in the mean of all 400 is **0.06 % rms**.
 
