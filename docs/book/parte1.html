@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>ALMITA — Crónica técnica</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono&display=swap">
+<style>
+@page { size: Letter; margin: 21mm 16mm 20mm 26mm; }
+@page :right { margin: 21mm 16mm 20mm 26mm; @bottom-right { content: counter(page); font: 9pt "IBM Plex Sans", "DejaVu Sans", sans-serif; color: #6b6b75; } }
+@page :left { margin: 21mm 26mm 20mm 16mm; @bottom-left { content: counter(page); font: 9pt "IBM Plex Sans", "DejaVu Sans", sans-serif; color: #6b6b75; } }
+@page blank { @bottom-right { content: none; } @bottom-left { content: none; } }
+@page cover { margin: 0; @bottom-right { content: none; } @bottom-left { content: none; } }
+:root { --ink:#1b1b1f; --muted:#6b6b75; --rule:#d9d9de; --blue:#1f5a8c; --rust:#b5532a; --green:#3d7a46;
+  --boxbg:#f3f6fa; --warnbg:#fbf1ea; --calcbg:#f1f6f1; }
+html { color: var(--ink); background: #fff; }
+body { margin: 0; font: 10.6pt/1.52 "Source Serif 4", "DejaVu Serif", Georgia, serif; hyphens: auto; }
+h1, h2, h3, .sans, figcaption, .box-title, table, .tag { font-family: "IBM Plex Sans", "DejaVu Sans", sans-serif; }
+h1 { font-size: 22pt; font-weight: 600; line-height: 1.15; margin: 0 0 4mm; text-wrap: balance; break-before: right; }
+h1 .num { display: block; font-size: 10pt; letter-spacing: .14em; text-transform: uppercase; color: var(--rust); font-weight: 500; margin-bottom: 2mm; }
+h2 { font-size: 13pt; font-weight: 600; margin: 7mm 0 2mm; break-after: avoid; }
+h3 { font-size: 10.8pt; font-weight: 600; margin: 5mm 0 1mm; break-after: avoid; }
+p { margin: 0 0 2.6mm; text-align: justify; orphans: 3; widows: 3; }
+.lead { font-size: 11.6pt; color: #33333a; font-style: italic; margin-bottom: 5mm; }
+figure { margin: 4mm 0 5mm; break-inside: avoid; text-align: center; }
+figure svg { max-width: 100%; height: auto; }
+figure img { max-width: 100%; }
+figcaption { font-size: 8.6pt; line-height: 1.4; color: var(--muted); text-align: left; margin-top: 1.5mm; }
+figcaption b { color: var(--ink); }
+.box { break-inside: avoid; border-left: 3px solid var(--blue); background: var(--boxbg); padding: 3mm 4mm 1.5mm; margin: 4mm 0; }
+.box.warn { border-color: var(--rust); background: var(--warnbg); }
+.box.sum { border-color: var(--ink); background: #f4f3ef; }
+.box.sum .box-title { color: var(--ink); }
+.box.sum ul { margin: 0 0 1.5mm; padding-left: 5mm; } .box.sum li { margin-bottom: .8mm; }
+.box.calc { border-color: var(--green); background: var(--calcbg); }
+.box-title { font-size: 8.4pt; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--blue); margin-bottom: 1.2mm; }
+.warn .box-title { color: var(--rust); } .calc .box-title { color: var(--green); }
+.box p { text-align: left; }
+.eq { font-family: "Source Serif 4", serif; font-style: italic; text-align: center; font-size: 12pt; margin: 3mm 0; }
+.eq .n { font-style: normal; font-family: "IBM Plex Sans", sans-serif; font-size: 8.5pt; color: var(--muted); margin-left: 6mm; }
+code, .mono { font-family: "IBM Plex Mono", "DejaVu Sans Mono", monospace; font-size: 9pt; }
+table { border-collapse: collapse; width: 100%; font-size: 8.8pt; margin: 3mm 0 4mm; break-inside: avoid; }
+table.long { break-inside: auto; } tr { break-inside: avoid; }
+th { text-align: left; font-weight: 600; border-bottom: 1.2px solid var(--ink); padding: 1.2mm 2mm; }
+td { border-bottom: .6px solid var(--rule); padding: 1.1mm 2mm; vertical-align: top; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.tag { display: inline-block; font-size: 6.8pt; font-weight: 600; letter-spacing: .08em; padding: .2mm 1.4mm; border-radius: 2px; vertical-align: 1px; }
+.tag.med { background: var(--green); color: #fff; } .tag.mod { background: var(--blue); color: #fff; } .tag.sup { background: var(--rust); color: #fff; }
+.cover { page: cover; height: 279.4mm; break-after: right; background: #000; color: #f4f1ea; position: relative; overflow: hidden; }
+.cover img { position: absolute; left: 50%; top: 10mm; width: 190mm; transform: translateX(-50%); }
+.cover .t { position: absolute; left: 0; right: 0; bottom: 20mm; text-align: center; font-family: "IBM Plex Sans", sans-serif; }
+.cover .t1 { font-size: 34pt; font-weight: 600; letter-spacing: .32em; margin-left: .32em; }
+.cover .t2 { font-size: 12.5pt; margin-top: 3mm; letter-spacing: .04em; }
+.cover .t3 { font-size: 8.5pt; color: #9a978f; margin-top: 7mm; line-height: 1.5; }
+.toc { font-family: "IBM Plex Sans", sans-serif; font-size: 9.2pt; }
+.toc div { display: flex; gap: 3mm; padding: .5mm 0; border-bottom: .6px solid var(--rule); }
+.toc .c { color: var(--rust); width: 9mm; } .toc .s { color: var(--muted); margin-left: auto; font-size: 8.6pt; }
+.partpage { break-before: right; break-after: page; height: 225mm; display: flex; flex-direction: column; justify-content: center; font-family: "IBM Plex Sans", "DejaVu Sans", sans-serif; }
+.partpage .pn { font-size: 11pt; letter-spacing: .3em; text-transform: uppercase; color: var(--rust); }
+.partpage .pt { font-size: 32pt; font-weight: 600; margin: 3mm 0 6mm; }
+.partpage .ps { font-size: 11.5pt; line-height: 1.5; color: #33333a; max-width: 120mm; }
+.partpage + h1 { break-before: auto; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+.small { font-size: 9pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  {{img:cover}}
+  <div class="t">
+    <div class="t1">ALMITA</div>
+    <div class="t2">Crónica técnica de un radiotelescopio casero</div>
+    <div class="t3">Portada: los 80 espectros de la noche del 5 de noviembre de 2026, línea 1 abajo.<br>Borrador para leer con lápiz · noviembre de 2026</div>
+  </div>
+</section>
+
+<h1 style="break-before: right"><span class="num">Antes de empezar</span>Cómo leer este libro</h1>
+<p class="lead">Este libro intenta llenar un vacío concreto: entender la física y el procesamiento que hay detrás de cada número que muestra la consola de ALMITA. No es un manual de uso ni un libro de radioastronomía general: es la radioastronomía justa para entender <em>este</em> telescopio, contada con sus propios datos y sus propios tropiezos.</p>
+<p>Cada idea aparece dos veces. Primero como física, con la menor cantidad de fórmulas posible. Después, en un recuadro azul <b>En ALMITA</b>, se responde <em>dónde</em> está esa idea en el sistema, <em>por qué</em> la necesitamos y <em>qué número</em> le pusimos. Si una fórmula se ve árida, salta al recuadro: casi siempre la explica mejor que el párrafo.</p>
+<p>Hay tres clases de recuadros:</p>
+<div class="box"><div class="box-title">En ALMITA</div><p>Dónde vive la idea en el telescopio, en el software o en una noche concreta de observación.</p></div>
+<div class="box calc"><div class="box-title">Cuenta</div><p>Un número trabajado paso a paso, para que la fórmula deje de ser abstracta.</p></div>
+<div class="box warn"><div class="box-title">Ojo</div><p>Una trampa en la que caímos, o en la que es fácil caer.</p></div>
+<p>Cada cifra lleva una etiqueta de honestidad: <span class="tag med">MEDIDO</span> es un dato tomado con el instrumento, con fecha; <span class="tag mod">MODELO</span> sale de un cálculo o una simulación (NEC, HI4PI, un modelo de la galaxia); <span class="tag sup">SUPUESTO</span> es un valor que no medimos, por ejemplo uno de una hoja de datos. La diferencia importa: buena parte de lo que aprendimos fue descubrir que algo que dábamos por medido era en realidad un supuesto.</p>
+
+<h2>ALMITA en treinta segundos</h2>
+<p>Para que los recuadros se entiendan desde la primera página, el instrumento en un párrafo. Un plato de 90 × 60 cm (una antena de grilla para WiFi, modificada) concentra las ondas de radio en un <b>dipolo</b>, dos brazos de cobre de 37 mm. Pegado al dipolo va un <b>LNA</b> (amplificador de bajo ruido) que multiplica la señal unas mil veces. Un cable lleva la señal a un <b>SDR</b> (<em>software-defined radio</em>, un receptor de radio del tamaño de un pendrive, el RTL-SDR) que la convierte en números. Una Raspberry Pi 4 junto al trípode reenvía esos números por un cable de red a un notebook dentro de la casa, donde se guardan y procesan. Todo va sobre una montura motorizada que apunta y sigue el cielo.</p>
+<p>El notebook tiene una consola web con páginas que aparecen a lo largo del libro:</p>
+<table>
+<tr><th>Página</th><th>Para qué sirve</th></tr>
+<tr><td>ALIGN</td><td>alinear la montura con el Sol o con el hidrógeno</td></tr>
+<tr><td>CALIBRATE</td><td>medir el factor Y y la temperatura de sistema (capítulo 9)</td></tr>
+<tr><td>OBSERVE · QUICKLOOK</td><td>observar grillas de puntos y ver los espectros en vivo</td></tr>
+<tr><td>REDUCE</td><td>convertir las capturas crudas en espectros limpios (capítulo 12)</td></tr>
+<tr><td>SCIENCE · STATUS</td><td>mapas del cielo y estado del sistema</td></tr>
+<tr><td>SURVEY · EXPERIMENT</td><td>pilotos automáticos: un relevamiento del cielo, o un experimento con su veredicto escrito de antemano</td></tr>
+</table>
+<p>Dos cifras se repiten mucho. La <b>correlación r</b> mide qué tan parecidas son dos curvas o dos mapas: 1 es «idénticas en forma», 0 es «nada que ver», −1 es «una es la otra dada vuelta». Cuando se dice que nuestros espectros dan r = 0,95 contra HI4PI (el gran relevamiento profesional de hidrógeno de todo el cielo), quiere decir que su forma calza casi perfecta. Pero una r alta por sí sola no prueba nada: hay que compararla con la r que daría una respuesta equivocada (la «prueba nula»). El capítulo 14 cuenta cómo esa prueba bajó los humos a varios resultados nuestros. La letra <b>σ</b> (sigma) es el tamaño típico del ruido: un resultado «a 6σ» es seis veces más grande que lo que el ruido produce por azar, y eso ya no es casualidad.</p>
+
+<h2>Contenido</h2>
+<div class="toc">
+  <div><span class="c">I</span><span><b>La física</b>: el termómetro, la línea de 21 cm, el Doppler, la galaxia que gira, la antena</span><span class="s">cap. 1–5</span></div>
+  <div><span class="c">II</span><span><b>Captura de la muestra</b>: de la onda a los números, IQ, Nyquist, la FFT, la forma del instrumento</span><span class="s">cap. 6–8</span></div>
+  <div><span class="c">III</span><span><b>Procesamiento</b>: factor Y, ON/OFF y conmutación de frecuencia, interferencia y curtosis, REDUCE</span><span class="s">cap. 9–12</span></div>
+  <div><span class="c">IV</span><span><b>Experimentos</b>: cómo se diseña uno, lo que hicimos, lo que queda y las trampas</span><span class="s">cap. 13–15</span></div>
+  <div><span class="c">V</span><span><b>El hardware en corto</b> y anexos: glosario, números clave, línea de tiempo</span><span class="s">cap. 16, anexos</span></div>
+</div>
+
+<section class="partpage"><div class="pn">Parte I</div><div class="pt">La física</div><div class="ps">Por qué una antena es un termómetro, qué es la línea de 21 cm, cómo una frecuencia se vuelve velocidad, cómo gira la galaxia y qué limita a cualquier radiotelescopio.</div></section>
+
+<h1><span class="num">Capítulo 1</span>Un radiotelescopio es un termómetro</h1>
+<p class="lead">La idea que ordena todo lo demás: lo que ALMITA mide no es «señal» en abstracto, es temperatura. Cuando se entiende eso, el factor Y, la Tsys y las curvas de ruido dejan de ser jerga.</p>
+
+<h2>1.1 Todo lo que está tibio brilla</h2>
+<p>Cualquier objeto con temperatura emite radiación electromagnética: sus cargas se agitan y, al agitarse, radian. Un cuerpo ideal que absorbe todo lo que le llega (un <em>cuerpo negro</em>) emite con una forma fija que depende solo de su temperatura: la curva de Planck. Un objeto más caliente brilla más en todas las frecuencias, y el máximo de su curva se corre hacia frecuencias altas. El Sol, a 5800 K, tiene su máximo en la luz visible; nosotros, a 310 K, en el infrarrojo; el fondo cósmico de microondas, a 2,7 K, en las microondas.</p>
+<figure>{{fig:f1_planck}}
+<figcaption><b>Figura 1.1.</b> Curvas de Planck para cuatro temperaturas que importan en ALMITA. Las líneas punteadas son la aproximación de Rayleigh–Jeans. En 1420 MHz (línea vertical) las curvas y sus aproximaciones se confunden: ahí el brillo es simplemente proporcional a la temperatura. Los dos ejes son logarítmicos: cada marca multiplica por diez. <span class="tag mod">MODELO</span></figcaption></figure>
+
+<p>La frecuencia de ALMITA, 1420 MHz, queda muy a la izquierda del gráfico, en la cola de baja frecuencia de todas las curvas. Ahí pasa algo muy conveniente. La energía de un fotón de 1420 MHz, dividida por la constante de Boltzmann, equivale a apenas <b>0,068 K</b>. Mientras la temperatura del objeto sea mucho mayor que eso (y siempre lo es: hasta el fondo cósmico está a 2,7 K), la fórmula de Planck se simplifica a la ley de Rayleigh–Jeans:</p>
+<p class="eq">I<sub>ν</sub> = 2 k T ν² / c²<span class="n">(1.1)</span></p>
+<p>El brillo <i>I</i> es <b>directamente proporcional a la temperatura</b>. Duplicar la temperatura duplica el brillo, sin más. Por eso en radioastronomía se habla casi siempre en kelvin y no en watts: la temperatura es una manera natural de medir brillo.</p>
+<div class="box"><div class="box-title">Para quien viene del telescopio óptico</div>
+<p>A 21 cm el cielo de día no es más brillante que el de noche: el Sol es una fuente fuerte, pero el «cielo azul» no existe en radio. Las nubes y la lluvia liviana son casi transparentes. Por eso ALMITA observa a las tres de la tarde (la rotación de la galaxia del 19-11 se midió de día) y lo que manda no es la oscuridad sino que el Sol no quede cerca del haz. La contaminación que importa no es la luz de la ciudad, sino sus radios.</p></div>
+
+<h2>1.2 Temperatura de brillo: una unidad, no un termómetro</h2>
+<p>Como el brillo y la temperatura son proporcionales, se puede <em>definir</em> la temperatura de brillo <i>T</i><sub>B</sub> de cualquier fuente como la temperatura que tendría que tener un cuerpo negro para brillar igual a esa frecuencia. La fuente no tiene por qué ser un cuerpo negro, ni estar realmente a esa temperatura. El Sol, a 1420 MHz, tiene una temperatura de brillo del orden de cien mil kelvin, mucho más que su superficie visible, porque a esa frecuencia lo que vemos es su corona, mucho más caliente. Una portadora de interferencia puede tener una temperatura de brillo de millones de kelvin sin que nada esté a esa temperatura.</p>
+<p>Así que «temperatura» en este libro casi siempre quiere decir «brillo expresado en kelvin». Cuando el gas de hidrógeno del plano galáctico aparece con 20 K en nuestro espectro, no dice que el gas esté a 20 K (está a unos 100 K o más): dice cuánto brilla, visto con nuestro haz.</p>
+
+<h2>1.3 La resistencia que hace ruido</h2>
+<p>En 1928 Johnson y Nyquist mostraron que una resistencia a temperatura <i>T</i> produce un voltaje de ruido: sus electrones se agitan térmicamente. La potencia de ese ruido que se puede extraer de la resistencia, en un ancho de banda <i>B</i>, es</p>
+<p class="eq">P = k T B<span class="n">(1.2)</span></p>
+<p>y no depende del valor de la resistencia. Es el mismo siseo que se oye en una radio sintonizada entre dos estaciones: parte de ese ruido es la agitación térmica de los electrones del propio aparato. Ahora el paso clave: imagina una antena dentro de una caja cerrada cuyas paredes están a temperatura <i>T</i>. En equilibrio térmico, la antena tiene que entregar exactamente la misma potencia que una resistencia a la misma temperatura, o se violaría la termodinámica: se podría calentar algo «gratis» conectando la antena a la resistencia. Entonces <b>una antena rodeada de algo a temperatura <i>T</i> entrega <i>kTB</i></b>, igual que una resistencia.</p>
+
+<figure>
+<svg viewBox="0 0 640 210" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="12">
+  <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1b1b1f"/></marker></defs>
+  <!-- left: resistor -->
+  <rect x="20" y="30" width="260" height="150" rx="6" fill="#fbf1ea" stroke="#b5532a"/>
+  <text x="150" y="52" text-anchor="middle" fill="#b5532a" font-weight="600">Resistencia de 50 Ω a T = 300 K</text>
+  <path d="M60,115 h20 l8,-14 l16,28 l16,-28 l16,28 l16,-28 l16,28 l8,-14 h20" fill="none" stroke="#1b1b1f" stroke-width="2"/>
+  <line x1="196" y1="115" x2="262" y2="115" stroke="#1b1b1f" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="150" y="160" text-anchor="middle" fill="#1b1b1f">electrones agitados → P = k·300 K·B</text>
+  <!-- right: antenna in box -->
+  <rect x="360" y="30" width="260" height="150" rx="6" fill="#f3f6fa" stroke="#1f5a8c"/>
+  <text x="490" y="52" text-anchor="middle" fill="#1f5a8c" font-weight="600">Antena rodeada de algo a T</text>
+  <path d="M420,90 a60,60 0 0 0 0,60" fill="none" stroke="#1b1b1f" stroke-width="2.5"/>
+  <line x1="440" y1="120" x2="455" y2="120" stroke="#1b1b1f" stroke-width="2.5"/>
+  <line x1="455" y1="120" x2="602" y2="120" stroke="#1b1b1f" stroke-width="2" marker-end="url(#ar)"/>
+  <g stroke="#1f5a8c" stroke-width="1.2" fill="none" opacity=".75">
+    <path d="M385,70 q6,-6 12,0 t12,0"/><path d="M560,72 q6,-6 12,0 t12,0"/><path d="M380,165 q6,-6 12,0 t12,0"/><path d="M565,160 q6,-6 12,0 t12,0"/>
+  </g>
+  <text x="490" y="160" text-anchor="middle" fill="#1b1b1f">misma potencia: P = k·T·B</text>
+  <text x="320" y="118" text-anchor="middle" font-size="22" fill="#6b6b75">=</text>
+  <text x="320" y="205" text-anchor="middle" fill="#6b6b75" font-size="11">El cielo es la «caja». Su temperatura de brillo es lo que la antena entrega.</text>
+</svg>
+<figcaption><b>Figura 1.2.</b> La equivalencia que convierte una antena en termómetro: si lo que la rodea está a temperatura <i>T</i>, la antena entrega la misma potencia que una resistencia a <i>T</i>. La temperatura que «ve» la antena se llama <em>temperatura de antena</em>, <i>T</i><sub>A</sub>.</figcaption></figure>
+
+<p>Esta equivalencia es la razón por la que todo el sistema se puede contabilizar en kelvin. La antena aporta su temperatura de antena; el amplificador agrega su propio ruido, que también se expresa como una temperatura; los cables con pérdidas agregan la suya. Todo se suma en la misma moneda. La suma completa se llama <b>temperatura de sistema, <i>T</i><sub>sys</sub></b>, y es el protagonista del capítulo 5.</p>
+
+<div class="box"><div class="box-title">En ALMITA</div>
+<p><b>La carga de 50 Ω es literalmente la resistencia de la figura.</b> En CALIBRATE se conecta a la entrada del LNA en lugar de la antena, y entrega <i>k</i>·<i>T</i><sub>carga</sub>·<i>B</i>, con <i>T</i><sub>carga</sub> ≈ 300 K. Después se apunta la antena al cielo frío y se compara. Ese cociente es el <b>factor Y</b> (capítulo 9). Por eso la carga tiene su propio termómetro DS18B20 (<code>load</code> en <code>observer_config.json</code>): sin su temperatura real, el factor Y no se puede convertir en kelvin. El 12-11 la carga estaba a 27,8 °C = 300,9 K <span class="tag med">MEDIDO</span>.</p></div>
+
+<div class="box calc"><div class="box-title">Cuenta · cuánta potencia es esto</div>
+<p>Con <i>T</i><sub>sys</sub> = 122 K (la del 12-11) y la banda completa del SDR, <i>B</i> = 2,4 MHz:</p>
+<p class="eq">P = 1,38·10⁻²³ × 122 × 2,4·10⁶ ≈ 4·10⁻¹⁵ W ≈ −114 dBm</p>
+<p>Cuatro femtowatts. Un celular transmite del orden de un watt: catorce órdenes de magnitud más. Por eso hace falta un LNA con unos 30 dB de ganancia pegado a la antena, y por eso una Raspberry a 30 cm del feed es una catástrofe.</p></div>
+
+<div class="box warn"><div class="box-title">Ojo · decibeles en dos minutos</div>
+<p>Un cociente de potencias en dB es 10·log₁₀(cociente). Las reglas útiles: 3 dB es ×2; 10 dB es ×10; 1 dB es ×1,26. Para cambios chicos, <b>1 % ≈ 0,043 dB</b>, y 0,1 dB ≈ 2,3 %. QUICKLOOK y la tabla de Unknown Pleasures muestran dB relativos: una joroba de 0,6 dB en el plano galáctico es un 15 % más de potencia. El factor Y de 4,71 dB del 12-11 es un cociente de 2,96. «dBm» es otra cosa: dB respecto de un milivatio, una potencia absoluta.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 1 en tres líneas</div><ul><li>Una antena mide temperatura: lo que entrega es <i>kTB</i>, como una resistencia.</li><li>Todo el ruido de la cadena se cuenta en kelvin, y los kelvin se suman.</li><li>La carga de 50 Ω es nuestra temperatura conocida.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 2</span>La línea de 21 cm</h1>
+<p class="lead">El átomo más simple del universo tiene un pequeño truco magnético. Ese truco produce una sola frecuencia, 1 420 405 752 Hz, y esa frecuencia es la razón de ser de ALMITA.</p>
+
+<h2>2.1 Dos imanes chiquititos</h2>
+<p>Un átomo de hidrógeno es un protón y un electrón. Los dos tienen <em>espín</em>, una propiedad cuántica que los hace comportarse como pequeños imanes. En el estado de menor energía del átomo, los dos imanes pueden estar orientados de dos maneras: con los espines paralelos o antiparalelos. La configuración paralela tiene un poquito más de energía. Cuando un átomo en el estado paralelo invierte el espín de su electrón y pasa al antiparalelo, la diferencia de energía sale como un fotón.</p>
+
+<figure>
+<svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="12">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1b1b1f"/></marker>
+  <marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b5532a"/></marker></defs>
+  <!-- parallel -->
+  <text x="120" y="24" text-anchor="middle" font-weight="600">Espines paralelos</text>
+  <text x="120" y="40" text-anchor="middle" fill="#6b6b75" font-size="11">un poco más de energía</text>
+  <circle cx="95" cy="120" r="26" fill="#b5532a" opacity=".85"/><text x="95" y="124" text-anchor="middle" fill="#fff" font-weight="600">p⁺</text>
+  <line x1="95" y1="160" x2="95" y2="76" stroke="#1b1b1f" stroke-width="2.4" marker-end="url(#a2)"/>
+  <circle cx="160" cy="120" r="12" fill="#1f5a8c"/><text x="160" y="124" text-anchor="middle" fill="#fff" font-size="10">e⁻</text>
+  <line x1="160" y1="150" x2="160" y2="88" stroke="#1b1b1f" stroke-width="2.4" marker-end="url(#a2)"/>
+  <!-- arrow -->
+  <line x1="215" y1="120" x2="300" y2="120" stroke="#1b1b1f" stroke-width="1.6" marker-end="url(#a2)"/>
+  <text x="257" y="108" text-anchor="middle" font-size="11">el electrón</text><text x="257" y="140" text-anchor="middle" font-size="11">se da vuelta</text>
+  <!-- antiparallel -->
+  <text x="390" y="24" text-anchor="middle" font-weight="600">Espines antiparalelos</text>
+  <text x="390" y="40" text-anchor="middle" fill="#6b6b75" font-size="11">estado base</text>
+  <circle cx="365" cy="120" r="26" fill="#b5532a" opacity=".85"/><text x="365" y="124" text-anchor="middle" fill="#fff" font-weight="600">p⁺</text>
+  <line x1="365" y1="160" x2="365" y2="76" stroke="#1b1b1f" stroke-width="2.4" marker-end="url(#a2)"/>
+  <circle cx="430" cy="120" r="12" fill="#1f5a8c"/><text x="430" y="124" text-anchor="middle" fill="#fff" font-size="10">e⁻</text>
+  <line x1="430" y1="88" x2="430" y2="150" stroke="#1b1b1f" stroke-width="2.4" marker-end="url(#a2)"/>
+  <!-- photon -->
+  <path d="M460,120 q8,-14 16,0 t16,0 t16,0 t16,0 t16,0 t16,0" fill="none" stroke="#b5532a" stroke-width="2"/>
+  <line x1="556" y1="120" x2="575" y2="120" stroke="#b5532a" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="525" y="95" text-anchor="middle" fill="#b5532a" font-weight="600">fotón</text>
+  <text x="525" y="150" text-anchor="middle" fill="#b5532a">1420,405752 MHz</text>
+  <text x="525" y="166" text-anchor="middle" fill="#b5532a">λ = 21,1 cm</text>
+  <text x="320" y="215" text-anchor="middle" fill="#6b6b75" font-size="11">ΔE = 5,9 millonésimas de electronvolt · un átomo aislado tarda en promedio 11 millones de años en hacerlo</text>
+</svg>
+<figcaption><b>Figura 2.1.</b> La transición hiperfina del hidrógeno. Las flechas representan el espín (el «imán») del protón y del electrón. Es una de las transiciones más débiles y lentas que se conocen, y aun así es la manera principal de ver el gas de las galaxias.</figcaption></figure>
+
+<p>La energía de ese salto es diminuta: 5,9 millonésimas de electronvolt (la luz visible tiene unos 2 eV, un millón de veces más). Por eso el fotón es de radio, de 21,1 cm de longitud de onda. Y su frecuencia es una de las cantidades mejor medidas de toda la física: los máseres de hidrógeno, los relojes que usan los radiotelescopios profesionales, están construidos alrededor de esta transición.</p>
+
+<div class="box"><div class="box-title">En ALMITA</div>
+<p>El número <code>1420405752</code> Hz aparece una sola vez en todo el sistema, en <code>observer_config.json</code>, y todo lo demás lo lee de ahí. Puede parecer obsesivo, pero tuvimos tres incidentes en que la frecuencia declarada en los archivos no era la que el SDR tenía de verdad sintonizada. Desde entonces cada captura sintoniza explícitamente y espera que <code>rtl_tcp</code> confirme. La lección: si el eje de frecuencia está mal, toda la física de los capítulos que siguen (velocidades, rotación, distancias) se corre con él.</p></div>
+
+<h2>2.2 Once millones de años</h2>
+<p>Un átomo de hidrógeno aislado, en el estado paralelo, tarda en promedio <b>unos 11 millones de años</b> en emitir espontáneamente ese fotón. Es una transición «prohibida» en la jerga: posible, pero lentísima. ¿Cómo es posible entonces que la veamos con una antena de 90 cm desde una azotea en Santiago?</p>
+<p>Por la cantidad. En una línea de visión que atraviesa el plano de la galaxia hay del orden de 10²¹ a 10²² átomos de hidrógeno por cada centímetro cuadrado de cielo. Aunque cada átomo emita una vez cada 11 millones de años, son tantos que siempre hay billones emitiendo en cada instante. Es como la lotería: la probabilidad de que una persona gane esta semana es ínfima, pero en un país entero casi todas las semanas gana alguien. La lentitud tiene además una ventaja: como el gas emite tan poco, casi no se absorbe a sí mismo. Los fotones que salen del otro lado de la galaxia llegan hasta nosotros sin ser tragados en el camino.</p>
+<p>Los átomos no esperan los 11 millones de años quietos: chocan entre ellos mucho más a menudo, y esos choques los pasan de un estado al otro. El resultado es que las poblaciones de los dos niveles quedan fijadas por la temperatura del gas. Como 0,068 K es muchísimo menos que la temperatura de cualquier gas real, los dos estados quedan poblados según su «número de maneras» de estar: el estado paralelo tiene tres, el antiparalelo una. Tres cuartos de los átomos están en el estado alto, siempre, en todas partes.</p>
+
+<h2>2.3 Ópticamente delgado: contar átomos midiendo brillo</h2>
+<p>Cuando un gas casi no absorbe su propia radiación se dice que es <em>ópticamente delgado</em>. En ese caso cada átomo suma su granito de brillo al total, y el brillo de la línea es proporcional a cuántos átomos hay en la línea de visión. La relación es una de las más usadas de la radioastronomía:</p>
+<p class="eq">N<sub>H</sub> = 1,823·10¹⁸ ∫ T<sub>B</sub>(v) dv<span class="n">(2.1)</span></p>
+<p>donde <i>N</i><sub>H</sub> es la <em>densidad de columna</em> (átomos por cm² de cielo), <i>T</i><sub>B</sub> en kelvin y la velocidad <i>v</i> en km/s. En palabras: <b>el área bajo el espectro cuenta los átomos</b>. No el máximo, el área.</p>
+
+<div class="box"><div class="box-title">En ALMITA · el mapa de STATUS</div>
+<p>El primer panel de STATUS, «El cielo de ALMITA», lee en cada punto el <b>área de la línea</b> entre −60 y +60 km/s sobre una línea de base. Es exactamente la integral de la ecuación 2.1, solo que en unidades propias en vez de kelvin. Por eso el mapa es, en el fondo, un mapa de cuánto hidrógeno hay en cada dirección. Contra HI4PI (el relevamiento profesional de todo el cielo, hecho con los radiotelescopios de Parkes y Effelsberg) pasado por nuestro haz dio <b>r = 0,92</b> <span class="tag med">MEDIDO</span> (18-11). Ese número resultó engañoso: la auditoría del 25-11 mostró que lo pone casi entero el contraste entre las dos zonas observadas (el plano galáctico, con mucho hidrógeno, y la alta latitud, con poco). Dentro de cada zona la correlación es 0,49 y 0,72, y apuntados corridos 20–40° calzan igual: el mapa sigue el gradiente grueso del cielo, no su detalle (capítulo 14).</p></div>
+
+<div class="box warn"><div class="box-title">Ojo · área, no máximo</div>
+<p>La auditoría del 21-11 retiró un resultado que habíamos dado por bueno: nuestro hidrógeno aparecía «3 a 10 km/s por encima de HI4PI». Venía de comparar <em>máximos</em> de perfiles con techo plano y dos jorobas: un poco de ruido cambia cuál joroba gana y el máximo salta varios km/s. Ajustando el perfil completo, el corrimiento fue +0,06 km/s. Es la misma lección de la ecuación 2.1 aplicada a velocidades: los máximos son frágiles, las formas completas no.</p></div>
+
+<p>Hay una excepción importante. Mirando hacia el interior de la galaxia, a bajas latitudes, puede haber tanto gas a la misma velocidad que la línea deja de ser delgada: el brillo se satura y deja de crecer con la cantidad de átomos. La ecuación 2.1 entonces <em>subestima</em> la columna. Con un haz de 20° esto queda promediado con mucho cielo delgado y no domina, pero conviene saber que existe.</p>
+
+<h2>2.4 Un poco de historia</h2>
+<p>La línea fue predicha en 1944 por Hendrik van de Hulst, un estudiante en Holanda ocupada, y detectada en 1951 por Harold Ewen y Edward Purcell en Harvard, con una antena de bocina asomada por una ventana del laboratorio. En pocas semanas grupos de Holanda y Australia la confirmaron, y en unos años se dibujó con ella el primer mapa de los brazos espirales de la Vía Láctea. La primera detección de la historia se hizo con un instrumento no muy distinto, en espíritu, de una antena en una azotea.</p>
+
+<h2>2.5 Lo que hay detrás de la línea</h2>
+<p>La línea no llega sola. Llega sobre un fondo continuo: el fondo cósmico de microondas (2,7 K en todas direcciones), la radiación de electrones rápidos en el campo magnético de la galaxia (unos pocos K fuera del plano a esta frecuencia, más en el plano) y, lo que más pesa para nosotros, la radiación térmica del suelo y de los techos que la antena alcanza a ver por los costados. Todo ese continuo es plano en frecuencia dentro de nuestra banda de 2,4 MHz, así que sube el «piso» del espectro sin cambiar la forma de la línea. Por eso el hidrógeno se mide siempre como un <b>exceso</b> sobre un piso, en porcentaje de la <i>T</i><sub>sys</sub> o en kelvin sobre la línea de base.</p>
+
+<div class="box sum"><div class="box-title">Capítulo 2 en tres líneas</div><ul><li>El hidrógeno emite en 1420,405752 MHz cuando el electrón invierte su espín.</li><li>Cada átomo es lentísimo, pero hay tantos que la línea se ve desde una azotea.</li><li>El área bajo la línea cuenta los átomos; el máximo no.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 3</span>Doppler: frecuencias que son velocidades</h1>
+<p class="lead">Si todo el hidrógeno del universo emitiera en 1420,405752 MHz exactos, la línea sería una aguja y no tendría nada que contar. La riqueza está en que el gas se mueve, y el movimiento corre la frecuencia.</p>
+
+<h2>3.1 La regla de oro: 1 km/s = 4,74 kHz</h2>
+<p>Es el efecto de la sirena de una ambulancia: más aguda mientras se acerca, más grave cuando se aleja. Una fuente que se aleja de nosotros a velocidad <i>v</i> llega con su frecuencia un poco más baja; una que se acerca, más alta. Para velocidades mucho menores que la de la luz:</p>
+<p class="eq">v = c · (ν₀ − ν) / ν₀<span class="n">(3.1)</span></p>
+<p>Con ν₀ = 1420,405752 MHz, cada km/s corresponde a <b>4,738 kHz</b>. Es la regla de conversión más útil de este libro, y con ella se traducen todas las escalas del instrumento:</p>
+<table>
+<tr><th>Escala del instrumento</th><th class="r">en frecuencia</th><th class="r">en velocidad</th></tr>
+<tr><td>Media banda del SDR (2,4 MS/s)</td><td class="r">±1,2 MHz</td><td class="r">±253 km/s</td></tr>
+<tr><td>Un canal de QUICKLOOK y de la Unknown Pleasures (256 canales)</td><td class="r">9,4 kHz</td><td class="r">2,0 km/s</td></tr>
+<tr><td>Un canal de la máscara de RFI (FFT de 8192)</td><td class="r">293 Hz</td><td class="r">0,06 km/s</td></tr>
+<tr><td>Rotación de la galaxia en el punto tangente, l = 20°</td><td class="r">≈ 690 kHz</td><td class="r">≈ 145 km/s</td></tr>
+<tr><td>La portadora intrusa del 03-11</td><td class="r">1420,0398 MHz</td><td class="r">+77 km/s</td></tr>
+</table>
+<figure>{{fig:f3_axis}}
+<figcaption><b>Figura 3.1.</b> El mismo eje leído de dos maneras. Abajo, la frecuencia que muestra QUICKLOOK; arriba, la velocidad equivalente. Ojo con el sentido: <b>más velocidad es menos frecuencia</b>, así que el gas que se aleja aparece a la izquierda.</figcaption></figure>
+
+<div class="box warn"><div class="box-title">Ojo · la interferencia se disfraza de velocidad</div>
+<p>Una portadora artificial en 1420,0398 MHz se lee, por la ecuación 3.1, como «hidrógeno a +77 km/s». Si cae justo donde se espera gas, un análisis automático la interpreta como gas. Por eso existe <code>known_rfi_lines.json</code>: una lista fija de frecuencias que no son cielo. El 10-11 esa portadora estaba en los 400 puntos de una corrida de banco, sin antena: la prueba de que no viene del cielo <span class="tag med">MEDIDO</span>.</p></div>
+
+<h2>3.2 Todo se mueve: los sistemas de referencia</h2>
+<p>«Velocidad» siempre es respecto de algo. ALMITA está sobre una Tierra que gira (0,39 km/s en Santiago), que orbita el Sol (29,8 km/s), que se mueve respecto de las estrellas vecinas (unos 20 km/s), que a su vez giran alrededor de la galaxia (unos 220 km/s). Todos esos movimientos corren la frecuencia observada, y cambian con la hora, el día y la dirección.</p>
+<figure>{{fig:f3_speeds}}
+<figcaption><b>Figura 3.2.</b> Las velocidades que se suman en una medición. Las dos de arriba casi no importan; el movimiento de la Tierra y del Sol respecto de sus vecinas sí, porque son del mismo orden que los detalles que queremos ver.</figcaption></figure>
+<p>Para que dos observaciones tomadas en fechas distintas se puedan comparar, se lleva todo a un sistema común. El estándar para el hidrógeno galáctico es el <b>LSR</b> (<em>Local Standard of Rest</em>): un punto imaginario que gira alrededor de la galaxia en una órbita circular perfecta en la posición del Sol. En el LSR, el gas local está quieto en promedio, y el gas que se mueve con la rotación galáctica aparece con las velocidades del capítulo 4. La cadena es: <b>topocéntrico</b> (lo que mide la antena) → <b>baricéntrico</b> (se quita la rotación y la órbita de la Tierra) → <b>LSRK</b> (se quita el movimiento del Sol respecto de sus vecinas).</p>
+
+<div class="box"><div class="box-title">En ALMITA</div>
+<p>QUICKLOOK muestra el espectro <b>en MHz y topocéntrico</b>, a propósito: es lo que el instrumento ve, sin interpretar, y la interferencia (que está quieta respecto de la Tierra) aparece siempre en la misma frecuencia. REDUCE es quien hace la conversión a LSRK, punto por punto, con la hora y la dirección de cada captura. En la auditoría del 21-11 ese paso se comparó con un cálculo independiente: coinciden a <b>6 m/s</b> <span class="tag med">MEDIDO</span>, mil veces menos que un canal.</p></div>
+
+<div class="box calc"><div class="box-title">Cuenta · por qué el gas local cambia de frecuencia en una noche</div>
+<p>La velocidad de la Tierra en su órbita es 29,8 km/s, pero lo que importa es su proyección en la dirección de la antena. Apuntando a una zona fija del cielo durante varias horas, esa proyección cambia poco; entre noviembre y mayo, para la misma zona, puede cambiar decenas de km/s: un desplazamiento de más de 100 kHz, más de diez canales. Sin la corrección a LSRK, el mismo gas aparecería «corrido» de un mes a otro.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 3 en tres líneas</div><ul><li>Corrimiento de frecuencia es velocidad: 1 km/s = 4,74 kHz, y más velocidad es menos frecuencia.</li><li>Para comparar fechas, todo se lleva al LSR.</li><li>Una portadora puede disfrazarse de gas: no toda línea es cielo.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 4</span>La Vía Láctea gira</h1>
+<p class="lead">El corazón científico de ALMITA. Con una sola idea geométrica, el punto tangente, un espectro de hidrógeno se convierte en una medición de cómo gira la galaxia, y de ahí, en evidencia de materia que no se ve.</p>
+
+<h2>4.1 Coordenadas galácticas</h2>
+<p>Para hablar de la galaxia conviene un sistema de coordenadas propio. La <b>longitud galáctica <i>l</i></b> se mide a lo largo del plano de la Vía Láctea, desde la dirección del centro galáctico (<i>l</i> = 0°, en Sagitario) y creciendo hacia el sentido de la rotación. La <b>latitud galáctica <i>b</i></b> es el ángulo sobre o bajo el plano. El disco de gas es muy delgado comparado con su tamaño: unos pocos cientos de parsecs de espesor contra decenas de miles de diámetro. (Un kiloparsec, kpc, son 3260 años luz.) Por eso, visto desde dentro, el hidrógeno se concentra en una franja angosta alrededor de <i>b</i> = 0. Esa franja es la misma Vía Láctea que se ve a simple vista en un cielo oscuro: el centro galáctico queda en Sagitario, junto a Escorpión, que en Chile pasa por el cenit en las noches de invierno. Las coordenadas galácticas son ese mismo cielo, solo que con el ecuador puesto sobre la Vía Láctea en vez de sobre el ecuador de la Tierra.</p>
+
+<h2>4.2 Lo que ve la antena: velocidades proyectadas</h2>
+<p>Supongamos que todo el gas gira en círculos alrededor del centro galáctico, con una velocidad <i>V</i>(<i>R</i>) que depende solo de la distancia <i>R</i> al centro. El Sol está a <i>R</i>₀ ≈ 8,2 kpc y gira a <i>V</i>₀ ≈ 220 km/s. La antena no ve la velocidad del gas, sino la <em>diferencia</em> entre su movimiento y el nuestro, proyectada en la línea de visión. Para una dirección <i>l</i>, el gas a radio <i>R</i> aparece con velocidad</p>
+<p class="eq">v<sub>r</sub> = [ V(R)·R₀/R − V₀ ] · sen l<span class="n">(4.1)</span></p>
+<p>La figura 4.1 muestra esa fórmula «pintada» sobre la galaxia, para la línea de visión de <i>l</i> = 35°, la del Águila.</p>
+<figure>{{fig:f4_topview}}
+<figcaption><b>Figura 4.1.</b> La galaxia vista desde arriba, con una curva de rotación plana de 220 km/s. La línea de visión hacia <i>l</i> = 35° cruza el disco; cada punto está coloreado con la velocidad que tendría su gas visto desde el Sol. Rojo se aleja, azul se acerca. El punto tangente es donde la línea roza un círculo alrededor del centro: ahí la velocidad es máxima. <span class="tag mod">MODELO</span></figcaption></figure>
+
+<h2>4.3 El punto tangente</h2>
+<p>Una imagen ayuda: un auto dentro de una pista circular, mirando por la ventana hacia el centro con un ángulo. Los autos de las pistas interiores avanzan a la misma velocidad, pero el que va justo «de lado» respecto de la mirada, donde la línea de visión roza su pista, es el que más rápido se ve alejarse. Recorriendo la línea de visión desde el Sol hacia afuera, el gas primero se aleja cada vez más rápido, llega a un máximo y después vuelve a bajar. El máximo ocurre en el <b>punto tangente</b>: donde la línea de visión pasa más cerca del centro galáctico, rozando un círculo de radio <i>R</i> = <i>R</i>₀·sen <i>l</i>. Ahí el gas se mueve justo a lo largo de la línea de visión, y su velocidad observada es</p>
+<p class="eq">v<sub>t</sub> = V(R₀ sen l) − V₀ sen l<span class="n">(4.2)</span></p>
+<p>Esta es la llave: <b>el borde de alta velocidad del espectro dice cuánto vale <i>V</i> en el radio tangente</b>. Midiendo ese borde en varias longitudes se obtiene <i>V</i>(<i>R</i>) punto por punto, en todo el interior del círculo solar. Es el método con que se midió por primera vez la curva de rotación de la galaxia, en los años cincuenta.</p>
+<figure>{{fig:f4_vd}}
+<figcaption><b>Figura 4.2.</b> Velocidad observada en función de la distancia, para <i>l</i> = 20° y <i>l</i> = 35°. Dentro del círculo solar, cada velocidad (salvo la tangente) corresponde a dos distancias, una cercana y una lejana: la <em>ambigüedad cercano–lejano</em>. Más allá del círculo solar el gas aparece con velocidad negativa. <span class="tag mod">MODELO</span></figcaption></figure>
+
+<div class="box calc"><div class="box-title">Cuenta · los puntos tangentes de ALMITA</div>
+<table>
+<tr><th>l</th><th class="r">radio tangente</th><th class="r">distancia</th><th class="r">v tangente (curva plana)</th></tr>
+<tr><td>10°</td><td class="r">1,4 kpc</td><td class="r">8,1 kpc</td><td class="r">+182 km/s</td></tr>
+<tr><td>20°</td><td class="r">2,8 kpc</td><td class="r">7,7 kpc</td><td class="r">+145 km/s</td></tr>
+<tr><td>35°</td><td class="r">4,7 kpc</td><td class="r">6,7 kpc</td><td class="r">+94 km/s</td></tr>
+</table>
+<p>Con <i>R</i>₀ = 8,2 kpc y <i>V</i>₀ = 220 km/s <span class="tag sup">SUPUESTO</span>. En <i>l</i> = 20° el borde está en +145 km/s, más allá de la ventana de ±84 km/s de la conmutación de 600 kHz: por eso la receta ROTATION usa otra configuración, y por eso el mapa de STATUS en el plano da ALMITA/HI4PI ≈ 0,6.</p></div>
+
+<h2>4.4 La forma de un espectro, explicada</h2>
+<p>Con la figura 4.2 se puede «leer» cualquier espectro galáctico. Para <i>l</i> = 35°: el gas cercano aporta brillo cerca de 0 km/s; el gas que se va alejando aporta brillo cada vez a más velocidad positiva, hasta el tangente en +94 km/s, donde se acumula (muchos kilómetros de línea de visión tienen casi la misma velocidad, así que su brillo cae en pocos canales); más allá del tangente el gas vuelve a velocidades menores, solapándose con el cercano; y finalmente el gas del disco exterior aparece con velocidades negativas, débil pero extendido.</p>
+<p>Así nace la forma de la «polera del Águila»: un perfil asimétrico, con una rampa larga hacia velocidades positivas (el interior de la galaxia) y un hombro hacia las negativas (el disco exterior). Al barrer la latitud de −40° a +40° la montaña aparece solo cerca del plano, porque el disco es delgado. Lejos del plano solo queda gas cercano, a velocidad casi cero.</p>
+<figure>{{img:aquila}}
+<figcaption><b>Figura 4.3.</b> Simulación de 80 espectros en <i>l</i> = 35°, de <i>b</i> = −40° (abajo) a +40° (arriba), con un disco en rotación plana que se ensancha hacia afuera, un haz de 20° y ruido de 0,3 %. Es un <b>modelo, no datos</b>: un disco liso, sin nubes ni alabeo. La captura real está planificada para el jueves 26-11. <span class="tag mod">MODELO</span></figcaption></figure>
+
+<h2>4.5 La curva plana y la masa que no se ve</h2>
+<p>Si casi toda la masa de la galaxia estuviera en el centro, como en el sistema solar, las órbitas lejanas serían más lentas: la velocidad caería como 1/√<i>R</i> (la ley de Kepler). No es lo que se mide. La curva de rotación de la Vía Láctea, y la de casi todas las galaxias espirales, es aproximadamente <b>plana</b>: la velocidad se mantiene en torno a 200–240 km/s muy lejos del centro, hasta donde llega el gas.</p>
+<figure>{{fig:f4_curve}}
+<figcaption><b>Figura 4.4.</b> Una curva plana frente a la que se esperaría si toda la masa estuviera concentrada. La diferencia es masa que no emite luz: la <em>materia oscura</em>. En verde, el rango donde validamos el método del punto tangente con datos de HI4PI (11-11): 211–223 km/s entre 1,1 y 2,5 kpc. <span class="tag mod">MODELO</span></figcaption></figure>
+<p>Para que una órbita lejana sea tan rápida, tiene que haber mucha más masa dentro de ella que la que suman las estrellas y el gas visibles. Esa diferencia es una de las evidencias más directas de la materia oscura, y la línea de 21 cm es la herramienta con que se midió, porque el hidrógeno llega mucho más lejos que las estrellas.</p>
+
+<div class="box"><div class="box-title">En ALMITA · qué podemos decir y qué no</div>
+<p>Con HI4PI a 2° de resolución, nuestro método del punto tangente da una curva plana de 211–223 km/s <span class="tag mod">MODELO</span>. Ojo con la fórmula 4.2: la parte V₀·sen <i>l</i> no se mide, se supone. En <i>l</i> = 30° eso es la mitad de la respuesta (110 de ~215 km/s), así que una V «dentro del rango profesional» es en buena parte circular. Con nuestro haz de 20°, el gas tangente queda en apenas un 2–5 % del máximo del espectro y el borde aparente cae: por eso la comparación honesta es ALMITA contra HI4PI <em>pasado por el mismo haz</em>, no contra la curva ideal. La corrida del 19-11 (NUCLEO, 32 pasadas) mostró la rotación, pero también un corrimiento de −5 km/s todavía abierto que pesa ±5 km/s en la curva (capítulo 14). La receta VEL-AB está diseñada para resolverlo.</p></div>
+
+<h2>4.6 Latitud: el disco delgado, el gas local y el alabeo</h2>
+<p>El espesor del disco de hidrógeno crece hacia afuera (el disco se «ensancha»), y en la parte exterior además se dobla hacia arriba de un lado y hacia abajo del otro, como el ala de un sombrero: el <em>alabeo</em> (<em>warp</em>). Lejos del plano, a latitudes altas, solo hay gas cercano, a pocos cientos de parsecs, que se mueve casi como nosotros: su línea queda cerca de 0 km/s y es débil, del 1 al 3 % de la <i>T</i><sub>sys</sub>. Eso es lo que vio el grid de alta latitud del 12-11 (<i>b</i> ≈ −52°), con r = 0,62 contra HI4PI <span class="tag med">MEDIDO</span>.</p>
+
+<div class="box sum"><div class="box-title">Capítulo 4 en tres líneas</div><ul><li>El gas que gira produce espectros con forma: cerca, tangente, lejos y disco exterior.</li><li>El borde de alta velocidad da la rotación en el punto tangente.</li><li>La curva de rotación es plana: hay masa que no se ve.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 5</span>La antena como instrumento</h1>
+<p class="lead">Tres preguntas definen cualquier radiotelescopio: qué tan grande es el pedazo de cielo que ve, cuánto ruido propio le agrega a la medición y cuánto se puede bajar ese ruido esperando. La tercera tiene una fórmula, y esa fórmula explica casi todo lo que nos ha pasado.</p>
+
+<h2>5.1 El haz: cuánto cielo se ve a la vez</h2>
+<p>Una antena no ve un punto, ve una mancha: el <b>haz</b>. Su ancho depende de la relación entre la longitud de onda y el tamaño de la antena. Para un plato de diámetro <i>D</i>, el ancho a media potencia es aproximadamente</p>
+<p class="eq">θ ≈ 1,2 · λ / D   (en radianes)<span class="n">(5.1)</span></p>
+<p>El factor 1,2 depende de cómo ilumina el feed el plato: si ilumina más el centro que los bordes, el haz se ensancha un poco. Con λ = 21,1 cm, el lado de 90 cm del plato da 16° y el de 60 cm da 24°. Un plato rectangular da un haz <b>ovalado</b>, más angosto en la dirección del lado largo. El «~20°» que usamos en todas partes es un promedio, todavía no medido. Para tener una idea: 20° es más o menos lo que tapa una mano abierta con el brazo estirado. La Luna llena la tapa la uña del meñique, con margen.</p>
+<figure>{{fig:f5_beam}}
+<figcaption><b>Figura 5.1.</b> El tamaño del haz de ALMITA (ecuación 5.1, sin medir) comparado con la Luna, con el haz del relevamiento HI4PI y con el tamaño aproximado del hidrógeno de la Nube Chica de Magallanes. <span class="tag mod">MODELO</span></figcaption></figure>
+<p>Un haz grande tiene una consecuencia que conviene tener siempre presente: la <b>dilución</b>. Es como fotografiar una vela en un estadio con una cámara de un solo pixel: el pixel promedia la vela con todo el estadio oscuro. Una fuente más chica que el haz queda promediada con todo el cielo que la rodea. Su brillo aparente baja en proporción a la fracción del haz que ocupa. La Nube Chica de Magallanes tiene un hidrógeno intenso, pero ocupa una fracción pequeña de nuestro haz: diluida, aporta apenas 1,1–1,2 K, un 1 % de la <i>T</i><sub>sys</sub> <span class="tag mod">MODELO</span> (calculado con el cubo GASS).</p>
+
+<div class="box"><div class="box-title">En ALMITA · LOBE CROSS</div>
+<p>Como el haz entra en todo (la comparación con HI4PI, los kelvin, el diseño de la conmutación), la página LOBE tiene un modo CROSS que barre el Sol en ascensión recta y en declinación y entrega los dos anchos. Todavía no se ha corrido con un ALIGN solar aprobado: hasta entonces el haz ovalado de la figura 5.1 es un modelo. Para Petorca y para el plato de 1,2 m, medirlo es de las primeras tareas: con 1,2 m el haz bajaría a ~12°.</p></div>
+
+<h2>5.2 Área efectiva: cuánto de la antena trabaja</h2>
+<p>Un plato no aprovecha toda su superficie: parte de la potencia del feed se escapa por los bordes, parte se pierde en la iluminación desigual. La fracción que sí trabaja es la <b>eficiencia de apertura</b> η, y el área útil es el <b>área efectiva</b>, <i>A</i><sub>ef</sub> = η · <i>A</i><sub>geométrica</sub>. Para una fuente puntual de densidad de flujo <i>S</i>, la temperatura de antena que produce es</p>
+<p class="eq">T<sub>A</sub> = A<sub>ef</sub> · S / (2k)<span class="n">(5.2)</span></p>
+<p>El 2 aparece porque una antena con un solo dipolo recibe una sola polarización, la mitad de la potencia de una fuente no polarizada.</p>
+
+<div class="box calc"><div class="box-title">Cuenta · el Sol en kelvin</div>
+<p>El área del plato se estima en 0,463 m² <span class="tag sup">SUPUESTO</span> (falta medir el tramo recto) y NEC da η = 66 % con la placa a 85 mm <span class="tag mod">MODELO</span>: <i>A</i><sub>ef</sub> ≈ 0,31 m². El Sol en calma, a 1415 MHz, ronda las 70 unidades de flujo solar (1 sfu = 10⁻²² W m⁻² Hz⁻¹; el valor del día lo baja <code>lobe_aeff.py</code> de las estaciones de NOAA):</p>
+<p class="eq">T<sub>A</sub> ≈ 0,31 × 70·10⁻²² / (2 × 1,38·10⁻²³) ≈ 80 K</p>
+<p>El Sol suma unos 80 K a una <i>T</i><sub>sys</sub> de ~122 K: casi duplica la potencia. Por eso el ALIGN solar se ve tan claro, y por eso <code>lobe_aeff.py</code> puede hacer el camino inverso: del aumento medido y el flujo publicado, sacar el área efectiva real. Es una escala en kelvin independiente del factor Y.</p></div>
+
+<h2>5.3 Temperatura de sistema: de dónde salen los kelvin</h2>
+<p>Todo lo que agrega ruido se suma en kelvin, y cada etapa pesa según dónde está en la cadena. Si una etapa tiene ganancia <i>G</i>, el ruido de todo lo que viene después se divide por <i>G</i> cuando se refiere a la entrada (la fórmula de Friis). En la práctica: <b>la primera etapa decide casi todo</b>.</p>
+
+<figure>
+<svg viewBox="0 0 640 175" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="11.5">
+  <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1b1b1f"/></marker></defs>
+  <g stroke="#1b1b1f" stroke-width="1.3">
+    <rect x="10" y="40" width="92" height="50" rx="5" fill="#f3f6fa"/>
+    <rect x="135" y="40" width="102" height="50" rx="5" fill="#fbf1ea"/>
+    <rect x="270" y="40" width="92" height="50" rx="5" fill="#f1f6f1"/>
+    <rect x="395" y="40" width="102" height="50" rx="5" fill="#fbf1ea"/>
+    <rect x="530" y="40" width="100" height="50" rx="5" fill="#f3f6fa"/>
+  </g>
+  <g stroke="#1b1b1f" stroke-width="1.4" marker-end="url(#a4)">
+    <line x1="102" y1="65" x2="133" y2="65"/><line x1="237" y1="65" x2="268" y2="65"/>
+    <line x1="362" y1="65" x2="393" y2="65"/><line x1="497" y1="65" x2="528" y2="65"/>
+  </g>
+  <g text-anchor="middle" font-weight="600">
+    <text x="56" y="62">cielo + suelo</text><text x="56" y="78" font-weight="400">T<tspan baseline-shift="sub" font-size="8">A</tspan></text>
+    <text x="186" y="62">pérdidas antes</text><text x="186" y="78" font-weight="400">del LNA</text>
+    <text x="316" y="62">LNA</text><text x="316" y="78" font-weight="400">G ≈ 30 dB</text>
+    <text x="446" y="62">2 m de RG-58</text><text x="446" y="78" font-weight="400">≈ 1,6 dB</text>
+    <text x="580" y="62">SDR</text><text x="580" y="78" font-weight="400">ruido alto</text>
+  </g>
+  <g text-anchor="middle" fill="#6b6b75" font-size="10.5">
+    <text x="186" y="112">cada 0,2 dB a 290 K</text><text x="186" y="126">suman ~14 K y atenúan</text><text x="186" y="140">la señal: <tspan fill="#b5532a" font-weight="600">lo más caro</tspan></text>
+    <text x="316" y="112">su ruido propio</text><text x="316" y="126">entra completo</text>
+    <text x="446" y="112">después del LNA:</text><text x="446" y="126">pesa ÷1000</text>
+    <text x="580" y="112">dividido por toda</text><text x="580" y="126">la ganancia anterior</text>
+  </g>
+  <text x="320" y="20" text-anchor="middle" fill="#1b1b1f" font-size="12">Cuánto pesa el ruido de cada etapa, referido a la antena</text>
+</svg>
+<figcaption><b>Figura 5.2.</b> La cadena de recepción contada como ruido. Una pérdida antes del LNA hace doble daño: agrega su propio ruido térmico y además atenúa la señal antes de que se amplifique. Una pérdida después del LNA casi no importa.</figcaption></figure>
+
+<div class="box"><div class="box-title">En ALMITA · por qué el LNA va pegado al dipolo</div>
+<p>Esta figura es la razón de varias decisiones de la bitácora. Una pérdida <i>L</i> a temperatura física <i>T</i> agrega (<i>L</i> − 1)·<i>T</i> referidos a la antena: 0,2 dB son ~14 K, 1 dB son ~75 K, 4 dB son ~440 K. El 05-11 el factor Y dio 1,53 dB y la cuenta sugería ~4 dB de pérdida antes del LNA <span class="tag med">MEDIDO</span>: entre el SMA del feed (que hacía cortocircuito intermitente, 27-10) y un feed sin balún, la antena estaba perdiendo la mayor parte de su señal antes de amplificarla. Con el balún, la placa a 85 mm y el LNA a pocos centímetros del dipolo, el factor Y del 12-11 subió a 4,71 dB. La regla «coaxial del dipolo al LNA ≤ 25 cm» sale de aquí: RG-58 pierde ~0,8 dB/m a 1420 MHz.</p></div>
+
+<figure>{{fig:f5_tsys}}
+<figcaption><b>Figura 5.3.</b> El presupuesto de ruido del 12-11 (segundo factor Y, 4,71 dB, carga a 300,9 K). La <i>T</i><sub>sys</sub> de 122 K se reparte en dos mitades casi iguales. El factor Y es <span class="tag med">MEDIDO</span>; pasar de Y a kelvin necesita el ruido del LNA, que se tomó de su hoja de datos <span class="tag sup">SUPUESTO</span>, así que tanto la suma como el reparto heredan ese supuesto. A la derecha, la línea de hidrógeno en el plano, del 15 al 18 % de la <i>T</i><sub>sys</sub>.</figcaption></figure>
+
+<p>La parte de la antena (≈ 63 K) es mucho más que el cielo frío, que a esta frecuencia y lejos del plano son unos 5–10 K entre el fondo cósmico, la galaxia y la atmósfera. El resto es suelo y techos vistos por los costados del haz, y pérdidas del feed. Lo confirma la curva de potencia contra altura del 12-11: el cielo «se enfría» al subir la antena, de Y = 0,1–1,6 dB a 30–45° de altura hasta 4,3–4,6 dB a 75° <span class="tag med">MEDIDO</span>. Apuntar bajo es mirar más suelo.</p>
+
+<h2>5.4 La ecuación del radiómetro</h2>
+<p>Esta es la fórmula más importante del libro. El ruido térmico es aleatorio: si se mide su potencia durante un instante, el resultado fluctúa. Pero promediando, la fluctuación baja. ¿Cuánto? Una señal de ruido de ancho de banda <i>B</i> tiene <i>B</i> valores independientes por segundo; en un tiempo τ, hay <i>B</i>·τ valores independientes, y el promedio de <i>N</i> valores independientes tiene una incertidumbre √<i>N</i> veces menor. El resultado:</p>
+<p class="eq">σ<sub>T</sub> = T<sub>sys</sub> / √( B · τ )<span class="n">(5.3)</span></p>
+<p>Es la misma lógica de una encuesta: preguntarle a 100 personas da un margen de error de ~10 %, a 10 000 personas de ~1 %. Para dividir el error por 10 hay que multiplicar las muestras por 100. Tres lecturas de la misma fórmula: el ruido es <b>proporcional a la <i>T</i><sub>sys</sub></b> (de ahí la obsesión por bajarla); baja con la <b>raíz del tiempo</b> (cuatro veces más tiempo para la mitad de ruido); y baja con la <b>raíz del ancho de banda</b> (canales más anchos son menos ruidosos, pero ven menos detalle).</p>
+<figure>{{fig:f5_radiometer}}
+<figcaption><b>Figura 5.4.</b> La ecuación del radiómetro para la banda completa y para un canal de 9,4 kHz, con el punto medido el 17-10 con la carga de 50 Ω (bajo techo). Las líneas verdes marcan el tamaño de las señales que nos interesan. La zona sombreada es donde la teoría deja de valer en la práctica: la ganancia del receptor deriva.</figcaption></figure>
+
+<div class="box"><div class="box-title">En ALMITA · la ecuación verificada</div>
+<p>El 17-10, con la carga de 50 Ω conectada, se midió la estabilidad del receptor V3 con una varianza de Allan. A 1 s el ruido fue 6,98·10⁻⁴ <span class="tag med">MEDIDO</span>; la ecuación 5.3 con <i>B</i> = 2,4 MHz predice 1/√(2,4·10⁶) = 6,45·10⁻⁴. Un 8 % de diferencia: el receptor se comporta casi como un radiómetro ideal. Pero <b>sobre unos 8 s domina la deriva de ganancia</b>: integrar más deja de servir, porque el receptor mismo cambia más que el ruido que se quiere bajar. De esa sola medición nace la conmutación de frecuencia (capítulo 10): cambiar de sintonía cada pocos segundos para comparar siempre dentro de la ventana en que el receptor es estable.</p></div>
+
+<div class="box calc"><div class="box-title">Cuenta · ¿alcanza la polera?</div>
+<p>Plan para el Águila: 80 puntos, 30 s cada uno, conmutación de frecuencia (95 % del tiempo grabando, la mitad en cada sintonía), canales de 9,4 kHz. Cada sintonía integra ~14 s:</p>
+<p class="eq">σ ≈ 1 / √( 9375 × 14 ) ≈ 0,27 %</p>
+<p>Restar las dos sintonías suma ruido (×√2), y plegar las dos copias de la línea lo vuelve a bajar (÷√2): queda ≈ 0,27 % por canal, en el ideal <span class="tag mod">MODELO</span>. Contra una línea de ~15 % en el plano, la relación señal/ruido es ~50: montañas nítidas. Contra el 1–3 % del gas local a <i>b</i> = ±40°, es 4–10: líneas con textura de ruido. Para una polera, eso es justo lo que se quiere.</p></div>
+
+<div class="box warn"><div class="box-title">Ojo · el ruido baja con √τ; los sistemáticos, no</div>
+<p>La ecuación 5.3 trata del ruido aleatorio. No dice nada de los errores <em>sistemáticos</em>: la forma de banda del receptor, ondulaciones de la conmutación que dependen de hacia dónde apunta el plato, interferencias estables. La Nube Chica del 19-11 no se detectó: la señal esperada era 0,6–0,9 %, pero la estructura repetible de la línea de base era de ±5 % <span class="tag med">MEDIDO</span>, diez veces mayor. Integrar más no la habría bajado: se repite, no se promedia. Contra un sistemático no sirve esperar: hay que diseñar el experimento para que se cancele, por ejemplo alternando la Nube con OFFs a su misma altura muchas veces (la receta SMC-ONOFF). Esa diferencia entre ruido y sistemático es, probablemente, la lección más cara de todo ALMITA.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 5 en tres líneas</div><ul><li>El haz mide ~20° (una mano abierta): lo pequeño se diluye.</li><li>Tsys ≈ 122 K, la mitad del propio receptor; una pérdida antes del LNA es lo más caro.</li><li>El ruido baja con √(<i>B</i>τ); los sistemáticos no.</li></ul></div>
+
+<h2>Números para recordar</h2>
+<table>
+<tr><th>Magnitud</th><th class="r">Valor</th><th>Por qué importa</th></tr>
+<tr><td>Frecuencia de la línea</td><td class="r">1420,405752 MHz</td><td>una sola fuente en <code>observer_config.json</code></td></tr>
+<tr><td>Longitud de onda</td><td class="r">21,1 cm</td><td>fija el haz y el tamaño del dipolo</td></tr>
+<tr><td>Conversión Doppler</td><td class="r">1 km/s = 4,74 kHz</td><td>traduce MHz de QUICKLOOK a velocidades</td></tr>
+<tr><td>Media banda del SDR</td><td class="r">±253 km/s</td><td>todo lo que cabe en una sintonía</td></tr>
+<tr><td>Tsys (12-11, cielo alto)</td><td class="r">≈ 122 K</td><td>el piso contra el que se mide todo</td></tr>
+<tr><td>Factor Y (12-11)</td><td class="r">4,71 dB</td><td>la nota de salud de la antena</td></tr>
+<tr><td>Haz</td><td class="r">≈ 16° × 24° (modelo)</td><td>dilución; comparar con HI4PI pasado por el haz</td></tr>
+<tr><td>Línea en el plano</td><td class="r">15–18 % de Tsys</td><td>señal fácil</td></tr>
+<tr><td>Gas a latitud alta</td><td class="r">1–3 %</td><td>señal posible</td></tr>
+<tr><td>Nubes de Magallanes, diluidas</td><td class="r">≈ 1 %</td><td>señal difícil: la ganan o pierden los sistemáticos</td></tr>
+<tr><td>Ruido ideal, 1 s, banda completa</td><td class="r">0,065 %</td><td>medido 0,070 % (17-10)</td></tr>
+<tr><td>Estabilidad del receptor</td><td class="r">~8 s</td><td>razón de ser de la conmutación</td></tr>
+</table>
+
+</body>
+</html>

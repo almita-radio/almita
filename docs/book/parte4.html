@@ -1,0 +1,142 @@
+<section class="partpage"><div class="pn">Parte IV</div><div class="pt">Experimentos</div><div class="ps">Un instrumento que funciona no es todavía un resultado. Esta parte trata de cómo se pregunta algo al cielo sin engañarse: el diseño, lo que ALMITA ha preguntado y respondido, lo que no salió, y las trampas.</div></section>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 13</span>Cómo se diseña un experimento</h1>
+<p class="lead">Richard Feynman lo dijo en un discurso de graduación en Caltech, en 1974 («Cargo Cult Science»): el primer principio es no engañarse a uno mismo, y uno mismo es la persona más fácil de engañar. Casi todo lo que sigue son maneras concretas de cumplir ese principio con un radiotelescopio casero.</p>
+
+<h2>13.1 Las piezas</h2>
+<figure>
+<svg viewBox="0 0 660 170" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="10.5">
+  <defs><marker id="d1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b75"/></marker></defs>
+  <g text-anchor="middle">
+    <rect x="6" y="20" width="118" height="70" rx="6" fill="#f3f6fa" stroke="#1f5a8c"/><text x="65" y="42" font-weight="600">1 · Pregunta</text><text x="65" y="60">una sola,</text><text x="65" y="74">que pueda fallar</text>
+    <rect x="138" y="20" width="118" height="70" rx="6" fill="#f3f6fa" stroke="#1f5a8c"/><text x="197" y="42" font-weight="600">2 · Diseño</text><text x="197" y="60">controles, una</text><text x="197" y="74">variable a la vez</text>
+    <rect x="270" y="20" width="118" height="70" rx="6" fill="#fbf1ea" stroke="#b5532a"/><text x="329" y="42" font-weight="600" fill="#b5532a">3 · Veredicto</text><text x="329" y="60">escrito ANTES</text><text x="329" y="74">de los datos</text>
+    <rect x="402" y="20" width="118" height="70" rx="6" fill="#f1f6f1" stroke="#3d7a46"/><text x="461" y="42" font-weight="600">4 · Observar</text><text x="461" y="60">bajo cielo abierto,</text><text x="461" y="74">anotando todo</text>
+    <rect x="534" y="20" width="118" height="70" rx="6" fill="#f1f6f1" stroke="#3d7a46"/><text x="593" y="42" font-weight="600">5 · Aplicar</text><text x="593" y="60">la regla escrita;</text><text x="593" y="74">repetir</text>
+  </g>
+  <g stroke="#6b6b75" stroke-width="1.2" marker-end="url(#d1)"><line x1="124" y1="55" x2="136" y2="55"/><line x1="256" y1="55" x2="268" y2="55"/><line x1="388" y1="55" x2="400" y2="55"/><line x1="520" y1="55" x2="532" y2="55"/></g>
+  <path d="M593,92 C593,140 65,140 65,94" fill="none" stroke="#6b6b75" stroke-dasharray="4 3" marker-end="url(#d1)"/>
+  <text x="329" y="152" text-anchor="middle" fill="#6b6b75">un resultado inesperado no se «arregla»: se convierte en la pregunta siguiente</text>
+</svg>
+<figcaption><b>Figura 13.1.</b> El ciclo de un experimento en ALMITA. El paso 3 es el que más cuesta y el que más protege.</figcaption></figure>
+
+<h2>13.2 Una pregunta que pueda fallar</h2>
+<p>«¿Se ve algo hacia la Nube Chica?» no es una buena pregunta: casi siempre se ve <em>algo</em>. «¿Hay exceso entre +120 y +200 km/s sobre dos OFF a la misma altura, repetible en diez ciclos?» sí lo es: tiene una respuesta que puede ser no. Una buena pregunta nombra la cantidad que se va a medir, el rango y contra qué se compara.</p>
+
+<h2>13.3 Controles</h2>
+<p>Un control es una medición donde se sabe la respuesta de antemano. Si el control falla, el experimento no vale, salga lo que salga. ALMITA ha usado varios, y conviene reconocerlos como familia:</p>
+<table>
+<tr><th>Control</th><th>Qué descarta</th><th>Cuándo se usó</th></tr>
+<tr><td>La carga de 50 Ω en lugar de la antena</td><td>que una línea la fabrique el receptor</td><td>17-10: ninguna de las ~11 líneas apareció con la carga</td></tr>
+<tr><td>El eje espejado</td><td>que la coincidencia con HI4PI sea casualidad de forma</td><td>05-11: correlación +0,43…+0,77 contra −0,32…+0,11 espejado</td></tr>
+<tr><td>Corrida de banco sin antena</td><td>que una portadora venga del cielo</td><td>10-11: 1420,0398 MHz en 400 de 400 puntos sin antena</td></tr>
+<tr><td>OFF a la misma altura</td><td>que la base dependa de hacia dónde apunta el plato</td><td>recetas SMC-ONOFF y LMC-ONOFF</td></tr>
+<tr><td>Testigo de ganancia al inicio de cada tanda</td><td>que el receptor haya cambiado entre tandas</td><td>SURVEY: el polo, siempre a la misma altura</td></tr>
+<tr><td>Repetir lo mismo más tarde</td><td>que un resultado sea de un solo momento</td><td>SMC 12-11: la joroba de las 20:33 no estaba a las 21:33</td></tr>
+</table>
+
+<h2>13.4 Una variable a la vez</h2>
+<p>Si entre dos mediciones cambian dos cosas, la diferencia no se puede atribuir a ninguna. Es la regla 3 de la bitácora y la que más esfuerzo cuesta cumplir, porque en una salida a la azotea todo cambia a la vez: la hora, la temperatura, la posición del Sol, quién está cerca. La caza del peine de 357 kHz (octubre) tardó días precisamente porque se fue descartando un sospechoso por vez: la fuente de poder, las ranuras de la caja, el cable de red, el arnés de termómetros, y al final la distancia a la Raspberry (3 m contra 1 m).</p>
+
+<h2>13.5 El veredicto escrito antes</h2>
+<p>Con los datos en la mano, siempre hay una manera de leerlos que da el resultado que uno quería: cambiar la ventana, sacar un punto «raro», comparar máximos en vez de áreas. Cada decisión parece razonable por separado. La defensa es decidir todo eso <b>antes</b> de ver los datos: qué se va a calcular, en qué rango, y qué resultado significa qué. Después solo se aplica la regla.</p>
+
+<div class="box"><div class="box-title">En ALMITA · la página EXPERIMENT</div>
+<p>Desde el 21-11 cada experimento es una receta (<code>experiments/*.json</code>) que trae escritos su pregunta, su diseño y sus veredictos posibles, y que solo arranca si se marca que la antena está bajo cielo abierto. El runner la ejecuta tanda por tanda con OBSERVE y REDUCE y aplica la regla al final. Las recetas actuales:</p>
+<table>
+<tr><th>Receta</th><th>Pregunta</th><th>Veredicto escrito</th></tr>
+<tr><td>CHAIN-CHECK</td><td>¿Está el hidrógeno donde siempre? (4 min)</td><td>si no aparece, no se corre nada más: la cadena tiene un problema</td></tr>
+<tr><td>VEL-AB</td><td>¿El −5 km/s del 19-11 es del salto, del centrado o de la noche?</td><td>B corre y C no → centrado; B y C corren → salto; ninguno → la noche. Se compara el perfil completo, nunca el máximo</td></tr>
+<tr><td>SMC-ONOFF</td><td>¿Hay exceso en +120…+200 km/s sobre dos OFF a su altura?</td><td>esperado 0,6–0,9 % de Tsys; NO DETECTADA si ON − OFF es negativo y repetible</td></tr>
+<tr><td>LMC-ONOFF</td><td>¿Hay exceso en +220…+300 km/s?</td><td>esperado ~0,8–1,0 %; salto de 300 kHz para alejar el fantasma</td></tr>
+<tr><td>ROTATION</td><td>¿Qué tan rápido gira la galaxia a 1–7 kpc del centro?</td><td>bordes terminales en ambos lados del centro; corre después de VEL-AB</td></tr>
+</table></div>
+
+<h2>13.6 Bajo techo, instrumento; bajo cielo, cielo</h2>
+<p>La regla 4 de la bitácora: en interiores no se sacan conclusiones del cielo. Bajo techo, el «cielo» es el cielo raso a 290 K, las paredes reflejan, la electrónica está a centímetros. Una medición bajo techo sirve para probar el instrumento (¿se sintoniza bien?, ¿el plegado es plano?, ¿hay espurias propias?), nunca para afirmar algo del hidrógeno. Por eso cada sesión lleva anotado si fue adentro o afuera, y la página EXPERIMENT no deja empezar sin confirmarlo.</p>
+
+<div class="box sum"><div class="box-title">Capítulo 13 en tres líneas</div><ul><li>Una pregunta que pueda fallar, controles y una variable a la vez.</li><li>El veredicto se escribe antes de mirar los datos.</li><li>Bajo techo se prueba el instrumento; bajo cielo abierto, el cielo.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 14</span>Lo que hicimos</h1>
+<p class="lead">Los resultados de ALMITA hasta el 25 de noviembre de 2026, contados con el mismo criterio de las recetas: qué se preguntó, qué salió y qué tan firme es. Incluye lo que no salió, que enseñó tanto como lo que sí.</p>
+
+<h2>14.1 05-11: la primera detección</h2>
+<p>Noche en la azotea, sin balún ni conmutación, con un factor Y de 1,53 dB. La corrida de las 23:01:25, un grid de 5 × 5 en <i>l</i> = +20°, se comparó espectro por espectro con lo que predice HI4PI llevado a nuestra referencia de velocidad. Correlación +0,43 a +0,77 en los 6 puntos comparables; con el eje de frecuencia espejado, −0,32 a +0,11 <span class="tag med">MEDIDO</span>. Reprocesado el 25-11 con REDUCE, la correlación queda en 0,37–0,51, y el espectro de HI4PI de <em>otro</em> punto da casi lo mismo: hay hidrógeno y con el signo correcto, pero la prueba no distingue el apuntado. La sesión de 80 puntos de esa noche es la portada de este libro: en las 25 líneas del plano la joroba llega a 0,4–0,65 dB.</p>
+<p><b>Qué tan firme:</b> detección real, pero con ondas de ±2–6 % por la deriva del receptor (capítulo 8) y sin pasar por REDUCE. Fue la razón para construir la conmutación.</p>
+
+<h2>14.2 12-11: la noche de la madurez</h2>
+<p>Feed nuevo con balún Pawsey y placa a 85 mm (ROE 1,14). Factor Y de 4,71 dB, <i>T</i><sub>sys</sub> ≈ 122 K <span class="tag med">MEDIDO</span>. El grid de <i>l</i> = 20° repetido con conmutación (40 s por punto): hidrógeno en los 25 puntos, base 4 veces más plana que el 05-11, y espectro por espectro contra el cubo de HI4PI pasado por nuestro haz, <b>r = 0,95–0,99</b> <span class="tag med">MEDIDO</span>. El grid de alta latitud (<i>b</i> ≈ −52°) vio el gas local débil (1–3 %).</p>
+<p>La auditoría del 25-11 le hizo a ese r la prueba nula: correlacionar cada espectro nuestro con el HI4PI de <em>otro</em> punto del grid. Dio 0,91–0,98, casi igual; un punto a 20° de distancia, 0,95. El r alto dice que medimos el hidrógeno de esa zona con su forma correcta en velocidad (con el eje espejado cae a 0,3–0,65), no que cada espectro calce con su apuntado. Con los mapas pasa algo parecido: dentro de cada grid r = 0,49 y 0,72, y correr los apuntados 20–40° calza igual.</p>
+<p><b>Qué tan firme:</b> la mejor noche hasta ahora, y la línea es real en los 25 puntos (su área queda decenas de veces sobre el nulo de solo ruido). Lo que no se puede afirmar todavía es el calce punto a punto con HI4PI, ni los detalles del mapa.</p>
+
+<h2>14.3 19-11: la galaxia girando</h2>
+<p>Primera corrida del piloto automático SURVEY con la montura real: 99 capturas de 2 minutos, ninguna fallida. Espectros a lo largo del plano de <i>l</i> = −30° a +30°, con conmutación de 300 kHz y además pares ON/OFF para los bordes.</p>
+<figure>{{img:rotation}}
+<figcaption><b>Figura 14.1.</b> La rotación de la Vía Láctea vista desde la azotea, 19-11. (a) Espectros a lo largo del plano: el gas a <i>l</i> &gt; 0 se aleja (rojo), a <i>l</i> &lt; 0 se acerca (azul). (b) Velocidad media con una ventana simétrica en torno a 0 (negro) y con la ventana que se usó primero (gris). (c) Dos espectros ON/OFF con el borde medido a dos umbrales. (d) Cada «velocidad de rotación» separada en lo medido (el borde) y lo supuesto (V₀). Versión reprocesada el 25-11. <span class="tag med">MEDIDO</span></figcaption></figure>
+<p>Es el resultado del capítulo 4 hecho con nuestro instrumento: el gas a un lado del centro galáctico se aleja y al otro se acerca. Con una ventana simétrica, la velocidad media va de +18 km/s en <i>l</i> = +30° a −19 km/s en −30°, pasando por 0 en el centro.</p>
+<p>Al principio publicamos además dos velocidades de rotación, 200 ± 15 y 218 ± 5 km/s. La auditoría del 25-11 las retiró. El borde del espectro se mide contra un umbral de ~0,45 %, y la base del ON/OFF ondulaba ±1–2 % porque los OFF estaban 20–40° más altos que los ON: el borde lo decidía la base. En <i>l</i> = −20° cambiar el umbral de 3 % a 5 % movía V de 257 a 204 km/s. Y en <i>l</i> = +30° la mitad de V era el V₀ supuesto. Las velocidades medias publicadas también estaban infladas: la conmutación centrada hacia el borde dejaba ventanas como −31…+250 km/s, que empujan el promedio hacia afuera.</p>
+<p><b>Qué tan firme:</b> el giro del disco, sin ambigüedad. El borde de <i>l</i> = +30° (+104 ± 2 km/s con cualquier umbral), firme. Una curva de rotación, todavía no: hace falta ON y OFF a la misma altura, alternados muchas veces, y resolver el corrimiento de −5 km/s de esa noche (VEL-AB).</p>
+
+<h2>14.4 Las Nubes de Magallanes: lo que no salió</h2>
+<p>Tres intentos, tres no.</p>
+<p><b>SMC, 12-11.</b> Dos pasadas mostraron la misma joroba de +4–5 % cerca de +165 km/s, y el punto vacío no la tenía. Parecía una detección. Una hora después, con el mismo método, la joroba no estaba; los puntos lejanos daban +1,6 a +1,9 %. Veredicto: NO CONFIRMADA <span class="tag med">MEDIDO</span>.</p>
+<p><b>LMC, 12-11.</b> Barrido horizontal a la altura de la Nube: en la LMC el exceso salió <em>negativo</em> (−1,6 %), y puntos vecinos separados 7,5° saltaban de −1,6 a +3,0, algo imposible con un haz de 20°. Veredicto: NO DETECTADA. Hallazgo útil: la misma dirección repetida daba el mismo valor. La base depende de la dirección.</p>
+<figure>{{img:smc}}
+<figcaption><b>Figura 14.2.</b> SMC, 19-11: 20 pasadas de 2 min con conmutación de ±650 kHz centrada en +160 km/s. La SMC da −4,6 % en las 6 pasadas; los OFF, alrededor de 0. El hidrógeno solo puede sumar: un valor negativo y repetible no es cielo, es la base que cambia con la dirección. La franja gris del panel inferior es lo esperado según GASS. <span class="tag med">MEDIDO</span></figcaption></figure>
+<p><b>SMC, 19-11.</b> Veredicto: NO DETECTADA. La señal esperada (0,6–0,9 %) es diez veces menor que la estructura de ±5 % que aparece solo hacia la SMC, al sur, en el sector «caliente» de la curva contra altura.</p>
+<p><b>Qué se aprendió:</b> las Nubes no fallan por falta de sensibilidad (la ecuación del radiómetro dice que 2 minutos bastan para bajar el ruido a una fracción de la señal), sino por un sistemático que depende de la dirección. Eso cambió el diseño: OFF a la misma altura, alternando muchas veces (recetas SMC-ONOFF y LMC-ONOFF).</p>
+
+<h2>14.5 21-11: retirar un resultado</h2>
+<p>Desde el 05-11 se repetía que nuestro hidrógeno salía «3 a 10 km/s por encima de HI4PI». La auditoría del 21-11, preparando la charla en ALMA, lo retiró. Venía de comparar máximos de perfiles con techo plano y dos jorobas; ajustando el perfil completo (escala, base lineal y corrimiento) sobre el REDUCE oficial del 12-11, el corrimiento fue <b>+0,06 km/s</b> con dispersión 1,1 <span class="tag med">MEDIDO</span>. La cadena se verificó entera: el paso a LSRK coincide con un cálculo independiente a 6 m/s, el plegado está bien, las dos sintonías coinciden.</p>
+<p>La auditoría dejó una pregunta nueva, más honesta: el −5 a −6,5 km/s del 19-11, que además cambia con la hora. Y una advertencia: contra el cubo GASS todo sale −3 a −7 km/s, incluso el 12-11, así que el cero de velocidad de nuestro armado de GASS no está verificado y GASS no sirve de referencia de velocidad hasta revisarlo.</p>
+<div class="box"><div class="box-title">En ALMITA · por qué esto es un logro</div>
+<p>Retirar un resultado propio en público es la parte más difícil del oficio y la que más credibilidad da. La bitácora lo muestra tachado, no borrado: «<s>falta explicarlo</s> → era un artefacto de comparar máximos». Cualquiera que lea la bitácora puede seguir el razonamiento entero, incluida la equivocación.</p></div>
+
+<h2>14.6 25-11: la auditoría, o cómo bajarse los humos a tiempo</h2>
+<p>Después de una revisión del código, todos los resultados publicados se reprocesaron desde los crudos, con una pregunta por cada uno: ¿qué daría este número si la respuesta fuera falsa? Esa es la <b>prueba nula</b>, y es la herramienta más barata y más subestimada de la ciencia. Si un espectro de HI4PI elegido <em>mal</em> calza casi igual que el bueno, el calce no está midiendo lo que creíamos. Si una carga de 50 Ω, que no tiene hidrógeno, produce «áreas» de línea de 4 a 7 veces el error reportado, el error reportado está mal.</p>
+<table>
+<tr><th>Resultado</th><th>Antes</th><th>Después de la prueba nula</th></tr>
+<tr><td>Hidrógeno detectado (05-11, 12-11)</td><td>sí</td><td><b>sí</b>, con el signo de velocidad correcto</td></tr>
+<tr><td>Calce con HI4PI punto a punto</td><td>r = 0,94–0,99</td><td>no demostrado: otro punto da 0,91–0,98</td></tr>
+<tr><td>Mapa contra HI4PI</td><td>r = 0,92</td><td>gradiente grueso: 0,49 y 0,72 dentro de cada zona</td></tr>
+<tr><td>El disco gira (19-11)</td><td>sí</td><td><b>sí</b></td></tr>
+<tr><td>Velocidades de rotación</td><td>200 ± 15 y 218 ± 5 km/s</td><td>retiradas; queda el borde de +104 km/s en <i>l</i> = +30°</td></tr>
+<tr><td>Factor Y del 12-11</td><td>4,71 dB</td><td><b>4,71 dB</b>, confirmado desde los bytes crudos</td></tr>
+<tr><td>Signo de la corrección LSRK</td><td>supuesto bueno</td><td><b>bueno</b>, a 5 m/s de un cálculo independiente</td></tr>
+</table>
+<div class="box"><div class="box-title">En ALMITA · lo que se corrigió en público</div>
+<p>El README y el sitio de GitHub se corrigieron el mismo día, con las tres figuras rehechas, y cada corrección dice qué decía antes. El informe completo, con sus scripts y figuras, quedó en <code>data/audit_20261125/</code>. Para una charla en ALMA, «esto lo creíamos, esto hicimos para romperlo y esto quedó en pie» vale más que cualquier número bonito.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 14 en tres líneas</div><ul><li>Hidrógeno detectado (05-11, 12-11) con el signo correcto, y el disco de la galaxia girando (19-11).</li><li>Las velocidades de rotación y el calce punto a punto con HI4PI no pasaron la prueba nula; las Nubes las frena un sistemático.</li><li>Retirar un resultado equivocado también es un resultado, y la prueba nula es la manera de encontrarlos.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 15</span>Lo que queda, y las trampas</h1>
+
+<h2>15.1 Los experimentos pendientes</h2>
+<table>
+<tr><th>Experimento</th><th>Para qué</th><th>Cuándo</th></tr>
+<tr><td>CHAIN-CHECK</td><td>verificar la cadena antes de cada noche</td><td>siempre primero</td></tr>
+<tr><td>VEL-AB</td><td>cerrar la pregunta del −5 km/s</td><td>la próxima noche de cielo (~30 min)</td></tr>
+<tr><td>Polera del Águila</td><td>80 espectros en <i>l</i> = 35°, <i>b</i> −40° a +40°</td><td>jueves 26-11, ~14:30</td></tr>
+<tr><td>LOBE CROSS + área efectiva</td><td>medir el haz real y una escala en kelvin independiente</td><td>de día, tras un ALIGN solar aprobado</td></tr>
+<tr><td>SMC-ONOFF y LMC-ONOFF</td><td>las Nubes con OFF a su altura</td><td>noches oscuras; Petorca, semana del 06-12</td></tr>
+<tr><td>ROTATION</td><td>la curva con los bordes bien medidos</td><td>después de VEL-AB; temporada del centro galáctico (mayo–septiembre) para el lado interno</td></tr>
+<tr><td>Plato de 1,2 m</td><td>haz de ~12° en vez de 20°</td><td>después de Petorca</td></tr>
+</table>
+
+<h2>15.2 Las trampas</h2>
+<p>Experimentos que <em>no</em> conviene hacer, o maneras de hacerlos que engañan. Todas tienen su fecha en la bitácora.</p>
+<div class="box warn"><div class="box-title">1 · Concluir del cielo bajo techo</div><p>Bajo techo se prueba el instrumento, no el cielo. Si una sesión no dice si fue adentro o afuera, no sirve.</p></div>
+<div class="box warn"><div class="box-title">2 · Comparar máximos</div><p>El máximo de un perfil ancho salta con el ruido. Se compara el perfil completo o el área (capítulos 2 y 14).</p></div>
+<div class="box warn"><div class="box-title">3 · Un OFF a otra altura</div><p>La base depende de hacia dónde mira el plato. Un OFF que ve otro suelo no es un OFF (capítulo 10).</p></div>
+<div class="box warn"><div class="box-title">4 · Integrar contra un sistemático</div><p>Más tiempo baja el ruido, no las estructuras que se repiten. Si el resultado no mejora con √τ, el problema es de diseño (capítulo 5).</p></div>
+<div class="box warn"><div class="box-title">5 · Creer una sola pasada</div><p>La joroba de la SMC del 12-11 estuvo en dos pasadas seguidas y desapareció una hora después. Repetir más tarde, no solo más veces.</p></div>
+<div class="box warn"><div class="box-title">6 · Comparar con un relevamiento sin pasarlo por el haz</div><p>HI4PI ve 5000 veces menos cielo por punto. Se compara siempre contra HI4PI convolucionado con nuestro haz y recortado por nuestra ventana.</p></div>
+<div class="box warn"><div class="box-title">7 · Leer la interferencia como velocidad</div><p>Una portadora en 1420,0398 MHz es «gas a +77 km/s» para cualquier análisis automático. Lista de líneas conocidas y prueba con la carga.</p></div>
+<div class="box warn"><div class="box-title">8 · Cambiar dos cosas a la vez</div><p>Feed nuevo <em>y</em> cable nuevo en la misma noche: si mejora, no se sabe cuál fue. Una variable por vez.</p></div>
+<div class="box warn"><div class="box-title">9 · Personas y electrónica cerca</div><p>Una persona a menos de ~1,5 m de la Raspberry o del feed acopla la peineta y unas 30 líneas. La NanoVNA barriendo también irradia. Se anota quién está dónde.</p></div>
+<div class="box warn"><div class="box-title">10 · Usar una referencia sin verificar</div><p>GASS sirvió para estimar el brillo de las Nubes, pero su cero de velocidad, tal como lo armamos, no está verificado. Toda referencia externa pasa su propio control antes de usarse como vara.</p></div>
+<div class="box warn"><div class="box-title">11 · Una correlación sin prueba nula</div><p>r = 0,98 suena a calce perfecto, hasta que el espectro de otro punto da 0,97. Toda comparación lleva al lado lo que daría con la respuesta equivocada: otra posición, el eje espejado, una carga sin cielo.</p></div>
+<div class="box warn"><div class="box-title">12 · Una ventana o un umbral elegidos a la medida</div><p>Una ventana de velocidad corrida hacia un lado empuja el promedio hacia ese lado; un borde medido a un solo umbral esconde cuánto se mueve con otro. Se usan ventanas simétricas y se informa el barrido de umbrales.</p></div>

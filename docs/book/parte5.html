@@ -1,0 +1,109 @@
+<section class="partpage"><div class="pn">Parte V</div><div class="pt">El hardware en corto, y anexos</div><div class="ps">Lo mínimo del fierro para entender los capítulos anteriores, una línea de tiempo, un glosario y lecturas para seguir.</div></section>
+
+<h1><span class="num">Capítulo 16</span>El instrumento en una página</h1>
+<table class="long">
+<tr><th>Parte</th><th>Qué es</th><th>El número que importa</th><th>Por qué así</th></tr>
+<tr><td>Plato</td><td>grilla WiFi modificada, 90 × 60 cm, malla de acero detrás</td><td>profundidad 200 / 67 mm; haz ~16° × 24°</td><td>una grilla refleja solo el campo paralelo a sus barras</td></tr>
+<tr><td>Feed</td><td>dipolo de cinta de cobre <b>paralelo a las barras</b>, brazos de 37 mm, en caja impresa</td><td>ROE 1,14 en 1420 MHz (56,5 + j2,6 Ω)</td><td>cruzado, el plato sería casi transparente</td></tr>
+<tr><td>Balún</td><td>Pawsey, dos RG-58 pegados</td><td>37–38 mm entre soldaduras (NEC con chaquetas de PVC), no 52</td><td>sin él, la malla del coaxial es un tercer brazo que deforma el haz y recoge ruido</td></tr>
+<tr><td>Placa reflectora</td><td>12 × 12 cm detrás del dipolo</td><td>a 85 mm: eficiencia NEC 66 %</td><td>a 45 mm la ROE era 2,5 y la eficiencia 56 %</td></tr>
+<tr><td>LNA</td><td>SAWbird+ H1, a pocos cm del dipolo, alimentado por Bias-T</td><td>~30 dB; T<sub>rx</sub> supuesta 59 K</td><td>cada 0,2 dB de pérdida antes del LNA suma ~14 K (capítulo 5)</td></tr>
+<tr><td>Cable</td><td>2 m de RG-58 LNA → SDR</td><td>~0,8 dB/m</td><td>después del LNA casi no pesa</td></tr>
+<tr><td>Receptor</td><td>RTL-SDR Blog V3, EEPROM con serial 00000001 (MAIN)</td><td>2,4 MS/s, 40,2 dB, AGC apagado</td><td>el V4 murió el 17-10</td></tr>
+<tr><td>Junto al trípode</td><td>Raspberry Pi 4: <code>rtl_tcp</code>, agente de instrumento, INDI</td><td>a ≥ 1 m del feed; WiFi apagado</td><td>la Raspberry irradia (peineta de 357 kHz con la Pi 5)</td></tr>
+<tr><td>En la casa</td><td>notebook: web, captura, REDUCE, datos</td><td>cable de red directo a la Pi 4</td><td>lo ruidoso, lejos de la antena</td></tr>
+<tr><td>Montura</td><td>OnStep (protocolo LX200) vía INDI</td><td>alineación con el Sol (SUN SYNC)</td><td>un solo «conductor» de la montura a la vez</td></tr>
+<tr><td>Termómetros</td><td>4 × DS18B20: sdr, lna, cable, carga</td><td>SDR a 52–54 °C en operación</td><td>la carga sin temperatura no da kelvin; la ganancia deriva con el calor</td></tr>
+</table>
+<div class="box"><div class="box-title">Las reglas de oro, resumidas</div>
+<p>Nadie a menos de ~1,5 m de la Raspberry o del feed · NanoVNA en pausa durante mediciones de RF · una variable a la vez · bajo techo no hay conclusiones del cielo · carga y cielo en el mismo proceso de <code>rtl_tcp</code> · Bias-T verificado con cargas · todo crimpado nuevo se prueba con multímetro (moviéndolo) y NanoVNA · <code>capture.py</code> se detiene con Ctrl-C, nunca matándolo · después de reiniciar el SDR, revisar que entregue señal · respaldar los datos antes de reutilizar un equipo.</p></div>
+
+<div class="box"><div class="box-title">Si quieres armar uno · lo que ahorra más tiempo</div>
+<p><b>1. El LNA pegado al dipolo.</b> Cada centímetro de cable antes del LNA se paga en kelvin; después del LNA casi no importa.<br>
+<b>2. La electrónica lejos de la antena.</b> Una Raspberry a 30 cm del feed llena el espectro de líneas; a más de un metro, desaparecen.<br>
+<b>3. Una carga de 50 Ω desde el primer día.</b> Es el control que separa lo que fabrica el receptor de lo que entra por la antena, y la temperatura conocida del factor Y.<br>
+<b>4. Medir el factor Y antes de buscar hidrógeno.</b> Si Y no llega a ~4 dB, el problema está en la antena o en los conectores, y buscar galaxias es perder la noche.<br>
+<b>5. Comparar casi al mismo tiempo.</b> Una referencia de hace minutos ya no sirve; la conmutación de frecuencia es la manera más barata de tenerla al instante.<br>
+<b>6. Anotarlo todo.</b> Adentro o afuera, quién estaba cerca, qué cambió. La mitad de los misterios de ALMITA se resolvieron leyendo notas.</p></div>
+
+<h1><span class="num">Anexo A</span>Línea de tiempo</h1>
+<table class="long">
+<tr><th>Fecha</th><th>Hito</th></tr>
+<tr><td>10-08-2026</td><td>Línea base del repositorio: generador de grillas v1</td></tr>
+<tr><td>20-08</td><td>Control de la montura por INDI endurecido; campaña de pruebas de la montura</td></tr>
+<tr><td>08-10</td><td>Sincronización de la montura con el Sol y con el HI (protegida)</td></tr>
+<tr><td>15-10</td><td>Página LOBE; arreglos nocturnos: bloqueo de la montura, AGC del RTL apagado, chequeos de meridiano</td></tr>
+<tr><td>17-10</td><td>Muere el V4; el V3 se reprograma como MAIN. Prueba con carga: el radiómetro casi ideal; ninguna línea espuria propia</td></tr>
+<tr><td>18-10</td><td>Factor Y ≈ 1 dB: conector del LNA intermitente</td></tr>
+<tr><td>27-10</td><td>El SMA del feed hace cortocircuito intermitente; se rehace</td></tr>
+<tr><td>28–29-10</td><td>La peineta de 357 kHz: la Raspberry Pi 5 irradia por el aire</td></tr>
+<tr><td>01–02-11</td><td>Pi 4 limpia a ≥ 1 m; división en dos computadores: Pi 4 en el trípode, notebook en la casa</td></tr>
+<tr><td><b>05-11</b></td><td><b>Primera detección de hidrógeno</b> desde la azotea</td></tr>
+<tr><td>09-11</td><td>Conmutación de frecuencia: forma de banda de ±14,6 % → ±0,12–0,19 %</td></tr>
+<tr><td>10-11</td><td>Factor Y dentro de CALIBRATE; ESTIMATOR v2 con curtosis; balún Pawsey calculado con NEC</td></tr>
+<tr><td><b>12-11</b></td><td><b>Feed con balún y placa (ROE 1,14); Y = 4,71 dB; hidrógeno en los 25 puntos con conmutación</b>; SMC no confirmada, LMC no detectada</td></tr>
+<tr><td>17-11</td><td>Centro de conmutación configurable (BL-105) pasa el banco y entra en producción</td></tr>
+<tr><td>18-11</td><td>Mapa «El cielo de ALMITA» en STATUS (r = 0,92); deconvolución</td></tr>
+<tr><td><b>19-11</b></td><td><b>Piloto SURVEY con la montura real: la rotación de la Vía Láctea</b>; SMC no detectada</td></tr>
+<tr><td>21-11</td><td>Auditoría de velocidad: se retira el «+3 a +10 km/s»; página EXPERIMENT</td></tr>
+<tr><td>22-11</td><td>Este libro</td></tr>
+<tr><td><b>25-11</b></td><td><b>Auditoría con pruebas nulas:</b> se retiran las velocidades de rotación y el calce punto a punto con HI4PI; README y sitio corregidos</td></tr>
+<tr><td>26-11</td><td>Polera del Águila (planificada)</td></tr>
+<tr><td>Semana del 06-12</td><td>Petorca, luna nueva (planificado); después, coloquio en ALMA</td></tr>
+</table>
+
+<h1><span class="num">Anexo B</span>Glosario</h1>
+<table class="long">
+<tr><th>Término</th><th>Qué quiere decir</th></tr>
+<tr><td>ADC</td><td>convertidor analógico-digital; en el SDR, 8 bits (códigos 0–255)</td></tr>
+<tr><td>AGC</td><td>control automático de ganancia; apagado en ALMITA para que la ganancia no cambie entre mediciones</td></tr>
+<tr><td>Aliasing</td><td>una frecuencia fuera de la banda que aparece disfrazada de otra dentro de ella</td></tr>
+<tr><td>Balún</td><td>dispositivo que conecta una antena balanceada (dipolo) a un cable desbalanceado (coaxial) sin que la malla radie</td></tr>
+<tr><td>Banda de paso</td><td>la forma de ganancia contra frecuencia del receptor; multiplica todo lo que entra</td></tr>
+<tr><td>Bias-T</td><td>circuito que manda corriente continua por el coaxial para alimentar el LNA</td></tr>
+<tr><td>Canal</td><td>cada una de las frecuencias en que la FFT divide la banda; 293 Hz en REDUCE</td></tr>
+<tr><td>Conmutación de frecuencia</td><td>alternar la sintonía para cancelar la forma del receptor; deja una ventana útil y fantasmas</td></tr>
+<tr><td>Correlación (r)</td><td>qué tan parecidas son dos curvas o mapas, de −1 a 1; 1 es la misma forma. Siempre junto a su prueba nula</td></tr>
+<tr><td>Curtosis espectral (SK)</td><td>estadístico por canal que vale 1 para ruido; detecta pulsos (&gt;1) y portadoras fuertes (&lt;1)</td></tr>
+<tr><td>dB, dBm</td><td>cociente de potencias en escala logarítmica; dBm es potencia absoluta respecto de 1 mW</td></tr>
+<tr><td>Densidad de columna</td><td>átomos por cm² a lo largo de la línea de visión; proporcional al área de la línea</td></tr>
+<tr><td>Factor Y</td><td>cociente de potencia carga caliente / cielo frío; no depende de la ganancia</td></tr>
+<tr><td>Fantasma</td><td>copia negativa de una línea, a ±2δ, que deja el plegado de la conmutación</td></tr>
+<tr><td>FFT</td><td>algoritmo rápido para la transformada de Fourier: de muestras en el tiempo a canales en frecuencia</td></tr>
+<tr><td>FWHM</td><td>ancho a media potencia (de un haz o de una línea)</td></tr>
+<tr><td>GASS</td><td>relevamiento de HI del cielo austral hecho con Parkes; lo usamos para estimar el brillo de las Nubes</td></tr>
+<tr><td>Haz</td><td>la mancha de cielo que la antena ve a la vez; ~20° en ALMITA</td></tr>
+<tr><td>HI</td><td>hidrógeno atómico neutro, el que emite en 21 cm</td></tr>
+<tr><td>HI4PI</td><td>relevamiento de HI de todo el cielo con resolución de 0,27°; la referencia de comparación</td></tr>
+<tr><td>I/Q</td><td>las dos componentes de una muestra compleja; permiten distinguir frecuencias positivas y negativas</td></tr>
+<tr><td>kpc</td><td>kiloparsec: 3260 años luz</td></tr>
+<tr><td>LNA</td><td>amplificador de bajo ruido, la primera etapa después de la antena</td></tr>
+<tr><td>LSR / LSRK</td><td>sistema de referencia que gira con la galaxia en la posición del Sol; donde se comparan velocidades</td></tr>
+<tr><td>Momento 0 / 1</td><td>área de la línea (cuánto gas) / velocidad media (hacia dónde se mueve)</td></tr>
+<tr><td>MS/s</td><td>millones de muestras por segundo; el SDR trabaja a 2,4 MS/s</td></tr>
+<tr><td>NATIVE_GRID</td><td>contrato de ALMITA: los canales se marcan, nunca se rellenan ni se interpolan sin necesidad</td></tr>
+<tr><td>NEC</td><td>programa de simulación de antenas; sus valores mandan sobre las fórmulas de manual</td></tr>
+<tr><td>ON/OFF</td><td>comparar la fuente con un punto vacío del cielo</td></tr>
+<tr><td>Oscilador local (LO)</td><td>la oscilación que el mezclador usa para bajar la señal; elegirla es sintonizar</td></tr>
+<tr><td>Prueba nula</td><td>repetir una comparación con una respuesta que se sabe falsa (otra posición, eje espejado, una carga sin cielo); si da casi lo mismo, la comparación no prueba nada</td></tr>
+<tr><td>Punto tangente</td><td>donde la línea de visión pasa más cerca del centro galáctico; da la velocidad máxima</td></tr>
+<tr><td>RFI</td><td>interferencia de radiofrecuencia: lo que entra por la antena sin venir del cielo</td></tr>
+<tr><td>rms</td><td>raíz del promedio de los cuadrados: el tamaño típico de una señal que oscila o de un ruido</td></tr>
+<tr><td>ROE (VSWR)</td><td>razón de onda estacionaria: qué tan bien adaptada está la antena; 1 es perfecto</td></tr>
+<tr><td>SDR</td><td>radio definida por software: un receptor que entrega la señal como números y deja el resto al computador</td></tr>
+<tr><td>σ (sigma)</td><td>el tamaño típico del ruido; un resultado a 5–6σ difícilmente es casualidad</td></tr>
+<tr><td>Temperatura de antena / de brillo</td><td>potencia o brillo expresados como la temperatura de un cuerpo que los produciría</td></tr>
+<tr><td>T<sub>sys</sub></td><td>temperatura de sistema: todo el ruido de la cadena, referido a la antena</td></tr>
+<tr><td>Ventana (FFT)</td><td>función que suaviza los bordes de cada cuadro para reducir la fuga; Hann en ALMITA</td></tr>
+</table>
+
+<h1><span class="num">Anexo C</span>Para seguir leyendo</h1>
+<p><b>Condon y Ransom, <i>Essential Radio Astronomy</i></b> (NRAO, gratuito en la web). El más didáctico para la física de los capítulos 1 a 5: temperatura de brillo, antenas, radiómetros y la línea de 21 cm.</p>
+<p><b>Marr, Snell y Kurtz, <i>Fundamentals of Radio Astronomy</i></b>. Nivel de pregrado, muy claro en observación y procesamiento.</p>
+<p><b>Wilson, Rohlfs y Hüttemeister, <i>Tools of Radio Astronomy</i></b>. La referencia profesional; más densa.</p>
+<p><b>Marc Lichtman, <i>PySDR</i></b> (pysdr.org, gratuito). Muestreo IQ, FFT, aliasing y filtros con dibujos y código en Python: el complemento natural de la Parte II.</p>
+<p><b>Richard Lyons, <i>Understanding Digital Signal Processing</i></b>. Para entender la FFT y las ventanas a fondo.</p>
+<p><b>Nita y Gary (2010)</b>, el artículo que define el estimador de curtosis espectral que usa <code>reduce_estimator_v2.py</code>.</p>
+<p><b>DSPIRA</b> (NRAO / Green Bank) y <b>SARA</b> (Society of Amateur Radio Astronomers): proyectos de radiotelescopios de hidrógeno con SDR, los parientes más cercanos de ALMITA.</p>
+<p><b>La bitácora</b>, <code>docs/BITACORA.md</code>: cada resultado de este libro tiene ahí su fecha, su contexto y, cuando hizo falta, su corrección.</p>
+<p class="small" style="margin-top:8mm">ALMITA · crónica técnica de un radiotelescopio casero · borrador del 22 de noviembre de 2026. Las cifras marcadas MEDIDO provienen de los archivos y de la bitácora del proyecto; las marcadas MODELO, de simulaciones y cálculos reproducibles en <code>docs/book/</code>; las SUPUESTO, de hojas de datos o valores asumidos.</p>

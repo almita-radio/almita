@@ -1,0 +1,201 @@
+<section class="partpage"><div class="pn">Parte III</div><div class="pt">Procesamiento</div><div class="ps">Cómo se convierte un archivo de bytes en un espectro en el que se puede confiar: calibrar, comparar, limpiar la interferencia y reducir. Cada técnica aparece con el problema concreto que vino a resolver.</div></section>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 9</span>Calibración: de códigos a kelvin</h1>
+<p class="lead">El SDR entrega potencias en unidades arbitrarias: dependen de la ganancia, del cable, del día. Calibrar es encontrar el factor que las convierte en kelvin. Con dos temperaturas conocidas bastaría; el problema es que solo conocemos una.</p>
+
+<h2>9.1 Dos incógnitas</h2>
+<p>La potencia que mide el receptor es la ganancia total <i>G</i> por la temperatura de todo lo que entra (capítulo 5):</p>
+<p class="eq">P = G · k · B · (T<sub>entrada</sub> + T<sub>rx</sub>)<span class="n">(9.1)</span></p>
+<p>donde <i>T</i><sub>rx</sub> es el ruido propio del receptor. Hay dos incógnitas, <i>G</i> y <i>T</i><sub>rx</sub>. Midiendo dos entradas de temperatura conocida, una caliente y una fría, se despejan las dos. Es el método <b>caliente/frío</b>, y su número clave es el cociente de las dos potencias, el <b>factor Y</b>:</p>
+<p class="eq">Y = P<sub>caliente</sub> / P<sub>frío</sub> = (T<sub>caliente</sub> + T<sub>rx</sub>) / (T<sub>frío</sub> + T<sub>rx</sub>)<span class="n">(9.2)</span></p>
+<p>Es como calibrar un termómetro de cocina con agua con hielo (0 °C) y agua hirviendo (100 °C): dos puntos conocidos fijan la escala. Nosotros tenemos el agua hirviendo (la carga) pero no el hielo, y eso complica las cosas (sección 9.2). La <i>G</i> desapareció: el factor Y no depende de la ganancia. Por eso es tan útil como indicador de salud. Si la antena pierde señal (un conector malo, un feed desadaptado), el cielo «se calienta» con el ruido de esas pérdidas, y Y baja.</p>
+
+<figure>
+<svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="11.5">
+  <text x="20" y="22" font-weight="600">Carga de 50 Ω en la entrada del LNA</text>
+  <rect x="20" y="32" width="301" height="34" fill="#b5532a" opacity=".85"/><text x="170" y="54" text-anchor="middle" fill="#fff">T carga = 300,9 K (medida por su DS18B20)</text>
+  <rect x="321" y="32" width="59" height="34" fill="#6b6b75"/><text x="350" y="54" text-anchor="middle" fill="#fff">T rx</text>
+  <text x="392" y="54">→ P carga ∝ 360 K</text>
+  <text x="20" y="100" font-weight="600">Antena apuntando al cielo frío (HI BAJO)</text>
+  <rect x="20" y="110" width="63" height="34" fill="#1f5a8c"/><text x="51" y="132" text-anchor="middle" fill="#fff">T A</text>
+  <rect x="83" y="110" width="59" height="34" fill="#6b6b75"/><text x="112" y="132" text-anchor="middle" fill="#fff">T rx</text>
+  <text x="154" y="132">→ P cielo ∝ 122 K</text>
+  <text x="20" y="178" fill="#1b1b1f">Y = 360 / 122 = 2,96 = 4,71 dB.   Si T rx = 59 K (hoja de datos):  T sys = 360 / 2,96 = 122 K,  T A = 63 K.</text>
+  <text x="20" y="196" fill="#6b6b75" font-size="10.5">Con T rx entre 35 y 80 K, la T sys queda entre 113 y 129 K. Y está medido; los kelvin heredan el supuesto de T rx.</text>
+</svg>
+<figcaption><b>Figura 9.1.</b> El factor Y del 12-11 (segundo wizard, 20:14–20:25) contado con barras de temperatura. La barra gris es la misma en las dos mediciones: el ruido del receptor.</figcaption></figure>
+
+<h2>9.2 El problema de la temperatura fría</h2>
+<p>En un laboratorio la carga fría se sumerge en nitrógeno líquido (77 K). Nosotros no tenemos eso; la referencia fría es el cielo, y la temperatura del cielo visto por nuestra antena (fondo cósmico, galaxia, atmósfera, suelo por los costados, pérdidas) es justamente lo que no sabemos. Quedan dos incógnitas, <i>T</i><sub>A</sub> y <i>T</i><sub>rx</sub>, con una sola ecuación. El wizard resuelve la ambigüedad con un supuesto declarado: el ruido del LNA según su hoja de datos, <i>T</i><sub>rx</sub> = 59 K (cifra de ruido ~0,8 dB), y lleva siempre el rango de 35 a 80 K para mostrar cuánto cambia el resultado <span class="tag sup">SUPUESTO</span>.</p>
+<div class="box"><div class="box-title">En ALMITA · el wizard CALIBRATE</div>
+<p><code>calibration_engine/y_factor.py</code> toma las capturas de la carga (<code>AMBIENT_50R</code>) y del cielo frío (<code>HI_BAJO</code>), con su temperatura leída del sensor <code>load</code>, y calcula Y, la <i>T</i><sub>sys</sub> y la <i>T</i><sub>A</sub> con su rango. Además mide la zona alta del plano (<code>HI_ALTO</code>) para comprobar que el hidrógeno está donde debe. Tres reglas del wizard salen de errores reales: carga y cielo <b>en el mismo proceso</b> de <code>rtl_tcp</code> (un reinicio cambia la ganancia ~1,7 dB), <b>AGC apagado</b> (capítulo 6), y con la carga, <b>Bias-T verificado</b>: el Bias-T manda corriente continua por el coaxial para alimentar el LNA, y una carga de 50 Ω conectada directo al SDR la recibiría.</p></div>
+
+<h2>9.3 Una calibración también es una observación</h2>
+<p>El 12-11 hubo dos wizards en la misma noche, con el mismo feed: el primero dio Y = 2,85 dB y el segundo 4,71 dB <span class="tag med">MEDIDO</span>. Entre los dos se midió la potencia contra altura: el cielo del este y sur-sureste está «caliente» hasta unos 60° de altura (Y de 0,1–1,6 dB a 30–45°, de 4,3–4,6 dB a 75°). En el primer wizard el punto frío había quedado en ese sector, a 63° de altura; en el segundo, a 74°. La antena era la misma; el cielo «frío» no.</p>
+<div class="box warn"><div class="box-title">Ojo · el cielo frío no siempre es frío</div>
+<p>El factor Y mide la antena <em>y</em> el lugar al que apunta. A baja altura el haz de 20° y sus lóbulos laterales ven techos, cerros y la ciudad, todos cerca de 290 K. Para comparar factores Y entre noches hay que apuntar alto, y anotar a dónde. La conclusión del 12-11 fue: con cielo limpio, Y ≈ 4,5–4,7 dB, <i>T</i><sub>sys</sub> ≈ 122–130 K. Era la meta (≥ 4 dB) que decidía si hacía falta comprar el feed Kraken: no hizo falta.</p></div>
+
+<h2>9.4 De porcentaje a kelvin</h2>
+<p>REDUCE entrega los espectros como <b>exceso fraccional</b> sobre el nivel del sistema: la línea vale «15 % de <i>T</i><sub>sys</sub>». Para pasar a kelvin basta multiplicar por la <i>T</i><sub>sys</sub> del factor Y: 15 % de 122 K son 18 K de temperatura de antena. Es lo que hace <code>kelvin_scale.py</code>, y su informe dice explícitamente sus límites: la <i>T</i><sub>sys</sub> sobre la Vía Láctea es algo mayor que sobre el cielo frío (así que los kelvin quedan un poco bajos), y <i>T</i><sub>rx</sub> es un supuesto. Por eso el mapa de STATUS y SCIENCE se muestran en unidades propias: un factor único forzado escondería esos supuestos.</p>
+<p>Hay una segunda escala posible, independiente del factor Y: el Sol. Con su flujo publicado a 1415 MHz y el aumento de potencia que produce al pasar por el haz se obtiene el área efectiva real (capítulo 5, <code>lobe_aeff.py</code>). Cuando ambas escalas coincidan, los kelvin de ALMITA estarán defendidos por dos caminos.</p>
+
+<div class="box sum"><div class="box-title">Capítulo 9 en tres líneas</div><ul><li>El factor Y (caliente / frío) no depende de la ganancia: es la nota de salud de la antena.</li><li>Sin una carga fría conocida, los kelvin dependen de un supuesto sobre el receptor.</li><li>El cielo «frío» depende de hacia dónde se apunta.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 10</span>ON/OFF y conmutación de frecuencia</h1>
+<p class="lead">El capítulo 8 terminó con una regla: para ver el cielo hay que dividir por una referencia tomada con el mismo receptor, en el mismo estado. Hay tres maneras de conseguir esa referencia. ALMITA ha usado dos, y cada una le enseñó algo distinto.</p>
+
+<h2>10.1 Tres maneras de comparar</h2>
+<table>
+<tr><th>Método</th><th>Qué cambia entre las dos mediciones</th><th>Qué se cancela</th><th>Qué no</th></tr>
+<tr><td><b>ON/OFF</b> (posición)</td><td>hacia dónde apunta la antena</td><td>la forma del receptor, si no derivó</td><td>lo que depende de la dirección: suelo, lóbulos, ondulaciones de base</td></tr>
+<tr><td><b>Conmutación de frecuencia</b></td><td>la sintonía, cada 2 s</td><td>la forma del receptor y su deriva lenta</td><td>lo que cambia con la sintonía; deja «fantasmas»</td></tr>
+<tr><td><b>Conmutación de carga</b> (Dicke)</td><td>antena o carga, con un relé rápido</td><td>la deriva de ganancia</td><td>no se usa en ALMITA</td></tr>
+</table>
+
+<h2>10.2 La conmutación de frecuencia, paso a paso</h2>
+<p>La idea, en una imagen: para saber si una mancha está en el lente o en el paisaje, se mueve un poco la cámara y se comparan las dos fotos. Lo que se movió con el paisaje es paisaje; lo que quedó fijo en la foto es el lente. La conmutación «mueve» la sintonía en vez de la cámara. La antena queda quieta. Lo único que cambia es el oscilador local: un rato en <i>f</i><sub>A</sub> = <i>f</i>₀ − δ, un rato en <i>f</i><sub>B</sub> = <i>f</i>₀ + δ, con δ = 600 kHz (o 300). La forma del receptor pertenece a la banda base (frecuencias relativas a la sintonía), así que es idéntica en las dos mitades. La línea de hidrógeno, en cambio, pertenece al cielo: en la mitad A cae δ arriba del centro y en la mitad B, δ abajo.</p>
+<figure>{{fig:f10_fs}}
+<figcaption><b>Figura 10.1.</b> Un punto real del 12-11 (22:54, RA 18 h 28 m, Dec −11,5°, cerca de <i>l</i> = 20°, <i>b</i> = 0; 40 s, salto ±600 kHz). (1) Las dos mitades crudas, casi idénticas: la forma del receptor domina. (2) Su diferencia dividida por B: la forma desaparece y la línea aparece dos veces, positiva y negativa. (3) El plegado devuelve una sola línea, en su frecuencia real, con un máximo de ~16 %. <span class="tag med">MEDIDO</span></figcaption></figure>
+<p>En fórmulas, el cociente conmutado y el plegado son:</p>
+<p class="eq">S = (A − B) / B<span class="n">(10.1)</span></p>
+<p class="eq">T(f) = ½ [ S(f − f<sub>A</sub>) − S(f − f<sub>B</sub>) ]<span class="n">(10.2)</span></p>
+<p>El plegado alinea las dos copias de la línea en su frecuencia real (una con signo positivo, la otra invertida) y las promedia. Así se aprovecha el tiempo de ambas mitades: nada se tira.</p>
+
+<div class="box"><div class="box-title">En ALMITA · ABBA, 2 segundos, 0,15 s de pausa</div>
+<p><code>fswitch_capture.py</code> parte cada punto en tramos de 2 s en orden <b>A B B A A B B A…</b>, no A B A B. Con ese orden, una deriva lineal de ganancia afecta igual a A y a B en promedio y se cancela; además, tramos repetidos se graban como uno solo, con un cambio de sintonía en vez de dos. Tras cada cambio de sintonía se descartan 0,15 s (medidos el 09-11 con <code>fswitch_settle.py</code>): el SDR tarda en asentarse y las primeras muestras traen restos de la frecuencia anterior. Queda grabando el 95 % del tiempo. Cada frecuencia usada se coteja después contra lo que <code>rtl_tcp</code> registró haber aceptado.</p></div>
+
+<h2>10.3 La ventana y los fantasmas</h2>
+<p>La conmutación tiene dos precios. El primero es la <b>ventana</b>: la línea tiene que caer dentro de la banda útil (±1 MHz) en <em>las dos</em> mitades, así que solo sirve la zona de ±(1 MHz − δ) alrededor de <i>f</i>₀. El segundo son los <b>fantasmas</b>: al plegar, la copia invertida de cada mitad no desaparece, queda desplazada 2δ. El gas local, brillante y cercano a 0 km/s, deja una sombra negativa a ±2δ.</p>
+<figure>{{fig:f10_ghost}}
+<figcaption><b>Figura 10.2.</b> Ventana útil y fantasmas del gas local para los dos saltos que usa ALMITA. Un salto menor da una ventana más ancha, pero acerca los fantasmas. <span class="tag mod">MODELO</span></figcaption></figure>
+<table>
+<tr><th>Salto δ</th><th class="r">ventana útil</th><th class="r">fantasmas del gas local</th><th>sirve para</th></tr>
+<tr><td>±600 kHz</td><td class="r">±84 km/s</td><td class="r">±253 km/s</td><td>gas galáctico de velocidad moderada (12-11)</td></tr>
+<tr><td>±300 kHz</td><td class="r">±148 km/s</td><td class="r">±127 km/s</td><td>bordes de rotación, la Nube Grande</td></tr>
+</table>
+<div class="box warn"><div class="box-title">Ojo · el fantasma que se comía la Nube Grande</div>
+<p>La Nube Grande de Magallanes está a ~+260 km/s. Con el salto de 600 kHz el fantasma del gas local cae en ~+253: justo encima, y hacia esa dirección el gas local es varias veces más brillante que la Nube. Por eso (11-11) el salto pasó a ser configurable: con 300 kHz el fantasma cae en +127, lejos. Una prueba con una Nube Grande simulada lo confirmó: con 600 kHz el fantasma se la come, con 300 kHz sale entera <span class="tag mod">MODELO</span>.</p></div>
+
+<h2>10.4 Mover la ventana: el centro de conmutación</h2>
+<p>Si la ventana de ±84 km/s queda corta (el borde de rotación en <i>l</i> = 20° está en +145 km/s), se puede correr: sintonizar las dos mitades alrededor de otra velocidad central. BL-105 agregó eso: un centro fijo (por ejemplo +270 para la Nube Grande) o <code>auto</code>, que corre la ventana hacia el borde de alta velocidad. Funciona: el banco del 17-11 confirmó el eje de velocidad con una interferencia fija que siempre cayó en −83 km/s.</p>
+<div class="box"><div class="box-title">En ALMITA · la pregunta abierta</div>
+<p>El 19-11, con 300 kHz centrado en <code>auto</code>, la línea salió corrida −5 a −6,5 km/s respecto del 12-11 (600 kHz centrado en 0, que coincide con HI4PI a +0,06 km/s) <span class="tag med">MEDIDO</span>. Separando por pasada, el corrimiento cambió con la hora (−8,3 km/s a las 15–16 h, −1 km/s a las 16:30) en el mismo modo. La receta VEL-AB está diseñada para separar las tres explicaciones posibles: el salto, el centrado o la noche (capítulo 13).</p></div>
+
+<h2>10.5 Lo que la conmutación no cancela</h2>
+<p>La conmutación cancela lo que es igual en las dos sintonías. No cancela lo que cambia con la frecuencia del cielo: ondulaciones de la base que dependen de hacia dónde apunta el plato. La Nube Grande el 12-11 y la Chica el 19-11 mostraron estructuras repetibles de ±2–5 % que cambiaban con la dirección y no con el tiempo <span class="tag med">MEDIDO</span>: la misma dirección, repetida 13 minutos después, daba casi el mismo valor. Contra eso, la herramienta es volver al ON/OFF, pero con los OFF a la <b>misma altura</b> que la fuente, para que vean el mismo suelo (recetas SMC-ONOFF y LMC-ONOFF).</p>
+
+<div class="box sum"><div class="box-title">Capítulo 10 en tres líneas</div><ul><li>El ON/OFF mueve la antena; la conmutación de frecuencia mueve la sintonía.</li><li>La conmutación cancela la forma del receptor, a cambio de una ventana y dos fantasmas.</li><li>Lo que depende de la dirección solo se cancela con OFF a la misma altura.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 11</span>Interferencia: máscaras y curtosis</h1>
+<p class="lead">La interferencia de radio (RFI) es todo lo que entra por la antena sin venir del cielo. En una ciudad, es la regla. Este capítulo cuenta cómo la reconoce ALMITA sin tocar los datos crudos, y por qué la curtosis espectral resultó ser la mejor herramienta.</p>
+
+<h2>11.1 Las formas de la interferencia</h2>
+<p>La interferencia tiene firmas reconocibles, y casi todas se distinguen del hidrógeno por la misma razón: el hidrógeno es <b>ancho, suave y estable</b>, y es ruido gaussiano. La interferencia casi nunca lo es.</p>
+<table>
+<tr><th>Tipo</th><th>En frecuencia</th><th>En el tiempo</th><th>Ejemplo en ALMITA</th></tr>
+<tr><td>Portadora</td><td>uno o dos canales</td><td>estable</td><td>1420,0398 MHz (+77 km/s), en los 400 puntos del banco del 10-11</td></tr>
+<tr><td>Peineta</td><td>dientes equiespaciados</td><td>estable</td><td>357,142857 kHz = 125 MHz / 350, irradiada por la Raspberry Pi 5</td></tr>
+<tr><td>Pulsos</td><td>toda la banda</td><td>ráfagas de milisegundos</td><td>la Pi 4 en su caja (02-11), intermitente</td></tr>
+<tr><td>Bosque de líneas</td><td>muchas líneas angostas</td><td>van y vienen</td><td>una persona cerca de la Pi o del feed (01-11)</td></tr>
+</table>
+
+<h2>11.2 Marcar, nunca rellenar</h2>
+<p>La regla de oro de ALMITA frente a la interferencia es el contrato NATIVE_GRID: un canal contaminado se <b>marca</b> y se deja fuera de los ajustes y promedios, pero nunca se rellena con un valor «razonable». Rellenar es inventar datos: una interpolación sobre la línea de hidrógeno fabrica una línea que nadie midió. Un canal marcado, en cambio, dice honestamente «aquí no sé».</p>
+
+<h2>11.3 La máscara de RFI</h2>
+<p><code>rfi_mask.py</code> analiza cada captura en canales de 293 Hz y busca tres cosas, siempre medidas contra la propia captura:</p>
+<p><b>PULSE.</b> Cuadros de 3,4 ms cuya potencia total se dispara sobre el nivel robusto de la captura (calculado con la mediana y la desviación absoluta mediana, que no se dejan arrastrar por los propios pulsos). Se dejan fuera del promedio.</p>
+<p><b>COMB.</b> Los armónicos de la peineta de 357 kHz, cada uno buscado en ±6 kHz (el cristal del SDR tiene un pequeño error de frecuencia). Un diente que sobresale se marca.</p>
+<p><b>LINE.</b> Cualquier otro pico angosto sobre una mediana móvil de ~30 kHz. Necesita sobresalir 8 veces el ruido del canal y al menos 1 dB, y su ancho tiene un tope: <b>nada tan ancho como el hidrógeno puede ser declarado «línea»</b>. Esa condición está escrita en el código para que la máscara jamás se coma la señal.</p>
+<p>A eso se suma una lista fija, <code>known_rfi_lines.json</code>, de portadoras que aparecen siempre, aunque sean demasiado débiles para detectarlas en una sola captura.</p>
+
+<h2>11.4 La curtosis espectral</h2>
+<p>La <em>curtosis</em> mide qué tan «colas largas» tiene una distribución: si los valores se agrupan cerca del promedio con pocos extremos, o si de vez en cuando aparece un valor enorme. La <b>curtosis espectral</b> (SK) aplica esa idea a cada canal del espectro: toma las <i>M</i> potencias que tuvo ese canal en <i>M</i> cuadros sucesivos y calcula</p>
+<p class="eq">SK = (M+1)/(M−1) · ( M·S₂/S₁² − 1 )<span class="n">(11.1)</span></p>
+<p>donde <i>S</i>₁ es la suma de las potencias y <i>S</i>₂ la suma de sus cuadrados. Lo notable es lo que vale para ruido gaussiano: <b>exactamente 1, sea cual sea su nivel</b>. El cielo frío, la carga caliente y la línea de hidrógeno dan todos SK ≈ 1, porque todos son ruido. La interferencia no. Una imagen: el murmullo de un restorán lleno es ruido «normal», sube y baja sin sobresaltos. Un plato que se cae es un pulso: casi siempre silencio, de repente un estruendo. El zumbido parejo del refrigerador es una portadora: demasiado constante para ser gente conversando. La curtosis distingue los tres sin importar qué tan fuerte sea el murmullo.</p>
+<p>• Un <b>pulso</b> hace que unos pocos cuadros sean enormes: colas largas, SK &gt; 1.<br>• Una <b>portadora fuerte y estable</b> tiene casi la misma potencia en todos los cuadros: demasiado pareja para ser ruido, SK &lt; 1.</p>
+<figure>{{fig:f11_sk_model}}
+<figcaption><b>Figura 11.1.</b> Distribución de SK en 4000 canales simulados con <i>M</i> = 128 cuadros. El ruido se agrupa en 1; los pulsos lo empujan hacia arriba y una portadora fuerte hacia abajo. La franja gris son los límites de aceptación de ALMITA. <span class="tag mod">MODELO</span></figcaption></figure>
+<p>Para <i>M</i> = 128 la dispersión de SK sobre ruido es 0,174. ALMITA acepta entre 1 − 3σ y 1 + 6σ (0,48 a 2,04). Los límites son asimétricos porque la distribución de SK lo es: tiene una cola corta abajo y larga arriba. Con esos límites, en ruido puro se marca por error solo el ~0,02 % de los canales <span class="tag mod">MODELO</span>.</p>
+
+<h2>11.5 Dónde y por qué la usa ALMITA</h2>
+<p>La curtosis no está en ALMITA como curiosidad estadística: tiene un trabajo concreto. Vive en <code>reduce_estimator_v2.py</code>, la opción <b>ESTIMATOR v2</b> de REDUCE, y su trabajo es <b>permitir usar el promedio en vez de la mediana</b>.</p>
+<p>El razonamiento es el del capítulo 7. La mediana protege contra la interferencia, pero desperdicia la mitad del tiempo de integración. El promedio aprovecha todo, pero un pulso lo arrastra. La curtosis resuelve el dilema: identifica, celda por celda (bloque de tiempo × canal), qué no es ruido, y lo saca; con lo que queda, que es ruido limpio, se puede usar el promedio sin miedo. El procedimiento, por captura:</p>
+<p>1. Se corta la captura en bloques de 128 cuadros de 8192 muestras: 0,44 s cada bloque.<br>
+2. En cada bloque y cada canal se calcula SK con los cuadros que no se solapan (tienen que ser independientes).<br>
+3. Las celdas fuera de [0,48 ; 2,04] se dejan fuera. Si en un bloque más del 20 % de los canales cae fuera, el bloque completo se considera un evento de banda ancha y se descarta.<br>
+4. El espectro final es el promedio de las celdas limpias, con cuadros solapados al 50 %, multiplicado por ln 2. Ese factor hace que, sobre ruido, el nivel coincida exactamente con el del estimador de mediana clásico: los perfiles de calibración y todo lo que viene después conserva su escala.<br>
+5. Un canal que perdió más de la mitad de su tiempo queda marcado como RFI en la máscara de REDUCE: marcado, nunca rellenado.</p>
+<figure>{{fig:f11_sk_real}}
+<figcaption><b>Figura 11.2.</b> SK en un bloque real de 0,44 s del punto del plano del 12-11, en 7783 canales. La mediana es 0,98 y solo 1 canal cae fuera de los límites (líneas punteadas): la azotea esa noche estaba limpia, y la línea de hidrógeno, que está en esos canales, no se distingue del resto. Justo eso tiene que pasar. <span class="tag med">MEDIDO</span></figcaption></figure>
+<div class="box"><div class="box-title">En ALMITA · lo que ganamos</div>
+<p>Tiempo aprovechado: de ~32 % (estimador clásico) a ~95 % (v2) <span class="tag mod">MODELO</span>. En datos reales con conmutación (10-11), ruido ÷1,7 a 2,1: como observar 3 a 4,6 veces más tiempo <span class="tag med">MEDIDO</span>. Sin conmutación la ganancia no se nota, porque ahí manda la forma del receptor, no el ruido (la lección del capítulo 5: los sistemáticos no se promedian). En una captura conmutada, las marcas de SK se calculan en cada sintonía y se trasladan al espectro plegado por las dos imágenes de la línea, para que nada marcado se cuele por el plegado.</p></div>
+
+<div class="box warn"><div class="box-title">Ojo · la portadora que la curtosis no ve</div>
+<p>La portadora de 1420,0398 MHz estaba en los 400 puntos del banco del 10-11, entre 70 % y 340 % sobre el ruido, y la curtosis no la marcó. ¿Por qué? Porque una portadora <em>débil</em> comparada con el ruido de su canal casi no cambia la estadística: el canal sigue fluctuando como ruido y SK queda cerca de 1. La curtosis solo detecta portadoras que dominan su canal. Por eso existe la lista fija <code>known_rfi_lines.json</code>: lo que es estable y débil se conoce de antemano y se marca siempre. Ninguna herramienta lo ve todo; se combinan.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 11 en tres líneas</div><ul><li>La interferencia se marca, nunca se rellena.</li><li>La curtosis vale 1 para cualquier ruido, hidrógeno incluido; pulsos y portadoras fuertes se salen.</li><li>Gracias a ella REDUCE puede promediar y aprovechar ~95 % del tiempo.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 12</span>REDUCE: del espectro a la ciencia</h1>
+<p class="lead">REDUCE es la fábrica: entra un archivo crudo por punto, sale un espectro calibrado, sin línea de base, en velocidades LSRK, con su incertidumbre, sus marcas y un informe de calidad. Este capítulo recorre sus etapas y las reglas que las gobiernan.</p>
+
+<h2>12.1 Las etapas</h2>
+<figure>
+<svg viewBox="0 0 660 250" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="10.5">
+  <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6b6b75"/></marker></defs>
+  <g font-weight="600" text-anchor="middle">
+    <rect x="8" y="12" width="96" height="40" rx="5" fill="#f3f6fa" stroke="#1f5a8c"/><text x="56" y="30">INGEST</text><text x="56" y="44" font-weight="400" font-size="9">lee el crudo, sha256</text>
+    <rect x="118" y="12" width="96" height="40" rx="5" fill="#f3f6fa" stroke="#1f5a8c"/><text x="166" y="30">VALIDATE</text><text x="166" y="44" font-weight="400" font-size="9">atributos completos</text>
+    <rect x="228" y="12" width="96" height="40" rx="5" fill="#fbf1ea" stroke="#b5532a"/><text x="276" y="30">ESTIMATE</text><text x="276" y="44" font-weight="400" font-size="9">FFT · clásico o v2</text>
+    <rect x="338" y="12" width="96" height="40" rx="5" fill="#fbf1ea" stroke="#b5532a"/><text x="386" y="30">MASK</text><text x="386" y="44" font-weight="400" font-size="9">DC, EDGE, RFI…</text>
+    <rect x="448" y="12" width="96" height="40" rx="5" fill="#f1f6f1" stroke="#3d7a46"/><text x="496" y="30">CALIBRATE</text><text x="496" y="44" font-weight="400" font-size="9">perfil relativo</text>
+    <rect x="558" y="12" width="96" height="40" rx="5" fill="#f1f6f1" stroke="#3d7a46"/><text x="606" y="30">BASELINE</text><text x="606" y="44" font-weight="400" font-size="9">fuera de la línea</text>
+    <rect x="558" y="92" width="96" height="40" rx="5" fill="#f1f6f1" stroke="#3d7a46"/><text x="606" y="110">VELOCITY</text><text x="606" y="124" font-weight="400" font-size="9">topocéntrico → LSRK</text>
+    <rect x="448" y="92" width="96" height="40" rx="5" fill="#f3f6fa" stroke="#1f5a8c"/><text x="496" y="110">RESAMPLE</text><text x="496" y="124" font-weight="400" font-size="9">solo si hace falta</text>
+    <rect x="338" y="92" width="96" height="40" rx="5" fill="#f3f6fa" stroke="#1f5a8c"/><text x="386" y="110">STACK</text><text x="386" y="124" font-weight="400" font-size="9">pesos, rechazo robusto</text>
+    <rect x="228" y="92" width="96" height="40" rx="5" fill="#f3f6fa" stroke="#1f5a8c"/><text x="276" y="110">UNCERTAINTY</text><text x="276" y="124" font-weight="400" font-size="9">error por canal</text>
+    <rect x="118" y="92" width="96" height="40" rx="5" fill="#f3f6fa" stroke="#1f5a8c"/><text x="166" y="110">QUALITY</text><text x="166" y="124" font-weight="400" font-size="9">GOOD/WARNING/BAD</text>
+    <rect x="8" y="92" width="96" height="40" rx="5" fill="#1f5a8c"/><text x="56" y="110" fill="#fff">LEVEL 1</text><text x="56" y="124" font-weight="400" font-size="9" fill="#fff">espectro maestro</text>
+  </g>
+  <g stroke="#6b6b75" stroke-width="1.2" marker-end="url(#c1)">
+    <line x1="104" y1="32" x2="116" y2="32"/><line x1="214" y1="32" x2="226" y2="32"/><line x1="324" y1="32" x2="336" y2="32"/>
+    <line x1="434" y1="32" x2="446" y2="32"/><line x1="544" y1="32" x2="556" y2="32"/><line x1="606" y1="52" x2="606" y2="90"/>
+    <line x1="558" y1="112" x2="546" y2="112"/><line x1="448" y1="112" x2="436" y2="112"/><line x1="338" y1="112" x2="326" y2="112"/>
+    <line x1="228" y1="112" x2="216" y2="112"/><line x1="118" y1="112" x2="106" y2="112"/>
+  </g>
+  <rect x="8" y="160" width="646" height="80" rx="6" fill="#fbf1ea"/>
+  <text x="20" y="180" font-weight="600" fill="#b5532a" font-size="11">Opciones que envuelven al motor congelado sin cambiarlo</text>
+  <text x="20" y="200" font-size="10.5">RFI MASK: PULSE, COMB, LINE y líneas conocidas entran en ESTIMATE y MASK.   ESTIMATOR v2: reemplaza ESTIMATE (solape + promedio + curtosis).</text>
+  <text x="20" y="218" font-size="10.5">Capturas conmutadas: ESTIMATE se hace por sintonía y se pliega antes de BASELINE.   Sin las opciones, REDUCE da exactamente el resultado de antes.</text>
+  <text x="20" y="234" font-size="10.5" fill="#6b6b75">Varios núcleos, mismos resultados bit a bit; con una captura en curso usa la mitad de los núcleos y prioridad baja.</text>
+</svg>
+<figcaption><b>Figura 12.1.</b> Las etapas de REDUCE, en el orden canónico de <code>reduce_engine/pipeline.py</code>. Si un punto falla en una etapa, el fallo queda registrado con su razón y la campaña sigue.</figcaption></figure>
+
+<h2>12.2 Reglas que no se negocian</h2>
+<p><b>El crudo es sagrado.</b> REDUCE solo lee. Cada producto guarda la huella del crudo de origen.</p>
+<p><b>Motores congelados.</b> REDUCE y SCIENCE tienen sus motores congelados: un cambio requiere un commit con una referencia autorizada. Las mejoras (máscara, v2, conmutación) son opciones que envuelven al motor dentro del proceso y lo dejan como estaba al salir. Así, un resultado de hace dos semanas se puede reproducir hoy, idéntico.</p>
+<p><b>Marcar, nunca rellenar.</b> Cada canal lleva un conjunto de marcas (<code>DC</code>, <code>EDGE</code>, <code>RFI</code>, <code>KNOWN_SPUR</code>, <code>SATURATED</code>…) y solo los canales <code>GOOD</code> entran en ajustes y promedios.</p>
+<p><b>Nada implícito.</b> Si falta un dato para pasar a LSRK (hora, ubicación, dirección), el sistema de velocidad queda <code>UNAVAILABLE</code>, con el dato faltante nombrado. Nunca se cae silenciosamente al topocéntrico.</p>
+
+<h2>12.3 La línea de base</h2>
+<p>Aun después de dividir o conmutar, queda un piso que no es exactamente cero: una pendiente suave, una curvatura. Se modela con un polinomio de grado bajo ajustado <b>solo fuera de la línea</b> (en el motor clásico, fuera de ±150 km/s; en el plegado, en los bordes de la ventana), con un ajuste robusto que descarta iterativamente los puntos raros. Después se resta.</p>
+<figure>{{fig:f12_base}}
+<figcaption><b>Figura 12.2.</b> El espectro plegado de la figura 10.1 con una base lineal ajustada fuera de ±60 km/s. En el plano galáctico la línea casi llena la ventana: queda poco espacio «vacío» para ajustar la base. <span class="tag med">MEDIDO</span> (el espectro) · <span class="tag mod">MODELO</span> (esta base, para ilustrar)</figcaption></figure>
+<div class="box warn"><div class="box-title">Ojo · cuando la base se come la línea</div>
+<p>Si la línea es más ancha que la zona que se le reserva, la base se ajusta sobre las alas de la propia línea y le resta señal. En el plano galáctico en <i>l</i> = 20°, el gas llega a +145 km/s y la ventana de 600 kHz solo cubre ±84: parte del gas queda fuera y otra parte se va con la base. Por eso en el mapa de STATUS, en el plano, ALMITA/HI4PI ≈ 0,6, mientras a latitud alta, donde la línea es angosta, da ≈ 1,3. No es que la antena vea menos hidrógeno: es la ventana.</p></div>
+
+<h2>12.4 Velocidad, apilado e incertidumbre</h2>
+<p>La conversión a LSRK se calcula una vez por punto, con la hora, el lugar y la dirección de la captura, y se suma al eje entero: en la convención de velocidad de radio un cambio de sistema es un desplazamiento constante, así que esto es exacto. Las tablas de rotación terrestre se usan fuera de línea, para que REDUCE funcione sin internet.</p>
+<p>Si un punto tiene varias capturas, se apilan con pesos inversos a su varianza, y en cada canal se rechazan los valores extremos usando la mediana y la desviación absoluta mediana (para que un espectro malo no infle su propia barra de error). La incertidumbre por canal sale de la dispersión entre sub-integraciones independientes, y el informe de calidad combina recorte del ADC, fracción de canales útiles, ocupación de RFI y calidad del ajuste de base en un veredicto con razones: <code>GOOD</code>, <code>WARNING</code> o <code>BAD</code>.</p>
+
+<div class="box warn"><div class="box-title">Ojo · la barra de error que el pipeline no ve</div>
+<p>La auditoría del 25-11 comparó la incertidumbre que reporta REDUCE con la real, medida reduciendo por separado las dos mitades de cada captura. Por canal, con el ESTIMATOR v2, calza. Con el estimador clásico (mediana) el error real es 1,33 veces el reportado. Las <b>sumas</b> de canales salen 1,4–1,9 veces más ruidosas, porque los canales vecinos están correlacionados (capítulo 7). Y lo grande: comparando ventanas sin línea entre <b>distintas direcciones</b>, la dispersión es 4,7–7 veces el σ reportado. Es la base que cambia con hacia dónde apunta el plato, el mismo sistemático que frenó a las Nubes de Magallanes. Ninguna fórmula de ruido lo ve: hay que medirlo.</p></div>
+
+<h2>12.5 Después de REDUCE: mapas</h2>
+<p>Con un espectro por punto, SCIENCE construye mapas. Los dos más útiles son los <b>momentos</b> del espectro. El momento 0 es el área de la línea: cuánto hidrógeno hay (capítulo 2). El momento 1 es la velocidad media ponderada por el brillo: hacia dónde se mueve. El mapa de momento 1 del 19-11 muestra la galaxia girando: rojo a un lado del centro galáctico, azul al otro (capítulo 14).</p>
+<p>Cada mapa se compara con HI4PI <b>pasado por el mismo haz de 20°</b>: comparar con el mapa de alta resolución sería injusto, porque nuestro haz promedia 5000 veces más cielo. Con ese cuidado, el mapa de STATUS dio r = 0,92 <span class="tag med">MEDIDO</span>, aunque con una trampa: casi todo ese número sale del contraste entre el plano y la alta latitud, y dentro de cada zona baja a 0,49 y 0,72 (capítulo 14). La deconvolución de Richardson–Lucy puede afinar el mapa de 20° a unos 11–15° efectivos (simulado), pero lo que entrega es un modelo, y la interfaz lo dice: el botón DECONVOLVED nunca se confunde con MEASURED.</p>
+<div class="box sum"><div class="box-title">Capítulo 12 en tres líneas</div><ul><li>REDUCE va del crudo al espectro final en etapas fijas y reproducibles.</li><li>La base se ajusta fuera de la línea; si la línea no cabe en la ventana, se pierde señal.</li><li>Los mapas se comparan contra la referencia pasada por nuestro haz.</li></ul></div>

@@ -1,0 +1,170 @@
+<section class="partpage"><div class="pn">Parte II</div><div class="pt">Captura de la muestra</div><div class="ps">De la onda que llega al dipolo a un archivo de números. Mezcla, muestras complejas, Nyquist, ocho bits, la FFT y la forma del instrumento: todo lo que pasa antes de que haya «un espectro».</div></section>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 6</span>De la onda a los números</h1>
+<p class="lead">Una onda de 1420 MHz oscila 1420 millones de veces por segundo. Ningún computador barato puede muestrear eso directamente, y no hace falta: lo que nos interesa ocupa apenas unos cientos de kHz alrededor de la línea. Este capítulo cuenta cómo se baja la señal a un rango manejable y cómo se convierte en bytes.</p>
+
+<h2>6.1 El viaje de la señal</h2>
+<figure>
+<svg viewBox="0 0 660 240" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, DejaVu Sans, sans-serif" font-size="11">
+  <defs><marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1b1b1f"/></marker></defs>
+  <g stroke="#1b1b1f" stroke-width="1.2">
+    <rect x="8" y="30" width="78" height="56" rx="5" fill="#f3f6fa"/>
+    <rect x="110" y="30" width="70" height="56" rx="5" fill="#f1f6f1"/>
+    <rect x="204" y="18" width="250" height="82" rx="6" fill="#fff" stroke-dasharray="4 3"/>
+    <rect x="214" y="36" width="104" height="56" rx="5" fill="#fbf1ea"/>
+    <rect x="338" y="36" width="106" height="56" rx="5" fill="#fbf1ea"/>
+    <rect x="478" y="30" width="80" height="56" rx="5" fill="#f3f6fa"/>
+    <rect x="580" y="30" width="72" height="56" rx="5" fill="#f3f6fa"/>
+  </g>
+  <g stroke="#1b1b1f" stroke-width="1.3" marker-end="url(#b1)">
+    <line x1="86" y1="58" x2="108" y2="58"/><line x1="180" y1="58" x2="212" y2="58"/><line x1="318" y1="64" x2="336" y2="64"/>
+    <line x1="454" y1="58" x2="476" y2="58"/><line x1="558" y1="58" x2="578" y2="58"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="47" y="54" font-weight="600">dipolo</text><text x="47" y="70">1420 MHz</text>
+    <text x="145" y="54" font-weight="600">LNA</text><text x="145" y="70">+30 dB</text>
+    <text x="329" y="31" fill="#6b6b75" font-size="10">el «pendrive» RTL-SDR V3</text>
+    <text x="266" y="58" font-weight="600">sintonizador</text><text x="266" y="73">mezcla y filtra</text><text x="266" y="86" font-size="9.5" fill="#6b6b75">ganancia 40,2 dB</text>
+    <text x="391" y="58" font-weight="600">RTL2832U</text><text x="391" y="73">ADC de 8 bits</text><text x="391" y="86" font-size="9.5" fill="#6b6b75">→ I/Q a 2,4 MS/s</text>
+    <text x="518" y="54" font-weight="600">Pi 4</text><text x="518" y="70">rtl_tcp</text>
+    <text x="616" y="54" font-weight="600">notebook</text><text x="616" y="70">captura</text>
+  </g>
+  <g font-size="10" fill="#6b6b75" text-anchor="middle">
+    <text x="47" y="108">la onda</text>
+    <text x="145" y="108">señal más fuerte,</text><text x="145" y="121">mismo ruido relativo</text>
+    <text x="329" y="122">1420,4 MHz ± 1,2 MHz  →  0 ± 1,2 MHz</text>
+    <text x="518" y="108">4,8 millones de</text><text x="518" y="121">bytes por segundo</text>
+    <text x="616" y="108">cable de red;</text><text x="616" y="121">archivo HDF5</text>
+  </g>
+  <rect x="8" y="150" width="644" height="76" rx="6" fill="#f3f6fa"/>
+  <text x="20" y="171" font-weight="600" fill="#1f5a8c">Lo que guarda el archivo, por cada muestra: dos bytes</text>
+  <text x="20" y="192" font-family="IBM Plex Mono, DejaVu Sans Mono, monospace" font-size="11">I₀ Q₀ I₁ Q₁ I₂ Q₂ …   = 131 124 129 133 125 127 …   (enteros de 0 a 255, centro 127,5)</text>
+  <text x="20" y="213" font-size="10.5" fill="#6b6b75">40 s de un punto = 96 millones de muestras complejas = 192 MB. El archivo crudo nunca se modifica: todo lo demás se recalcula desde él.</text>
+</svg>
+<figcaption><b>Figura 6.1.</b> La cadena de captura. El SDR baja la banda de 1420 MHz a frecuencias cercanas a cero y la entrega como pares de números (I, Q). La Raspberry Pi 4 junto a la antena solo reenvía esos bytes por la red; el notebook, lejos, los guarda.</figcaption></figure>
+
+<h2>6.2 Mezclar: bajar 1420 MHz a cero</h2>
+<p>La herramienta central de toda radio es el <b>mezclador</b>: multiplicar la señal que llega por una oscilación local de frecuencia <i>f</i><sub>LO</sub> (el <em>oscilador local</em>). Multiplicar dos ondas produce dos nuevas, una en la suma y otra en la diferencia de sus frecuencias. Quien haya afinado una guitarra lo ha oído: dos cuerdas casi afinadas producen un «uá-uá-uá» lento, el batido, cuya frecuencia es la diferencia entre las dos notas. El mezclador hace lo mismo con ondas de radio. Si el oscilador está en 1420,405752 MHz, el hidrógeno que llega en 1420,5 MHz sale del mezclador en la diferencia: +94 kHz. La componente de la suma, cerca de 2840 MHz, se elimina con un filtro.</p>
+<p>El efecto neto es <b>trasladar</b> una ventana de frecuencias, sin deformarla, desde 1420 MHz hasta cerca de cero. A eso se le llama «sintonizar»: elegir la frecuencia del oscilador local elige qué parte del espectro cae en la ventana. Toda la física de la Parte I se conserva: el corrimiento Doppler de 4,74 kHz por km/s sigue siendo 4,74 kHz después de bajar.</p>
+
+<div class="box"><div class="box-title">En ALMITA</div>
+<p>Después de bajar, la señal está en frecuencias de audio y radio corriente; por eso el botón AUDIO de la consola permite <em>escuchar</em> el hidrógeno (un juguete, no ciencia: el oído no distingue un 15 % de exceso en un siseo, pero se oye cómo cambia). «Sintonizar» es exactamente elegir <i>f</i><sub>LO</sub>, y eso es lo que hace <code>sdr_tuning.tune_explicitly</code> al inicio de cada captura: manda la frecuencia, la ganancia, la tasa de muestreo, apaga el AGC, enciende el Bias-T, y espera el acuse de <code>rtl_tcp</code>. La conmutación de frecuencia (capítulo 10) no es más que cambiar <i>f</i><sub>LO</sub> cada 2 segundos. El oscilador local del V3 se deriva de un cristal de 28,8 MHz con compensación de temperatura: un error de 1 parte por millón en ese cristal corre la frecuencia 1,4 kHz, unos 0,3 km/s.</p></div>
+
+<h2>6.3 Muestras complejas: por qué I y Q</h2>
+<p>Después de mezclar aparece un problema. Una señal 94 kHz <em>sobre</em> el oscilador y otra 94 kHz <em>bajo</em> él salen ambas del mezclador como oscilaciones de 94 kHz: con un solo número por muestra no hay manera de distinguirlas. Y para el hidrógeno ese signo es todo: es la diferencia entre gas que se acerca y gas que se aleja.</p>
+<p>La solución es mezclar dos veces en paralelo, con dos copias del oscilador desfasadas un cuarto de ciclo (90°). La primera salida se llama <b>I</b> (<em>en fase</em>) y la segunda <b>Q</b> (<em>en cuadratura</em>). Juntas forman un número complejo, <i>z</i> = <i>I</i> + <i>jQ</i>, que gira en el plano: hacia un lado para frecuencias positivas, hacia el otro para las negativas. Piensa en la manecilla de un reloj vista de canto, desde el borde de la mesa: se ve subir y bajar, pero no se sabe si gira a la derecha o a la izquierda. Mirándola además desde abajo (una segunda vista, a 90°), el sentido de giro queda claro. I es una vista, Q es la otra.</p>
+<figure>{{fig:f6_iq}}
+<figcaption><b>Figura 6.2.</b> Dos señales a la misma distancia del oscilador local, una arriba y una abajo. I es idéntico en los dos casos; Q cambia de signo. Con solo I no se podrían distinguir. <span class="tag mod">MODELO</span></figcaption></figure>
+<p>Ganancia extra: con muestras complejas, una tasa de <i>f</i><sub>s</sub> muestras por segundo cubre una banda de <i>f</i><sub>s</sub> de ancho, de −<i>f</i><sub>s</sub>/2 a +<i>f</i><sub>s</sub>/2. Con muestras reales, la misma tasa cubriría solo la mitad. Por eso 2,4 millones de muestras complejas por segundo dan una ventana de 2,4 MHz: ±1,2 MHz alrededor de la sintonía, ±253 km/s.</p>
+
+<h2>6.4 Nyquist: cuántas muestras hacen falta</h2>
+<p>El teorema de muestreo dice que una señal se puede reconstruir completa a partir de sus muestras si se muestrea suficientemente rápido: más del doble de su frecuencia más alta para muestras reales, o al menos su ancho de banda para muestras complejas. Si se muestrea más lento, pasa algo traicionero: las frecuencias altas no desaparecen, se <b>disfrazan</b> de frecuencias bajas. A eso se le llama <em>aliasing</em>.</p>
+<figure>{{fig:f6_alias}}
+<figcaption><b>Figura 6.3.</b> Aliasing: una oscilación de 3 ciclos por segundo, muestreada 4 veces por segundo, produce exactamente las mismas muestras que una de 1 ciclo por segundo. Después de muestrear, no hay forma de saber cuál de las dos era. <span class="tag mod">MODELO</span></figcaption></figure>
+<p>Por eso todo SDR tiene, antes de bajar la tasa, un filtro que corta lo que está fuera de la banda (filtro <em>anti-alias</em>). Ningún filtro real corta en seco: cerca de los bordes la respuesta cae gradualmente, y lo que hay justo fuera de la banda se filtra solo en parte y puede reaparecer reflejado del otro lado.</p>
+
+<div class="box"><div class="box-title">En ALMITA · los bordes no se usan</div>
+<p>De los ±1,2 MHz que entrega el SDR, el sistema usa menos. <code>fswitch.py</code> se queda con ±1,0 MHz (<code>USABLE_HZ</code>), porque la banda del RTL cae más allá de eso, y <code>rfi_mask.py</code> descarta el 5 % de cada borde (<code>EDGE_FRACTION</code>). En REDUCE esos canales llevan la marca <code>EDGE</code>: quedan marcados, nunca se usan para ajustar ni promediar. Esa pérdida de bordes es la que determina las ventanas de velocidad de la conmutación (capítulo 10).</p></div>
+
+<h2>6.5 Ocho bits</h2>
+<p>El convertidor analógico-digital (ADC) del SDR entrega cada I y cada Q como un entero entre 0 y 255: ocho bits. El cero de la señal queda en 127,5. Parece poquísimo: una cámara de fotos usa 12 o 14 bits. ¿Cómo puede medirse una línea del 1 % con 256 niveles?</p>
+<p>La respuesta es que la señal es <b>ruido</b>, y el ruido es un aliado. Cada muestra cae en un nivel distinto al azar; al promediar millones de muestras, la potencia media se conoce con una precisión mucho más fina que un nivel. Lo que el ADC necesita no es resolución por muestra: es que el ruido ocupe varios niveles (si no, se pierde información) y que <b>nunca llegue a los extremos</b> 0 o 255, porque ahí la señal se recorta y aparece potencia falsa en todo el espectro.</p>
+<figure>{{fig:f6_raw}}
+<figcaption><b>Figura 6.4.</b> Muestras reales del 12-11, cielo del plano galáctico (HI ALTO del segundo wizard). Izquierda: los primeros 25 µs de I y Q: puro ruido, en apariencia. Derecha: el histograma de una captura de 2 s: una campana centrada en 127,5 que usa unos 50 de los 256 códigos. Dentro de ese ruido está la línea de hidrógeno, pero no se ve hasta hacer la FFT y promediar. <span class="tag med">MEDIDO</span></figcaption></figure>
+
+<div class="box calc"><div class="box-title">Cuenta · el factor Y escondido en los bytes</div>
+<p>Cada captura guarda en sus atributos el ruido rms de los códigos (<code>adc_rms_codes</code>). En el segundo wizard del 12-11: con la carga de 50 Ω, <b>8,88</b> códigos; con el cielo frío, <b>5,14</b> <span class="tag med">MEDIDO</span>. La potencia va como el cuadrado de la amplitud:</p>
+<p class="eq">(8,88 / 5,14)² = 2,98 ≈ 4,75 dB</p>
+<p>El wizard, con todo su procesamiento, dio Y = 2,96 (4,71 dB). Con los espectros completos de las mismas capturas, el cociente de medianas da exactamente 2,960. El factor Y está en los bytes crudos: la carga «suena» más fuerte que el cielo porque está más caliente.</p></div>
+
+<div class="box"><div class="box-title">En ALMITA · ganancia fija y AGC apagado</div>
+<p>La ganancia del sintonizador está fija en 40,2 dB y el control automático de ganancia (AGC) del RTL está <b>apagado</b> en cada sintonía, con acuse. Si el AGC estuviera encendido, el SDR bajaría su ganancia al ver la carga (más potencia) y la subiría con el cielo: el cociente que mide el factor Y quedaría aplastado. Con ganancia fija, un rms de 5 a 9 códigos deja el ruido lejos de los extremos: la fracción de muestras que tocaron 0 o 255 en el punto del plano del 12-11 fue 1 en 100 millones (<code>adc_rail_hit_fraction</code>) <span class="tag med">MEDIDO</span>. Ojo: un reinicio de <code>rtl_tcp</code> cambia la ganancia efectiva ~1,7 dB; por eso carga y cielo se miden siempre en el mismo proceso.</p></div>
+
+<h2>6.6 El archivo</h2>
+<p>Cada captura se guarda como un archivo HDF5 con un solo arreglo, <code>iq_data</code>, de bytes I, Q, I, Q… y una lista larga de atributos: la frecuencia y la ganancia aplicadas con la evidencia de que <code>rtl_tcp</code> las aceptó, la hora exacta, hacia dónde apuntaba la montura y si estaba siguiendo, las temperaturas del SDR y del LNA antes y después, el rms de los códigos, y en una captura conmutada, cada tramo con su oscilador local. Un punto de 40 s pesa 192 MB.</p>
+<p>Dos reglas rigen esos archivos. La primera: <b>el crudo nunca se modifica</b>. Todo lo que viene después (espectros, máscaras, mapas) se recalcula desde él, y cada producto guarda la huella digital (<code>sha256</code>) del crudo del que salió. La segunda: los atributos son tan importantes como los datos. Un espectro sin hora, sin dirección y sin evidencia de sintonía no se puede convertir a velocidades LSRK ni defender.</p>
+<div class="box warn"><div class="box-title">Ojo · 192 MB por punto</div>
+<p>El 19-11, en pleno piloto, un quicklook que abrió ocho capturas a la vez llegó a 8,6 GB de memoria y el sistema mató al editor. Desde entonces: un archivo por proceso, con límite de memoria, mientras haya algo corriendo en vivo. Las figuras de este libro que usan crudos se calcularon así, de a un archivo.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 6 en tres líneas</div><ul><li>Mezclar baja la banda de 1420 MHz a cero sin deformarla; sintonizar es elegir el oscilador local.</li><li>I y Q permiten distinguir lo que está sobre la sintonía de lo que está bajo ella.</li><li>Ocho bits alcanzan si el ruido ocupa varios códigos y nunca toca los extremos.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 7</span>La FFT sin miedo</h1>
+<p class="lead">Los bytes son una señal en el tiempo. El hidrógeno vive en la frecuencia. La transformada de Fourier es el puente, y en la práctica se calcula con un algoritmo llamado FFT. No hace falta entender el algoritmo; sí hace falta entender sus tres consecuencias: canales, fuga y promedios.</p>
+
+<h2>7.1 Canales</h2>
+<p>Un prisma separa la luz blanca en colores; el oído separa un acorde en sus notas. La FFT hace lo mismo con una señal muestreada. Toma un bloque de <i>N</i> muestras consecutivas (un <em>cuadro</em>) y lo descompone en <i>N</i> frecuencias igualmente espaciadas: los <b>canales</b>. El ancho de cada canal es la tasa de muestreo dividida por <i>N</i>, y la duración del cuadro es <i>N</i> dividido por la tasa. Su producto es siempre 1: <b>resolución en frecuencia y en tiempo se intercambian</b>. Canales angostos exigen cuadros largos.</p>
+<table>
+<tr><th>N (muestras por cuadro)</th><th class="r">ancho de canal</th><th class="r">en velocidad</th><th class="r">duración del cuadro</th><th>dónde se usa</th></tr>
+<tr><td>256</td><td class="r">9,4 kHz</td><td class="r">2,0 km/s</td><td class="r">0,11 ms</td><td>QUICKLOOK, Unknown Pleasures</td></tr>
+<tr><td>8192</td><td class="r">293 Hz</td><td class="r">0,06 km/s</td><td class="r">3,4 ms</td><td>REDUCE, conmutación, máscaras, curtosis</td></tr>
+</table>
+<p>¿Por qué REDUCE usa canales tan finos si la línea de hidrógeno mide decenas de km/s? Porque la interferencia es angosta. Una portadora ocupa uno o dos canales de 293 Hz; en canales de 9,4 kHz quedaría mezclada con el hidrógeno de ese canal y no se podría separar. Se trabaja fino para detectar y marcar lo angosto, y después se suaviza para la ciencia.</p>
+
+<h2>7.2 Potencia de ruido: un número que salta mucho</h2>
+<p>De cada canal, la FFT entrega un número complejo; su módulo al cuadrado es la potencia en ese canal durante ese cuadro. Para ruido, esa potencia es tremendamente variable: sigue una distribución exponencial, cuya desviación estándar es <em>igual</em> a su promedio. Un solo cuadro, en un solo canal, tiene una incertidumbre del 100 %.</p>
+
+<h2>7.3 Ventanas y fuga</h2>
+<p>La FFT supone que el cuadro se repite periódicamente. Una señal que no completa un número entero de ciclos dentro del cuadro queda «cortada» en los bordes, y ese corte abrupto reparte su energía en muchos canales vecinos: la <b>fuga espectral</b>. Para una portadora fuerte, la fuga puede contaminar decenas de canales con un piso que parece cielo.</p>
+<figure>{{fig:f7_window}}
+<figcaption><b>Figura 7.1.</b> Una portadora que cae entre dos canales, con y sin ventana. La ventana de Hann suaviza los bordes del cuadro antes de la FFT y hace que la fuga caiga mucho más rápido. A cambio, ensancha un poco el pico. <span class="tag mod">MODELO</span></figcaption></figure>
+<p>La cura es multiplicar el cuadro por una <b>ventana</b> que vaya suavemente a cero en los bordes. ALMITA usa la de Hann en todas partes. Tiene un costo: las muestras cerca de los bordes del cuadro casi no cuentan, así que una parte del tiempo de integración se desperdicia. Para recuperarlo, los cuadros se pueden <b>solapar</b>: empezar un cuadro nuevo a la mitad del anterior. Esa es una de las dos mejoras del ESTIMATOR v2 (capítulo 11).</p>
+
+<h2>7.4 Promediar: la ecuación del radiómetro, cuadro a cuadro</h2>
+<figure>{{fig:f7_avg}}
+<figcaption><b>Figura 7.2.</b> Una ventana de 60 kHz de un punto real del 12-11, en canales de 293 Hz: un cuadro, el promedio de 10 y el de 128. La dispersión medida cae de 106 % a 28 % y a 9,5 %; la teoría (1/√N) dice 100 %, 32 % y 8,8 %. <span class="tag med">MEDIDO</span></figcaption></figure>
+<p>Promediar <i>N</i> cuadros independientes baja la dispersión como 1/√<i>N</i>. Esto es la ecuación del radiómetro del capítulo 5 vista desde adentro: en un canal de ancho <i>B</i> durante un tiempo τ caben exactamente <i>B</i>·τ cuadros independientes. Con 293 Hz y 0,44 s, <i>B</i>·τ = 128: el «número de muestras independientes» de la ecuación 5.3 es, literalmente, el número de cuadros que se promedian.</p>
+<div class="box calc"><div class="box-title">Cuenta · por qué se suaviza después</div>
+<p>Un punto de 40 s en un canal de 293 Hz junta <i>B</i>·τ ≈ 11 700 cuadros: dispersión de 0,9 %. Sumando 65 canales vecinos (19 kHz, 4 km/s, todavía mucho más angosto que la línea) el ancho de banda efectivo sube 65 veces y la dispersión baja √65 ≈ 8 veces: ~0,11 %. El hidrógeno, que es ancho y suave, no pierde nada. Por eso los informes de REDUCE citan el ruido «a 19 kHz».</p>
+<p>Un detalle que costó caro: esa cuenta supone canales <em>independientes</em>. Con la ventana de Hann no lo son, porque cada canal se filtra un poco hacia sus vecinos (correlación ρ ≈ 0,47 con el ESTIMATOR v2, medida el 25-11). Al sumar canales vecinos el ruido real sale ~1,4 veces mayor que el de la cuenta ingenua: σ<sub>suma</sub> ≈ σ·√(k·(1 + 2ρ)).</p></div>
+
+<h2>7.5 Promedio o mediana</h2>
+<p>Hay dos maneras de combinar muchos cuadros en un solo espectro. El <b>promedio</b> usa toda la información, pero un solo cuadro con un pulso de interferencia lo arrastra. La <b>mediana</b> ignora los valores extremos, así que es robusta, pero con ruido exponencial desperdicia información: en una simulación con 64 cuadros, la mediana dispersa 1,42 veces más que el promedio, lo que equivale a usar solo el ~49 % del tiempo <span class="tag mod">MODELO</span>.</p>
+<div class="box"><div class="box-title">En ALMITA · el estimador clásico y el v2</div>
+<p>El motor congelado de REDUCE usa cuadros de Hann <b>sin solape</b> y combina con la <b>mediana</b>: dos decisiones conservadoras que juntas aprovechan solo ~32 % del tiempo de integración (simulado, 10-11). El ESTIMATOR v2 usa solape del 50 % y el promedio, y le encarga la robustez contra la interferencia a la curtosis espectral, que saca solo lo que no es ruido. Resultado: ~95 % del tiempo aprovechado, y en datos reales con conmutación el ruido baja 1,7 a 2,1 veces, como observar 3 a 4,6 veces más tiempo <span class="tag med">MEDIDO</span>. El capítulo 11 explica la curtosis.</p></div>
+
+<div class="box sum"><div class="box-title">Capítulo 7 en tres líneas</div><ul><li>La FFT reparte un cuadro de muestras en canales; resolución en tiempo y en frecuencia se intercambian.</li><li>Una sola medición de ruido tiene 100 % de error; promediar <i>N</i> cuadros lo baja como 1/√<i>N</i>.</li><li>Canales finos para cazar interferencia; suavizar después para la ciencia.</li></ul></div>
+
+<!-- ================================================================ -->
+<h1><span class="num">Capítulo 8</span>La forma del instrumento</h1>
+<p class="lead">El primer espectro que entrega el SDR no se parece a nada astronómico. Es, casi entero, el retrato del propio receptor. Aprender a ver esa forma, y a sacarla, es la mitad del oficio.</p>
+
+<h2>8.1 La banda de paso</h2>
+<p>Cada etapa de la cadena (LNA, cable, filtros del sintonizador, filtros digitales del RTL2832U) tiene una ganancia que varía un poco con la frecuencia. El producto de todas es la <b>banda de paso</b> (<em>bandpass</em>): una curva que multiplica todo lo que entra. Mirando la carga de 50 Ω, que es ruido perfectamente plano, se ve la banda de paso pura.</p>
+<figure>{{fig:f8_band}}
+<figcaption><b>Figura 8.1.</b> Espectros crudos del 12-11 (segundo wizard, 5 capturas de 2 s cada uno, suavizados a 10 kHz). Las tres curvas tienen la misma forma: es el receptor. La carga queda 4,71 dB arriba del cielo frío en toda la banda: el factor Y. Los bordes caen por el filtro anti-alias. En el plano galáctico (verde) asoma una pequeña joroba cerca de la sintonía: el hidrógeno. <span class="tag med">MEDIDO</span></figcaption></figure>
+<p>Dentro de ±1 MHz la forma de la carga sube hasta un 11 % sobre su mediana y cae hasta un 45 % en los bordes <span class="tag med">MEDIDO</span>. La línea de hidrógeno en el plano es de 12 a 18 %: <b>del mismo tamaño que la forma del receptor</b>. En el espectro crudo, la línea es una arruga sobre otra arruga más grande.</p>
+
+<h2>8.2 Dividir para ver</h2>
+<p>Como la banda de paso multiplica todo, se cancela dividiendo dos espectros tomados con el mismo receptor. Si uno tiene la línea y el otro no (o la tiene distinta), el cociente menos uno deja solo la diferencia del cielo:</p>
+<figure>{{fig:f8_ratio}}
+<figcaption><b>Figura 8.2.</b> El cociente HI ALTO / HI BAJO del mismo wizard, menos 1. La forma del receptor desapareció y queda el hidrógeno del plano galáctico, con un máximo de 12,5 % en +8 km/s topocéntricos. Las ondulaciones de ±1–2 % del resto son lo que no se canceló. <span class="tag med">MEDIDO</span></figcaption></figure>
+<p>Este es el truco de toda la radioastronomía espectral: <b>comparar</b>. Contra qué se compara, y cuánto tiempo pasa entre las dos mediciones, decide la calidad del resultado. La Parte III trata justamente de eso.</p>
+
+<h2>8.3 La forma se mueve</h2>
+<p>Si la banda de paso fuera fija, bastaría medirla una vez. No lo es. La ganancia del LNA y del SDR depende de la temperatura (el SDR trabaja a 52–54 °C), y la medición de Allan del 17-10 mostró que sobre ~8 s la deriva de ganancia supera al ruido. Una referencia tomada minutos antes ya no tiene la misma forma.</p>
+<div class="box"><div class="box-title">En ALMITA · la noche que nació la conmutación</div>
+<p>El 05-11, en la primera detección, cada espectro se dividía por una referencia tomada minutos antes y en otra parte del cielo. Quedaron ondas de ±2–6 % en todos los espectros, diez veces el ruido del radiómetro <span class="tag med">MEDIDO</span>. Eran la forma del receptor derivando entre las dos mediciones. Cuatro días después (09-11) se escribió <code>fswitch.py</code>: en vez de mover la antena y esperar minutos, cambiar la sintonía cada 2 segundos, dentro de la ventana en que el receptor es estable. En el banco del 09-11, la forma de banda de ±14,6 % cayó a ±0,12–0,19 % en el espectro plegado.</p></div>
+
+<h2>8.4 Lo que fabrica el propio receptor</h2>
+<p>Además de la forma suave, el receptor fabrica algunos rasgos angostos que no vienen del cielo:</p>
+<p><b>La espiga central (DC).</b> Justo en la frecuencia de sintonía aparece un pico, producto de pequeños desbalances del ADC y del mezclador. No tiene nada que ver con el hidrógeno, aunque caiga en 1420,405752 MHz. <code>fswitch.py</code> descarta ±10 kHz alrededor del centro (<code>DC_HZ</code>) y REDUCE marca esos canales como <code>DC</code>.</p>
+<p><b>Espurias propias.</b> En el banco del 17-11 se encontró una espuria del SDR 645 kHz bajo cada sintonía. Como se mueve con la sintonía, la conmutación la cancela.</p>
+<p><b>Interferencia que entra por la antena.</b> La portadora de 1420,0398 MHz, la peineta de 357 kHz de la Raspberry Pi 5, las líneas que aparecen cuando alguien se acerca a la Pi o al feed. Estas no las fabrica el receptor: llegan por el mismo camino que el cielo, y por eso son las más peligrosas.</p>
+<div class="box warn"><div class="box-title">Ojo · espuria o interferencia</div>
+<p>La prueba que las separa es la carga de 50 Ω. Lo que sigue apareciendo con la carga conectada en lugar de la antena lo fabrica el receptor. Lo que desaparece entraba por la antena. El 17-10, con la carga, no apareció ninguna de las ~11 líneas que se veían con la antena <span class="tag med">MEDIDO</span>: todas venían de afuera. Esa prueba de una variable llevó, semanas después, a encontrar que la Raspberry irradiaba por el aire.</p></div>
+<div class="box"><div class="box-title">Para astrofotógrafos · lo que ya sabes, con otro nombre</div>
+<table>
+<tr><th>En astrofotografía</th><th>En ALMITA</th><th>Lo que tienen en común</th></tr>
+<tr><td>una subexposición</td><td>un cuadro de la FFT (3,4 ms) o una captura</td><td>la unidad que se apila</td></tr>
+<tr><td>apilar subs</td><td>promediar cuadros</td><td>el ruido baja como 1/√N</td></tr>
+<tr><td>flat</td><td>la banda de paso</td><td>la respuesta desigual del instrumento, que se divide</td></tr>
+<tr><td>dark / bias</td><td>la carga de 50 Ω y la T<sub>rx</sub></td><td>lo que pone el propio equipo sin luz</td></tr>
+<tr><td>pixel caliente, traza de satélite</td><td>espuria, interferencia</td><td>lo que no es cielo y se descarta</td></tr>
+<tr><td>sigma clipping</td><td>curtosis espectral, rechazo con mediana/MAD</td><td>sacar lo raro antes de promediar</td></tr>
+<tr><td>gradiente de contaminación lumínica</td><td>ondulación de la línea de base</td><td>un fondo que cambia con la dirección y hay que modelar</td></tr>
+<tr><td>campo de la cámara</td><td>el haz de 20°</td><td>cuánto cielo entra a la vez</td></tr>
+</table>
+<p>La gran diferencia: en óptica cada pixel es una dirección del cielo y la imagen sale de una vez; ALMITA tiene <b>un solo pixel</b> (el haz) y muchísimos «colores» (los canales). Un mapa se arma apuntando punto por punto, como un mosaico de una sola celda.</p></div>
+<div class="box sum"><div class="box-title">Capítulo 8 en tres líneas</div><ul><li>El espectro crudo es el retrato del receptor, no del cielo.</li><li>Dividiendo dos espectros del mismo receptor aparece el cielo.</li><li>La forma del receptor deriva en segundos: la referencia tiene que ser casi simultánea.</li></ul></div>
