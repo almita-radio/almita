@@ -58,7 +58,9 @@ CAPTURE_REQUIRED_FIELDS = {"point_number", "scan_order", "target_ra_hours", "tar
 # reduce_engine re-pinned from 7adcefc to 649ac2d (2026-11-11, same BL-105 authorisation, operator: "quiero aprovechar
 # la circunpolaridad de las nubes!"): the fold's baseline also stays off the capture's mask windows (local gas and its
 # ghosts) when it records them. Captures without them fold as before.
-FROZEN = (("reduce_engine", "649ac2d"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "d8893ff"), ("almita_science.py", "f5e2f65"),
+# reduce_engine, science_engine and capture.py re-pinned to be498d74 (2026-11-25, operator: "dale nomás" on the
+# audit fixes): median sigma, Hann-correlated integrals, mean-velocity coverage, plain-FS model line window.
+FROZEN = (("reduce_engine", "be498d74"), ("almita_reduce.py", "2afc4c5"), ("science_engine", "be498d74"), ("almita_science.py", "f5e2f65"),
           # science_forensics re-pinned from 02b8e5a to 7b2eefb (2026-10-13, BL-052): experiment/plan.py's DEFAULT_INSTRUMENT
           # carries the RFI_REF Bias-T ON (antenna B's LNA) and records the campaign's OFF as bias_tee_feature_campaign.
           ("science_forensics", "7b2eefb"), ("almita_science_forensics.py", "8f4b40a"),
@@ -83,7 +85,7 @@ FROZEN = (("reduce_engine", "649ac2d"), ("almita_reduce.py", "2afc4c5"), ("scien
           # after each point. Without the option the acquisition loop, spectral path and HDF5 format are unchanged.
           # capture.py re-pinned from 7adcefc to 649ac2d (2026-11-11, BL-105): --fswitch-offset-hz (configurable throw for
           # the Magellanic Clouds). Without it the LOs stay at -/+ 600 kHz as before.
-          ("capture.py", "649ac2d"),
+          ("capture.py", "be498d74"),
           # observation_orchestrator.py re-pinned from 26fa261 to 0148b78 (2026-10-13): _pid_alive() no longer counts an
           # exited, unreaped capture as running (first real STOP OBSERVATION). The capture path is unchanged.
           # observation_spec.py re-pinned from 7b2eefb to e4b0a0b (2026-10-15): operator-ordered grid ANGLE - an optional

@@ -346,7 +346,8 @@ def test_frozen_modules_untouched():
     # reduce_engine re-pinned 2026-11-10 to 6d0ea46 (frequency-switching fold, BL-100, operator-authorised)
     # and 2026-11-11 to 7adcefc (BL-105: baseline outside the capture's line window, operator-authorised)
     # and 2026-11-11 to 649ac2d (configurable throw: baseline also off the local gas's mask windows)
-    frozen = {"reduce_engine": "649ac2d", "science_engine": "d8893ff"}
+    # 2026-11-25 both re-pinned to be498d74 (audit fixes, operator-authorised: "dale nomás")
+    frozen = {"reduce_engine": "be498d74", "science_engine": "be498d74"}
     for path, commit in frozen.items():
         out = subprocess.run(["git", "diff", "--name-only", commit, "--", path], cwd=ROOT, capture_output=True, text=True)
         if out.returncode != 0:
