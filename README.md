@@ -15,6 +15,7 @@ It combines INDI/OnStep mount control, automated sky planning, HDF5 acquisition,
 behind a login. It is **offline-first**: internet access is not required to observe.
 
 Project site: <https://almita-radio.github.io/almita/>
+Home page, with a SIMULATED demo of the web console: <https://almita-radio.space>
 
 ALMITA is mostly vibe-coded, extensively field-tested, occasionally threatened with a hammer, and still held together in
 suspiciously many places by **plastic cable ties**. This is considered temporary. It has also been considered temporary for
