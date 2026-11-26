@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>ALMITA · radiotelescopio de hidrógeno</title>
+<title>ALMITA · radiotelescopio de hidrógeno</title><link rel="icon" href="/project/favicon.svg" type="image/svg+xml"><link rel="icon" href="/project/favicon-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/project/apple-touch-icon.png">
 <meta name="description" content="ALMITA: un radiotelescopio hecho en casa, en Chile, que escucha el hidrógeno de la Vía Láctea. Qué es, cómo funciona, qué ha visto y cómo probarlo. / A home-built radio telescope from Chile that listens to the Milky Way's hydrogen.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
@@ -32,14 +32,14 @@ section+section{border-top:1px solid var(--line)}
 /* top bar */
 nav.top{position:sticky;top:0;z-index:30;background:rgba(7,10,18,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 nav.top .wrap{display:flex;align-items:center;gap:1.1rem;min-height:54px}
-nav.top .brand{font:700 1.15rem var(--serif);letter-spacing:.04em;color:var(--fg);text-decoration:none;margin-right:auto}
-nav.top .links{display:flex;gap:1.1rem;overflow-x:auto;white-space:nowrap}
+.heroLogo{width:100%;max-width:540px;height:auto;border-radius:14px;margin:0 0 1.6rem;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+nav.top .links{margin-left:auto;display:flex;gap:1.1rem;overflow-x:auto;white-space:nowrap}
 nav.top .links a{color:var(--fg2);text-decoration:none;font:600 .78rem var(--mono);letter-spacing:.08em;text-transform:uppercase}
 nav.top .links a:hover{color:var(--fg)}
 .lang{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;flex:none}
 .lang button{background:transparent;color:var(--fg3);border:0;font:600 .72rem var(--mono);letter-spacing:.1em;padding:.35rem .7rem;cursor:pointer}
 .lang button[aria-pressed="true"]{background:var(--h);color:#04202a}
-@media (max-width:46rem){nav.top .links{display:none}}
+@media (max-width:46rem){nav.top .links{display:none}nav.top .lang{margin-left:auto}}
 
 /* hero */
 .hero{position:relative;overflow:hidden;padding-block:4.5rem 3.5rem;background:
@@ -134,12 +134,11 @@ dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:ma
 <body data-l="es">
 
 <nav class="top"><div class="wrap">
-  <a class="brand" href="#top">ALMITA</a>
   <div class="links">
     <a href="#que"><span lang="es">Qué es</span><span lang="en">What</span></a>
     <a href="#como"><span lang="es">Cómo</span><span lang="en">How</span></a>
-    <a href="#modulos"><span lang="es">Módulos</span><span lang="en">Modules</span></a>
     <a href="#logros"><span lang="es">Resultados</span><span lang="en">Results</span></a>
+    <a href="#modulos"><span lang="es">Módulos</span><span lang="en">Modules</span></a>
     <a href="#preguntas"><span lang="es">Preguntas</span><span lang="en">FAQ</span></a>
     <a href="#contacto"><span lang="es">Contacto</span><span lang="en">Contact</span></a>
   </div>
@@ -149,6 +148,7 @@ dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:ma
 </div></nav>
 
 <header class="hero" id="top"><div class="wrap">
+  <img class="heroLogo" src="project/almita-logo.jpg" width="1400" height="467" alt="ALMITA logo: 21 cm Hydrogen Line Radio Telescope, github.com/almita-radio">
   <span class="kicker"><span lang="es">Radioastronomía amateur · hecho en Chile</span><span lang="en">Amateur radio astronomy · made in Chile</span></span>
   <h1><span lang="es">Un radiotelescopio hecho en casa que escucha el <em>hidrógeno</em> de la Vía Láctea</span><span lang="en">A home-built radio telescope that listens to the Milky Way's <em>hydrogen</em></span></h1>
   <p class="lede"><span lang="es">ALMITA es un plato de rejilla, una antena casera, un receptor de radio por USB y mucho software abierto. Con eso
@@ -161,8 +161,8 @@ dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:ma
     <a class="btn" href="#contacto"><span lang="es">Escríbenos</span><span lang="en">Get in touch</span></a>
     <a class="btn" href="https://github.com/almita-radio/almita" rel="noopener">GitHub</a>
   </div>
-  <canvas id="spec" aria-label="Animated sketch of a 21 cm spectrum: noise with the hydrogen line rising out of it"></canvas>
-  <div class="speccap"><span>1419.9 MHz</span><span><span lang="es">la línea del hidrógeno asomando entre el ruido (dibujo)</span><span lang="en">the hydrogen line rising out of the noise (sketch)</span></span><span>1420.9 MHz</span></div>
+  <canvas id="spec" aria-label="ALMITA’s real 21 cm data of 12 November 2026 (l = 5°, b = 0°): the raw capture averaged from 0.04 to 40 seconds, the hydrogen line rising out of the real noise"></canvas>
+  <div class="speccap"><span>1420.04 MHz</span><span><span lang="es">datos reales de ALMITA, 12-11-2026 (l = 5°, b = 0°): la captura cruda promediada de 0,04 a 40 s</span><span lang="en">ALMITA’s real data, 12 Nov 2026 (l = 5°, b = 0°): the raw capture averaged from 0.04 to 40 s</span></span><span>1420.84 MHz</span></div>
 </div></header>
 
 <section id="que"><div class="wrap">
@@ -235,6 +235,32 @@ dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:ma
   </div>
 </div></section>
 
+<section id="logros"><div class="wrap">
+  <span class="kicker"><span lang="es">Lo que ha visto de verdad</span><span lang="en">What it has really seen</span> <span class="tag real"><span lang="es">DATOS REALES</span><span lang="en">REAL DATA</span></span></span>
+  <h2><span lang="es">Noviembre de 2026, desde un techo en Santiago, Chile</span><span lang="en">November 2026, from a rooftop in Santiago, Chile</span></h2>
+  <p class="lede"><span lang="es">Cada resultado viene con lo que todavía no demuestra. Las intensidades son relativas: aún no hay calibración absoluta.</span><span lang="en">Every result comes with what it does not show yet. Intensities are relative: there is no absolute calibration yet.</span></p>
+  <div class="tl">
+    <div class="ev"><div class="when">19 nov 2026</div><div>
+      <h3><span lang="es">La Vía Láctea gira</span><span lang="en">The Milky Way turns</span></h3>
+      <p><span lang="es">Una tarde con el piloto automático: 99 capturas, ninguna falló. A un lado del centro galáctico el hidrógeno se aleja, al otro se acerca, y la diferencia crece hacia afuera: la velocidad media va de +18 km/s a −19 km/s. El disco rota.</span><span lang="en">An afternoon on autopilot: 99 captures, none failed. On one side of the Galactic Centre the hydrogen recedes, on the other it approaches, and the difference grows outward: the mean velocity goes from +18 km/s to −19 km/s. The disc rotates.</span></p>
+      <button class="fig" type="button" data-full="project/results/rotation_20261119.jpg"><img src="project/results/rotation_20261119.jpg" alt="21 cm spectra along the Galactic plane, 19 November 2026" width="1600" height="1176" loading="lazy"></button>
+      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">todavía no es una velocidad de rotación: con un plato de 20° y una sola tarde, la mitad del número sale de un supuesto. Una revisión del 25 de noviembre retiró las dos velocidades publicadas al principio.</span><span lang="en">it is not yet a rotation speed: with a 20° dish and one afternoon, half the number comes from an assumption. A 25 November review withdrew the two speeds first published.</span></p>
+    </div></div>
+    <div class="ev"><div class="when">12 nov 2026</div><div>
+      <h3><span lang="es">Repetido, y mucho más limpio</span><span lang="en">Repeated, and much cleaner</span></h3>
+      <p><span lang="es">Con <i>conmutación de frecuencia</i> (el receptor salta entre dos sintonías: el hidrógeno se mueve y las imperfecciones del receptor no), la línea apareció en los 25 puntos del mosaico, sobre una base plana. Su forma calza con HI4PI con correlación de 0,95 a 0,99.</span><span lang="en">With <i>frequency switching</i> (the receiver hops between two tunings: the hydrogen moves, the receiver's flaws do not), the line showed up in all 25 points of the mosaic on a flat baseline. Its shape matches HI4PI with a correlation of 0.95 to 0.99.</span></p>
+      <button class="fig" type="button" data-full="project/results/hi_frequency_switched_20261112.jpg"><img src="project/results/hi_frequency_switched_20261112.jpg" alt="Frequency-switched 21 cm spectra from 12 November 2026 against HI4PI" width="1600" height="736" loading="lazy"></button>
+      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">el espectro de HI4PI de otro punto de la grilla calza casi igual de bien, y las Nubes de Magallanes no se detectaron.</span><span lang="en">HI4PI's spectrum of another point of the grid matches almost as well, and the Magellanic Clouds were not detected.</span></p>
+    </div></div>
+    <div class="ev"><div class="when">5 nov 2026</div><div>
+      <h3><span lang="es">Primer hidrógeno</span><span lang="en">First hydrogen</span></h3>
+      <p><span lang="es">La primera noche en el techo, ALMITA vio la línea del hidrógeno donde el catálogo HI4PI dice que debe estar, y del lado correcto del cero de velocidad: con el eje invertido, la coincidencia se cae.</span><span lang="en">On its first rooftop night, ALMITA saw the hydrogen line where the HI4PI survey says it should be, on the right side of zero velocity: with the axis flipped, the match falls apart.</span></p>
+      <button class="fig" type="button" data-full="project/results/hi_detection_20261105.jpg"><img src="project/results/hi_detection_20261105.jpg" alt="21 cm spectra from 5 November 2026 against HI4PI" width="1600" height="736" loading="lazy"></button>
+      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">muestra hidrógeno con el signo correcto, no que cada espectro calce con su propio punto del cielo.</span><span lang="en">it shows hydrogen with the right sign, not that each spectrum matches its own point in the sky.</span></p>
+    </div></div>
+  </div>
+</div></section>
+
 <section id="modulos"><div class="wrap">
   <span class="kicker"><span lang="es">El software, módulo por módulo</span><span lang="en">The software, module by module</span></span>
   <h2><span lang="es">Una consola web para operar un radiotelescopio</span><span lang="en">A web console to run a radio telescope</span></h2>
@@ -244,32 +270,6 @@ dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:ma
   simulated and the sky comes from a professional survey (HI4PI). You can open each one and press buttons.</span></p>
   <div class="mods" id="mods"></div>
   <p style="margin-top:1.8rem"><a href="/console-tour.html"><span lang="es">Tour técnico de la consola, en inglés →</span><span lang="en">Technical tour of the console →</span></a></p>
-</div></section>
-
-<section id="logros"><div class="wrap">
-  <span class="kicker"><span lang="es">Lo que ha visto de verdad</span><span lang="en">What it has really seen</span> <span class="tag real"><span lang="es">DATOS REALES</span><span lang="en">REAL DATA</span></span></span>
-  <h2><span lang="es">Noviembre de 2026, desde un techo en Santiago</span><span lang="en">November 2026, from a rooftop in Santiago</span></h2>
-  <p class="lede"><span lang="es">Cada resultado viene con lo que todavía no demuestra. Las intensidades son relativas: aún no hay calibración absoluta.</span><span lang="en">Every result comes with what it does not show yet. Intensities are relative: there is no absolute calibration yet.</span></p>
-  <div class="tl">
-    <div class="ev"><div class="when">5 nov 2026</div><div>
-      <h3><span lang="es">Primer hidrógeno</span><span lang="en">First hydrogen</span></h3>
-      <p><span lang="es">La primera noche en el techo, ALMITA vio la línea del hidrógeno donde el catálogo HI4PI dice que debe estar, y del lado correcto del cero de velocidad: con el eje invertido, la coincidencia se cae.</span><span lang="en">On its first rooftop night, ALMITA saw the hydrogen line where the HI4PI survey says it should be, on the right side of zero velocity: with the axis flipped, the match falls apart.</span></p>
-      <button class="fig" type="button" data-full="project/results/hi_detection_20261105.jpg"><img src="project/results/hi_detection_20261105.jpg" alt="21 cm spectra from 5 November 2026 against HI4PI" width="1600" height="736" loading="lazy"></button>
-      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">muestra hidrógeno con el signo correcto, no que cada espectro calce con su propio punto del cielo.</span><span lang="en">it shows hydrogen with the right sign, not that each spectrum matches its own point in the sky.</span></p>
-    </div></div>
-    <div class="ev"><div class="when">12 nov 2026</div><div>
-      <h3><span lang="es">Repetido, y mucho más limpio</span><span lang="en">Repeated, and much cleaner</span></h3>
-      <p><span lang="es">Con <i>conmutación de frecuencia</i> (el receptor salta entre dos sintonías: el hidrógeno se mueve y las imperfecciones del receptor no), la línea apareció en los 25 puntos del mosaico, sobre una base plana. Su forma calza con HI4PI con correlación de 0,95 a 0,99.</span><span lang="en">With <i>frequency switching</i> (the receiver hops between two tunings: the hydrogen moves, the receiver's flaws do not), the line showed up in all 25 points of the mosaic on a flat baseline. Its shape matches HI4PI with a correlation of 0.95 to 0.99.</span></p>
-      <button class="fig" type="button" data-full="project/results/hi_frequency_switched_20261112.jpg"><img src="project/results/hi_frequency_switched_20261112.jpg" alt="Frequency-switched 21 cm spectra from 12 November 2026 against HI4PI" width="1600" height="736" loading="lazy"></button>
-      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">el espectro de HI4PI de otro punto de la grilla calza casi igual de bien, y las Nubes de Magallanes no se detectaron.</span><span lang="en">HI4PI's spectrum of another point of the grid matches almost as well, and the Magellanic Clouds were not detected.</span></p>
-    </div></div>
-    <div class="ev"><div class="when">19 nov 2026</div><div>
-      <h3><span lang="es">La Vía Láctea gira</span><span lang="en">The Milky Way turns</span></h3>
-      <p><span lang="es">Una tarde con el piloto automático: 99 capturas, ninguna falló. A un lado del centro galáctico el hidrógeno se aleja, al otro se acerca, y la diferencia crece hacia afuera: la velocidad media va de +18 km/s a −19 km/s. El disco rota.</span><span lang="en">An afternoon on autopilot: 99 captures, none failed. On one side of the Galactic Centre the hydrogen recedes, on the other it approaches, and the difference grows outward: the mean velocity goes from +18 km/s to −19 km/s. The disc rotates.</span></p>
-      <button class="fig" type="button" data-full="project/results/rotation_20261119.jpg"><img src="project/results/rotation_20261119.jpg" alt="21 cm spectra along the Galactic plane, 19 November 2026" width="1600" height="1176" loading="lazy"></button>
-      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">todavía no es una velocidad de rotación: con un plato de 20° y una sola tarde, la mitad del número sale de un supuesto. Una revisión del 25 de noviembre retiró las dos velocidades publicadas al principio.</span><span lang="en">it is not yet a rotation speed: with a 20° dish and one afternoon, half the number comes from an assumption. A 25 November review withdrew the two speeds first published.</span></p>
-    </div></div>
-  </div>
 </div></section>
 
 <section id="aprendido"><div class="wrap">
@@ -404,26 +404,37 @@ const lb = document.getElementById("lb");
 document.addEventListener("click", (e) => { const t = e.target.closest("[data-full]"); if (!t) return; document.getElementById("lbi").src = t.dataset.full; lb.showModal(); });
 document.getElementById("lbx").addEventListener("click", () => lb.close());
 lb.addEventListener("click", (e) => { if (e.target === lb) lb.close(); });
-// animated spectrum sketch: noise, slowly averaging down, with the line rising out of it
+// hero spectrum, ALL REAL: ALMITA's raw capture of 2026-11-12 22:42 UTC (l=5 b=0, frequency switched, 40 s) averaged up
+// progressively - from 0.02 s to 20 s per tuning - by demo/build_hero_frames.py (REDUCE's own fold, LSRK). Nothing simulated.
 const cv = document.getElementById("spec"), cx = cv.getContext("2d");
-const N = 220; let avg = new Float32Array(N), n = 0;
-const line = (i) => { const x = (i - N * 0.52) / (N * 0.045), y = (i - N * 0.6) / (N * 0.03); return 0.55 * Math.exp(-x * x / 2) + 0.28 * Math.exp(-y * y / 2); };
-const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let H = null, n = 0, hold = 0;
 function frame() {
   const w = cv.clientWidth, h = cv.clientHeight, d = devicePixelRatio || 1;
   if (cv.width !== w * d) { cv.width = w * d; cv.height = h * d; }
   cx.setTransform(d, 0, 0, d, 0, 0); cx.clearRect(0, 0, w, h);
-  n = n >= 400 ? 1 : n + 1; if (n === 1) avg.fill(0);
-  for (let i = 0; i < N; i++) avg[i] += ((line(i) + 0.9 * gauss()) - avg[i]) / n;
-  cx.strokeStyle = "rgba(98,211,240,.9)"; cx.lineWidth = 2; cx.beginPath();
-  for (let i = 0; i < N; i++) { const x = i / (N - 1) * w, y = h * 0.82 - avg[i] * h * 0.85; i ? cx.lineTo(x, y) : cx.moveTo(x, y); }
-  cx.stroke();
-  cx.strokeStyle = "rgba(242,169,59,.5)"; cx.setLineDash([4, 5]); cx.beginPath(); cx.moveTo(w * 0.52, 8); cx.lineTo(w * 0.52, h); cx.stroke(); cx.setLineDash([]);
-  cx.fillStyle = "#7f8aa1"; cx.font = "12px 'IBM Plex Mono', monospace"; cx.fillText(`${n} / 400`, 4, 14);
-  if (!reduce) setTimeout(() => requestAnimationFrame(frame), 60);
+  if (H) {
+    const fr = H.frames[n], N = fr.length, [F0, F1] = H.freq_mhz;
+    const y = (pct) => h * 0.86 - pct / 20 * h * 0.72;
+    cx.lineWidth = 1; cx.strokeStyle = "rgba(127,138,161,.35)"; cx.beginPath(); cx.moveTo(0, y(0)); cx.lineTo(w, y(0)); cx.stroke();
+    cx.strokeStyle = "rgba(98,211,240,.9)"; cx.lineWidth = 2; cx.beginPath(); let pen = false;
+    for (let i = 0; i < N; i++) {
+      if (fr[i] == null) { pen = false; continue; }
+      const x = i / (N - 1) * w, yy = Math.max(2, Math.min(h - 2, y(fr[i])));
+      pen ? cx.lineTo(x, yy) : cx.moveTo(x, yy); pen = true;
+    }
+    cx.stroke(); cx.lineWidth = 1;
+    const xr = (H.rest_mhz - F0) / (F1 - F0) * w;
+    cx.strokeStyle = "rgba(242,169,59,.5)"; cx.setLineDash([4, 5]); cx.beginPath(); cx.moveTo(xr, 8); cx.lineTo(xr, h); cx.stroke(); cx.setLineDash([]);
+    const t = 2 * H.seconds_per_tuning[n];
+    cx.fillStyle = "#7f8aa1"; cx.font = "12px 'IBM Plex Mono', monospace";
+    cx.fillText(`${t < 1 ? t.toFixed(2) : t.toFixed(1)} s / 40 s`, 4, 14);
+    cx.textAlign = "right"; cx.fillText("20 %", w - 4, y(20) + 4); cx.fillText("0 %", w - 4, y(0) - 4); cx.textAlign = "left";
+    if (!reduce) { if (n < H.frames.length - 1) n++; else if (++hold > 40) { n = 0; hold = 0; } }
+  }
+  if (!reduce) setTimeout(() => requestAnimationFrame(frame), 80);
 }
-if (reduce) { n = 399; for (let k = 0; k < 400; k++) { n = k; for (let i = 0; i < N; i++) avg[i] += ((line(i) + 0.9 * gauss()) - avg[i]) / (k + 1); } n = 399; }
+fetch("project/hero_frames.json").then((r) => r.json()).then((j) => { H = j; if (reduce) { n = H.frames.length - 1; frame(); } }).catch(() => {});
 frame();
 </script>
 </body>

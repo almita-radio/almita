@@ -10,6 +10,7 @@
 const SPEED = 10;
 const BANNER = `<div id="almita-demo-banner" style="position:sticky;top:0;z-index:99999;background:#e8590c;color:#fff;font:600 13px/1.4 system-ui,sans-serif;letter-spacing:.04em;padding:6px 12px;text-align:center">SIMULATED DEMO · a recording of ALMITA's real software driving a simulated telescope and SDR (sky: HI4PI, HI4PI Collaboration 2016, A&amp;A 594, A116). Nothing here is a real observation. <a href="/about-demo.html" style="color:#fff">How it works</a></div>`;
 
+const ICON = `<link rel="icon" href="/project/favicon.svg" type="image/svg+xml"><link rel="icon" href="/project/favicon-32.png" type="image/png" sizes="32x32">`;
 let MAN = null;            // {start_t, actions:[{t, method, url, post}], byKey:{key:[entries sorted by t]}}
 let clock = null;          // {t0 (recording t), wall0 (ms), until (recording t or null)}
 
@@ -65,7 +66,7 @@ async function respond(e, extraHtml) {
   let buf = await r.arrayBuffer();
   const headers = { "Content-Type": e.ctype || "application/octet-stream", "Cache-Control": "no-store", "X-Almita-Demo": "SIMULATED" };
   if (extraHtml && /text\/html/.test(e.ctype || "")) {
-    const html = new TextDecoder().decode(buf).replace(/<head([^>]*)>/i, (m) => m + dateShim()).replace(/<body([^>]*)>/i, (m) => m + extraHtml);
+    const html = new TextDecoder().decode(buf).replace(/<link rel="icon" href="data:,">/i, "").replace(/<head([^>]*)>/i, (m) => m + ICON + dateShim()).replace(/<body([^>]*)>/i, (m) => m + extraHtml);
     return new Response(html, { status: e.status || 200, headers });
   }
   return new Response(buf, { status: e.status || 200, headers });
@@ -73,14 +74,17 @@ async function respond(e, extraHtml) {
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "X-Almita-Demo": "SIMULATED" } });
 
+const STATIC_PAGES = /^\/(home|console-tour|demo|about-demo|simulator|404)(\.html)?$/;
+
 async function handle(req) {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return fetch(req);
-  if (url.pathname.startsWith("/rec/") || url.pathname === "/sw.js" || url.pathname === "/about-demo.html" || url.pathname === "/simulator.html"
-      || url.pathname === "/sim.js" || url.pathname === "/sky.json" || url.pathname === "/home.html" || url.pathname === "/console-tour.html" || url.pathname === "/demo.html" || url.pathname.startsWith("/project/")) return fetch(req);
+  // real files (hosts that drop ".html", e.g. Cloudflare Pages, serve /home.html as /home: accept both)
+  if (url.pathname.startsWith("/rec/") || url.pathname === "/sw.js" || STATIC_PAGES.test(url.pathname)
+      || url.pathname === "/sim.js" || url.pathname === "/sky.json" || url.pathname === "/favicon.ico" || url.pathname.startsWith("/project/")) return fetch(req);
   // the Space root is the project page; "/" means MONITOR only when it is followed from a console page
   if (url.pathname === "/" && !url.search && req.mode === "navigate" && !(req.referrer && new URL(req.referrer).origin === self.location.origin
-      && !/\/(home|console-tour|demo|about-demo|simulator)\.html$/.test(new URL(req.referrer).pathname))) return fetch(req);
+      && !STATIC_PAGES.test(new URL(req.referrer).pathname))) return fetch(req);
   const m = await manifest();
   if (url.pathname === "/__demo_clock") return json(200, { clock, now: now(), start_t: m.start_t, end_t: m.end_t, actions: m.actions.map((a) => [a.t, a.key]) });
   // "/?go=observe.html" (links from the project page) opens that console page; "/" alone is MONITOR, as in the real console

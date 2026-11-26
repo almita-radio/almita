@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- ALMITA tab icon: a small dish antenna listening (logo colours: navy + 21 cm cyan) -->
+  <rect width="64" height="64" rx="14" fill="#16245a"/>
+  <!-- dish, opening up-right -->
+  <path d="M10 22 A26 26 0 0 0 42 54 Z" fill="#e9f1fe"/>
+  <!-- feed arm to the focus and the feed -->
+  <path d="M26 38 L38 26" stroke="#e9f1fe" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="39" cy="25" r="3.6" fill="#0099df"/>
+  <!-- mount -->
+  <path d="M24 46 L18 58 M24 46 L32 58 M15 58 H35" stroke="#e9f1fe" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <!-- incoming 21 cm waves -->
+  <path d="M43 15 A10 10 0 0 1 49 21" stroke="#0099df" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path d="M43 7 A17 17 0 0 1 57 21" stroke="#0099df" stroke-width="3.5" stroke-linecap="round" fill="none" opacity=".6"/>
+</svg>
