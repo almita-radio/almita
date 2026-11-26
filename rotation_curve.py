@@ -9,6 +9,9 @@ Method (plain words in docs/BACKLOG.md BL-105):
   - the TERMINAL velocity: going inward from the terminal end of the spectrum (positive in QI, negative in QIV), the
     first velocity where the line reaches max(nsigma x noise, edge_fraction x peak);
   - tangent point: R = R0 |sin l|; rotation speed V(R) = |v_t| + V0 |sin l| (R0 = 8.2 kpc, V0 = 220 km/s).
+  - audit 2026-11-25: the measured edge and the assumed V0 part are reported apart; every edge is also found at edge
+    fractions 0.02/0.03/0.05 and half that spread goes into V_err; the tail's baseline ripple is reported and an edge
+    whose threshold is below 2x it is flagged (edge_set_by_ripple); the noise counts the Hann channel correlation.
   - edge_fraction 0.03 (2026-11-11, measured on HI4PI): through a 20 deg beam the tangent-point gas is only ~2-5 % of
     the spectrum's peak (the local gas dominates it); 0.2 would stop on the local gas's shoulder.
   - The SAME edge method is applied, where an HI4PI cube tile covers the beam, to HI4PI's spectrum seen through
@@ -58,6 +61,18 @@ def smooth(v: np.ndarray, t: np.ndarray, width_km_s: float = SMOOTH_KM_S) -> np.
     return out
 
 
+def smoothed_noise_factor(k: int, rho=None) -> float:
+    """sigma of a k-channel running MEAN per unit sigma of the channel-to-channel DIFFERENCES (audit 2026-11-25).
+    Neighbouring REDUCE channels correlate through the Hann window (rho1 4/9, rho2 1/36): a difference then has
+    variance 2 sigma^2 (1 - rho1) - not 2 sigma^2 - and a k-channel mean sigma^2 (k + 2 SUM (k-j) rho_j) / k^2 - not
+    sigma^2 / k. The old 1/sqrt(2k) was 0.56 of the real noise for the default smoothing."""
+    from science_engine.config import HANN_CHANNEL_CORRELATION
+    rho = HANN_CHANNEL_CORRELATION if rho is None else rho
+    per_channel = 1.0 / math.sqrt(2.0 * (1.0 - rho[0]))
+    var_mean = (k + 2.0 * sum((k - j) * r for j, r in enumerate(rho, start=1) if j < k)) / (k * k)
+    return per_channel * math.sqrt(var_mean)
+
+
 EDGE_FRACTION = 0.03                  # HI4PI through a 20 deg beam: the tangent gas is only ~2-5 % of the spectrum's peak
 
 
@@ -80,7 +95,7 @@ def terminal_velocity(v_km_s: np.ndarray, t: np.ndarray, sign: int, *, edge_frac
     dv = float(np.median(np.abs(np.diff(v)))) or 1.0
     k = max(1, int(round(SMOOTH_KM_S / dv)))
     d = np.diff(raw[tail])
-    noise = (1.4826 * float(np.median(np.abs(d - np.median(d)))) / math.sqrt(2) / math.sqrt(k)) if tail.sum() > 5 else float("nan")
+    noise = (1.4826 * float(np.median(np.abs(d - np.median(d)))) * smoothed_noise_factor(k)) if tail.sum() > 5 else float("nan")
     base = float(np.median(ts[tail])) if tail.sum() > 5 else 0.0
     peak = float(np.nanmax(ts) - base)
     if not (peak > 0 and math.isfinite(noise)):
@@ -104,13 +119,39 @@ def terminal_velocity(v_km_s: np.ndarray, t: np.ndarray, sign: int, *, edge_frac
     hi = np.where(ts - base >= thr - noise)[0]
     lo = np.where(ts - base >= thr + noise)[0]
     err = 0.5 * abs((float(v[hi.max()]) if hi.size else vt) - (float(v[lo.max()]) if lo.size else vt))
+    # the baseline's own ripple in the last 25 km/s (smoothed): an edge threshold below ~2x it is set by the ripple
+    ripple = float(1.4826 * np.median(np.abs(tt - np.median(tt))))
+    step = abs(float(np.median(tt[half]) - np.median(tt[~half]))) if half.sum() > 2 and (~half).sum() > 2 else 0.0
     return {"ok": True, "terminal_km_s": sign * vt, "terminal_err_km_s": max(err, SMOOTH_KM_S / 2),
-            "peak": peak, "noise": noise, "threshold": thr, "snr_peak": peak / noise if noise > 0 else None}
+            "peak": peak, "noise": noise, "threshold": thr, "snr_peak": peak / noise if noise > 0 else None,
+            "tail_ripple": ripple, "tail_step": step, "threshold_over_ripple": thr / ripple if ripple > 0 else None,
+            "edge_set_by_ripple": bool(ripple > 0 and thr < 2.0 * max(ripple, step))}
+
+
+SENSITIVITY_FRACTIONS = (0.02, 0.03, 0.05)
+
+
+def threshold_sensitivity(v_km_s: np.ndarray, t: np.ndarray, sign: int, *, nsigma: float = 4.0,
+                          fractions=SENSITIVITY_FRACTIONS) -> Dict[str, Any]:
+    """The same edge at several edge fractions (audit 2026-11-25: at l = -20 the edge moved -129 -> -182 km/s with
+    the threshold). spread = max - min of the edges that were found; a point whose edge is not found at every
+    fraction says so."""
+    edges = {}
+    for f in fractions:
+        e = terminal_velocity(v_km_s, t, sign, edge_fraction=f, nsigma=nsigma)
+        edges[f"{f:g}"] = round(e["terminal_km_s"], 2) if e.get("ok") else None
+    found = [x for x in edges.values() if x is not None]
+    return {"edge_by_fraction_km_s": edges, "all_found": len(found) == len(edges),
+            "spread_km_s": round(max(found) - min(found), 2) if len(found) > 1 else None}
 
 
 def tangent_point(l_deg: float, v_t_km_s: float, err_km_s: float = 0.0) -> Dict[str, float]:
+    """V = |v_t| + V0 |sin l|: the MEASURED edge and the ASSUMED solar speed are reported apart (audit 2026-11-25:
+    V0 supplied 28-52 % of every V on 19-11); V_err_km_s is the measured part's error only - V0's is not in it."""
     s = abs(math.sin(math.radians(l_deg)))
-    return {"R_kpc": R0_KPC * s, "V_km_s": abs(v_t_km_s) + V0_KM_S * s, "V_err_km_s": err_km_s}
+    return {"R_kpc": R0_KPC * s, "V_km_s": abs(v_t_km_s) + V0_KM_S * s, "V_err_km_s": err_km_s,
+            "V_measured_edge_km_s": abs(v_t_km_s), "V_assumed_V0_part_km_s": V0_KM_S * s,
+            "V0_share": V0_KM_S * s / (abs(v_t_km_s) + V0_KM_S * s) if (abs(v_t_km_s) + V0_KM_S * s) > 0 else None}
 
 
 # ------------------------------------------------------------------ HI4PI through ALMITA's beam
@@ -196,7 +237,12 @@ def analyse(reduce_dir: Path, *, bmax: float = 10.0, edge_fraction: float = EDGE
             row.update(used=False, reason=e["reason"], **{k: v for k, v in e.items() if k not in ("ok", "reason")})
             rows.append(row); continue
         row.update(used=True, **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in e.items() if k != "ok"})
-        row.update({k: round(v, 3) for k, v in tangent_point(l, e["terminal_km_s"], e["terminal_err_km_s"]).items()})
+        sens = threshold_sensitivity(p["v"], p["t"], sign, nsigma=nsigma)
+        # the error quoted with V holds the threshold choice too: half the spread of the edges at 0.02/0.03/0.05
+        err_total = math.hypot(e["terminal_err_km_s"], 0.5 * (sens["spread_km_s"] or 0.0))
+        row.update(threshold_sensitivity=sens, terminal_err_noise_km_s=round(e["terminal_err_km_s"], 3))
+        row.update({k: (round(v, 3) if isinstance(v, float) else v)
+                    for k, v in tangent_point(l, e["terminal_km_s"], err_total).items()})
         # HI4PI through OUR beam (what an antenna like ALMITA should see) and through a narrow 2 deg one (close to
         # the true curve): the gap between the two is the beam's own effect on the edge
         for key, fwhm in (("hi4pi", beam_fwhm_deg), ("hi4pi_narrow", 2.0)):
@@ -216,7 +262,13 @@ def analyse(reduce_dir: Path, *, bmax: float = 10.0, edge_fraction: float = EDGE
                        "hi4pi_tiles": [Path(t[0]).name for t in hi4pi.tiles]},
             "points": rows, "used": len(used),
             "median_V_km_s": round(float(np.median([r["V_km_s"] for r in used])), 1) if used else None,
-            "note": "relative/instrumental spectra; the edge is a fraction of each spectrum's own peak - no Kelvin needed"}
+            "points_edge_set_by_ripple": sum(1 for r in used if r.get("edge_set_by_ripple")),
+            "points_edge_threshold_dependent": sum(1 for r in used if not r["threshold_sensitivity"]["all_found"]
+                                                   or (r["threshold_sensitivity"]["spread_km_s"] or 0) > 10),
+            "note": ("relative/instrumental spectra; the edge is a fraction of each spectrum's own peak - no Kelvin "
+                     "needed. V = measured edge + ASSUMED V0 |sin l| (both reported); V_err holds the edge's noise "
+                     "and its threshold dependence (0.02/0.03/0.05), not V0's. A position-switched ON/OFF pair must "
+                     "be taken at the same elevation, or ground pickup enters the baseline.")}
 
 
 def plots(result: Dict[str, Any], reduce_dir: Path, out: Path) -> List[str]:
@@ -286,6 +338,11 @@ def main(argv=None) -> int:
             extra = f"  HI4PI {r['hi4pi']['terminal_km_s']:+.0f}" if "hi4pi" in r else ""
             print(f"  l={r['l_deg']:6.1f} b={r['b_deg']:+5.1f}  v_t={r['terminal_km_s']:+6.1f}±{r['terminal_err_km_s']:.0f}  "
                   f"R={r['R_kpc']:.2f} kpc  V={r['V_km_s']:.0f} km/s{extra}")
+            sens = r["threshold_sensitivity"]
+            flags = (" EDGE SET BY BASELINE RIPPLE" if r.get("edge_set_by_ripple") else "") + (
+                f" threshold spread {sens['spread_km_s']:.0f} km/s" if sens["spread_km_s"] else "")
+            print(f"      = edge {r['V_measured_edge_km_s']:.0f} + assumed V0 part {r['V_assumed_V0_part_km_s']:.0f} "
+                  f"({100 * r['V0_share']:.0f} %){flags}")
         else:
             print(f"  l={r['l_deg']:6.1f} b={r['b_deg']:+5.1f}  left out: {r['reason']}")
     print("files:", ", ".join(res["files"]))

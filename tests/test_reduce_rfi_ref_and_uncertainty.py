@@ -92,3 +92,25 @@ def test_global_metrics_usable_fraction_and_median_noise():
     assert metrics["usable_fraction"] == pytest.approx(0.7)
     assert metrics["median_noise"] == pytest.approx(0.5)
     assert metrics["effective_integration_time_seconds"] == 10.0
+
+
+def test_median_uncertainty_matches_the_real_scatter_of_the_median_on_exponential_periodograms():
+    """Audit 2026-11-25: single Hann periodogram bins of noise are exponential; 1.4826 MAD / sqrt(n) gave 0.71 of the
+    median's real error. The order-statistic estimate must match a Monte Carlo of the median itself."""
+    rng = np.random.default_rng(4)
+    n, bins = 600, 3000
+    seg = rng.exponential(1.0, (n, bins))
+    true = np.std(np.median(rng.exponential(1.0, (400, n, 200)), axis=1), axis=0).mean()
+    got = float(np.median(per_capture_uncertainty(seg)))
+    old = float(np.median(per_capture_uncertainty(seg, combine="robust_mean_of_block_means")))
+    assert got / true == pytest.approx(1.0, abs=0.05)
+    assert old / true == pytest.approx(0.71, abs=0.05)
+
+
+def test_mean_and_v2_block_mean_uncertainty_modes():
+    rng = np.random.default_rng(5)
+    seg = 1.0 + 0.1 * rng.standard_normal((400, 500))
+    for mode in ("mean", "robust_mean_of_block_means"):
+        assert float(np.median(per_capture_uncertainty(seg, combine=mode))) == pytest.approx(0.1 / np.sqrt(400), rel=0.08)
+    with pytest.raises(ValueError):
+        per_capture_uncertainty(seg, combine="nope")

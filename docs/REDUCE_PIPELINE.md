@@ -161,10 +161,14 @@ law.
 
 ### UNCERTAINTY (`reduce_engine/uncertainty.py`)
 
-Per-capture: a robust (MAD-based) standard error of the median-combined
-PSD, per bin, from that capture's own independent FFT sub-integration
-segments (`per_capture_uncertainty`) - never a single global scalar
-broadcast to every bin. After stacking: `AverageResult.uncertainty` is
+Per-capture: the standard error of the combined PSD, per bin, from that
+capture's own independent FFT sub-integration segments
+(`per_capture_uncertainty`) - never a single global scalar broadcast to
+every bin. reduce-v1.2 (audit 2026-11-25): for the median of single
+periodograms (exponential, not Gaussian) it comes from order statistics
+(McKean-Schrader); the old 1.4826 MAD / sqrt(n) was 0.71 of the real
+error. A mean takes std / sqrt(n); REDUCE ESTIMATOR v2's block means keep
+1.4826 MAD / sqrt(n) (`uncertainty_combine` in its fft_config). After stacking: `AverageResult.uncertainty` is
 either the analytic inverse-variance combination (`1/sqrt(sum(weights))`)
 or the empirical dispersion-based standard error, per the weighting
 actually used. Global QC (`uncertainty.global_metrics`):

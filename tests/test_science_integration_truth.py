@@ -5,7 +5,7 @@ directly (ScienceCube) so the expected numbers come from explicit formulas, neve
 import numpy as np
 import pytest
 
-from science_engine.config import ScienceConfig
+from science_engine.config import HANN_CHANNEL_CORRELATION, ScienceConfig
 from science_engine.integration import (bin_bounds, channel_map, channel_map_nearest, integrated_map,
                                         nearest_channel_index, window_overlaps)
 from science_engine.models import ScienceCube, ScienceGrid
@@ -159,7 +159,7 @@ def test_integrated_uncertainty_is_the_independent_channel_quadrature_with_dv():
     sigma = 0.03
     cube = make_cube(v, lambda x: np.zeros_like(x), sigma_fn=lambda x: sigma + 0 * x)
     lo, hi = v[100], v[300]
-    res = integrated_map(cube, cfg(lo, hi))
+    res = integrated_map(cube, cfg(lo, hi, channel_correlation=(0.0, 0.0)))
     ov = window_overlaps(v, lo, hi)
     expected = np.sqrt(np.sum((sigma * ov) ** 2))
     assert res.uncertainty[1, 1] == pytest.approx(expected, rel=1e-12)
@@ -169,12 +169,66 @@ def test_integrated_uncertainty_is_the_independent_channel_quadrature_with_dv():
     assert res.metadata["uncertainty_assumption"] == "independent channels"
 
 
+def test_integrated_uncertainty_carries_the_hann_cross_terms_by_default():
+    """Audit 2026-11-25: neighbouring channels share the Hann window's leakage (rho1 = 4/9, rho2 = 1/36); the
+    sigma of a sum is the full quadratic form, x sqrt(1 + 2 rho1 + 2 rho2) = x1.394 for a wide window."""
+    v = np.arange(0, 400) * DV
+    sigma = 0.03
+    cube = make_cube(v, lambda x: np.zeros_like(x), sigma_fn=lambda x: sigma + 0 * x)
+    lo, hi = v[100], v[300]
+    res = integrated_map(cube, cfg(lo, hi))
+    s = sigma * window_overlaps(v, lo, hi)
+    r1, r2 = HANN_CHANNEL_CORRELATION
+    expected = np.sqrt(np.sum(s ** 2) + 2 * r1 * np.sum(s[:-1] * s[1:]) + 2 * r2 * np.sum(s[:-2] * s[2:]))
+    assert res.uncertainty[1, 1] == pytest.approx(expected, rel=1e-12)
+    assert res.uncertainty[1, 1] / (sigma * DV * np.sqrt(200)) == pytest.approx(np.sqrt(35 / 18), rel=0.01)
+    assert res.metadata["uncertainty_assumption"].startswith("adjacent channels correlated")
+
+
+def test_cross_terms_survive_the_channel_chunking():
+    """More window channels than one accumulation chunk: the pairs across a chunk border must still count."""
+    from science_engine import integration as integ
+    v = np.arange(0, 700) * DV
+    rng = np.random.default_rng(9)
+    sig = rng.uniform(0.01, 0.05, v.size)
+    cube = make_cube(v, lambda x: np.zeros_like(x), sigma_fn=lambda x: sig)
+    res = integrated_map(cube, cfg(v[0] - DV / 2, v[-1] + DV / 2))
+    s = sig * DV
+    r1, r2 = HANN_CHANNEL_CORRELATION
+    expected = np.sqrt(np.sum(s ** 2) + 2 * r1 * np.sum(s[:-1] * s[1:]) + 2 * r2 * np.sum(s[:-2] * s[2:]))
+    assert v.size > integ._CHUNK_CHANNELS
+    assert res.uncertainty[1, 1] == pytest.approx(expected, rel=1e-10)
+
+
+def test_hann_correlation_matches_real_hann_power_spectra():
+    """The constants are not a fit: sums of Hann-windowed power spectra of white noise scatter by the predicted
+    factor over the independent-channel sigma."""
+    rng = np.random.default_rng(11)
+    n, frames, trials, k = 256, 16, 1500, 60
+    win = np.hanning(n)
+    sums, chans = [], []
+    for _ in range(trials):
+        x = rng.standard_normal((frames, n)) + 1j * rng.standard_normal((frames, n))
+        p = np.mean(np.abs(np.fft.fft(x * win, axis=1)) ** 2, axis=0)
+        chans.append(p[100:100 + k])
+    chans = np.array(chans)
+    sd = chans.std(axis=0, ddof=1)
+    emp = chans.sum(axis=1).std(ddof=1)
+    from science_engine.integration import correlated_sum_sigma
+    pred_indep = float(np.sqrt(np.sum(sd ** 2)))
+    pred_hann = float(correlated_sum_sigma(sd))
+    assert emp / pred_indep == pytest.approx(np.sqrt(35 / 18), rel=0.06)
+    assert emp / pred_hann == pytest.approx(1.0, abs=0.06)
+
+
 def test_masked_channels_are_excluded_from_the_uncertainty_sum():
     v = np.arange(0, 100) * DV
     valid = lambda vel, ny, nx: np.broadcast_to((np.arange(vel.size) % 2 == 0)[:, None, None], (vel.size, ny, nx)).copy()
     cube = make_cube(v, lambda x: np.ones_like(x), sigma_fn=lambda x: 0.1 + 0 * x, valid_fn=valid)
     res = integrated_map(cube, cfg(v[0] - DV / 2, v[-1] + DV / 2, min_spectral_coverage_fraction=0.4))
-    assert res.uncertainty[1, 1] == pytest.approx(0.1 * DV * np.sqrt(50), rel=1e-9)
+    # valid channels are two apart: only the rho2 cross terms remain (49 pairs)
+    r2 = HANN_CHANNEL_CORRELATION[1]
+    assert res.uncertainty[1, 1] == pytest.approx(0.1 * DV * np.sqrt(50 + 2 * r2 * 49), rel=1e-9)
     assert res.value[1, 1] == pytest.approx(DV * 50, rel=1e-9)             # only valid channels contribute (no fake I=0 rows)
 
 
@@ -213,7 +267,10 @@ def test_channel_map_uncertainty_equals_cube_channel_uncertainty():
     multi = channel_map(cube, 1000.0, 400.0)
     n = multi.metadata["n_channels"]
     idx = multi.metadata["channel_indices"]
-    assert np.allclose(multi.uncertainty, np.sqrt(np.sum(cube.uncertainty[idx] ** 2, axis=0)) / n)
+    u = cube.uncertainty[idx]
+    r1, r2 = HANN_CHANNEL_CORRELATION
+    var = np.sum(u ** 2, axis=0) + 2 * r1 * np.sum(u[:-1] * u[1:], axis=0) + 2 * r2 * np.sum(u[:-2] * u[2:], axis=0)
+    assert np.allclose(multi.uncertainty, np.sqrt(var) / n)
 
 
 def test_bin_bounds_tile_the_axis_and_survive_descending_order():

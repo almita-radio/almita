@@ -35,7 +35,8 @@ def mc(trials, *, offsets, n_channels=48, truth_amp=0.5, seed=0):
         s.velocity_offset_m_s = offsets[i % len(offsets)]
     rng = np.random.default_rng(seed)
     config = ScienceConfig(beam_fwhm_deg=1.5, pixels_per_beam=2.0, extent_margin_beams=0.5,
-                           velocity_window_min_m_s=-1.9e5, velocity_window_max_m_s=1.9e5)
+                           velocity_window_min_m_s=-1.9e5, velocity_window_max_m_s=1.9e5,
+                           channel_correlation=(0.0, 0.0))     # the synthetic noise here is independent per channel
     beam = build_beam_model(config)
     si0 = build_synthetic_science_input(specs, n_channels=n_channels, line_amplitude_fn=lambda r, d: truth_amp,
                                         line_fwhm_m_s=1e9, noise_sigma=SIGMA, rng=rng)

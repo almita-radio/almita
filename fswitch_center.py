@@ -162,6 +162,22 @@ def parse_centre(value: Any) -> Optional[Any]:
     return v
 
 
+def model_window_attrs(ra_hours: float, dec_deg: float, when_utc, observer: Dict[str, Any],
+                       beam_fwhm_deg: float = 20.0) -> Dict[str, Any]:
+    """Audit 2026-11-25: a PLAIN switched capture (no centre, tuned at the rest frequency) also records where the
+    rotation model expects the line, so REDUCE can keep the baseline of S off it, not only off +/-80 km/s. Recorded
+    under its own name (fswitch_model_line_window_topo_km_s): the BL-105 branch keys on fswitch_line_window_topo_km_s
+    and must not be triggered by a capture that was not centred for it."""
+    shift = lsrk_shift_km_s(ra_hours, dec_deg, when_utc, float(observer["latitude_deg"]),
+                            float(observer["longitude_deg"]), float(observer.get("elevation_m", 0.0)))
+    l, b = gal_from_equatorial(ra_hours, dec_deg)
+    window = model_line_window_lsrk(l, b, beam_fwhm_deg)
+    return {"fswitch_model_line_window_lsrk_km_s": [round(window[0], 2), round(window[1], 2)],
+            "fswitch_model_line_window_topo_km_s": [round(window[0] - shift, 2), round(window[1] - shift, 2)],
+            "fswitch_model_line_window_source": "flat-rotation-curve model through the beam (planning, not a measurement)",
+            "galactic_l_deg": round(l, 3), "galactic_b_deg": round(b, 3)}
+
+
 def plan_point(centre: Any, ra_hours: float, dec_deg: float, when_utc, observer: Dict[str, Any],
                beam_fwhm_deg: float = 20.0, offset_hz: Optional[float] = None) -> Dict[str, Any]:
     """Everything one switched point needs: the sky frequency to straddle, and what to record with the capture.

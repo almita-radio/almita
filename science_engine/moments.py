@@ -35,6 +35,12 @@ def moment1_like(cube: ScienceCube, config: ScienceConfig, moment0: SpatialMap |
     snr = np.divide(moment0.value, moment0.uncertainty, out=np.full_like(moment0.value, np.nan),
                     where=(moment0.uncertainty > 0) & np.isfinite(moment0.uncertainty))
     signal_ok = np.isfinite(snr) & (snr >= config.moment_min_snr) & moment0.valid
+    # the SAME window for every pixel: a direction whose data cover only part of it (a frequency-switched capture
+    # centred toward its terminal side, an edge of the cube) would get a centroid pulled toward the part it has -
+    # audit 2026-11-25 (x3-5 on 19-11 at l = +-10, +-20). Such a pixel is invalid, with its reason.
+    coverage = moment0.spectral_coverage if moment0.spectral_coverage is not None else np.ones_like(moment0.value)
+    window_ok = np.nan_to_num(coverage, nan=0.0) >= config.moment_min_window_coverage
+    signal_ok = signal_ok & window_ok
 
     velocity = cube.velocity_lsrk_m_s
     in_window = window_overlaps(velocity, config.velocity_window_min_m_s, config.velocity_window_max_m_s) > 0
@@ -52,7 +58,11 @@ def moment1_like(cube: ScienceCube, config: ScienceConfig, moment0: SpatialMap |
                       units="m/s", metadata={"moment_min_snr": config.moment_min_snr,
                                              "gating": "integrated SNR >= moment_min_snr AND per-channel value >= "
                                                        "moment_min_snr * channel sigma",
-                                             "reason_if_invalid": "SNR below moment_min_snr or no signal channel"})
+                                             "moment_min_window_coverage": config.moment_min_window_coverage,
+                                             "pixels_invalid_partial_window": int(np.sum(moment0.valid & ~window_ok)),
+                                             "reason_if_invalid": "SNR below moment_min_snr, no signal channel, or the "
+                                                                  "data cover less than moment_min_window_coverage of "
+                                                                  "the common velocity window"})
 
 
 def moment2_like(cube: ScienceCube, config: ScienceConfig, moment1: SpatialMap | None = None) -> SpatialMap:

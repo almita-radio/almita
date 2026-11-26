@@ -17,9 +17,17 @@ outside the cube both lower it). A pixel is valid only if spectral_coverage >= m
 Masked channels are NEVER interpolated: an incomplete line gives an incomplete (lower) integral together with
 a lower spectral_coverage - the honest report, not a "recovered truth".
 
-Uncertainty assumes channel noise is independent. Adjacent channels of a resampled cube share source bins
-and REDUCE channels themselves may be correlated by its spectral window, so sigma_I is an approximation
-(exact for uncorrelated channels), stated in SCIENCE_MODEL.md. Neighbouring OUTPUT PIXELS are also
+Neighbouring channels are NOT independent (audit 2026-11-25, operator "dale nomas"): REDUCE's Hann window makes
+the power in adjacent REDUCE channels correlate. For white noise the Hann window's Fourier coefficients (1/2, -1/4, -1/4)
+give a power correlation of rho1 = (2/3)^2 = 4/9 between neighbours and rho2 = (1/6)^2 = 1/36 two bins apart
+(measured on real captures: rho1 0.44-0.47). The variance of a sum therefore carries the cross terms
+
+    sigma_I^2 = SUM_i s_i^2 + 2 rho1 SUM_i s_i s_(i+1) + 2 rho2 SUM_i s_i s_(i+2),     s_i = overlap_i * sigma_i
+
+(x1.39 in sigma for a wide window; it was the independent-channel sum, 0.72 of the scatter measured across
+line-free windows). rho comes from ScienceConfig.channel_correlation; (0, 0) gives the old independent sum. The
+velocity resample (linear interpolation, sigma propagated as fully correlated) adds a little more correlation; the
+baseline's own wander between pointings is NOT in this sigma (see linefree_noise.py). Neighbouring OUTPUT PIXELS are also
 beam-correlated: a per-pixel sigma does not make neighbouring pixels independent.
 
 Units: relative_intensity is dimensionless, so the integral is dimensionless x m/s ("relative_intensity*m/s").
@@ -73,6 +81,8 @@ def integrated_map(cube: ScienceCube, config: ScienceConfig) -> SpatialMap:
     valid_width = np.zeros((ny, nx))
     weight_sum_2d = np.zeros((ny, nx))
     n_pointings_2d = np.zeros((ny, nx), dtype=cube.n_pointings.dtype)
+    rho = tuple(config.channel_correlation)
+    prev = None                                        # last two s-slices of the previous chunk (cross terms)
     for start in range(0, channels.shape[0], _CHUNK_CHANNELS):
         idx = channels[start:start + _CHUNK_CHANNELS]
         ov = overlap[idx][:, None, None]
@@ -80,7 +90,9 @@ def integrated_map(cube: ScienceCube, config: ScienceConfig) -> SpatialMap:
         # select first, multiply second: an invalid (NaN) channel is replaced by a finite 0 BEFORE any
         # arithmetic; its absence is carried by valid_width/spectral_coverage, never faked as I = 0.
         value += np.sum(np.where(valid, cube.relative_intensity[idx], 0.0) * ov, axis=0)
-        variance += np.sum(np.where(valid, cube.uncertainty[idx], 0.0) ** 2 * ov ** 2, axis=0)
+        s_chunk = np.where(valid, cube.uncertainty[idx], 0.0) * ov
+        variance += _correlated_variance(s_chunk, prev, rho)
+        prev = s_chunk[-2:]
         valid_width += np.sum(np.where(valid, ov, 0.0), axis=0)
         weight_sum_2d += np.sum(np.where(valid, cube.weight_sum[idx], 0.0), axis=0)
         n_pointings_2d = np.maximum(n_pointings_2d, np.max(np.where(valid, cube.n_pointings[idx], 0), axis=0))
@@ -100,9 +112,40 @@ def integrated_map(cube: ScienceCube, config: ScienceConfig) -> SpatialMap:
                  "window_status": "FULL" if window_covered_fraction >= 1.0 - 1e-9 else "PARTIAL_OUTSIDE_CUBE",
                  "n_window_channels": int(channels.shape[0]),
                  "integration_rule": "bin-overlap: sum(overlap_i * value_i), overlap from actual channel bin edges",
-                 "uncertainty_assumption": "independent channels",
+                 "uncertainty_assumption": _assumption(rho),
+                 "channel_correlation": list(rho),
                  "min_spectral_coverage_fraction": config.min_spectral_coverage_fraction},
     )
+
+
+def _correlated_variance(s: np.ndarray, prev, rho) -> np.ndarray:
+    """Variance of SUM s_i for channels in index (= frequency) order, with correlation rho[k-1] between channels
+    k apart (k = 1, 2). `prev` = the last two s-slices of the previous chunk, so cross terms across chunk borders
+    are kept."""
+    full = s if prev is None else np.concatenate([prev, s], axis=0)
+    n_prev = 0 if prev is None else prev.shape[0]
+    var = np.sum(s * s, axis=0)
+    for k, r in enumerate(rho, start=1):
+        if r == 0 or full.shape[0] <= k:
+            continue
+        a, b = full[:-k], full[k:]
+        # only the pairs whose LATER channel is in this chunk (earlier pairs were counted with the previous chunk)
+        first = max(0, n_prev - k)
+        var = var + 2.0 * r * np.sum(a[first:] * b[first:], axis=0)
+    return var
+
+
+def _assumption(rho) -> str:
+    if not any(rho):
+        return "independent channels"
+    return "adjacent channels correlated (Hann window): " + ", ".join(f"rho{k}={r:.4f}" for k, r in enumerate(rho, 1))
+
+
+def correlated_sum_sigma(sigmas: np.ndarray, rho=None) -> np.ndarray:
+    """sigma of the SUM over axis 0 of channels with the given per-channel sigmas (same correlation model)."""
+    from science_engine.config import HANN_CHANNEL_CORRELATION
+    rho = HANN_CHANNEL_CORRELATION if rho is None else rho
+    return np.sqrt(_correlated_variance(np.asarray(sigmas, dtype=np.float64), None, tuple(rho)))
 
 
 def _channel_map_from_indices(cube: ScienceCube, indices: np.ndarray, metadata: dict) -> SpatialMap:
@@ -113,8 +156,12 @@ def _channel_map_from_indices(cube: ScienceCube, indices: np.ndarray, metadata: 
     # mean of the VALID channels: select first (NaN never enters the sum), divide by the valid count
     safe_count = np.maximum(n_valid, 1)
     value = np.sum(np.where(windowed_valid, cube.relative_intensity[indices], 0.0), axis=0) / safe_count
-    # mean of n independent channels: sigma = sqrt(sum sigma_i^2) / n_valid  (n_valid = 1 -> exactly the cube sigma)
-    uncertainty = np.sqrt(np.sum(np.where(windowed_valid, cube.uncertainty[indices], 0.0) ** 2, axis=0)) / safe_count
+    # mean of n channels: sigma = sigma(sum) / n_valid with the Hann cross terms between neighbouring selected
+    # channels (n_valid = 1 -> exactly the cube sigma). Channel indices are consecutive for an interval map.
+    from science_engine.config import HANN_CHANNEL_CORRELATION
+    s_sel = np.where(windowed_valid, cube.uncertainty[indices], 0.0)
+    contiguous = indices.shape[0] < 2 or bool(np.all(np.diff(indices) == 1))
+    uncertainty = correlated_sum_sigma(s_sel, HANN_CHANNEL_CORRELATION if contiguous else (0.0, 0.0)) / safe_count
     weight_sum_2d = np.sum(np.where(windowed_valid, cube.weight_sum[indices], 0.0), axis=0)
     n_pointings_2d = np.max(np.where(windowed_valid, cube.n_pointings[indices], 0), axis=0)
     valid_2d = n_valid > 0

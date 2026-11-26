@@ -91,3 +91,41 @@ def test_hi4pi_is_averaged_through_the_beam_only_where_the_tile_holds_it(tmp_pat
     got = tiles.beam_spectrum(30.0, 0.0, 20.0)
     assert got is not None and got[2] > 0.9 and np.nanmax(got[1]) == pytest.approx(50.0, rel=1e-3)
     assert tiles.beam_spectrum(58.0, 0.0, 20.0) is None    # the beam hangs off the tile: no partial average
+
+
+def test_smoothed_noise_from_differences_holds_the_hann_correlation():
+    """Audit 2026-11-25: on real Hann power spectra the noise of a k-channel running mean, estimated from
+    channel-to-channel differences, must match its true scatter (the old 1/sqrt(2k) was ~0.56 of it)."""
+    import math
+    rng = np.random.default_rng(2)
+    n, frames, k = 4096, 8, 13
+    win = np.hanning(n)
+    x = rng.standard_normal((frames, n)) + 1j * rng.standard_normal((frames, n))
+    p = np.mean(np.abs(np.fft.fft(x * win, axis=1)) ** 2, axis=0)
+    t = p / np.median(p) - 1.0
+    d = np.diff(t)
+    est = 1.4826 * float(np.median(np.abs(d - np.median(d)))) * rc.smoothed_noise_factor(k)
+    true = float(np.std(np.convolve(t, np.ones(k) / k, "valid")))
+    assert est / true == pytest.approx(1.0, abs=0.12)
+    old = 1.4826 * float(np.median(np.abs(d - np.median(d)))) / math.sqrt(2) / math.sqrt(k)
+    assert old / true < 0.75
+
+
+def test_rotation_speed_reports_measured_edge_and_assumed_v0_apart():
+    tp = rc.tangent_point(30.0, 104.0, 2.0)
+    assert tp["V_measured_edge_km_s"] == pytest.approx(104.0)
+    assert tp["V_assumed_V0_part_km_s"] == pytest.approx(110.0, abs=0.01)
+    assert tp["V_km_s"] == pytest.approx(214.0, abs=0.01)
+    assert tp["V0_share"] == pytest.approx(110 / 214, abs=1e-3)
+
+
+def test_threshold_sensitivity_finds_the_edge_at_every_fraction_and_reports_the_spread():
+    v = np.linspace(-150, 200, 3000)
+    t = 0.2 * np.exp(-0.5 * (v / 12) ** 2) + 0.03 * np.clip(1 - (v - 0) / 110, 0, 1) * (v > 0)   # a ramp to +110
+    rng = np.random.default_rng(1)
+    t = t + 0.0005 * rng.standard_normal(v.size)
+    s = rc.threshold_sensitivity(v, t, +1)
+    assert s["all_found"] and set(s["edge_by_fraction_km_s"]) == {"0.02", "0.03", "0.05"}
+    e = s["edge_by_fraction_km_s"]
+    assert e["0.02"] >= e["0.03"] >= e["0.05"]                   # a lower threshold reaches further out on the ramp
+    assert s["spread_km_s"] == pytest.approx(e["0.02"] - e["0.05"])

@@ -102,7 +102,8 @@ def reduce_point(point: PointRecord, manifest: CampaignManifest, config: ReduceC
             unc_fractional = calibration_outcome.fractional_uncertainty
         else:
             relative_intensity = (estimate.psd - baseline_result.baseline) / baseline_result.baseline
-            per_bin_psd_uncertainty = uncertainty_mod.per_capture_uncertainty(estimate.segments)
+            per_bin_psd_uncertainty = uncertainty_mod.per_capture_uncertainty(
+                estimate.segments, combine=estimate.fft_config.get("uncertainty_combine", config.combine))
             unc_fractional = per_bin_psd_uncertainty / baseline_result.baseline
 
         with _stage("resample"):

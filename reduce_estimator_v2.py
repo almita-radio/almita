@@ -176,6 +176,7 @@ class EstimatorV2:
                       "estimator": ESTIMATOR, "sample_rate_hz": float(sample_rate_hz),
                       "center_frequency_hz": float(center_frequency_hz), "iq_center": 127.5,
                       "n_segments": int(r["segments"].shape[0]), "segments_are": "per-block means (independent)",
+                      "uncertainty_combine": "robust_mean_of_block_means",
                       **{f"v2_{k}": v for k, v in r["stats"].items()}}
         est = SpectralEstimate(frequency_hz=r["frequency_hz"], psd=r["psd"], segments=r["segments"],
                                clipping_fraction=_clipping_fraction(iq_bytes), fft_config=fft_config)

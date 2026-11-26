@@ -27,6 +27,9 @@ baseline is fitted where the line really is not: on S outside both images of tha
 constant in S cancels in the fold, a slope folds into a constant) and a degree-0/1 baseline is fitted on the FOLDED
 spectrum, in the part of the folded band outside the line window (the line-free margin fswitch_center leaves beyond
 the edge). A capture without that attribute is folded exactly as before.
+reduce-v1.2 (audit 2026-11-25): a PLAIN switched capture may record the rotation model's line window
+(fswitch_model_line_window_topo_km_s); S's baseline then also stays off both images of it when enough bins remain,
+otherwise the old +/-80 km/s rule is used and a baseline_warning says the fit may hold line.
 Configurable throw (2026-11-11): the offset is read from the LOs (f_b - f_a), and a capture that also records MASK
 windows (fswitch_mask_windows_topo_km_s: the local gas and its ghosts, when the target is elsewhere - the Magellanic
 Clouds) keeps the baseline off them too.
@@ -69,6 +72,11 @@ def _segments(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return json.loads(str(raw)) if raw is not None else []
 
 
+def _combine(estimate, config) -> str:
+    """How that estimate's PSD was combined from its segments (REDUCE ESTIMATOR v2 says so in its fft_config)."""
+    return str(estimate.fft_config.get("uncertainty_combine", getattr(config, "combine", "median")))
+
+
 def is_switched(attrs: dict[str, Any]) -> bool:
     return attrs.get("fswitch_segments_json") is not None
 
@@ -79,6 +87,18 @@ def _interp(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
 
 def _line_window_topo(attrs: dict[str, Any]):
     raw = attrs.get("fswitch_line_window_topo_km_s")
+    if raw is None:
+        return None
+    import json
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    vals = json.loads(raw) if isinstance(raw, str) else list(raw)
+    return float(min(vals)), float(max(vals))
+
+
+def _model_window_topo(attrs: dict[str, Any]):
+    """The rotation model's line window recorded by a PLAIN switched capture (fswitch_center.model_window_attrs)."""
+    raw = attrs.get("fswitch_model_line_window_topo_km_s")
     if raw is None:
         return None
     import json
@@ -138,19 +158,37 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
         raise ValueError("LO A and LO B spectra are not on the same baseband bins")
     ok_bb = (np.abs(bb) <= USABLE_HZ) & (np.abs(bb) >= DC_HZ) & (B > 0) & np.isfinite(A) & np.isfinite(B)
     S = np.where(ok_bb, (A - B) / np.where(B > 0, B, np.nan), np.nan)
-    sa = uncertainty_mod.per_capture_uncertainty(est[f_a].segments) / A
-    sb = uncertainty_mod.per_capture_uncertainty(est[f_b].segments) / B
+    sa = uncertainty_mod.per_capture_uncertainty(est[f_a].segments, combine=_combine(est[f_a], config)) / A
+    sb = uncertainty_mod.per_capture_uncertainty(est[f_b].segments, combine=_combine(est[f_b], config)) / B
     sS = np.sqrt(sa ** 2 + sb ** 2)
 
     # 3. baseline of S where neither image of the line can be
     window = _line_window_topo(attrs)                          # BL-105: the capture says where the line is
     masks = _mask_windows_topo(attrs)                          # ... and where other known emission is (local gas, ghosts)
     folded_baseline = None
+    baseline_warning = None
+    model_window = _model_window_topo(attrs)
     if window is None:
         hw_hz = IMAGE_HALFWIDTH_KMS / C_KMS * f0
         free = ok_bb & (np.abs(bb - delta) > hw_hz) & (np.abs(bb + delta) > hw_hz) & np.isfinite(S)
         if free.sum() < 50:
             raise ValueError(f"only {int(free.sum())} line-free baseband bins to fit the switched baseline")
+        baseline_model_suffix = ""
+        if model_window is not None:
+            # reduce-v1.2 (audit 2026-11-25): also keep both images of the MODEL line window out of the fit; an
+            # inner-Galaxy line wider than +/-80 km/s otherwise lands in the "line-free" bins and tilts S
+            rest = float(config.hi_rest_frequency_hz)
+            m_lo_rf, m_hi_rf = rest * (1 - model_window[1] / C_KMS), rest * (1 - model_window[0] / C_KMS)
+            narrower = free & ~((bb >= m_lo_rf - f_a) & (bb <= m_hi_rf - f_a)) & ~((bb >= m_lo_rf - f_b) & (bb <= m_hi_rf - f_b))
+            span = float(np.ptp(bb[narrower])) if narrower.any() else 0.0
+            if narrower.sum() >= MIN_FREE_BINS_S and span >= MIN_FREE_SPAN_HZ:
+                free = narrower
+                baseline_model_suffix = "_and_model_line_window"
+            else:
+                baseline_warning = (f"the model line window {model_window[0]:+.0f}..{model_window[1]:+.0f} km/s "
+                                    f"(topocentric) leaves {int(narrower.sum())} free bins over {span / 1e6:.2f} MHz: "
+                                    f"baseline fitted outside +/-{IMAGE_HALFWIDTH_KMS:.0f} km/s only, where line may "
+                                    f"remain - centre the switch on the line (--fswitch-center auto)")
         x = bb / 1e6
         coef = np.polyfit(x[free], S[free], BASELINE_DEGREE)
         for _ in range(3):                                         # robust: clip > 4 sigma outliers (RFI lines)
@@ -160,7 +198,7 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
             coef = np.polyfit(x[free][keep], S[free][keep], BASELINE_DEGREE)
         resid = S - np.polyval(coef, x)
         fit_rms = float(np.std((S - np.polyval(coef, x))[free]))
-        baseline_model = f"switched_S_polynomial_degree_{BASELINE_DEGREE}_outside_both_images"
+        baseline_model = f"switched_S_polynomial_degree_{BASELINE_DEGREE}_outside_both_images" + baseline_model_suffix
     else:
         rest = float(config.hi_rest_frequency_hz)
         line_lo_rf, line_hi_rf = rest * (1 - window[1] / C_KMS), rest * (1 - window[0] / C_KMS)
@@ -226,6 +264,8 @@ def switched_spectrum(iq: np.ndarray, attrs: dict[str, Any], config) -> FswitchS
             # half height) inside the folded band. Fraction of the folded band whose ghost lands in the line window:
             "ghost_overlap_fraction": _ghost_overlap(window, f0, f_b - f_a, float(config.hi_rest_frequency_hz))}
            if window is not None else {}),
+        **({"model_line_window_topo_km_s": [model_window[0], model_window[1]]} if model_window is not None else {}),
+        **({"baseline_warning": baseline_warning} if baseline_warning else {}),
         **({"mask_windows_topo_km_s": [[w[0], w[1]] for w in masks],
             "local_ghost_in_line_window": str(attrs.get("fswitch_local_ghost_in_line_window", "")).lower() in ("true", "1")}
            if masks else {}),

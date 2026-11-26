@@ -194,3 +194,34 @@ out.on = [posts[1].capture, posts[1].quicklook.calibration_profile_path];
     assert "driver_error" not in out, out.get("driver_error")
     assert out["off"][0] == {"seconds": 10, "settle_seconds": 2} and out["off"][1] == "data/calibration/x.json"
     assert out["on"][0] == {"seconds": 10, "settle_seconds": 2, "frequency_switching": True} and out["on"][1] is None
+
+
+def test_a_plain_capture_keeps_its_baseline_off_the_model_line_window_or_says_it_could_not(capture):
+    """Audit 2026-11-25: a plain switched capture records the rotation model's line window; REDUCE keeps S's baseline
+    off both of its images when enough bins remain, otherwise the +/-80 km/s rule with a baseline_warning."""
+    from reduce_engine.ingest import read_capture
+    iq, attrs = read_capture(capture[0])
+    plain = fswitch_fold.switched_spectrum(iq, attrs, ReduceConfig())
+    assert "baseline_warning" not in plain.info and "model_line_window_topo_km_s" not in plain.info
+    narrow = fswitch_fold.switched_spectrum(iq, {**attrs, "fswitch_model_line_window_topo_km_s": "[-60.0, 120.0]"}, ReduceConfig())
+    assert narrow.info["baseline_model"].endswith("_and_model_line_window")
+    assert narrow.info["baseline_free_bins"] < plain.info["baseline_free_bins"]
+    assert "baseline_warning" not in narrow.info
+    v = (1 - narrow.frequency_hz / F0) * 299792.458
+    ok = np.isfinite(narrow.fractional) & (np.abs(v - LINE_V_KMS) > 40)
+    # fewer free bins, so a noisier fit: the plain fold itself scatters by ~0.4 % over seeds (5/6/7: -0.08/+0.55/+0.13 %)
+    assert abs(np.median(narrow.fractional[ok])) < 0.006
+    wide = fswitch_fold.switched_spectrum(iq, {**attrs, "fswitch_model_line_window_topo_km_s": "[-400.0, 400.0]"}, ReduceConfig())
+    assert wide.info["baseline_model"].endswith("_outside_both_images")
+    assert "centre the switch on the line" in wide.info["baseline_warning"]
+    assert np.array_equal(wide.fractional, plain.fractional, equal_nan=True)
+
+
+def test_the_model_window_record_for_a_plain_capture():
+    import fswitch_center
+    from datetime import datetime
+    obs = {"latitude_deg": -33.45, "longitude_deg": -70.66, "elevation_m": 570.0}
+    a = fswitch_center.model_window_attrs(18.5, -10.0, datetime(2026, 11, 19, 21, 0), obs)
+    lo, hi = a["fswitch_model_line_window_lsrk_km_s"]
+    assert lo < 0 < hi and hi > 80                                        # l ~ 20 deg: the inner Galaxy reaches far positive
+    assert "fswitch_line_window_topo_km_s" not in a                       # never triggers the BL-105 centred branch

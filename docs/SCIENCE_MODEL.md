@@ -137,7 +137,8 @@ BAD is never used. Masks apply independently of the policy.
 ## 8. Integrated map and channel maps
 ```
 I(y,x)   = sum_i overlap_i * v_i(y,x)                [relative_intensity_dimensionless * m/s]
-sigma_I  = sqrt( sum_i (overlap_i sigma_i)^2 )        (independent-channel assumption)
+sigma_I^2 = sum_i s_i^2 + 2 rho1 sum_i s_i s_(i+1) + 2 rho2 sum_i s_i s_(i+2),   s_i = overlap_i sigma_i
+           (Hann neighbouring-channel correlation, rho1 = 4/9, rho2 = 1/36; ScienceConfig.channel_correlation)
 spectral_coverage = sum_{valid i} overlap_i / (vmax - vmin);   valid iff >= min_spectral_coverage_fraction (0.5)
 ```
 `overlap_i` = width of channel i's bin (edges = midpoints of the ACTUAL axis) inside `[vmin, vmax]`: exact for irregular axes,
@@ -147,8 +148,16 @@ never interpolated (an incomplete line gives a lower integral and lower coverage
 area error on analytic Gaussians: <= 1e-13 %. Channel maps: `channel_map` (interval, inclusive centres), `channel_map_nearest`;
 selected indices/velocities are reported; a single-channel map equals the cube slice and sigma exactly.
 
+Audit 2026-11-25: neighbouring REDUCE channels share the Hann window's leakage, so the old independent-channel sum
+was 0.72 of the real scatter of a wide-window integral (x1.394 = sqrt(35/18) now, checked on real Hann power spectra in
+`tests/test_science_integration_truth.py`). `channel_correlation = (0, 0)` restores the independent sum. This sigma is
+still the radiometer noise only: the baseline's wander between pointings (x4.5-6.4 on 12/13-11, measured with
+`linefree_noise.py`) is not in it.
+
 `moment1_like` / `moment2_like` (deferred-grade, kept): gated by integrated SNR >= `moment_min_snr` AND per-channel
-value >= `moment_min_snr` x channel sigma (clipping only negatives let window noise bias a high-SNR centroid by 1.3
+value >= `moment_min_snr` x channel sigma AND (audit 2026-11-25) data over >= `moment_min_window_coverage` (0.9) of
+the SAME velocity window for every pixel - a direction covering only part of it (a switched capture centred toward its
+terminal side) would get a centroid pulled toward that part (x3-5 on 19-11) (clipping only negatives let window noise bias a high-SNR centroid by 1.3
 channels; now 0.07). Beam smoothing shrinks recovered velocity gradients (golden: 4730 vs 8000 m/s/deg true, 4493 by the
 independent model).
 

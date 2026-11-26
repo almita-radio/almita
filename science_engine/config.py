@@ -23,6 +23,11 @@ QUALITY_POLICIES = ("STRICT", "STANDARD", "PERMISSIVE")
 BEAM_STATUSES = ("PROVISIONAL_DEFAULT", "CONFIGURED_OPERATIONAL", "MEASURED")
 
 
+# Power correlation between REDUCE channels 1 and 2 apart for a Hann window on white noise: (2/3)^2 and (1/6)^2
+# (integration.py; audit 2026-11-25 measured 0.44-0.47 on real captures).
+HANN_CHANNEL_CORRELATION = (4.0 / 9.0, 1.0 / 36.0)
+
+
 @dataclass(frozen=True)
 class ScienceConfig:
     # --- input ---
@@ -54,6 +59,12 @@ class ScienceConfig:
     velocity_window_min_m_s: float = -100_000.0
     velocity_window_max_m_s: float = 100_000.0
     min_spectral_coverage_fraction: float = 0.5   # section 40: below this, integrated value is invalid, not extrapolated
+    # neighbouring-channel noise correlation used for sigma of integrals/means (integration.py); (0, 0) = independent
+    channel_correlation: tuple = HANN_CHANNEL_CORRELATION
+    # moment-1/2: a pixel must have valid data over at least this fraction of the SAME window as every other pixel,
+    # or its centroid is invalid (audit 2026-11-25: windows centred toward each direction's terminal side inflated
+    # the mean velocity by up to 3-5x)
+    moment_min_window_coverage: float = 0.9
 
     # --- uncertainty weighting (section 23) ---
     uncertainty_floor_relative: float = 1e-6      # sigma <= this * per-input median sigma is treated as invalid, not floored

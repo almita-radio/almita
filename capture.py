@@ -2141,6 +2141,18 @@ class CaptureExecutor:
                                     self.log("FSWITCH WARNING the Milky Way's local gas puts its negative ghost inside "
                                              "this point's line window: use a smaller offset (--fswitch-offset-hz "
                                              "300000 for the LMC)", force=True)
+                            else:
+                                # plain switching: record the model line window (REDUCE keeps the baseline off it);
+                                # a failure here never stops the capture
+                                try:
+                                    import fswitch_center
+                                    beam = float((self.observer_config.get('observation_defaults') or {}).get('beam_fwhm_deg') or 20.0)
+                                    extra = fswitch_center.model_window_attrs(
+                                        ra_hours, dec_deg, datetime.now(timezone.utc).replace(tzinfo=None),
+                                        self.observer_config.get('observer') or {}, beam_fwhm_deg=beam)
+                                except Exception as exc:  # noqa: BLE001
+                                    self.log(f"FSWITCH model line window not recorded: {type(exc).__name__}: {exc}", force=True)
+                                    extra = None
                             sdr_metrics = await fswitch_capture.capture_point(
                                 self.sdr, f0_hz=f0_point, sample_rate=self.sdr_sample_rate,
                                 gain_db=float(self.sdr_gain_db), duration_s=capture_time,
