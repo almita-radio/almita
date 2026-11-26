@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ALMITA demo</title>
+<style>:root{color-scheme:dark}body{margin:0;background:#0a0c10;color:#e6e8ee;font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}
+main{max-width:36rem;padding:2rem 1rem}.tag{border:1px solid #e8590c;color:#e8590c;font:600 .75rem ui-monospace,monospace;letter-spacing:.14em;padding:2px 8px;border-radius:3px}
+h1{margin:.6rem 0 .4rem}p{color:#a9b0bd}a{color:#4cc9f0}#st{font:.9rem ui-monospace,monospace;color:#8d95a5}</style></head>
+<body><main><span class="tag">SIMULATED</span><h1>ALMITA · demo</h1>
+<p>The real ALMITA console - STATUS, OBSERVE, MONITOR, REDUCE, SCIENCE, SESSIONS, EXPERIMENT - replaying a recording of
+ALMITA's own software driving a simulated telescope and SDR whose sky follows the HI4PI survey. Press the buttons: what
+was recorded plays back, ten times faster.</p>
+<p id="st">Starting the demo…</p>
+<p><a href="/home.html">About ALMITA</a> · <a href="/about-demo.html">How the demo works</a> · <a href="https://github.com/almita-radio/almita" rel="noopener">ALMITA on GitHub</a></p>
+</main>
+<script>
+(async () => {
+  const st = document.getElementById("st");
+  if (!("serviceWorker" in navigator)) { st.textContent = "This browser cannot run the demo (no service workers)."; return; }
+  try {
+    await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    await navigator.serviceWorker.ready;
+    if (!navigator.serviceWorker.controller) { location.reload(); return; }
+    const go = new URLSearchParams(location.search).get("go");
+    location.replace("/" + (go && /^[a-z_]+\.html$/.test(go) ? go : "status.html"));
+  } catch (e) {
+    st.innerHTML = 'The demo could not start here (' + e.message + '). Open it in its own tab: <a href="' + location.href + '" target="_blank" rel="noopener">' + location.host + '</a>';
+  }
+})();
+</script></body></html>

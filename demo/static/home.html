@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ALMITA · radiotelescopio de hidrógeno</title>
+<meta name="description" content="ALMITA: un radiotelescopio hecho en casa, en Chile, que escucha el hidrógeno de la Vía Láctea. Qué es, cómo funciona, qué ha visto y cómo probarlo. / A home-built radio telescope from Chile that listens to the Milky Way's hydrogen.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+:root{color-scheme:dark;--bg:#070a12;--bg2:#0b1020;--panel:#10172a;--line:#1e2a44;--fg:#eef1f7;--fg2:#b3bccd;--fg3:#7f8aa1;
+--h:#62d3f0;--warm:#f2a93b;--sim:#e8590c;--real:#5ccf95;
+--serif:"Fraunces",Georgia,"Times New Roman",serif;--sans:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 var(--sans)}
+body[data-l="es"] [lang="en"],body[data-l="en"] [lang="es"]{display:none!important}
+a{color:var(--h)}
+img{max-width:100%;display:block;height:auto}
+.wrap{max-width:70rem;margin:0 auto;padding-left:max(18px,env(safe-area-inset-left,0px));padding-right:max(18px,env(safe-area-inset-right,0px))}
+h1,h2,h3{font-family:var(--serif);font-weight:700;line-height:1.12;text-wrap:balance;margin:0}
+h2{font-size:clamp(1.7rem,3.6vw,2.5rem);margin-bottom:.7rem}
+h3{font-size:1.25rem}
+p{max-width:64ch;margin:.6rem 0}
+.kicker{font:600 .74rem/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--warm);margin-bottom:.9rem;display:block}
+.lede{font-size:1.12rem;color:var(--fg2)}
+section{padding-block:5rem}
+section+section{border-top:1px solid var(--line)}
+.tag{display:inline-block;font:600 .64rem/1 var(--mono);letter-spacing:.14em;padding:4px 7px;border-radius:3px;border:1px solid currentColor;vertical-align:middle}
+.tag.sim{color:var(--sim)}.tag.real{color:var(--real)}
+
+/* top bar */
+nav.top{position:sticky;top:0;z-index:30;background:rgba(7,10,18,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav.top .wrap{display:flex;align-items:center;gap:1.1rem;min-height:54px}
+nav.top .brand{font:700 1.15rem var(--serif);letter-spacing:.04em;color:var(--fg);text-decoration:none;margin-right:auto}
+nav.top .links{display:flex;gap:1.1rem;overflow-x:auto;white-space:nowrap}
+nav.top .links a{color:var(--fg2);text-decoration:none;font:600 .78rem var(--mono);letter-spacing:.08em;text-transform:uppercase}
+nav.top .links a:hover{color:var(--fg)}
+.lang{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;flex:none}
+.lang button{background:transparent;color:var(--fg3);border:0;font:600 .72rem var(--mono);letter-spacing:.1em;padding:.35rem .7rem;cursor:pointer}
+.lang button[aria-pressed="true"]{background:var(--h);color:#04202a}
+@media (max-width:46rem){nav.top .links{display:none}}
+
+/* hero */
+.hero{position:relative;overflow:hidden;padding-block:4.5rem 3.5rem;background:
+  radial-gradient(70rem 32rem at 80% -20%,rgba(98,211,240,.16),transparent 60%),
+  radial-gradient(50rem 30rem at -10% 120%,rgba(242,169,59,.10),transparent 60%),var(--bg)}
+.hero h1{font-size:clamp(2.3rem,6.2vw,4.4rem);letter-spacing:-.015em;max-width:16ch}
+.hero h1 em{font-style:italic;color:var(--h)}
+.hero .lede{margin-top:1.3rem}
+.cta{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:1.8rem}
+.btn{display:inline-flex;align-items:center;gap:.5rem;padding:.78rem 1.2rem;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--fg);text-decoration:none;font:600 .8rem var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+.btn:hover{border-color:var(--h)}
+.btn.primary{background:var(--h);border-color:var(--h);color:#04202a}
+#spec{display:block;width:100%;height:170px;margin-top:3rem}
+.speccap{font:500 .78rem var(--mono);color:var(--fg3);display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+
+/* explainer */
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:1.4rem;margin-top:2.2rem}
+.fact{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:1.4rem 1.4rem 1.2rem}
+.fact svg{width:100%;height:auto;margin-bottom:.8rem}
+.fact h3{margin-bottom:.4rem}
+.fact p{color:var(--fg2);font-size:.97rem;margin:.3rem 0}
+.big{font:600 1.35rem var(--mono);color:var(--h);margin-bottom:.3rem}
+
+/* journey */
+.journey{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,12.5rem),1fr));gap:0;margin-top:2.2rem;counter-reset:s}
+.step{position:relative;padding:1.2rem 1.2rem 1.2rem 0;border-top:2px solid var(--line)}
+.step::before{counter-increment:s;content:counter(s,decimal-leading-zero);position:absolute;top:-.85rem;left:0;background:var(--bg);padding-right:.6rem;font:600 .85rem var(--mono);color:var(--warm)}
+.step h3{font-size:1.1rem;margin:.6rem 0 .3rem}
+.step p{color:var(--fg2);font-size:.93rem;margin:0}
+
+/* modules */
+.mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));gap:1.3rem;margin-top:2.2rem}
+.mod{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.mod .pic{aspect-ratio:16/9;overflow:hidden;background:#000;border-bottom:1px solid var(--line)}
+.mod .pic img{width:100%;height:100%;object-fit:cover;object-position:top left}
+.mod .pic.none{display:grid;place-items:center;color:var(--fg3);font:600 .8rem var(--mono);letter-spacing:.12em;background:repeating-linear-gradient(135deg,#0d1426 0 10px,#0b1120 10px 20px)}
+.mod .b{padding:1.1rem 1.2rem 1.2rem;display:flex;flex-direction:column;gap:.45rem;flex:1}
+.mod .name{font:600 .78rem var(--mono);letter-spacing:.16em;color:var(--h)}
+.mod h3{font-size:1.15rem}
+.mod p{color:var(--fg2);font-size:.95rem;margin:0}
+.mod .like{font-size:.88rem;color:var(--fg3);font-style:italic}
+.mod .go{margin-top:auto;padding-top:.6rem;font:600 .76rem var(--mono);letter-spacing:.08em;text-transform:uppercase;text-decoration:none}
+.mod .go:hover{text-decoration:underline}
+.mod .go.off{color:var(--fg3)}
+
+/* timeline */
+.tl{margin-top:2.4rem;display:grid;gap:2.6rem}
+.ev{display:grid;grid-template-columns:9rem minmax(0,1fr);gap:1.6rem}
+.ev .when{font:600 .9rem var(--mono);color:var(--warm);padding-top:.25rem}
+.ev .fig{background:#fff;border-radius:10px;padding:.5rem;margin:.9rem 0;border:0;width:100%;cursor:zoom-in;display:block}
+.ev .but{border-left:3px solid var(--warm);padding:.2rem 0 .2rem .9rem;color:var(--fg2);font-size:.93rem}
+.ev .but b{color:var(--warm);font:600 .7rem var(--mono);letter-spacing:.14em;text-transform:uppercase}
+@media (max-width:44rem){.ev{grid-template-columns:1fr;gap:.4rem}}
+
+/* lessons */
+.lessons{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr));gap:1.3rem;margin-top:2rem}
+.lesson{border:1px dashed var(--line);border-radius:14px;padding:1.2rem 1.3rem}
+.lesson .em{font-size:1.6rem;line-height:1}
+.lesson h3{font-size:1.08rem;margin:.6rem 0 .35rem}
+.lesson p{color:var(--fg2);font-size:.94rem;margin:0}
+
+/* faq */
+details{border-bottom:1px solid var(--line);padding:1rem 0}
+summary{cursor:pointer;font:600 1.05rem var(--sans);list-style:none;display:flex;justify-content:space-between;gap:1rem}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--h);font:600 1.2rem var(--mono)}
+details[open] summary::after{content:"–"}
+details p{color:var(--fg2)}
+
+/* contact */
+.contact{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:2.4rem;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:1.6rem}
+.mail{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:1rem 0}
+.mail code{font:600 1.1rem var(--mono);background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem;user-select:all;overflow-wrap:anywhere}
+.card ul{color:var(--fg2);padding-left:1.1rem;margin:.6rem 0 0}
+@media (max-width:50rem){.contact{grid-template-columns:1fr}}
+
+footer{border-top:1px solid var(--line);padding-block:2.6rem 3.2rem;color:var(--fg3);font-size:.88rem}
+footer .who{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr));gap:1rem 2rem;padding:1.4rem 0 1.6rem;margin-bottom:1.4rem;border-bottom:1px solid var(--line)}
+footer .who .n{font:700 1.25rem var(--serif);color:var(--fg)}
+footer .who dt{font:600 .68rem var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3)}
+footer .who dd{margin:.15rem 0 0;color:var(--fg2);overflow-wrap:anywhere}
+footer .who dl{margin:0}
+footer .row{display:flex;flex-wrap:wrap;gap:1.2rem;margin-bottom:1rem}
+
+dialog{border:0;padding:0;background:transparent;max-width:min(96vw,1400px)}
+dialog::backdrop{background:rgba(0,0,0,.86)}
+dialog img{max-height:86vh;width:auto;margin:0 auto;border-radius:8px;background:#fff}
+dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:max(12px,env(safe-area-inset-right,0px));background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:999px;font:600 .8rem var(--mono);padding:.5rem .9rem;cursor:pointer}
+</style>
+</head>
+<body data-l="es">
+
+<nav class="top"><div class="wrap">
+  <a class="brand" href="#top">ALMITA</a>
+  <div class="links">
+    <a href="#que"><span lang="es">Qué es</span><span lang="en">What</span></a>
+    <a href="#como"><span lang="es">Cómo</span><span lang="en">How</span></a>
+    <a href="#modulos"><span lang="es">Módulos</span><span lang="en">Modules</span></a>
+    <a href="#logros"><span lang="es">Resultados</span><span lang="en">Results</span></a>
+    <a href="#preguntas"><span lang="es">Preguntas</span><span lang="en">FAQ</span></a>
+    <a href="#contacto"><span lang="es">Contacto</span><span lang="en">Contact</span></a>
+  </div>
+  <div class="lang" role="group" aria-label="Idioma / Language">
+    <button type="button" data-set="es" aria-pressed="true">ES</button><button type="button" data-set="en" aria-pressed="false">EN</button>
+  </div>
+</div></nav>
+
+<header class="hero" id="top"><div class="wrap">
+  <span class="kicker"><span lang="es">Radioastronomía amateur · hecho en Chile</span><span lang="en">Amateur radio astronomy · made in Chile</span></span>
+  <h1><span lang="es">Un radiotelescopio hecho en casa que escucha el <em>hidrógeno</em> de la Vía Láctea</span><span lang="en">A home-built radio telescope that listens to the Milky Way's <em>hydrogen</em></span></h1>
+  <p class="lede"><span lang="es">ALMITA es un plato de rejilla, una antena casera, un receptor de radio por USB y mucho software abierto. Con eso
+  capta una señal que el hidrógeno de nuestra galaxia emite desde hace miles de millones de años, y con ella dibuja cómo se mueve el gas
+  de la Vía Láctea.</span><span lang="en">ALMITA is a grid dish, a home-made antenna, a USB radio receiver and a lot of open software. With them it
+  picks up a signal our galaxy's hydrogen has been sending for billions of years, and uses it to draw how the Milky Way's gas moves.</span></p>
+  <p style="color:var(--fg3);font-style:italic"><span lang="es">(El nombre: </span><span lang="en">(The name: </span><b style="color:var(--warm);font-style:normal">A</b>ntenna <b style="color:var(--warm);font-style:normal">L</b>istening <b style="color:var(--warm);font-style:normal">M</b>ostly to <b style="color:var(--warm);font-style:normal">I</b>nterference, <b style="color:var(--warm);font-style:normal">T</b>entatively <b style="color:var(--warm);font-style:normal">A</b>stronomy.<span lang="es"> Es honesto.)</span><span lang="en"> It is honest.)</span></p>
+  <div class="cta">
+    <a class="btn primary" href="/demo.html" target="_blank" rel="noopener">▶ <span lang="es">Pruébalo (demo)</span><span lang="en">Try it (demo)</span></a>
+    <a class="btn" href="#contacto"><span lang="es">Escríbenos</span><span lang="en">Get in touch</span></a>
+    <a class="btn" href="https://github.com/almita-radio/almita" rel="noopener">GitHub</a>
+  </div>
+  <canvas id="spec" aria-label="Animated sketch of a 21 cm spectrum: noise with the hydrogen line rising out of it"></canvas>
+  <div class="speccap"><span>1419.9 MHz</span><span><span lang="es">la línea del hidrógeno asomando entre el ruido (dibujo)</span><span lang="en">the hydrogen line rising out of the noise (sketch)</span></span><span>1420.9 MHz</span></div>
+</div></header>
+
+<section id="que"><div class="wrap">
+  <span class="kicker"><span lang="es">¿Qué escucha?</span><span lang="en">What does it hear?</span></span>
+  <h2><span lang="es">La línea de 21 cm: la radio del hidrógeno</span><span lang="en">The 21 cm line: hydrogen's radio station</span></h2>
+  <p class="lede"><span lang="es">El hidrógeno es lo más abundante del universo. Entre las estrellas flota en nubes frías y oscuras que ningún
+  telescopio común ve. Pero emiten en radio, siempre en la misma frecuencia.</span><span lang="en">Hydrogen is the most common thing in the universe.
+  Between the stars it floats in cold, dark clouds no ordinary telescope can see. But they broadcast in radio, always on the same frequency.</span></p>
+  <div class="grid3">
+    <div class="fact">
+      <svg viewBox="0 0 300 120" role="img" aria-label="A hydrogen atom flips its electron's spin and emits a 21 cm wave">
+        <circle cx="60" cy="60" r="34" fill="none" stroke="#1e2a44" stroke-width="2"/><circle cx="60" cy="60" r="9" fill="#f2a93b"/>
+        <path d="M60 42 v-14 m-5 5 l5-5 5 5" stroke="#f2a93b" stroke-width="2.5" fill="none"/>
+        <circle cx="94" cy="60" r="6" fill="#62d3f0"/><path d="M94 70 v14 m-5 -5 l5 5 5 -5" stroke="#62d3f0" stroke-width="2.5" fill="none"/>
+        <path d="M118 60 q8 -18 16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0" stroke="#62d3f0" stroke-width="2.5" fill="none"/>
+        <text x="200" y="100" fill="#7f8aa1" font-family="monospace" font-size="13">21 cm · 1420 MHz</text>
+      </svg>
+      <div class="big">1420.405752 MHz</div>
+      <h3><span lang="es">Un giro diminuto</span><span lang="en">A tiny flip</span></h3>
+      <p><span lang="es">Cuando el electrón de un átomo de hidrógeno da vuelta su giro, suelta una onda de radio de 21 cm. Un átomo lo hace
+      una vez cada ~10 millones de años, pero en la galaxia hay tantos que la señal no se apaga nunca.</span><span lang="en">When the electron of a
+      hydrogen atom flips its spin, it lets out a 21 cm radio wave. One atom does it about once every 10 million years, but the galaxy holds so
+      many that the signal never stops.</span></p>
+    </div>
+    <div class="fact">
+      <svg viewBox="0 0 300 120" role="img" aria-label="Spectrum, frequency increasing to the right: gas that recedes shifts the line to lower frequency, gas that approaches to higher">
+        <line x1="10" y1="100" x2="290" y2="100" stroke="#1e2a44" stroke-width="2"/>
+        <line x1="150" y1="18" x2="150" y2="100" stroke="#7f8aa1" stroke-dasharray="4 4"/>
+        <path d="M10 98 C70 98 80 96 95 60 C102 40 108 40 115 60 C125 92 140 98 290 98" stroke="#5ccf95" stroke-width="2.5" fill="none"/>
+        <path d="M10 98 C170 98 180 96 190 58 C197 36 203 36 210 58 C222 94 240 98 290 98" stroke="#f2a93b" stroke-width="2.5" fill="none"/>
+        <text x="40" y="24" fill="#5ccf95" font-family="monospace" font-size="12">← receding</text>
+        <text x="168" y="24" fill="#f2a93b" font-family="monospace" font-size="12">approaching →</text>
+      </svg>
+      <div class="big">4.7 kHz = 1 km/s</div>
+      <h3><span lang="es">El efecto Doppler</span><span lang="en">The Doppler effect</span></h3>
+      <p><span lang="es">Si la nube se acerca, la línea llega un poco más aguda; si se aleja, más grave, como la sirena de una ambulancia.
+      Midiendo cuánto se corre, ALMITA sabe a qué velocidad se mueve el gas.</span><span lang="en">If the cloud comes toward us the line arrives a little
+      higher; if it moves away, a little lower, like an ambulance siren. From how far it shifts, ALMITA knows how fast the gas moves.</span></p>
+    </div>
+    <div class="fact">
+      <svg viewBox="0 0 300 120" role="img" aria-label="The Milky Way seen from above, rotating, with the Sun off-centre">
+        <ellipse cx="150" cy="60" rx="120" ry="42" fill="none" stroke="#1e2a44" stroke-width="2"/>
+        <ellipse cx="150" cy="60" rx="80" ry="28" fill="none" stroke="#1e2a44" stroke-width="2"/>
+        <ellipse cx="150" cy="60" rx="30" ry="11" fill="#62d3f0" opacity=".35"/>
+        <path d="M250 36 a120 42 0 0 1 10 22" stroke="#62d3f0" stroke-width="2.5" fill="none"/><path d="M256 52 l4 6 3-8" stroke="#62d3f0" stroke-width="2.5" fill="none"/>
+        <circle cx="150" cy="90" r="5" fill="#f2a93b"/><text x="160" y="106" fill="#f2a93b" font-family="monospace" font-size="12">Sun</text>
+      </svg>
+      <div class="big"><span lang="es">a través del polvo</span><span lang="en">through the dust</span></div>
+      <h3><span lang="es">Ver la galaxia girar</span><span lang="en">Watching the galaxy turn</span></h3>
+      <p><span lang="es">Las ondas de radio atraviesan el polvo que tapa la luz visible. Apuntando a distintas partes de la Vía Láctea y midiendo
+      velocidades, se nota que el disco gira: un lado viene hacia nosotros y el otro se aleja.</span><span lang="en">Radio waves cross the dust that hides
+      visible light. Pointing at different parts of the Milky Way and measuring speeds shows that the disc rotates: one side comes toward us,
+      the other moves away.</span></p>
+    </div>
+  </div>
+</div></section>
+
+<section id="como"><div class="wrap">
+  <span class="kicker"><span lang="es">¿Cómo funciona?</span><span lang="en">How does it work?</span></span>
+  <h2><span lang="es">El viaje de la señal, del cielo al mapa</span><span lang="en">The signal's journey, from the sky to a map</span></h2>
+  <p class="lede"><span lang="es">Todo el hardware cabe en un techo y cuesta lo que un hobby. Lo difícil es sacar una señal que apenas asoma, un 5 a
+  15 % sobre el ruido del propio receptor, y que no se confunda con interferencias.</span><span lang="en">All the hardware fits on a rooftop and costs what a hobby costs. The hard part is pulling out a
+  signal that barely rises 5 to 15 % above the receiver's own noise, without mistaking interference for it.</span></p>
+  <div class="journey">
+    <div class="step"><h3><span lang="es">El plato</span><span lang="en">The dish</span></h3><p><span lang="es">Una rejilla de ~90 × 60 cm junta las ondas en una antena dipolo hecha a mano. Mira un trozo de cielo de 20°, unas 40 lunas llenas de ancho.</span><span lang="en">A ~90 × 60 cm grid gathers the waves onto a hand-made dipole antenna. It sees a patch of sky 20° wide, about 40 full moons.</span></p></div>
+    <div class="step"><h3><span lang="es">El amplificador</span><span lang="en">The amplifier</span></h3><p><span lang="es">Un amplificador de bajo ruido, pegado a la antena, sube la señal antes de que el cable se la coma.</span><span lang="en">A low-noise amplifier right at the antenna boosts the signal before the cable eats it.</span></p></div>
+    <div class="step"><h3><span lang="es">El receptor</span><span lang="en">The receiver</span></h3><p><span lang="es">Un RTL-SDR: nació como sintonizador de TV por USB. Digitaliza 2,4 millones de muestras por segundo alrededor de 1420 MHz.</span><span lang="en">An RTL-SDR, born as a USB TV tuner. It digitises 2.4 million samples a second around 1420 MHz.</span></p></div>
+    <div class="step"><h3><span lang="es">La montura</span><span lang="en">The mount</span></h3><p><span lang="es">Una montura ecuatorial motorizada apunta el plato y sigue el cielo mientras la Tierra gira.</span><span lang="en">A motorised equatorial mount points the dish and follows the sky as the Earth turns.</span></p></div>
+    <div class="step"><h3><span lang="es">Los computadores</span><span lang="en">The computers</span></h3><p><span lang="es">Una Raspberry Pi en una caja metálica junto al plato, y un notebook adentro que corre la consola web y todo el procesamiento.</span><span lang="en">A Raspberry Pi in a metal box by the dish, and a notebook indoors running the web console and all the processing.</span></p></div>
+  </div>
+</div></section>
+
+<section id="modulos"><div class="wrap">
+  <span class="kicker"><span lang="es">El software, módulo por módulo</span><span lang="en">The software, module by module</span></span>
+  <h2><span lang="es">Una consola web para operar un radiotelescopio</span><span lang="en">A web console to run a radio telescope</span></h2>
+  <p class="lede"><span lang="es">Cada módulo es una página de la consola. Las imágenes vienen de la demo <span class="tag sim">SIMULADA</span>,
+  donde el telescopio y el receptor son simulados y el cielo sale de un catálogo profesional (HI4PI). Puedes abrir cada una y apretar botones.</span><span lang="en">
+  Each module is a page of the console. The pictures come from the <span class="tag sim">SIMULATED</span> demo, where telescope and receiver are
+  simulated and the sky comes from a professional survey (HI4PI). You can open each one and press buttons.</span></p>
+  <div class="mods" id="mods"></div>
+  <p style="margin-top:1.8rem"><a href="/console-tour.html"><span lang="es">Tour técnico de la consola, en inglés →</span><span lang="en">Technical tour of the console →</span></a></p>
+</div></section>
+
+<section id="logros"><div class="wrap">
+  <span class="kicker"><span lang="es">Lo que ha visto de verdad</span><span lang="en">What it has really seen</span> <span class="tag real"><span lang="es">DATOS REALES</span><span lang="en">REAL DATA</span></span></span>
+  <h2><span lang="es">Noviembre de 2026, desde un techo en Santiago</span><span lang="en">November 2026, from a rooftop in Santiago</span></h2>
+  <p class="lede"><span lang="es">Cada resultado viene con lo que todavía no demuestra. Las intensidades son relativas: aún no hay calibración absoluta.</span><span lang="en">Every result comes with what it does not show yet. Intensities are relative: there is no absolute calibration yet.</span></p>
+  <div class="tl">
+    <div class="ev"><div class="when">5 nov 2026</div><div>
+      <h3><span lang="es">Primer hidrógeno</span><span lang="en">First hydrogen</span></h3>
+      <p><span lang="es">La primera noche en el techo, ALMITA vio la línea del hidrógeno donde el catálogo HI4PI dice que debe estar, y del lado correcto del cero de velocidad: con el eje invertido, la coincidencia se cae.</span><span lang="en">On its first rooftop night, ALMITA saw the hydrogen line where the HI4PI survey says it should be, on the right side of zero velocity: with the axis flipped, the match falls apart.</span></p>
+      <button class="fig" type="button" data-full="project/results/hi_detection_20261105.jpg"><img src="project/results/hi_detection_20261105.jpg" alt="21 cm spectra from 5 November 2026 against HI4PI" width="1600" height="736" loading="lazy"></button>
+      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">muestra hidrógeno con el signo correcto, no que cada espectro calce con su propio punto del cielo.</span><span lang="en">it shows hydrogen with the right sign, not that each spectrum matches its own point in the sky.</span></p>
+    </div></div>
+    <div class="ev"><div class="when">12 nov 2026</div><div>
+      <h3><span lang="es">Repetido, y mucho más limpio</span><span lang="en">Repeated, and much cleaner</span></h3>
+      <p><span lang="es">Con <i>conmutación de frecuencia</i> (el receptor salta entre dos sintonías: el hidrógeno se mueve y las imperfecciones del receptor no), la línea apareció en los 25 puntos del mosaico, sobre una base plana. Su forma calza con HI4PI con correlación de 0,95 a 0,99.</span><span lang="en">With <i>frequency switching</i> (the receiver hops between two tunings: the hydrogen moves, the receiver's flaws do not), the line showed up in all 25 points of the mosaic on a flat baseline. Its shape matches HI4PI with a correlation of 0.95 to 0.99.</span></p>
+      <button class="fig" type="button" data-full="project/results/hi_frequency_switched_20261112.jpg"><img src="project/results/hi_frequency_switched_20261112.jpg" alt="Frequency-switched 21 cm spectra from 12 November 2026 against HI4PI" width="1600" height="736" loading="lazy"></button>
+      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">el espectro de HI4PI de otro punto de la grilla calza casi igual de bien, y las Nubes de Magallanes no se detectaron.</span><span lang="en">HI4PI's spectrum of another point of the grid matches almost as well, and the Magellanic Clouds were not detected.</span></p>
+    </div></div>
+    <div class="ev"><div class="when">19 nov 2026</div><div>
+      <h3><span lang="es">La Vía Láctea gira</span><span lang="en">The Milky Way turns</span></h3>
+      <p><span lang="es">Una tarde con el piloto automático: 99 capturas, ninguna falló. A un lado del centro galáctico el hidrógeno se aleja, al otro se acerca, y la diferencia crece hacia afuera: la velocidad media va de +18 km/s a −19 km/s. El disco rota.</span><span lang="en">An afternoon on autopilot: 99 captures, none failed. On one side of the Galactic Centre the hydrogen recedes, on the other it approaches, and the difference grows outward: the mean velocity goes from +18 km/s to −19 km/s. The disc rotates.</span></p>
+      <button class="fig" type="button" data-full="project/results/rotation_20261119.jpg"><img src="project/results/rotation_20261119.jpg" alt="21 cm spectra along the Galactic plane, 19 November 2026" width="1600" height="1176" loading="lazy"></button>
+      <p class="but"><b><span lang="es">Pero</span><span lang="en">But</span></b> · <span lang="es">todavía no es una velocidad de rotación: con un plato de 20° y una sola tarde, la mitad del número sale de un supuesto. Una revisión del 25 de noviembre retiró las dos velocidades publicadas al principio.</span><span lang="en">it is not yet a rotation speed: with a 20° dish and one afternoon, half the number comes from an assumption. A 25 November review withdrew the two speeds first published.</span></p>
+    </div></div>
+  </div>
+</div></section>
+
+<section id="aprendido"><div class="wrap">
+  <span class="kicker"><span lang="es">Aprendido a porrazos</span><span lang="en">Learned the hard way</span></span>
+  <h2><span lang="es">El peor enemigo de un radiotelescopio casero es la casa</span><span lang="en">A home radio telescope's worst enemy is the home</span></h2>
+  <div class="lessons">
+    <div class="lesson"><div class="em" aria-hidden="true">📡</div><h3><span lang="es">El computador cantaba</span><span lang="en">The computer was singing</span></h3><p><span lang="es">Durante semanas, una "señal" misteriosa era la Raspberry Pi 5 que manejaba el telescopio, emitiendo justo en la banda del hidrógeno. Se jubiló; ahora una Pi 4 vive en una caja metálica.</span><span lang="en">For weeks a mysterious "signal" was the Raspberry Pi 5 running the telescope, broadcasting right in the hydrogen band. It was retired; a Pi 4 now lives in a metal box.</span></p></div>
+    <div class="lesson"><div class="em" aria-hidden="true">🧍</div><h3><span lang="es">Las personas también</span><span lang="en">So do people</span></h3><p><span lang="es">Con nadie cerca, la caja quedaba limpia. Con una persona al lado de la antena, la interferencia volvía. Ahora se observa a distancia, desde la consola web.</span><span lang="en">With nobody near, the box stayed clean. With a person next to the antenna, the interference came back. Now it is operated from a distance, through the web console.</span></p></div>
+    <div class="lesson"><div class="em" aria-hidden="true">🔌</div><h3><span lang="es">Un conector flojo parece astronomía</span><span lang="en">A loose connector looks like astronomy</span></h3><p><span lang="es">Saltos de señal que parecían del cielo eran un contacto que iba y venía. Desde entonces: una variable a la vez, y el veredicto se escribe antes de mirar los datos.</span><span lang="en">Jumps that looked like the sky were a contact coming and going. Since then: one variable at a time, and the verdict is written before looking at the data.</span></p></div>
+    <div class="lesson"><div class="em" aria-hidden="true">🪢</div><h3><span lang="es">Amarras plásticas</span><span lang="en">Cable ties</span></h3><p><span lang="es">Partes del proyecto están muy bien diseñadas. Otras, muy bien amarradas. Es temporal. Hace bastante tiempo que es temporal.</span><span lang="en">Some parts are carefully engineered. Others are carefully tied. It is temporary. It has been temporary for quite a while.</span></p></div>
+  </div>
+</div></section>
+
+<section id="preguntas"><div class="wrap" style="max-width:52rem">
+  <span class="kicker"><span lang="es">Preguntas</span><span lang="en">Questions</span></span>
+  <h2><span lang="es">Lo que suelen preguntar</span><span lang="en">What people usually ask</span></h2>
+  <details><summary><span lang="es">¿Lo que veo en la demo es real?</span><span lang="en">Is what I see in the demo real?</span></summary>
+    <p><span lang="es">No. La demo es el software real de ALMITA manejando un telescopio y un receptor simulados, con un cielo sacado del catálogo HI4PI. Sirve para conocer la consola. Los resultados reales están en la sección de arriba.</span><span lang="en">No. The demo is ALMITA's real software driving a simulated telescope and receiver, with a sky taken from the HI4PI survey. It is there to get to know the console. The real results are in the section above.</span></p></details>
+  <details><summary><span lang="es">¿Puedo construir uno?</span><span lang="en">Can I build one?</span></summary>
+    <p><span lang="es">Sí, esa es la idea. El software es abierto (licencia MIT) y la documentación del hardware también (CERN-OHL-S-2.0). Todo está en GitHub. Si te embarcas, escribe: los errores ya cometidos están bien documentados.</span><span lang="en">Yes, that is the idea. The software is open (MIT licence) and so is the hardware documentation (CERN-OHL-S-2.0). It is all on GitHub. If you set out, write in: the mistakes already made are well documented.</span></p></details>
+  <details><summary><span lang="es">¿Por qué no se ve a simple vista?</span><span lang="en">Why can't you see it with your eyes?</span></summary>
+    <p><span lang="es">Porque es radio, no luz: una onda de 21 cm, como la de un celular o un microondas, pero muchísimo más débil. Hay que juntarla con una antena y promediar minutos para que asome entre el ruido.</span><span lang="en">Because it is radio, not light: a 21 cm wave, like a phone's or a microwave oven's, but far fainter. It has to be gathered with an antenna and averaged for minutes to rise above the noise.</span></p></details>
+  <details><summary><span lang="es">¿Interfiere con algo, o es peligroso?</span><span lang="en">Does it interfere with anything, or is it dangerous?</span></summary>
+    <p><span lang="es">No. ALMITA solo escucha, no transmite nada. La banda de 1420 MHz está protegida para la radioastronomía justamente por eso.</span><span lang="en">No. ALMITA only listens; it transmits nothing. The 1420 MHz band is protected for radio astronomy for exactly that reason.</span></p></details>
+  <details><summary><span lang="es">¿Qué viene ahora?</span><span lang="en">What comes next?</span></summary>
+    <p><span lang="es">Observar desde cielos con menos interferencia, repetir las mediciones muchas veces, medir ON y OFF a la misma altura y, algún día, calibrar en unidades físicas (Kelvin).</span><span lang="en">Observing from skies with less interference, repeating the measurements many times, measuring ON and OFF at the same altitude and, one day, calibrating in physical units (Kelvin).</span></p></details>
+  <details><summary><span lang="es">¿Quién está detrás?</span><span lang="en">Who is behind it?</span></summary>
+    <p><span lang="es">Felipe Fridman G., en Chile, como proyecto personal e independiente. Mucho del código se escribió conversando con IA, y todo se probó en terreno.</span><span lang="en">Felipe Fridman G., in Chile, as a personal and independent project. Much of the code was written in conversation with AI, and all of it was tested in the field.</span></p></details>
+</div></section>
+
+<section id="contacto"><div class="wrap contact">
+  <div>
+    <span class="kicker"><span lang="es">Contacto</span><span lang="en">Contact</span></span>
+    <h2><span lang="es">¿Preguntas, ideas, quieres armar el tuyo?</span><span lang="en">Questions, ideas, want to build your own?</span></h2>
+    <p class="lede"><span lang="es">Colegios, clubes de astronomía, radioaficionados, curiosos y profesionales: todas las consultas son bienvenidas.</span><span lang="en">Schools, astronomy clubs, radio amateurs, the curious and professionals: every question is welcome.</span></p>
+  </div>
+  <div class="card">
+    <h3><span lang="es">Escribe a</span><span lang="en">Write to</span></h3>
+    <div class="mail"><code id="mail">ffridman@gmail.com</code><button class="btn" type="button" id="copy"><span lang="es">Copiar</span><span lang="en">Copy</span></button></div>
+    <ul>
+      <li><span lang="es">Para dudas técnicas o errores en el código: </span><span lang="en">For technical questions or bugs: </span><a href="https://github.com/almita-radio/almita/issues" rel="noopener">GitHub issues</a></li>
+    </ul>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="who">
+    <div><div class="n">Felipe Fridman G.</div><div><span lang="es">Creador de ALMITA</span><span lang="en">Creator of ALMITA</span></div></div>
+    <dl><dt><span lang="es">Correo</span><span lang="en">Email</span></dt><dd><a href="mailto:ffridman@gmail.com">ffridman@gmail.com</a></dd></dl>
+    <dl><dt><span lang="es">Dónde</span><span lang="en">Where</span></dt><dd>Santiago, Chile</dd></dl>
+    <dl><dt>GitHub</dt><dd><a href="https://github.com/almita-radio" rel="noopener">github.com/almita-radio</a></dd></dl>
+  </div>
+  <div class="row">
+    <a href="/demo.html" target="_blank" rel="noopener">Demo</a>
+    <a href="/console-tour.html"><span lang="es">Tour de la consola</span><span lang="en">Console tour</span></a>
+    <a href="/simulator.html" target="_blank" rel="noopener"><span lang="es">Simulador de cielo</span><span lang="en">Sky simulator</span></a>
+    <a href="https://github.com/almita-radio/almita" rel="noopener">GitHub</a>
+    <a href="https://almita-radio.github.io/almita/" rel="noopener"><span lang="es">Notas técnicas</span><span lang="en">Technical notes</span></a>
+  </div>
+  <p><span lang="es">ALMITA es un proyecto personal e independiente de radioastronomía amateur, Chile. Software MIT, hardware CERN-OHL-S-2.0. Cielo de la demo y espectros de referencia: HI4PI Collaboration 2016, A&amp;A 594, A116. Resultados de un instrumento amateur experimental, no de un observatorio profesional.</span><span lang="en">ALMITA is a personal, independent amateur radio astronomy project, Chile. Software MIT, hardware CERN-OHL-S-2.0. Demo sky and reference spectra: HI4PI Collaboration 2016, A&amp;A 594, A116. Results of an experimental amateur instrument, not of a professional observatory.</span></p>
+</div></footer>
+
+<dialog id="lb" aria-label="Image"><button type="button" id="lbx">✕</button><img id="lbi" alt=""></dialog>
+
+<script>
+const MODS = [
+  { id: "observe", name: "OBSERVE", go: "observe.html",
+    es: ["Planear la noche", "Eliges una zona del cielo y ALMITA arma una grilla de puntos, revisa que estén sobre el horizonte y lejos del Sol, y calcula cuánto demora.", "Como trazar la ruta antes de salir de viaje."],
+    en: ["Planning the night", "Choose a patch of sky and ALMITA lays out a grid of points, checks they are above the horizon and away from the Sun, and works out how long it takes.", "Like planning the route before a trip."] },
+  { id: "monitor", name: "MONITOR", go: "index.html",
+    es: ["Mirar en vivo", "Mientras el plato salta de punto en punto, se ve llegar cada espectro, la cascada y un mapa que se va llenando.", "El tablero del auto mientras manejas."],
+    en: ["Watching live", "As the dish hops from point to point, each spectrum, the waterfall and a filling map arrive on screen.", "A car's dashboard while you drive."] },
+  { id: "reduce", name: "REDUCE", go: "reduce.html",
+    es: ["Limpiar la señal", "Convierte millones de muestras crudas en un espectro por punto: quita interferencias, corrige el movimiento de la Tierra y dice cuánto error tiene.", "Revelar un rollo de fotos."],
+    en: ["Cleaning the signal", "Turns millions of raw samples into one spectrum per point: removes interference, corrects for the Earth's motion and states its error.", "Developing a roll of film."] },
+  { id: "science", name: "SCIENCE", go: "science.html",
+    es: ["Hacer mapas", "Junta los espectros en mapas de hidrógeno y los pone al lado de lo que el catálogo profesional HI4PI dice que debería verse.", "Armar el puzle y compararlo con la caja."],
+    en: ["Making maps", "Puts the spectra together into hydrogen maps, beside what the professional HI4PI survey says should be there.", "Doing the puzzle and checking it against the box."] },
+  { id: "experiment", name: "EXPERIMENT", go: "experiment.html",
+    es: ["Experimentos con veredicto previo", "Recetas listas (¿se ve hidrógeno?, ¿Nubes de Magallanes?) que escriben qué cuenta como resultado antes de mirar el cielo.", "Apostar antes de lanzar la moneda, no después."],
+    en: ["Experiments with the verdict first", "Ready recipes (is there hydrogen? the Magellanic Clouds?) that write down what counts as a result before looking at the sky.", "Calling heads before the coin lands, not after."] },
+  { id: "survey", name: "SURVEY", go: null,
+    es: ["Piloto automático", "Recorre solo una lista de zonas del cielo: elige el siguiente lote, apunta, captura, procesa y sigue, y el mapa de STATUS se va llenando. Así se hizo la tarde de la rotación.", "Un dron con plan de vuelo."],
+    en: ["Autopilot", "Works through a list of sky patches on its own: picks the next batch, points, captures, reduces and moves on, while the STATUS map fills in. That is how the rotation afternoon was done.", "A drone with a flight plan."] },
+  { id: "status", name: "STATUS", go: "status.html",
+    es: ["Salud y mapa del cielo", "¿Está todo listo? Temperaturas, receptor, montura, servicios, y un mapa de todo el cielo con cada punto ya observado.", "El chequeo previo de un piloto."],
+    en: ["Health and sky map", "Is everything ready? Temperatures, receiver, mount, services, and a map of the whole sky with every point already observed.", "A pilot's pre-flight check."] },
+  { id: "align", name: "ALIGN", go: "align.html",
+    es: ["Apuntar bien", "Ajusta la puntería usando el Sol o el propio hidrógeno, con resguardos antes de corregir nada.", "Calibrar la mira de un telescopio."],
+    en: ["Pointing right", "Tunes the pointing using the Sun or the hydrogen itself, with safeguards before it corrects anything.", "Zeroing a telescope's finder."] },
+  { id: "calibrate", name: "CALIBRATE", go: "calibrate.html",
+    es: ["Conocer el receptor", "Con una carga de 50 Ω mide cuánto ruido pone el propio equipo, para separar lo que viene del cielo.", "Tarar la balanza antes de pesar."],
+    en: ["Knowing the receiver", "With a 50 Ω load it measures how much noise the equipment itself adds, to tell it apart from the sky.", "Zeroing the scale before weighing."] },
+  { id: "lobe", name: "LOBE · TRANSIT", go: "lobe.html",
+    es: ["Medir el haz con el Sol", "Deja que el Sol cruce frente a la antena y mide qué tan ancha es su \"mirada\".", "Medir el foco de una linterna pasándola por la pared."],
+    en: ["Measuring the beam with the Sun", "Lets the Sun drift across the antenna to measure how wide its \"gaze\" is.", "Sweeping a torch across a wall to see its spot."] },
+  { id: "sessions", name: "SESSIONS", go: "sessions.html",
+    es: ["El archivo", "Cada noche queda catalogada con sus datos crudos, procesados y mapas. Nada se sobrescribe.", "El álbum de la familia, con fechas."],
+    en: ["The archive", "Every night is catalogued with its raw data, reductions and maps. Nothing is overwritten.", "The family album, with dates."] },
+  { id: "simulator", name: "SKY SIMULATOR", href: "/simulator.html",
+    es: ["Simulador de cielo", "Apunta un ALMITA de mentira a cualquier parte de la región y ve qué espectro de hidrógeno debería medir. Corre en tu navegador.", "Un simulador de vuelo, pero de radio."],
+    en: ["Sky simulator", "Point a make-believe ALMITA anywhere in the region and see which hydrogen spectrum it should measure. It runs in your browser.", "A flight simulator, for radio."] },
+];
+const el = (t, a = {}, ...k) => { const e = document.createElement(t); for (const [n, v] of Object.entries(a)) e.setAttribute(n, v); e.append(...k); return e; };
+const two = (es, en) => [el("span", { lang: "es" }, es), el("span", { lang: "en" }, en)];
+const box = document.getElementById("mods");
+for (const m of MODS) {
+  const pic = m.id ? el("div", { class: "pic" }, el("img", { src: `project/shots/${m.id}.jpg`, alt: `${m.name} (SIMULATED demo)`, loading: "lazy", width: "1200", height: "675" }))
+                   : el("div", { class: "pic none" }, ...two("sin captura en la demo", "not in the demo"));
+  const href = m.href || (m.go ? `/demo.html?go=${m.go}` : null);
+  const link = href ? el("a", { class: "go", href, target: "_blank", rel: "noopener" }, ...two("Abrir en la demo →", "Open in the demo →"))
+                    : el("span", { class: "go off" }, ...two("Captura simulada · no está en la grabación de la demo", "Simulated screenshot · not in the demo recording"));
+  box.append(el("article", { class: "mod" }, pic, el("div", { class: "b" },
+    el("span", { class: "name" }, m.name), el("h3", {}, ...two(m.es[0], m.en[0])), el("p", {}, ...two(m.es[1], m.en[1])),
+    el("p", { class: "like" }, ...two(m.es[2], m.en[2])), link)));
+}
+// language
+const setL = (l) => { document.body.dataset.l = l; document.documentElement.lang = l;
+  document.querySelectorAll(".lang button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.set === l)));
+  try { localStorage.setItem("almita-lang", l); } catch (e) {} };
+let L = "es"; try { L = localStorage.getItem("almita-lang") || ((navigator.language || "es").toLowerCase().startsWith("es") ? "es" : "en"); } catch (e) {}
+setL(L);
+document.querySelectorAll(".lang button").forEach((b) => b.addEventListener("click", () => setL(b.dataset.set)));
+// copy mail
+document.getElementById("copy").addEventListener("click", async () => {
+  const t = document.getElementById("mail").textContent;
+  try { await navigator.clipboard.writeText(t); } catch (e) { const r = document.createRange(); r.selectNodeContents(document.getElementById("mail")); getSelection().removeAllRanges(); getSelection().addRange(r); }
+  const b = document.getElementById("copy"); b.querySelectorAll("span").forEach((s) => s.textContent = s.lang === "es" ? "Copiado ✓" : "Copied ✓");
+});
+// lightbox
+const lb = document.getElementById("lb");
+document.addEventListener("click", (e) => { const t = e.target.closest("[data-full]"); if (!t) return; document.getElementById("lbi").src = t.dataset.full; lb.showModal(); });
+document.getElementById("lbx").addEventListener("click", () => lb.close());
+lb.addEventListener("click", (e) => { if (e.target === lb) lb.close(); });
+// animated spectrum sketch: noise, slowly averaging down, with the line rising out of it
+const cv = document.getElementById("spec"), cx = cv.getContext("2d");
+const N = 220; let avg = new Float32Array(N), n = 0;
+const line = (i) => { const x = (i - N * 0.52) / (N * 0.045), y = (i - N * 0.6) / (N * 0.03); return 0.55 * Math.exp(-x * x / 2) + 0.28 * Math.exp(-y * y / 2); };
+const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function frame() {
+  const w = cv.clientWidth, h = cv.clientHeight, d = devicePixelRatio || 1;
+  if (cv.width !== w * d) { cv.width = w * d; cv.height = h * d; }
+  cx.setTransform(d, 0, 0, d, 0, 0); cx.clearRect(0, 0, w, h);
+  n = n >= 400 ? 1 : n + 1; if (n === 1) avg.fill(0);
+  for (let i = 0; i < N; i++) avg[i] += ((line(i) + 0.9 * gauss()) - avg[i]) / n;
+  cx.strokeStyle = "rgba(98,211,240,.9)"; cx.lineWidth = 2; cx.beginPath();
+  for (let i = 0; i < N; i++) { const x = i / (N - 1) * w, y = h * 0.82 - avg[i] * h * 0.85; i ? cx.lineTo(x, y) : cx.moveTo(x, y); }
+  cx.stroke();
+  cx.strokeStyle = "rgba(242,169,59,.5)"; cx.setLineDash([4, 5]); cx.beginPath(); cx.moveTo(w * 0.52, 8); cx.lineTo(w * 0.52, h); cx.stroke(); cx.setLineDash([]);
+  cx.fillStyle = "#7f8aa1"; cx.font = "12px 'IBM Plex Mono', monospace"; cx.fillText(`${n} / 400`, 4, 14);
+  if (!reduce) setTimeout(() => requestAnimationFrame(frame), 60);
+}
+if (reduce) { n = 399; for (let k = 0; k < 400; k++) { n = k; for (let i = 0; i < N; i++) avg[i] += ((line(i) + 0.9 * gauss()) - avg[i]) / (k + 1); } n = 399; }
+frame();
+</script>
+</body>
+</html>

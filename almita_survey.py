@@ -24,6 +24,7 @@ A batch captured but not reduced (stopped mid-REDUCE, crash) is reduced first on
 """
 from __future__ import annotations
 
+import os
 import argparse
 import glob
 import json
@@ -82,7 +83,8 @@ def gate_reason(state: Dict[str, Any], check_experiment: bool = True) -> Optiona
                 return "an EXPERIMENT is running (one driver of the mount at a time)"
         except Exception as exc:  # noqa: BLE001 - an unreadable state is a reason to wait, not to go
             return f"cannot read the EXPERIMENT runner's state ({type(exc).__name__}: {exc})"
-    if mount_device.is_simulator() and not state["definition"].get("allow_simulator"):
+    # ALMITA_DEMO=1 only inside the demo container (demo/docker): its simulated mount IS the demo's sky
+    if mount_device.is_simulator() and not state["definition"].get("allow_simulator") and os.environ.get("ALMITA_DEMO") != "1":
         return "the mount selector in the page header is on SIM; this survey is for the real sky (LX200)"
     try:
         import almita_web_ops

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About the ALMITA demo</title>
+<style>:root{color-scheme:dark}body{margin:0;background:#0a0c10;color:#e6e8ee;font:16px/1.6 system-ui,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:2rem max(16px,env(safe-area-inset-left,0px)) 3rem}
+.tag{border:1px solid #e8590c;color:#e8590c;font:600 .75rem ui-monospace,monospace;letter-spacing:.14em;padding:2px 8px;border-radius:3px}
+h1{margin:.6rem 0 .2rem}h2{font-size:1.05rem;margin:1.8rem 0 .4rem}p,li{color:#b8bfcb}a{color:#4cc9f0}code{font-size:.9em;color:#e6e8ee}</style></head>
+<body><main>
+<span class="tag">SIMULATED</span>
+<h1>How the ALMITA demo works</h1>
+<p>ALMITA is a home-built 21 cm hydrogen-line radio telescope. This site shows its real web console - the same pages the
+operator uses at night - replaying a recording. Nothing here is a real observation and nothing here moves anything.</p>
+
+<h2>What was recorded</h2>
+<p>ALMITA's own software (unchanged: capture, QUICKLOOK, REDUCE, SCIENCE, EXPERIMENT) ran in a container against a
+simulated instrument, on a simulated winter night in Santiago (15 July 2026, 22:00, the Galactic Centre overhead):</p>
+<ul>
+<li><b>Mount:</b> INDI's <i>Telescope Simulator</i>. ALMITA's own banner says so on every page.</li>
+<li><b>SDR:</b> a stand-in for <code>rtl_tcp</code> that speaks its protocol and streams raw I/Q in real time. The sky in
+that stream follows the <b>HI4PI</b> survey (HI4PI Collaboration 2016, A&amp;A 594, A116) seen through ALMITA's 20° beam,
+Doppler-shifted for the time and place; the receiver (system temperature 120 K, band shape, noise) is a model.</li>
+<li><b>Thermometers, Bias-T, the capture Pi:</b> simulated too.</li>
+</ul>
+<p>A browser then pressed the buttons: PLAN and START on OBSERVE (a 5 × 5 grid around galactic longitude 10°, with
+frequency switching), MONITOR while it ran, REDUCE with the v2 estimator, SCIENCE maps, SESSIONS, and an EXPERIMENT
+recipe. Every request and every answer was recorded.</p>
+
+<h2>What you are seeing</h2>
+<p>A service worker in your browser answers the pages' requests from that recording. When you press a button that was
+pressed during the recording (START, RUN), the recording plays from that moment, ten times faster. Buttons that were not
+recorded say "disabled in the SIMULATED demo". The clock on the pages is the simulated night's.</p>
+
+<h2>What it is not</h2>
+<p>Not ALMITA's data, not a measurement, and not a test of the hardware: the sky is a survey, the receiver a model. The
+real results - and their honest caveats - are on the project page.</p>
+<h2>Also here</h2>
+<p><a href="/simulator.html">The sky simulator</a>: point a simulated ALMITA anywhere in the region, choose the beam and
+the switching, and see the folded spectrum next to HI4PI and its null test - computed live in your browser.</p>
+<p><a href="/status.html">Back to the demo</a> · <a href="/home.html">About ALMITA</a> · <a href="https://github.com/almita-radio/almita" rel="noopener">ALMITA on GitHub</a></p>
+</main></body></html>

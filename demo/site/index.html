@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ALMITA demo</title>
+<meta name="description" content="A simulated 21 cm hydrogen-line radio telescope: point ALMITA at the inner Milky Way and observe a sky that follows the HI4PI survey. SIMULATED.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{--bg:#0a0c10;--panel:#11151c;--line:#232a35;--fg:#e6e8ee;--dim:#8d95a5;--accent:#4cc9f0;--warn:#e8590c;--truth:#c9ced8;--null:#7d8696;
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-size:15px;line-height:1.5}
+.wrap{max-width:1240px;margin:0 auto;padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 18px;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}
+h1{font-size:1.5rem;margin:0;font-weight:600;letter-spacing:.02em}
+.sim{border:1px solid var(--warn);color:var(--warn);font:500 .72rem "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.14em;padding:2px 8px;border-radius:3px}
+.lede{color:var(--dim);margin:0;flex-basis:100%;max-width:75ch}
+.grid{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:18px}
+@media (max-width:880px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px;min-width:0}
+.panel h2{font:500 .74rem "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+canvas{display:block;width:100%;height:auto;border-radius:3px}
+#sky{cursor:crosshair;touch-action:none}
+.ctl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;align-items:center;margin-top:12px;font-size:.9rem}
+.ctl label{color:var(--dim)}
+select,input[type=range]{width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px;font:inherit}
+.row{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+button{font:600 .85rem "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.08em;background:var(--accent);color:#06121a;border:0;border-radius:4px;padding:9px 16px;cursor:pointer}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.82rem}
+.readout{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;color:var(--dim)}
+.readout b{color:var(--fg);font-weight:500}
+.plots{display:grid;gap:18px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:.82rem;color:var(--dim);margin-top:6px}
+.sw{display:inline-block;width:18px;height:2px;vertical-align:middle;margin-right:6px}
+.verdict{margin-top:10px;padding:10px 12px;border-left:3px solid var(--accent);background:#0d1117;font-size:.9rem}
+.notes{margin-top:22px;color:var(--dim);font-size:.86rem;max-width:90ch}
+.notes h3{color:var(--fg);font-size:.95rem;margin:18px 0 4px}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>ALMITA · demo</h1><span class="sim">SIMULATED</span>
+  <p class="lede">A home-built 21 cm radio telescope, simulated. Point it at the inner Milky Way (galactic longitude 0–20°), observe, and see the hydrogen line come out of the noise. The sky follows the HI4PI survey seen through a simulated beam; the receiver, the noise and the frequency switching are models. Nothing here touches the real instrument.</p>
+</header>
+
+<div class="grid">
+  <section class="panel">
+    <h2>Sky · HI4PI column (|v| ≤ 150 km/s) · click to point</h2>
+    <canvas id="sky" width="760" height="760" aria-label="Map of the observable region; click to point the telescope"></canvas>
+    <div class="readout mono" id="pointing"></div>
+    <div class="ctl">
+      <label for="beam">Beam</label>
+      <select id="beam"><option value="0">20° · ALMITA today (0.9 m)</option><option value="1">12° · a 1.2 m dish</option><option value="2">5° · a 3 m dish</option></select>
+      <label for="time">Integration</label>
+      <div><input id="time" type="range" min="0" max="100" value="45"><div class="mono" id="timeLabel"></div></div>
+      <label for="mode">Switching</label>
+      <select id="mode"><option value="600000">frequency switching ±600 kHz</option><option value="300000">frequency switching ±300 kHz</option><option value="0">none (raw band only)</option></select>
+      <label for="ripple">Receiver ripple</label>
+      <select id="ripple"><option value="0.005">±0.5 % (as measured)</option><option value="0">off (ideal)</option><option value="0.015">±1.5 % (bad night)</option></select>
+    </div>
+    <div class="row"><button id="observe">OBSERVE</button><button id="again" class="ghost">NEW NOISE</button></div>
+  </section>
+
+  <section class="plots">
+    <div class="panel">
+      <h2>QUICKLOOK · what the SDR sees (MHz, LO A)</h2>
+      <canvas id="raw" width="1600" height="520"></canvas>
+      <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>power at LO A (arbitrary units)</span><span id="rawNote"></span></div>
+    </div>
+    <div class="panel">
+      <h2>REDUCE · folded spectrum (LSRK km/s)</h2>
+      <canvas id="red" width="1600" height="620"></canvas>
+      <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>simulated ALMITA</span><span><i class="sw" style="background:var(--truth)"></i>HI4PI through the same beam (the input)</span><span><i class="sw" style="background:var(--null);height:0;border-top:2px dashed var(--null)"></i>HI4PI at a pointing 8° away</span></div>
+      <div class="verdict" id="verdict">Choose a direction and press OBSERVE.</div>
+    </div>
+  </section>
+</div>
+
+<div class="notes">
+  <h3>What is simulated, and how</h3>
+  <p><b>Sky:</b> the HI4PI 21 cm survey (HI4PI Collaboration 2016, A&amp;A 594, A116), tile CAR_E01, through a Gaussian beam. The tile only covers l −1…21°, b −11…+11°, so a wide beam is <b>truncated</b> at its edges (the map says how much of the beam falls inside). <b>Antenna:</b> T<sub>A</sub> = η · T<sub>B</sub>, η = 0.5 (assumed). <b>Receiver:</b> T<sub>sys</sub> = 120 K (ALMITA's Y-factor of 12 Nov 2026), a band shape that rolls off beyond ±1 MHz, a spike at the LO. <b>Noise:</b> the radiometer equation, σ = 1/√(Δν·t) per 6.1 kHz channel. <b>Velocity:</b> LSRK → topocentric for 6 Dec 2026, 00:00 Chile, from Santiago.</p>
+  <p><b>Frequency switching</b> (what ALMITA really does): half the time the LO sits δ below the line, half δ above. S = (A − B)/B cancels the band shape; the line appears twice, positive and negative, and folding the two copies gives the spectrum. Narrow throw (±300 kHz) leaves a wider folded band but puts the negative "ghost" of a wide line inside it. A linear baseline is fitted outside the line window a rotation model expects; whatever ripple is left stays in the spectrum, as it does on real nights. Near l = 0° the expected line fills most of the folded band, so the baseline is fitted on one side only and the spectrum can sit tilted below the input: that is the instrument, not the sky.</p>
+  <p><b>Why two HI4PI curves:</b> a 20° beam averages so much sky that HI4PI looks almost the same in every direction of this region. A high correlation with the "true" spectrum therefore proves you see hydrogen with the right velocity, not that you pointed at that exact spot, unless it also beats the spectrum from 8° away. ALMITA's own 2026-11-25 audit learned that the hard way. Try the 5° beam.</p>
+  <p>ALMITA: <a href="https://github.com/almita-radio/almita" rel="noopener">github.com/almita-radio/almita</a>. Sky data: HI4PI Collaboration 2016, A&amp;A 594, A116 - please cite it if you use anything from this page.</p>
+</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

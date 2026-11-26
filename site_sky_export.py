@@ -19,6 +19,7 @@ Usage:  .venv/bin/python site_sky_export.py [--out site/sky]
 """
 from __future__ import annotations
 
+import os
 import argparse
 import glob
 import json
@@ -87,7 +88,9 @@ def sessions_from_catalog() -> list:
     out = []
     for s in cat["sessions"]:
         runs = (s.get("reduce") or {}).get("runs") or []
-        if s.get("mount") != "LX200 OnStep" or not runs:
+        # ALMITA_DEMO=1 only inside the demo container (demo/docker): there the Telescope Simulator is the demo's mount
+        demo_sim = os.environ.get("ALMITA_DEMO") == "1" and s.get("mount") == "Telescope Simulator"
+        if (s.get("mount") != "LX200 OnStep" and not demo_sim) or not runs:
             continue
         out.append({"campaign_id": s["campaign_id"], "started_utc": s["started_utc"], "reduce_run": runs[-1],
                     "points_captured": s.get("points_captured")})

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ALMITA · console tour</title>
+<meta name="description" content="ALMITA: a home-built, open-source 21 cm hydrogen-line radio telescope from Chile. Its web console page by page, a SIMULATED live demo, and its first results with their caveats.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&family=Inter:wght@400;600&display=swap">
+<style>
+:root{color-scheme:dark;--bg:#080b10;--panel:#0f141c;--panel2:#141b25;--line:#223042;--fg:#e6e9ef;--fg2:#a8b1c0;--fg3:#7d8796;
+--cyan:#5cc8e8;--orange:#e8590c;--amber:#e9b44c;--green:#53c08a;
+--sans:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;--head:"Space Grotesk","Inter",system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
+a{color:var(--cyan)}
+img{max-width:100%;height:auto;display:block}
+.wrap{max-width:72rem;margin:0 auto;padding-left:max(18px,env(safe-area-inset-left,0px));padding-right:max(18px,env(safe-area-inset-right,0px))}
+h1,h2,h3{font-family:var(--head);text-wrap:balance;line-height:1.15}
+h2{font-size:clamp(1.5rem,3vw,2rem);margin:0 0 .4rem}
+h3{font-size:1.1rem;margin:0}
+p{max-width:65ch}
+.label{font:600 .72rem/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--fg3)}
+.mono{font-family:var(--mono)}
+section{padding-block:4.5rem;border-top:1px solid var(--line)}
+.lede{color:var(--fg2);font-size:1.05rem}
+
+/* top bar */
+nav.top{position:sticky;top:0;z-index:20;background:rgba(8,11,16,.88);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+nav.top .wrap{display:flex;gap:1.2rem;align-items:center;min-height:52px;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+nav.top .wrap::-webkit-scrollbar{display:none}
+nav.top b{font:700 1.05rem var(--head);letter-spacing:.06em;margin-right:auto}
+nav.top a{color:var(--fg2);text-decoration:none;font:600 .78rem var(--mono);letter-spacing:.1em;text-transform:uppercase}
+nav.top a:hover{color:var(--fg)}
+
+/* hero */
+.hero{padding-block:3.5rem 4rem;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;background:
+  radial-gradient(60rem 30rem at 85% -10%,rgba(92,200,232,.13),transparent 60%),
+  radial-gradient(40rem 25rem at -10% 110%,rgba(232,89,12,.10),transparent 60%);pointer-events:none}
+.hero .wrap{position:relative}
+.logo{border-radius:10px;width:min(100%,30rem);height:auto;margin-bottom:2rem;border:1px solid var(--line)}
+.hero h1{font-size:clamp(2rem,5.5vw,3.6rem);margin:.2rem 0 .6rem;letter-spacing:-.01em}
+.acronym{font:500 1rem var(--mono);color:var(--amber);margin:0 0 1.2rem}
+.acronym span{color:var(--fg)}
+.cta{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:1.6rem}
+.btn{display:inline-flex;align-items:center;gap:.5rem;padding:.7rem 1.1rem;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--fg);text-decoration:none;font:600 .82rem var(--mono);letter-spacing:.08em;text-transform:uppercase}
+.btn:hover{border-color:var(--cyan)}
+.btn.primary{background:var(--cyan);color:#05212b;border-color:var(--cyan)}
+.btn.primary:hover{filter:brightness(1.08)}
+.tag{display:inline-block;font:600 .66rem/1 var(--mono);letter-spacing:.14em;padding:4px 7px;border-radius:3px;border:1px solid currentColor;vertical-align:middle}
+.tag.sim{color:var(--orange)}.tag.real{color:var(--green)}.tag.view{color:var(--fg3)}
+
+/* numbers */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(10.5rem,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:2.6rem}
+.stat{background:var(--panel);padding:1rem 1.1rem}
+.stat .v{font:600 1.45rem var(--mono);color:var(--fg)}
+.stat .v small{font-size:.8rem;color:var(--fg2)}
+.stat .k{color:var(--fg3);font-size:.82rem;line-height:1.35;margin-top:.25rem}
+
+/* chain diagram */
+.chain{display:flex;flex-wrap:wrap;align-items:stretch;gap:.5rem;margin:2rem 0 1rem}
+.node{flex:1 1 9rem;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:.8rem .9rem}
+.node .label{display:block;margin-bottom:.35rem}
+.node b{font-family:var(--head);font-size:1rem}
+.node p{margin:.25rem 0 0;color:var(--fg2);font-size:.85rem;line-height:1.4}
+.arrow{align-self:center;color:var(--fg3);font:600 1.2rem var(--mono)}
+.where{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1rem;margin-top:1.4rem}
+.where div{border-left:2px solid var(--cyan);padding:.1rem 0 .1rem .9rem;color:var(--fg2);font-size:.92rem}
+.where b{color:var(--fg);display:block;font-family:var(--head)}
+
+/* pages */
+.filters{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.6rem 0 1.4rem}
+.filters button{background:var(--panel);color:var(--fg2);border:1px solid var(--line);border-radius:999px;padding:.4rem .9rem;font:600 .74rem var(--mono);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+.filters button[aria-pressed="true"]{color:#05212b;background:var(--cyan);border-color:var(--cyan)}
+.pages{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,21rem),1fr));gap:1.2rem}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.card button.shot{all:unset;cursor:zoom-in;display:block;aspect-ratio:16/10;overflow:hidden;background:#000;border-bottom:1px solid var(--line)}
+.card button.shot img{width:100%;height:100%;object-fit:cover;object-position:top left;transition:transform .4s}
+.card button.shot:hover img{transform:scale(1.03)}
+.card button.shot:focus-visible{outline:2px solid var(--cyan);outline-offset:-2px}
+.card .body{padding:1rem 1.1rem 1.1rem;display:flex;flex-direction:column;gap:.55rem;flex:1}
+.card .row{display:flex;align-items:center;justify-content:space-between;gap:.6rem}
+.card h3{font:700 1.05rem var(--mono);letter-spacing:.12em}
+.card .what{color:var(--fg);margin:0;font-size:.95rem}
+.card ul{margin:0;padding-left:1.1rem;color:var(--fg2);font-size:.88rem;line-height:1.5}
+.card .foot{margin-top:auto;padding-top:.5rem;display:flex;justify-content:space-between;align-items:center;gap:.6rem;font-size:.82rem;color:var(--fg3)}
+.card .foot a{white-space:nowrap;font:600 .75rem var(--mono);letter-spacing:.08em;text-transform:uppercase;text-decoration:none}
+.card .foot a:hover{text-decoration:underline}
+.card.hide{display:none}
+
+/* demo strip */
+.demo{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:2.2rem;align-items:center}
+.demo ol{color:var(--fg2);padding-left:1.2rem}
+.demo ol li{margin:.35rem 0}
+.demo ol b{color:var(--fg)}
+.demo figure{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.demo figcaption{font-size:.8rem;color:var(--fg3);padding:.5rem .8rem;background:var(--panel)}
+@media (max-width:52rem){.demo{grid-template-columns:1fr}}
+
+/* results */
+.result{display:grid;grid-template-columns:minmax(0,1fr);gap:1rem;margin-top:2.6rem}
+.result .paper{display:block;width:100%;background:#fff;border-radius:8px;padding:.6rem;cursor:zoom-in;border:0}
+.result .paper img{width:100%;height:auto}
+.result .txt{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:1.6rem}
+.result .txt p{margin:.3rem 0}
+.result .not{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;padding:.8rem 1rem;font-size:.9rem;color:var(--fg2)}
+.result .not b{color:var(--amber);font:600 .72rem var(--mono);letter-spacing:.14em;text-transform:uppercase;display:block;margin-bottom:.3rem}
+.result .not ul{margin:0;padding-left:1.1rem}
+.result h3 .date{font:500 .85rem var(--mono);color:var(--fg3);margin-left:.4rem}
+@media (max-width:52rem){.result .txt{grid-template-columns:1fr}}
+
+/* honesty + hardware */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,20rem),1fr));gap:2rem}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1.3rem 1.4rem}
+.box ul{padding-left:1.1rem;color:var(--fg2);margin:.6rem 0 0}
+.box li{margin:.35rem 0}
+.box li b{color:var(--fg)}
+dl.hw{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.45rem 1.1rem;margin:.8rem 0 0;font-size:.92rem}
+dl.hw dt{font:600 .72rem/1.9 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--fg3)}
+dl.hw dd{margin:0;color:var(--fg2)}
+
+footer{border-top:1px solid var(--line);padding-block:2.4rem 3rem;color:var(--fg3);font-size:.88rem}
+footer .links{display:flex;flex-wrap:wrap;gap:1.2rem;margin-bottom:1rem}
+
+/* lightbox */
+dialog{border:0;padding:0;background:transparent;max-width:min(96vw,1400px);max-height:94vh}
+dialog::backdrop{background:rgba(0,0,0,.85)}
+dialog img{max-height:86vh;width:auto;max-width:100%;margin:0 auto;border-radius:6px;background:#fff}
+dialog p{color:#cfd5de;text-align:center;font-size:.9rem;margin:.6rem auto 0}
+dialog button{position:fixed;top:max(12px,env(safe-area-inset-top,0px));right:max(12px,env(safe-area-inset-right,0px));background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font:600 .8rem var(--mono);padding:.5rem .8rem;cursor:pointer}
+</style>
+</head>
+<body>
+<nav class="top"><div class="wrap">
+  <b><a href="/home.html" style="color:inherit;text-decoration:none">ALMITA</a></b>
+  <a href="#how">How it works</a><a href="#console">Console</a><a href="#demo">Demo</a><a href="#results">Results</a><a href="#honesty">Honesty</a><a href="#hardware">Hardware</a>
+  <a href="https://github.com/almita-radio/almita" rel="noopener">GitHub</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <img class="logo" src="project/almita-logo.jpg" alt="ALMITA logo: 21 cm Hydrogen Line Radio Telescope" width="1400" height="467">
+  <div class="label">Open-source · open-hardware · amateur radio astronomy · Chile</div>
+  <h1>A home-built radio telescope that listens to the Milky Way's hydrogen</h1>
+  <p class="acronym"><span>A</span>ntenna <span>L</span>istening <span>M</span>ostly to <span>I</span>nterference, <span>T</span>entatively <span>A</span>stronomy</p>
+  <p class="lede">ALMITA observes the 21 cm line of neutral hydrogen at 1420.405752 MHz with an RTL-SDR, a modified grid dish
+  and an equatorial mount. Its own software plans a sky mosaic, points, captures raw I/Q, reduces it to spectra and turns them
+  into velocity maps - all from a web console that works offline, in a field.</p>
+  <div class="cta">
+    <a class="btn primary" href="/demo.html" target="_blank" rel="noopener">▶ Try the live demo</a>
+    <a class="btn" href="https://github.com/almita-radio/almita" rel="noopener">Source on GitHub</a>
+    <a class="btn" href="/simulator.html" target="_blank" rel="noopener">Sky simulator</a>
+    <a class="btn" href="https://almita-radio.github.io/almita/" rel="noopener">Project notes</a>
+  </div>
+  <div class="stats" aria-label="ALMITA in numbers">
+    <div class="stat"><div class="v">1420.4<small> MHz</small></div><div class="k">the hydrogen line, rest frequency 1420.405752 MHz</div></div>
+    <div class="stat"><div class="v">20°</div><div class="k">beam of the ~90 × 60 cm grid dish with a DIY dipole feed</div></div>
+    <div class="stat"><div class="v">≈120<small> K</small></div><div class="k">system temperature from a Y-factor of 4.71 dB (12 Nov 2026)</div></div>
+    <div class="stat"><div class="v">±0.6<small> MHz</small></div><div class="k">frequency switching: the receiver's shape cancels, the line stays</div></div>
+    <div class="stat"><div class="v">5 Nov 2026</div><div class="k">first hydrogen seen, matching the HI4PI survey's shape</div></div>
+  </div>
+</div></header>
+
+<section id="how"><div class="wrap">
+  <div class="label">How it works</div>
+  <h2>From a dish on a rooftop to a velocity map</h2>
+  <p class="lede">The signal path is short and cheap; most of the work is in software that keeps every step auditable: raw data are kept,
+  every product says how it was made, and nothing claims a calibration it does not have.</p>
+  <div class="chain" role="list">
+    <div class="node" role="listitem"><span class="label">Antenna</span><b>Grid dish + dipole</b><p>Pawsey balun, reflector plate, 20° beam</p></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="node" role="listitem"><span class="label">Receiver</span><b>LNA + RTL-SDR</b><p>2.4 MS/s raw I/Q around 1420.4 MHz</p></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="node" role="listitem"><span class="label">At the dish</span><b>Raspberry Pi 4</b><p>in a metal box: <span class="mono">rtl_tcp</span>, INDI for the OnStep mount</p></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="node" role="listitem"><span class="label">Indoors</span><b>Notebook</b><p>web console, capture, REDUCE, SCIENCE</p></div>
+  </div>
+  <div class="where">
+    <div><b>OBSERVE</b>plans a grid on the sky, checks it is up and away from the Sun, points the mount and records HDF5 captures with all their metadata.</div>
+    <div><b>REDUCE</b>turns each capture into a spectrum: RFI masks, frequency-switch folding, LSRK velocity, and an honest uncertainty per channel.</div>
+    <div><b>SCIENCE</b>grids the spectra with the real beam into velocity cubes and integrated maps, with HI4PI's expected map beside them.</div>
+  </div>
+</div></section>
+
+<section id="console"><div class="wrap">
+  <div class="label">The web console</div>
+  <h2>Every page, what it does</h2>
+  <p class="lede">One port, one login, a DAY/NIGHT theme for sunlight, a STOP MOUNT button on every page. These screenshots come from the
+  <span class="tag sim">SIMULATED</span> demo, so the mount is INDI's Telescope Simulator and the sky is HI4PI. Click a picture to enlarge it.</p>
+  <div class="filters" role="group" aria-label="Filter pages">
+    <button type="button" data-f="all" aria-pressed="true">All</button>
+    <button type="button" data-f="plays" aria-pressed="false">Plays in the demo</button>
+    <button type="button" data-f="observe" aria-pressed="false">Observing</button>
+    <button type="button" data-f="process" aria-pressed="false">Processing</button>
+    <button type="button" data-f="instrument" aria-pressed="false">Instrument</button>
+  </div>
+  <div class="pages" id="pages"></div>
+</div></section>
+
+<section id="demo"><div class="wrap demo">
+  <div>
+    <div class="label">Live demo <span class="tag sim">SIMULATED</span></div>
+    <h2>Press the buttons yourself</h2>
+    <p class="lede">The demo is ALMITA's real console, replaying a recording of its own software driving a simulated telescope and SDR on a
+    simulated winter night in Santiago (15 July 2026, the Galactic Centre overhead). The SDR stand-in streams I/Q whose sky follows the
+    HI4PI survey through ALMITA's 20° beam.</p>
+    <ol>
+      <li><b>OBSERVE</b> - press PLAN, then START. A 5 × 5 grid near l = 10° runs, ten times faster.</li>
+      <li><b>MONITOR</b> - watch spectra, waterfall and the 3D stack arrive point by point.</li>
+      <li><b>REDUCE</b> - pick the campaign, PLAN, RUN: 25 / 25 spectra with ESTIMATOR v2.</li>
+      <li><b>SCIENCE</b> - PLAN and RUN the maps, next to what HI4PI says they should look like.</li>
+      <li><b>EXPERIMENT</b> - start the <i>Chain check</i> recipe and read its pre-written verdict.</li>
+      <li><b>STATUS</b> - the sky map now shows the 25 pointings.</li>
+    </ol>
+    <div class="cta"><a class="btn primary" href="/demo.html" target="_blank" rel="noopener">▶ Open the demo</a><a class="btn" href="/about-demo.html" target="_blank" rel="noopener">How the demo works</a></div>
+  </div>
+  <figure>
+    <img src="project/shots/monitor.jpg" alt="MONITOR during the simulated grid: live spectrum, waterfall, map and a 3D spectral stack" width="1200" height="675" loading="lazy">
+    <figcaption>MONITOR halfway through the simulated grid. Nothing here is a real observation.</figcaption>
+  </figure>
+</div></section>
+
+<section id="results"><div class="wrap">
+  <div class="label">Results so far <span class="tag real">REAL DATA</span></div>
+  <h2>What ALMITA has actually seen</h2>
+  <p class="lede">Real rooftop nights in Santiago, all re-analysed on 25 November 2026. Every result comes with what it does
+  <em>not</em> show. All intensities are relative: there is no calibration in Kelvin yet.</p>
+
+  <article class="result">
+    <h3>The Milky Way's rotation<span class="date">19 Nov 2026</span></h3>
+    <button class="paper" type="button" data-full="project/results/rotation_20261119.jpg" data-cap="ALMITA 21 cm spectra along the Galactic plane, 19 November 2026 (real data)"><img src="project/results/rotation_20261119.jpg" alt="ALMITA 21 cm spectra along the Galactic plane, the mean hydrogen velocity in symmetric and off-centre windows, and two position-switched spectra with their terminal edges" width="1600" height="1176"></button>
+    <div class="txt">
+      <div><p>An afternoon of the survey pilot running on its own: 99 captures of 2 minutes, none failed, at l = 0°, ±10°, ±20°, ±30°.
+      On one side of the Galactic Centre the hydrogen spreads to positive velocities, on the other to negative ones, and the spread grows
+      away from the centre: <b>the disc rotates</b>. The mean velocity goes from +18 km/s at l = +30° to −19 km/s at l = −30°.</p>
+      <p>At l = +30° the edge of the line sits at +104 ± 2 km/s whichever threshold is used.</p></div>
+      <div class="not"><b>What this is not</b><ul>
+        <li>Not yet a rotation speed: with the usual V0 = 220 km/s, the assumption supplies half of it.</li>
+        <li>One afternoon, one ON/OFF run per direction; the OFFs were 20–40° higher than the ONs.</li>
+        <li>A 20° beam averages a wide stretch of the Galaxy.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="result">
+    <h3>Hydrogen with frequency switching, repeated<span class="date">12 Nov 2026</span></h3>
+    <button class="paper" type="button" data-full="project/results/hi_frequency_switched_20261112.jpg" data-cap="Frequency-switched 21 cm spectra against HI4PI, 12 November 2026 (real data)"><img src="project/results/hi_frequency_switched_20261112.jpg" alt="Seven frequency-switched 21 cm spectra from ALMITA against HI4PI for the same pointing and another pointing, and the null test" width="1600" height="736"></button>
+    <div class="txt">
+      <div><p>The same 5 × 5 mosaic around l ≈ +20°, now with frequency switching and a new feed. The line shows up in all 25 pointings,
+      on a flat baseline (leftover receiver structure ~0.75 %, against a line of 14–18 %). Inside the HI4PI reference tile its shape
+      correlates <b>+0.95 to +0.99</b> with HI4PI, and only +0.29 to +0.65 with the velocity axis mirrored.</p></div>
+      <div class="not"><b>What this is not</b><ul>
+        <li>Not a pointing-by-pointing match: HI4PI's spectrum of <i>another</i> pointing correlates +0.91 to +0.98.</li>
+        <li>Still relative, not Kelvin.</li>
+        <li>The Magellanic Clouds were not detected.</li></ul></div>
+    </div>
+  </article>
+
+  <article class="result">
+    <h3>First 21 cm hydrogen detection<span class="date">5 Nov 2026</span></h3>
+    <button class="paper" type="button" data-full="project/results/hi_detection_20261105.jpg" data-cap="First 21 cm spectra against HI4PI, 5 November 2026 (real data)"><img src="project/results/hi_detection_20261105.jpg" alt="Seven measured 21 cm spectra from 5 November against HI4PI and the null test" width="1600" height="736"></button>
+    <div class="txt">
+      <div><p>The first night on a rooftop: hydrogen where the HI4PI all-sky survey says it should be, on the correct side of zero velocity
+      (the match fails with the axis flipped). Shape correlation with HI4PI +0.37 to +0.51, +0.83 at l = 20°, b = 0.</p></div>
+      <div class="not"><b>What this is not</b><ul>
+        <li>Not a calibrated measurement; leftover receiver ripple of ±2–6 %.</li>
+        <li>Hydrogen with the right sign, not a pointing-by-pointing match.</li></ul></div>
+    </div>
+  </article>
+  <p style="margin-top:2rem"><a href="https://github.com/almita-radio/almita#results-so-far" rel="noopener">The full results, with every number and caveat, are in the README →</a></p>
+</div></section>
+
+<section id="honesty"><div class="wrap two">
+  <div class="box">
+    <div class="label">Scientific honesty</div>
+    <h2>Conservative claims, raw data kept</h2>
+    <ul>
+      <li><b>Relative, not absolute.</b> No calibration in Kelvin, Jansky or column density is claimed yet.</li>
+      <li><b>Verdicts before data.</b> EXPERIMENT recipes write what counts as a result before the sky is observed.</li>
+      <li><b>Null tests.</b> Every match with HI4PI is checked against a mirrored velocity axis and against other pointings.</li>
+      <li><b>Retractions are published.</b> The November re-analysis withdrew two rotation speeds and a velocity offset, in public.</li>
+      <li><b>No automated astrophysics.</b> Nothing in the pipeline interprets or classifies signals on its own.</li>
+    </ul>
+  </div>
+  <div class="box" id="hardware">
+    <div class="label">Hardware</div>
+    <h2>Accessible, experimental, repairable</h2>
+    <dl class="hw">
+      <dt>Dish</dt><dd>Modified grid reflector, ~90 × 60 cm; beam ~20°</dd>
+      <dt>Feed</dt><dd>DIY 1420 MHz dipole, Pawsey balun, reflector plate</dd>
+      <dt>Receiver</dt><dd>Low-noise amplifier + RTL-SDR Blog V3</dd>
+      <dt>Mount</dt><dd>Equatorial, OnStep controller, INDI</dd>
+      <dt>Computers</dt><dd>Raspberry Pi 4 in a metal box at the dish; a notebook for everything else</dd>
+      <dt>Interference</dt><dd>Its own worst enemy was the Raspberry Pi 5 that used to run it: retired for radiating into the feed</dd>
+      <dt>Fasteners</dt><dd>Suspiciously many plastic cable ties. Temporary. For quite some time.</dd>
+    </dl>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="links">
+    <a href="https://github.com/almita-radio/almita" rel="noopener">GitHub</a>
+    <a href="https://almita-radio.github.io/almita/" rel="noopener">Project notes</a>
+    <a href="/demo.html" target="_blank" rel="noopener">Live demo (SIMULATED)</a>
+    <a href="/simulator.html" target="_blank" rel="noopener">Sky simulator</a>
+    <a href="/about-demo.html" target="_blank" rel="noopener">About the demo</a>
+  </div>
+  <p>ALMITA is a personal, independent amateur project by Felipe Fridman G., Chile. Software under the MIT License; hardware
+  documentation under the project's open-hardware notice. Demo sky and reference spectra: HI4PI Collaboration 2016, A&amp;A 594, A116.
+  Results are those of an experimental amateur instrument, not of a professional observatory.</p>
+</div></footer>
+
+<dialog id="lb" aria-label="Enlarged image"><button type="button" id="lb-close">CLOSE ✕</button><img id="lb-img" alt=""><p id="lb-cap"></p></dialog>
+
+<script>
+const PAGES = [
+  { id: "status", name: "STATUS", cat: "instrument", plays: true, go: "status.html",
+    what: "Is the instrument ready, and how much of the sky has it seen?",
+    items: ["Health of SDR, mount, capture Pi, services and dependencies", "Sky map of every valid pointing over the HI4PI sky", "Temperatures, LNA (Bias-T) power, a quick local RFI check"],
+    demo: "Fills with the 25 pointings after REDUCE" },
+  { id: "pipeline", name: "PIPELINE", cat: "process", go: "pipeline.html",
+    what: "The whole chain end to end, one stage after another.",
+    items: ["Preflight → align → calibrate → observe → reduce → science", "Each stage runs the real command; PASS / PARTIAL / FAIL from its own exit code"],
+    demo: "View only" },
+  { id: "observe", name: "OBSERVE", cat: "observe", plays: true, go: "observe.html",
+    what: "Plan a sky mosaic and run it.",
+    items: ["Grid by centre, size, rows and columns; coverage drawn with the real 20° beam", "Visibility, Sun distance, meridian flip and time-left checks", "Frequency switching with a window suggested from the sky", "PREFLIGHT before START"],
+    demo: "PLAN and START replay the 5 × 5 grid" },
+  { id: "monitor", name: "MONITOR", cat: "observe", plays: true, go: "index.html",
+    what: "Watch a capture run live.",
+    items: ["Spectrum, waterfall and a map of the session so far", "3D spectral stack and the RFI MASK panel", "Activity log of every mount move and capture"],
+    demo: "Plays while OBSERVE runs" },
+  { id: "reduce", name: "REDUCE", cat: "process", plays: true, go: "reduce.html",
+    what: "Raw I/Q to calibrated-as-far-as-honest spectra.",
+    items: ["Per capture or per campaign, on several CPU cores", "Optional RFI masks and ESTIMATOR v2", "Frequency-switch folding, LSRK velocity, uncertainty per channel"],
+    demo: "PLAN and RUN: 25 / 25 reduced" },
+  { id: "science", name: "SCIENCE", cat: "process", plays: true, go: "science.html",
+    what: "Spectra to maps.",
+    items: ["Measured, interpolated and smoothed integrated maps", "Uncertainty and coverage diagnostics", "HI4PI's expected map, same frame and beam, for comparison"],
+    demo: "PLAN and RUN the maps" },
+  { id: "science_hi4pi", name: "SCIENCE · HI4PI", cat: "process", plays: true, go: "science.html",
+    what: "What the same area should look like.",
+    items: ["HI4PI through a 20° beam, sampled like the grid", "Compares shapes, not values: ALMITA is not calibrated"],
+    demo: "Shown after SCIENCE runs" },
+  { id: "experiment", name: "EXPERIMENT", cat: "process", plays: true, go: "experiment.html",
+    what: "Ready-made experiments whose verdict is written before the data.",
+    items: ["Chain check, which mode shifts the velocity, Magellanic Clouds ON/OFF, Galactic Centre", "Each recipe says when the sky allows it and what counts as a result"],
+    demo: "Chain check: \"Hydrogen in sight\"" },
+  { id: "sessions", name: "SESSIONS", cat: "process", plays: true, go: "sessions.html",
+    what: "The catalog of everything ever observed.",
+    items: ["Filters by capture, reduction, science, receiver and condition", "Sky map of the real pointings; safe deletion"],
+    demo: "Lists the simulated sessions" },
+  { id: "align", name: "ALIGN", cat: "instrument", go: "align.html",
+    what: "Conservative pointing alignment.",
+    items: ["Guarded SYNC on the Sun or on hydrogen", "Sky view of candidate points, scored by contrast", "SUN SYNC for a hand-pointed dish"],
+    demo: "View only; SYNC is blocked on the simulator" },
+  { id: "calibrate", name: "CALIBRATE", cat: "instrument", go: "calibrate.html",
+    what: "Characterise the receiver.",
+    items: ["Wizard with a 50 Ω load: gain profile, Y-factor and system temperature", "HI reference zones"],
+    demo: "View only" },
+  { id: "lobe", name: "LOBE", cat: "instrument", go: "lobe.html",
+    what: "Measure the beam with the Sun.",
+    items: ["Drift, RA or Dec scans and a cross scan", "Live Gaussian fit; effective area from the solar flux"],
+    demo: "View only (the simulated Sun is down)" },
+  { id: "transit", name: "TRANSIT", cat: "instrument", go: "transit.html",
+    what: "A still antenna and the Sun drifting through.",
+    items: ["Band power every 10 s, last 30 / 60 / 180 min", "With the capture Pi's temperature beside it"],
+    demo: "View only" },
+  { id: "simulator", name: "SKY SIMULATOR", cat: "observe", plays: true, href: "/simulator.html",
+    what: "Not part of the console: an in-browser model of ALMITA.",
+    items: ["Point anywhere in the region, choose beam and switching", "Folded spectrum next to HI4PI, with its null test"],
+    demo: "Runs live in your browser" },
+];
+const el = (t, a = {}, ...kids) => { const e = document.createElement(t); for (const [k, v] of Object.entries(a)) (k in e && k !== "list") ? (e[k] = v) : e.setAttribute(k, v); e.append(...kids); return e; };
+const grid = document.getElementById("pages");
+for (const p of PAGES) {
+  const img = el("img", { src: `project/shots/${p.id}.jpg`, alt: `${p.name} page of the ALMITA console (SIMULATED demo)`, loading: "lazy", width: 1200, height: 675 });
+  const shot = el("button", { type: "button", className: "shot", "aria-label": `Enlarge the ${p.name} screenshot` }, img);
+  shot.dataset.full = img.getAttribute("src"); shot.dataset.cap = `${p.name} - ${p.what} (SIMULATED demo)`;
+  const tag = el("span", { className: "tag " + (p.plays ? "sim" : "view") }, p.plays ? "PLAYS" : "VIEW ONLY");
+  const href = p.href || `/demo.html?go=${p.go}`;
+  const card = el("article", { className: "card" }, shot,
+    el("div", { className: "body" },
+      el("div", { className: "row" }, el("h3", {}, p.name), tag),
+      el("p", { className: "what" }, p.what),
+      el("ul", {}, ...p.items.map((i) => el("li", {}, i))),
+      el("div", { className: "foot" }, el("span", {}, p.demo), el("a", { href, target: "_blank", rel: "noopener" }, "Open →"))));
+  card.dataset.cat = p.cat; card.dataset.plays = p.plays ? "1" : "0";
+  grid.append(card);
+}
+document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll(".filters button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  const f = b.dataset.f;
+  grid.querySelectorAll(".card").forEach((c) => c.classList.toggle("hide", !(f === "all" || (f === "plays" ? c.dataset.plays === "1" : c.dataset.cat === f))));
+}));
+const lb = document.getElementById("lb"), lbImg = document.getElementById("lb-img"), lbCap = document.getElementById("lb-cap");
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-full]"); if (!t) return;
+  lbImg.src = t.dataset.full; lbImg.alt = t.dataset.cap || ""; lbCap.textContent = t.dataset.cap || ""; lb.showModal();
+});
+document.getElementById("lb-close").addEventListener("click", () => lb.close());
+lb.addEventListener("click", (e) => { if (e.target === lb) lb.close(); });
+</script>
+</body>
+</html>

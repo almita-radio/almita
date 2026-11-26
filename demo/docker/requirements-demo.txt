@@ -1,0 +1,12 @@
+aiofiles==25.1.0
+astropy==8.0.2
+astropy-iers-data==0.2026.10.19.0.52.1
+h5py==3.16.0
+indipy==0.5.0
+matplotlib==3.11.2
+numpy==2.5.4
+pillow==13.0.0
+pyrtlsdr==0.5.1
+PyYAML==6.0.3
+scipy==1.18.1
+tzdata==2026.6
